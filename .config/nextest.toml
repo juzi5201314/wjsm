@@ -1,0 +1,9 @@
+nextest-version = "0.9.122"
+
+[profile.default]
+test-threads = "num-cpus"
+failure-output = "immediate-final"
+success-output = "never"
+status-level = "pass"
+final-status-level = "all"
+fail-fast = false
