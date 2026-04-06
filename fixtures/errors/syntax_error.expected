@@ -1,0 +1,4 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: Parse error: Error { error: (36..37, Expected(",", ";")) }
