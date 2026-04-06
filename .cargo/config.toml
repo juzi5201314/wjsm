@@ -1,0 +1,2 @@
+[env]
+CARGO_TERM_COLOR = "never"
