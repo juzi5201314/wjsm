@@ -1,0 +1,9 @@
+[package]
+name = "wjsm-runtime"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+wasmtime = { workspace = true }
+wjsm-ir = { path = "../wjsm-ir" }

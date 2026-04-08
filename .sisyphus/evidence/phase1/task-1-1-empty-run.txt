@@ -1,0 +1,34 @@
+warning: constant `MASK_SIGN` is never used
+ --> src/compiler/value.rs:1:11
+  |
+1 | pub const MASK_SIGN: u64 = 0x8000_0000_0000_0000;
+  |           ^^^^^^^^^
+
+warning: constant `MASK_PAYLOAD` is never used
+ --> src/compiler/value.rs:4:11
+  |
+4 | pub const MASK_PAYLOAD: u64 = 0x0007_FFFF_FFFF_FFFF;
+  |           ^^^^^^^^^^^^
+
+warning: function `encode_f64` is never used
+  --> src/compiler/value.rs:13:8
+   |
+13 | pub fn encode_f64(val: f64) -> i64 {
+   |        ^^^^^^^^^^
+
+warning: function `is_f64` is never used
+  --> src/compiler/value.rs:22:8
+   |
+22 | pub fn is_f64(val: i64) -> bool {
+   |        ^^^^^^
+
+warning: `wjsm` (bin "wjsm" test) generated 4 warnings
+warning: `wjsm` (bin "wjsm") generated 4 warnings (4 duplicates)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1m 17s
+────────────
+ Nextest run ID 458b40f7-5d6d-4e34-85a3-25c113a4c99f with nextest profile: default
+    Starting 1 test across 2 binaries
+        PASS [   0.005s] (1/1) wjsm::unit unit::nextest_smoke_test
+────────────
+     Summary [   0.011s] 1 test run: 1 passed, 0 skipped
+        PASS [   0.005s] (1/1) wjsm::unit unit::nextest_smoke_test

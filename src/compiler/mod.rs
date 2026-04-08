@@ -1,4 +1,4 @@
-pub mod value;
 pub mod codegen;
+pub mod value;
 
 pub use codegen::compile;

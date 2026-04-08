@@ -1,34 +1,14 @@
 use anyhow::Result;
-use swc_core::common::sync::Lrc;
-use swc_core::common::{FileName, SourceMap};
 use swc_core::ecma::ast as swc_ast;
-use swc_core::ecma::parser::{Parser, StringInput, Syntax, lexer::Lexer};
 use wasm_encoder::{
     CodeSection, DataSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
     ImportSection, Instruction, MemorySection, MemoryType, Module, TypeSection, ValType,
 };
+use wjsm_ir::{Program, value};
 
-pub fn compile(source: &str) -> Result<Vec<u8>> {
-    let cm: Lrc<SourceMap> = Default::default();
-    let fm = cm.new_source_file(
-        FileName::Custom("input.ts".into()).into(),
-        source.to_string(),
-    );
-
-    let lexer = Lexer::new(
-        Syntax::Typescript(Default::default()),
-        Default::default(),
-        StringInput::from(&*fm),
-        None,
-    );
-
-    let mut parser = Parser::new_from(lexer);
-    let module = parser
-        .parse_module()
-        .map_err(|e| anyhow::anyhow!("Parse error: {:?}", e))?;
-
+pub fn compile(program: &Program) -> Result<Vec<u8>> {
     let mut compiler = Compiler::new();
-    compiler.compile_module(&module)?;
+    compiler.compile_module(program.module())?;
 
     Ok(compiler.finish())
 }
@@ -50,24 +30,22 @@ struct Compiler {
 impl Compiler {
     fn new() -> Self {
         let mut types = TypeSection::new();
-        // Type 0: (i64) -> ()  [for env.console_log]
         types.ty().function(vec![ValType::I64], vec![]);
-        // Type 1: () -> ()     [for main]
         types.ty().function(vec![], vec![]);
 
         let mut imports = ImportSection::new();
         imports.import("env", "console_log", EntityType::Function(0));
 
         let mut functions = FunctionSection::new();
-        functions.function(1); // main has type index 1
+        functions.function(1);
 
         let mut exports = ExportSection::new();
-        exports.export("main", ExportKind::Func, 1); // Export main function
-        exports.export("memory", ExportKind::Memory, 0); // Export memory
+        exports.export("main", ExportKind::Func, 1);
+        exports.export("memory", ExportKind::Memory, 0);
 
         let mut memory = MemorySection::new();
         memory.memory(MemoryType {
-            minimum: 1, // 1 page = 64KB
+            minimum: 1,
             maximum: None,
             memory64: false,
             shared: false,
@@ -101,7 +79,7 @@ impl Compiler {
 
         if !self.string_data.is_empty() {
             self.data.active(
-                0, // memory index
+                0,
                 &wasm_encoder::ConstExpr::i32_const(0),
                 self.string_data.clone(),
             );
@@ -114,8 +92,6 @@ impl Compiler {
         match stmt {
             swc_ast::Stmt::Expr(expr_stmt) => {
                 self.compile_expr(&expr_stmt.expr)?;
-                // If the expression leaves a value on the stack, drop it
-                // We're keeping it simple for the PoC
             }
             _ => anyhow::bail!("Unsupported statement type"),
         }
@@ -142,7 +118,7 @@ impl Compiler {
                             anyhow::bail!("console.log requires at least 1 argument");
                         }
                         self.compile_expr(&call.args[0].expr)?;
-                        self.current_func.instruction(&Instruction::Call(0)); // env.console_log
+                        self.current_func.instruction(&Instruction::Call(0));
                         return Ok(());
                     }
                 }
@@ -190,13 +166,13 @@ impl Compiler {
             swc_ast::Lit::Str(s) => {
                 let ptr = self.data_offset;
                 let mut bytes = s.value.as_bytes().to_vec();
-                bytes.push(0); // null terminator
+                bytes.push(0);
                 let len = bytes.len() as u32;
 
                 self.string_data.extend(bytes);
                 self.data_offset += len;
 
-                let encoded = super::value::encode_string_ptr(ptr);
+                let encoded = value::encode_string_ptr(ptr);
                 self.current_func
                     .instruction(&Instruction::I64Const(encoded));
                 Ok(())

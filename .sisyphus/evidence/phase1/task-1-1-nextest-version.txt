@@ -1,0 +1,5 @@
+cargo-nextest 0.9.122 (14513ce84 2026-01-14)
+release: 0.9.122
+commit-hash: 14513ce84fbaedd42731bedf04b7685f94277467
+commit-date: 2026-01-14
+host: x86_64-unknown-linux-gnu

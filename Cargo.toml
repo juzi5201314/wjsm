@@ -3,10 +3,33 @@ name = "wjsm"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[workspace]
+members = [
+    "crates/wjsm-parser",
+    "crates/wjsm-semantic",
+    "crates/wjsm-ir",
+    "crates/wjsm-backend-wasm",
+    "crates/wjsm-backend-jit",
+    "crates/wjsm-runtime",
+    "crates/wjsm-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.0", features = ["derive"] }
 swc_core = { version = "62.0.0", features = ["ecma_parser", "ecma_ast", "common"] }
 thiserror = "2.0.18"
 wasm-encoder = "0.246.2"
 wasmtime = "43.0.0"
+
+[dependencies]
+anyhow = { workspace = true }
+wjsm-cli = { path = "crates/wjsm-cli" }
+
+[dev-dependencies]
+anyhow = { workspace = true }

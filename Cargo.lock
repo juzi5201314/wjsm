@@ -2863,11 +2863,71 @@ name = "wjsm"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "clap",
+ "wjsm-cli",
+]
+
+[[package]]
+name = "wjsm-backend-jit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "wjsm-ir",
+]
+
+[[package]]
+name = "wjsm-backend-wasm"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "swc_core",
- "thiserror 2.0.18",
  "wasm-encoder 0.246.2",
+ "wjsm-ir",
+]
+
+[[package]]
+name = "wjsm-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "wjsm-backend-jit",
+ "wjsm-backend-wasm",
+ "wjsm-ir",
+ "wjsm-parser",
+ "wjsm-runtime",
+ "wjsm-semantic",
+]
+
+[[package]]
+name = "wjsm-ir"
+version = "0.1.0"
+dependencies = [
+ "swc_core",
+]
+
+[[package]]
+name = "wjsm-parser"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "swc_core",
+]
+
+[[package]]
+name = "wjsm-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
  "wasmtime",
+ "wjsm-ir",
+]
+
+[[package]]
+name = "wjsm-semantic"
+version = "0.1.0"
+dependencies = [
+ "swc_core",
+ "wjsm-ir",
 ]
 
 [[package]]

@@ -1,6 +1,6 @@
-use crate::compiler::value;
 use anyhow::Result;
 use wasmtime::*;
+use wjsm_ir::value;
 
 pub fn execute(wasm_bytes: &[u8]) -> Result<()> {
     let engine = Engine::default();
@@ -13,7 +13,6 @@ pub fn execute(wasm_bytes: &[u8]) -> Result<()> {
             let ptr = value::decode_string_ptr(val);
             if let Some(Extern::Memory(mem)) = caller.get_export("memory") {
                 let data = mem.data(&caller);
-                // Read null-terminated string
                 let mut end = ptr as usize;
                 while end < data.len() && data[end] != 0 {
                     end += 1;
@@ -27,7 +26,6 @@ pub fn execute(wasm_bytes: &[u8]) -> Result<()> {
                 println!("<memory error>");
             }
         } else {
-            // It's a number (f64 bitcasted to i64)
             let f = f64::from_bits(val as u64);
             println!("{}", f);
         }
