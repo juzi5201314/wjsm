@@ -1,14 +1,17 @@
-use anyhow::Result;
-use swc_core::ecma::ast as swc_ast;
+use anyhow::{Context, Result};
 use wasm_encoder::{
     CodeSection, DataSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
-    ImportSection, Instruction, MemorySection, MemoryType, Module, TypeSection, ValType,
+    ImportSection, Instruction as WasmInstruction, MemorySection, MemoryType, Module, TypeSection,
+    ValType,
 };
-use wjsm_ir::{Program, value};
+use wjsm_ir::{
+    BasicBlock, BinaryOp, Builtin, Constant, Function as IrFunction, Instruction,
+    Module as IrModule, Program, value,
+};
 
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     let mut compiler = Compiler::new();
-    compiler.compile_module(program.module())?;
+    compiler.compile_module(program)?;
 
     Ok(compiler.finish())
 }
@@ -22,7 +25,7 @@ struct Compiler {
     codes: CodeSection,
     memory: MemorySection,
     data: DataSection,
-    current_func: Function,
+    current_func: Option<Function>,
     string_data: Vec<u8>,
     data_offset: u32,
 }
@@ -61,21 +64,20 @@ impl Compiler {
             codes: CodeSection::new(),
             memory,
             data: DataSection::new(),
-            current_func: Function::new([]),
+            current_func: None,
             string_data: Vec::new(),
             data_offset: 0,
         }
     }
 
-    fn compile_module(&mut self, ast: &swc_ast::Module) -> Result<()> {
-        for item in &ast.body {
-            if let swc_ast::ModuleItem::Stmt(stmt) = item {
-                self.compile_stmt(stmt)?;
-            }
-        }
+    fn compile_module(&mut self, module: &IrModule) -> Result<()> {
+        let main = module
+            .functions()
+            .iter()
+            .find(|function| function.name() == "main")
+            .context("backend-wasm expects lowered `main` function")?;
 
-        self.current_func.instruction(&Instruction::End);
-        self.codes.function(&self.current_func);
+        self.compile_function(module, main)?;
 
         if !self.string_data.is_empty() {
             self.data.active(
@@ -88,95 +90,123 @@ impl Compiler {
         Ok(())
     }
 
-    fn compile_stmt(&mut self, stmt: &swc_ast::Stmt) -> Result<()> {
-        match stmt {
-            swc_ast::Stmt::Expr(expr_stmt) => {
-                self.compile_expr(&expr_stmt.expr)?;
-            }
-            _ => anyhow::bail!("Unsupported statement type"),
+    fn compile_function(&mut self, module: &IrModule, function: &IrFunction) -> Result<()> {
+        let local_count = self.required_local_count(function);
+        let locals = if local_count == 0 {
+            Vec::new()
+        } else {
+            vec![(local_count, ValType::I64)]
+        };
+        self.current_func = Some(Function::new(locals));
+
+        for block in function.blocks() {
+            self.compile_block(module, block)?;
         }
+
+        self.emit(WasmInstruction::End);
+        self.codes.function(
+            self.current_func
+                .as_ref()
+                .context("current function missing after compile")?,
+        );
+
         Ok(())
     }
 
-    fn compile_expr(&mut self, expr: &swc_ast::Expr) -> Result<()> {
-        match expr {
-            swc_ast::Expr::Call(call) => self.compile_call(call),
-            swc_ast::Expr::Bin(bin) => self.compile_bin(bin),
-            swc_ast::Expr::Lit(lit) => self.compile_lit(lit),
-            _ => anyhow::bail!("Unsupported expression type"),
+    fn compile_block(&mut self, module: &IrModule, block: &BasicBlock) -> Result<()> {
+        for instruction in block.instructions() {
+            self.compile_instruction(module, instruction)?;
+        }
+
+        match block.terminator() {
+            wjsm_ir::Terminator::Return { .. } => Ok(()),
         }
     }
 
-    fn compile_call(&mut self, call: &swc_ast::CallExpr) -> Result<()> {
-        if let swc_ast::Callee::Expr(callee_expr) = &call.callee
-            && let swc_ast::Expr::Member(member) = &**callee_expr
-            && let (swc_ast::Expr::Ident(obj), swc_ast::MemberProp::Ident(prop)) =
-                (&*member.obj, &member.prop)
-            && obj.sym == "console"
-            && prop.sym == "log"
-        {
-            if call.args.is_empty() {
-                anyhow::bail!("console.log requires at least 1 argument");
-            }
-            self.compile_expr(&call.args[0].expr)?;
-            self.current_func.instruction(&Instruction::Call(0));
-            return Ok(());
-        }
-        anyhow::bail!("Unsupported call expression")
-    }
-
-    fn compile_bin(&mut self, bin: &swc_ast::BinExpr) -> Result<()> {
-        self.compile_expr(&bin.left)?;
-        self.current_func
-            .instruction(&Instruction::F64ReinterpretI64);
-
-        self.compile_expr(&bin.right)?;
-        self.current_func
-            .instruction(&Instruction::F64ReinterpretI64);
-
-        match bin.op {
-            swc_ast::BinaryOp::Add => {
-                self.current_func.instruction(&Instruction::F64Add);
-            }
-            swc_ast::BinaryOp::Sub => {
-                self.current_func.instruction(&Instruction::F64Sub);
-            }
-            swc_ast::BinaryOp::Mul => {
-                self.current_func.instruction(&Instruction::F64Mul);
-            }
-            swc_ast::BinaryOp::Div => {
-                self.current_func.instruction(&Instruction::F64Div);
-            }
-            _ => anyhow::bail!("Unsupported binary operation"),
-        }
-        self.current_func
-            .instruction(&Instruction::I64ReinterpretF64);
-        Ok(())
-    }
-
-    fn compile_lit(&mut self, lit: &swc_ast::Lit) -> Result<()> {
-        match lit {
-            swc_ast::Lit::Num(num) => {
-                let bits = num.value.to_bits() as i64;
-                self.current_func.instruction(&Instruction::I64Const(bits));
+    fn compile_instruction(&mut self, module: &IrModule, instruction: &Instruction) -> Result<()> {
+        match instruction {
+            Instruction::Const { dest, constant } => {
+                let constant = module
+                    .constants()
+                    .get(constant.0 as usize)
+                    .with_context(|| format!("missing constant {constant}"))?;
+                let encoded = self.encode_constant(constant);
+                self.emit(WasmInstruction::I64Const(encoded));
+                self.emit(WasmInstruction::LocalSet(dest.0));
                 Ok(())
             }
-            swc_ast::Lit::Str(s) => {
+            Instruction::Binary { dest, op, lhs, rhs } => {
+                self.emit(WasmInstruction::LocalGet(lhs.0));
+                self.emit(WasmInstruction::F64ReinterpretI64);
+                self.emit(WasmInstruction::LocalGet(rhs.0));
+                self.emit(WasmInstruction::F64ReinterpretI64);
+
+                match op {
+                    BinaryOp::Add => self.emit(WasmInstruction::F64Add),
+                    BinaryOp::Sub => self.emit(WasmInstruction::F64Sub),
+                    BinaryOp::Mul => self.emit(WasmInstruction::F64Mul),
+                    BinaryOp::Div => self.emit(WasmInstruction::F64Div),
+                }
+
+                self.emit(WasmInstruction::I64ReinterpretF64);
+                self.emit(WasmInstruction::LocalSet(dest.0));
+                Ok(())
+            }
+            Instruction::CallBuiltin { builtin, args, .. } => match builtin {
+                Builtin::ConsoleLog => {
+                    let first_arg = args
+                        .first()
+                        .context("console.log lowering expects at least one argument")?;
+                    self.emit(WasmInstruction::LocalGet(first_arg.0));
+                    self.emit(WasmInstruction::Call(0));
+                    Ok(())
+                }
+            },
+        }
+    }
+
+    fn encode_constant(&mut self, constant: &Constant) -> i64 {
+        match constant {
+            Constant::Number(value) => value.to_bits() as i64,
+            Constant::String(value) => {
                 let ptr = self.data_offset;
-                let mut bytes = s.value.as_bytes().to_vec();
+                let mut bytes = value.as_bytes().to_vec();
                 bytes.push(0);
                 let len = bytes.len() as u32;
 
                 self.string_data.extend(bytes);
                 self.data_offset += len;
 
-                let encoded = value::encode_string_ptr(ptr);
-                self.current_func
-                    .instruction(&Instruction::I64Const(encoded));
-                Ok(())
+                value::encode_string_ptr(ptr)
             }
-            _ => anyhow::bail!("Unsupported literal type"),
         }
+    }
+
+    fn required_local_count(&self, function: &IrFunction) -> u32 {
+        function
+            .blocks()
+            .iter()
+            .flat_map(|block| block.instructions())
+            .flat_map(|instruction| match instruction {
+                Instruction::Const { dest, .. } => [Some(dest.0), None, None],
+                Instruction::Binary { dest, lhs, rhs, .. } => {
+                    [Some(dest.0), Some(lhs.0), Some(rhs.0)]
+                }
+                Instruction::CallBuiltin { dest, args, .. } => {
+                    let max_arg = args.iter().map(|value| value.0).max();
+                    [dest.map(|value| value.0), max_arg, None]
+                }
+            })
+            .flatten()
+            .max()
+            .map_or(0, |max| max + 1)
+    }
+
+    fn emit(&mut self, instruction: WasmInstruction<'_>) {
+        self.current_func
+            .as_mut()
+            .expect("compiler function should be initialized before emission")
+            .instruction(&instruction);
     }
 
     fn finish(mut self) -> Vec<u8> {
