@@ -108,21 +108,19 @@ impl Compiler {
     }
 
     fn compile_call(&mut self, call: &swc_ast::CallExpr) -> Result<()> {
-        if let swc_ast::Callee::Expr(callee_expr) = &call.callee {
-            if let swc_ast::Expr::Member(member) = &**callee_expr {
-                if let (swc_ast::Expr::Ident(obj), swc_ast::MemberProp::Ident(prop)) =
-                    (&*member.obj, &member.prop)
-                {
-                    if obj.sym == "console" && prop.sym == "log" {
-                        if call.args.is_empty() {
-                            anyhow::bail!("console.log requires at least 1 argument");
-                        }
-                        self.compile_expr(&call.args[0].expr)?;
-                        self.current_func.instruction(&Instruction::Call(0));
-                        return Ok(());
-                    }
-                }
+        if let swc_ast::Callee::Expr(callee_expr) = &call.callee
+            && let swc_ast::Expr::Member(member) = &**callee_expr
+            && let (swc_ast::Expr::Ident(obj), swc_ast::MemberProp::Ident(prop)) =
+                (&*member.obj, &member.prop)
+            && obj.sym == "console"
+            && prop.sym == "log"
+        {
+            if call.args.is_empty() {
+                anyhow::bail!("console.log requires at least 1 argument");
             }
+            self.compile_expr(&call.args[0].expr)?;
+            self.current_func.instruction(&Instruction::Call(0));
+            return Ok(());
         }
         anyhow::bail!("Unsupported call expression")
     }
