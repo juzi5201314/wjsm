@@ -278,6 +278,7 @@ fn expr_kind(expr: &swc_ast::Expr) -> &'static str {
         swc_ast::Expr::TsNonNull(_) => "ts-non-null",
         swc_ast::Expr::TsAs(_) => "ts-as",
         swc_ast::Expr::TsInstantiation(_) => "ts-instantiation",
+        swc_ast::Expr::TsSatisfies(_) => "ts-satisfies",
         swc_ast::Expr::PrivateName(_) => "private-name",
         swc_ast::Expr::OptChain(_) => "optional-chain",
         swc_ast::Expr::Invalid(_) => "invalid",
