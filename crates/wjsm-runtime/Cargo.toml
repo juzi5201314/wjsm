@@ -7,3 +7,8 @@ edition.workspace = true
 anyhow = { workspace = true }
 wasmtime = { workspace = true }
 wjsm-ir = { path = "../wjsm-ir" }
+
+[dev-dependencies]
+wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
+wjsm-parser = { path = "../wjsm-parser" }
+wjsm-semantic = { path = "../wjsm-semantic" }
