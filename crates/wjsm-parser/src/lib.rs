@@ -23,3 +23,25 @@ pub fn parse_module(source: &str) -> Result<swc_ast::Module> {
         .parse_module()
         .map_err(|error| anyhow::anyhow!("Parse error: {:?}", error))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::parse_module;
+
+    #[test]
+    fn parses_console_log_module() {
+        let module =
+            parse_module(r#"console.log("hello");"#).expect("parser should accept fixture");
+        assert_eq!(module.body.len(), 1);
+    }
+
+    #[test]
+    fn normalizes_parse_errors() {
+        let error = parse_module(r#"console.log("missing closing paren";"#)
+            .expect_err("parser should reject invalid syntax");
+
+        let message = error.to_string();
+        assert!(message.starts_with("Parse error: "));
+        assert!(message.contains("Expected"));
+    }
+}

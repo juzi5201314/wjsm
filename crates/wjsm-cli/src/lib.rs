@@ -1,13 +1,10 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::fs;
-
-pub use wjsm_backend_jit as backend_jit;
-pub use wjsm_backend_wasm as backend_wasm;
-pub use wjsm_ir as ir;
-pub use wjsm_parser as parser;
-pub use wjsm_runtime as runtime;
-pub use wjsm_semantic as semantic;
+use wjsm_backend_wasm as backend_wasm;
+use wjsm_parser as parser;
+use wjsm_runtime as runtime;
+use wjsm_semantic as semantic;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
