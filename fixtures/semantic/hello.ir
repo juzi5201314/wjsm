@@ -1,0 +1,10 @@
+module {
+  constants:
+    c0 = string("Hello, World!")
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      call builtin.console.log(%0)
+      return
+}
