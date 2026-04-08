@@ -1,0 +1,9 @@
+$ timeout 60s cargo run -- run fixtures/happy/hello.js
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.34s
+     Running `target/debug/wjsm run fixtures/happy/hello.js`
+Hello, World!
+
+$ timeout 60s cargo run -- run fixtures/happy/arithmetic.js
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.49s
+     Running `target/debug/wjsm run fixtures/happy/arithmetic.js`
+7
