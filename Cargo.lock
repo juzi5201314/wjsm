@@ -2882,6 +2882,8 @@ dependencies = [
  "swc_core",
  "wasm-encoder 0.246.2",
  "wjsm-ir",
+ "wjsm-parser",
+ "wjsm-semantic",
 ]
 
 [[package]]
@@ -2919,7 +2921,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "wasmtime",
+ "wjsm-backend-wasm",
  "wjsm-ir",
+ "wjsm-parser",
+ "wjsm-semantic",
 ]
 
 [[package]]
