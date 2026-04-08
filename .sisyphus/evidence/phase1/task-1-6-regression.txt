@@ -120,3 +120,161 @@ $ timeout 60s cargo clippy -p wjsm-backend-wasm -p wjsm-runtime --all-targets --
     Checking cranelift-assembler-x64 v0.130.0
     Checking cpp_demangle v0.4.5
     Checking swc_ecma_ast v23.0.0
+   Compiling cranelift-codegen-meta v0.130.0
+    Checking wasm-encoder v0.246.2
+    Checking swc_allocator v4.0.1
+    Checking rustc-demangle v0.1.27
+    Checking wasmtime-internal-component-util v43.0.0
+    Checking crossbeam-utils v0.8.21
+    Checking crossbeam-epoch v0.9.18
+   Compiling ittapi-sys v0.4.0
+    Checking bitmaps v2.1.0
+    Checking futures-core v0.3.32
+    Checking winnow v1.0.1
+    Checking futures-sink v0.3.32
+    Checking toml_parser v1.1.2+spec-1.1.0
+    Checking futures-channel v0.3.32
+    Checking sized-chunks v0.6.5
+   Compiling wit-parser v0.245.1
+    Checking rand_xoshiro v0.6.0
+    Checking wasm-encoder v0.245.1
+    Checking wasmprinter v0.245.1
+    Checking swc_ecma_visit v23.0.0
+    Checking swc_ecma_parser v38.0.0
+    Checking crossbeam-deque v0.8.6
+    Checking wast v246.0.2
+   Compiling cranelift-codegen v0.130.0
+   Compiling wasmtime-internal-fiber v43.0.0
+   Compiling wasmtime-internal-jit-debug v43.0.0
+    Checking toml_datetime v0.7.5+spec-1.1.0
+    Checking wasmtime-environ v43.0.0
+    Checking serde_spanned v1.1.1
+    Checking dirs-sys-next v0.1.2
+    Checking winnow v0.7.15
+    Checking uuid v1.23.0
+    Checking toml_writer v1.1.1+spec-1.1.0
+    Checking swc_ecma_utils v29.0.0
+    Checking futures-io v0.3.32
+    Checking unsafe-libyaml v0.2.11
+    Checking ryu v1.0.23
+    Checking slab v0.4.12
+    Checking fixedbitset v0.4.2
+    Checking futures-task v0.3.32
+    Checking petgraph v0.6.5
+    Checking serde_yaml v0.9.34+deprecated
+    Checking futures-util v0.3.32
+    Checking toml v0.9.12+spec-1.1.0
+   Compiling zstd-safe v7.2.4
+    Checking zstd v0.13.3
+    Checking debugid v0.8.0
+   Compiling wasmtime-internal-wit-bindgen v43.0.0
+    Checking swc_ecma_transforms_base v41.0.0
+    Checking directories-next v2.0.0
+    Checking rayon-core v1.13.0
+    Checking im-rc v15.1.0
+    Checking wat v1.246.2
+    Checking getrandom v0.4.2
+   Compiling wasmtime v43.0.0
+    Checking itertools v0.14.0
+    Checking fastrand v2.4.0
+    Checking base64 v0.22.1
+    Checking wjsm-ir v0.1.0 (/home/soeur/project/wjsm/.omx/team/execute-omx-plans-prd-wjsm-era/worktrees/worker-3/crates/wjsm-ir)
+    Checking tempfile v3.27.0
+    Checking fxprof-processed-profile v0.8.1
+    Checking rayon v1.11.0
+    Checking ittapi v0.4.0
+    Checking memfd v0.6.5
+    Checking addr2line v0.26.1
+    Checking wasmtime-internal-jit-icache-coherence v43.0.0
+   Compiling wasmtime-internal-component-macro v43.0.0
+    Checking wasm-compose v0.245.1
+    Checking encoding_rs v0.8.35
+    Checking wjsm-semantic v0.1.0 (/home/soeur/project/wjsm/.omx/team/execute-omx-plans-prd-wjsm-era/worktrees/worker-3/crates/wjsm-semantic)
+    Checking wjsm-parser v0.1.0 (/home/soeur/project/wjsm/.omx/team/execute-omx-plans-prd-wjsm-era/worktrees/worker-3/crates/wjsm-parser)
+    Checking wjsm-backend-wasm v0.1.0 (/home/soeur/project/wjsm/.omx/team/execute-omx-plans-prd-wjsm-era/worktrees/worker-3/crates/wjsm-backend-wasm)
+    Checking futures v0.3.32
+error: this `if` statement can be collapsed
+   --> crates/wjsm-backend-wasm/src/lib.rs:111:9
+    |
+111 | /         if let swc_ast::Callee::Expr(callee_expr) = &call.callee {
+112 | |             if let swc_ast::Expr::Member(member) = &**callee_expr {
+113 | |                 if let (swc_ast::Expr::Ident(obj), swc_ast::MemberProp::Ident(prop)) =
+114 | |                     (&*member.obj, &member.prop)
+...   |
+126 | |         }
+    | |_________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+    = note: `-D clippy::collapsible-if` implied by `-D warnings`
+    = help: to override `-D warnings` add `#[allow(clippy::collapsible_if)]`
+help: collapse nested if block
+    |
+111 ~         if let swc_ast::Callee::Expr(callee_expr) = &call.callee
+112 ~             && let swc_ast::Expr::Member(member) = &**callee_expr {
+113 |                 if let (swc_ast::Expr::Ident(obj), swc_ast::MemberProp::Ident(prop)) =
+...
+124 |                 }
+125 ~             }
+    |
+
+error: this `if` statement can be collapsed
+   --> crates/wjsm-backend-wasm/src/lib.rs:112:13
+    |
+112 | /             if let swc_ast::Expr::Member(member) = &**callee_expr {
+113 | |                 if let (swc_ast::Expr::Ident(obj), swc_ast::MemberProp::Ident(prop)) =
+114 | |                     (&*member.obj, &member.prop)
+...   |
+125 | |             }
+    | |_____________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+112 ~             if let swc_ast::Expr::Member(member) = &**callee_expr
+113 ~                 && let (swc_ast::Expr::Ident(obj), swc_ast::MemberProp::Ident(prop)) =
+114 |                     (&*member.obj, &member.prop)
+...
+123 |                     }
+124 ~                 }
+    |
+
+error: this `if` statement can be collapsed
+   --> crates/wjsm-backend-wasm/src/lib.rs:113:17
+    |
+113 | /                 if let (swc_ast::Expr::Ident(obj), swc_ast::MemberProp::Ident(prop)) =
+114 | |                     (&*member.obj, &member.prop)
+115 | |                 {
+116 | |                     if obj.sym == "console" && prop.sym == "log" {
+...   |
+124 | |                 }
+    | |_________________^
+    |
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.94.0/index.html#collapsible_if
+help: collapse nested if block
+    |
+114 ~                     (&*member.obj, &member.prop)
+115 ~                     && obj.sym == "console" && prop.sym == "log" {
+116 |                         if call.args.is_empty() {
+...
+121 |                         return Ok(());
+122 ~                     }
+    |
+
+error: could not compile `wjsm-backend-wasm` (lib) due to 3 previous errors
+warning: build failed, waiting for other jobs to finish...
+error: could not compile `wjsm-backend-wasm` (lib test) due to 3 previous errors
+
+$ timeout 60s cargo nextest run --color=never
+   Compiling wjsm v0.1.0 (/home/soeur/project/wjsm/.omx/team/execute-omx-plans-prd-wjsm-era/worktrees/worker-3)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 2.28s
+────────────
+ Nextest run ID 8ae57b32-ce5d-4eda-a52f-7edad2c450b4 with nextest profile: default
+    Starting 3 tests across 4 binaries
+        PASS [   0.097s] (1/3) wjsm::unit unit::nextest_smoke_test
+        PASS [   0.221s] (2/3) wjsm::integration integration::fixtures::errors
+        PASS [   0.404s] (3/3) wjsm::integration integration::fixtures::happy
+────────────
+     Summary [   0.405s] 3 tests run: 3 passed, 0 skipped
+        PASS [   0.097s] (1/3) wjsm::unit unit::nextest_smoke_test
+        PASS [   0.221s] (2/3) wjsm::integration integration::fixtures::errors
+        PASS [   0.404s] (3/3) wjsm::integration integration::fixtures::happy
