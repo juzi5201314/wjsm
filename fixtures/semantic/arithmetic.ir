@@ -1,0 +1,16 @@
+module {
+  constants:
+    c0 = number(1)
+    c1 = number(2)
+    c2 = number(3)
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      %1 = const c1
+      %2 = const c2
+      %3 = mul %1, %2
+      %4 = add %0, %3
+      call builtin.console.log(%4)
+      return
+}
