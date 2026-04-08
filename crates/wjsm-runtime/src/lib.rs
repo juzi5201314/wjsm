@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::io::{self, Write};
+use std::sync::{Arc, Mutex};
 use wasmtime::*;
 use wjsm_ir::value;
 
@@ -12,15 +13,26 @@ pub fn execute(wasm_bytes: &[u8]) -> Result<()> {
 pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> {
     let engine = Engine::default();
     let module = Module::new(&engine, wasm_bytes)?;
+    let output = Arc::new(Mutex::new(Vec::new()));
 
-    let mut store = Store::new(&engine, RuntimeState { writer });
+    let mut store = Store::new(
+        &engine,
+        RuntimeState {
+            output: Arc::clone(&output),
+        },
+    );
 
     let console_log = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState<W>>, val: i64| {
-            let rendered = render_value(&mut caller, val)
-                .expect("console_log should render runtime values");
-            writeln!(caller.data_mut().writer, "{rendered}")
+        |mut caller: Caller<'_, RuntimeState>, val: i64| {
+            let rendered =
+                render_value(&mut caller, val).expect("console_log should render runtime values");
+            let mut buffer = caller
+                .data()
+                .output
+                .lock()
+                .expect("runtime output buffer mutex should not be poisoned");
+            writeln!(&mut *buffer, "{rendered}")
                 .expect("console_log should write to the configured output sink");
         },
     );
@@ -31,14 +43,23 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let main = instance.get_typed_func::<(), ()>(&mut store, "main")?;
     main.call(&mut store, ())?;
 
-    Ok(store.into_data().writer)
+    drop(store);
+
+    let bytes = output
+        .lock()
+        .expect("runtime output buffer mutex should not be poisoned")
+        .clone();
+    let mut writer = writer;
+    writer.write_all(&bytes)?;
+
+    Ok(writer)
 }
 
-struct RuntimeState<W> {
-    writer: W,
+struct RuntimeState {
+    output: Arc<Mutex<Vec<u8>>>,
 }
 
-fn render_value<W: Write>(caller: &mut Caller<'_, RuntimeState<W>>, val: i64) -> Result<String> {
+fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<String> {
     if value::is_string(val) {
         let ptr = value::decode_string_ptr(val);
         return read_string(caller, ptr);
@@ -47,7 +68,7 @@ fn render_value<W: Write>(caller: &mut Caller<'_, RuntimeState<W>>, val: i64) ->
     Ok(f64::from_bits(val as u64).to_string())
 }
 
-fn read_string<W: Write>(caller: &mut Caller<'_, RuntimeState<W>>, ptr: u32) -> Result<String> {
+fn read_string(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Result<String> {
     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
         anyhow::bail!("Runtime expected exported memory")
     };
