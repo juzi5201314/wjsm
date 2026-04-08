@@ -2901,9 +2901,6 @@ dependencies = [
 [[package]]
 name = "wjsm-ir"
 version = "0.1.0"
-dependencies = [
- "swc_core",
-]
 
 [[package]]
 name = "wjsm-parser"
@@ -2927,7 +2924,9 @@ name = "wjsm-semantic"
 version = "0.1.0"
 dependencies = [
  "swc_core",
+ "thiserror 2.0.18",
  "wjsm-ir",
+ "wjsm-parser",
 ]
 
 [[package]]
