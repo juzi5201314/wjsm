@@ -1,18 +1,20 @@
 $ timeout 60s cargo build
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.18s
 
 $ timeout 60s cargo nextest run --color=never -p wjsm-backend-wasm -p wjsm-runtime
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.46s
+   Compiling wjsm-backend-wasm v0.1.0 (/home/soeur/project/wjsm/.omx/team/execute-omx-plans-prd-wjsm-era/worktrees/worker-3/crates/wjsm-backend-wasm)
+   Compiling wjsm-runtime v0.1.0 (/home/soeur/project/wjsm/.omx/team/execute-omx-plans-prd-wjsm-era/worktrees/worker-3/crates/wjsm-runtime)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.27s
 ────────────
- Nextest run ID 2485f659-e9be-44a2-83c2-19ab384805c7 with nextest profile: default
+ Nextest run ID 98946fee-4fad-401a-808a-44fabf92969d with nextest profile: default
     Starting 4 tests across 2 binaries
-        PASS [   0.022s] (1/4) wjsm-backend-wasm tests::compile_embeds_string_data_segment
-        PASS [   0.024s] (2/4) wjsm-backend-wasm tests::compile_exports_runtime_contract
-        PASS [   0.042s] (3/4) wjsm-runtime tests::execute_with_writer_prints_arithmetic_fixture
-        PASS [   0.044s] (4/4) wjsm-runtime tests::execute_with_writer_prints_string_fixture
+        PASS [   0.006s] (1/4) wjsm-backend-wasm tests::compile_embeds_string_data_segment
+        PASS [   0.009s] (2/4) wjsm-backend-wasm tests::compile_exports_runtime_contract
+        PASS [   0.022s] (3/4) wjsm-runtime tests::execute_with_writer_prints_string_fixture
+        PASS [   0.022s] (4/4) wjsm-runtime tests::execute_with_writer_prints_arithmetic_fixture
 ────────────
-     Summary [   0.045s] 4 tests run: 4 passed, 0 skipped
-        PASS [   0.022s] (1/4) wjsm-backend-wasm tests::compile_embeds_string_data_segment
-        PASS [   0.024s] (2/4) wjsm-backend-wasm tests::compile_exports_runtime_contract
-        PASS [   0.042s] (3/4) wjsm-runtime tests::execute_with_writer_prints_arithmetic_fixture
-        PASS [   0.044s] (4/4) wjsm-runtime tests::execute_with_writer_prints_string_fixture
+     Summary [   0.023s] 4 tests run: 4 passed, 0 skipped
+        PASS [   0.006s] (1/4) wjsm-backend-wasm tests::compile_embeds_string_data_segment
+        PASS [   0.009s] (2/4) wjsm-backend-wasm tests::compile_exports_runtime_contract
+        PASS [   0.022s] (3/4) wjsm-runtime tests::execute_with_writer_prints_string_fixture
+        PASS [   0.022s] (4/4) wjsm-runtime tests::execute_with_writer_prints_arithmetic_fixture
