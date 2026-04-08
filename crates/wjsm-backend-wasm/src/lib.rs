@@ -196,3 +196,55 @@ impl Compiler {
         self.module.finish()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::compile;
+    use anyhow::Result;
+
+    fn compile_source(source: &str) -> Result<Vec<u8>> {
+        let module = wjsm_parser::parse_module(source)?;
+        let program = wjsm_semantic::lower_module(module);
+        compile(&program)
+    }
+
+    #[test]
+    fn compile_exports_runtime_contract() -> Result<()> {
+        let wasm_bytes = compile_source(r#"console.log("hello");"#)?;
+
+        assert!(
+            wasm_bytes
+                .windows("console_log".len())
+                .any(|window| window == b"console_log"),
+            "wasm module should import env.console_log"
+        );
+        assert!(
+            wasm_bytes
+                .windows("main".len())
+                .any(|window| window == b"main"),
+            "wasm module should export main"
+        );
+        assert!(
+            wasm_bytes
+                .windows("memory".len())
+                .any(|window| window == b"memory"),
+            "wasm module should export memory"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn compile_embeds_string_data_segment() -> Result<()> {
+        let wasm_bytes = compile_source(r#"console.log("Hello, Backend!");"#)?;
+
+        assert!(
+            wasm_bytes
+                .windows("Hello, Backend!\0".len())
+                .any(|window| window == b"Hello, Backend!\0"),
+            "wasm module should embed nul-terminated string data"
+        );
+
+        Ok(())
+    }
+}
