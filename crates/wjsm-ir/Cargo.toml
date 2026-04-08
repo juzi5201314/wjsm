@@ -1,0 +1,7 @@
+[package]
+name = "wjsm-ir"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+swc_core = { workspace = true }

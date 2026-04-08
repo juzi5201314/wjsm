@@ -1,0 +1,8 @@
+[package]
+name = "wjsm-backend-jit"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+wjsm-ir = { path = "../wjsm-ir" }

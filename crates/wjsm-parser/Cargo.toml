@@ -1,0 +1,8 @@
+[package]
+name = "wjsm-parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+swc_core = { workspace = true }

@@ -1,0 +1,10 @@
+[package]
+name = "wjsm-backend-wasm"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+swc_core = { workspace = true }
+wasm-encoder = { workspace = true }
+wjsm-ir = { path = "../wjsm-ir" }

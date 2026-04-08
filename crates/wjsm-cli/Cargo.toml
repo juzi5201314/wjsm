@@ -1,0 +1,14 @@
+[package]
+name = "wjsm-cli"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+wjsm-backend-jit = { path = "../wjsm-backend-jit" }
+wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
+wjsm-ir = { path = "../wjsm-ir" }
+wjsm-parser = { path = "../wjsm-parser" }
+wjsm-runtime = { path = "../wjsm-runtime" }
+wjsm-semantic = { path = "../wjsm-semantic" }
