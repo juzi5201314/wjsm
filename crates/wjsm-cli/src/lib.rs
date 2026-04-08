@@ -59,6 +59,6 @@ pub fn execute(cli: Cli) -> Result<()> {
 
 fn compile_source(source: &str) -> Result<Vec<u8>> {
     let module = parser::parse_module(source)?;
-    let program = semantic::lower_module(module);
+    let program = semantic::lower_module(module)?;
     backend_wasm::compile(&program)
 }
