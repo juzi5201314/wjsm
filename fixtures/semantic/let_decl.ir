@@ -1,0 +1,15 @@
+module {
+  constants:
+    c0 = number(1)
+    c1 = undefined
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.x, %0
+      %1 = const c1
+      store var $0.y, %1
+      %2 = load var $0.x
+      call builtin.console.log(%2)
+      return
+}

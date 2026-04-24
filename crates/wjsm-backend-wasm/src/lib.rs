@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::collections::HashMap;
 use wasm_encoder::{
     CodeSection, DataSection, EntityType, ExportKind, ExportSection, Function, FunctionSection,
     ImportSection, Instruction as WasmInstruction, MemorySection, MemoryType, Module, TypeSection,
@@ -28,6 +29,10 @@ struct Compiler {
     current_func: Option<Function>,
     string_data: Vec<u8>,
     data_offset: u32,
+    /// Map variable name → WASM local index (for LoadVar / StoreVar).
+    var_locals: HashMap<String, u32>,
+    /// Next available WASM local index (after SSA temporaries).
+    next_var_local: u32,
 }
 
 impl Compiler {
@@ -67,6 +72,8 @@ impl Compiler {
             current_func: None,
             string_data: Vec::new(),
             data_offset: 0,
+            var_locals: HashMap::new(),
+            next_var_local: 0,
         }
     }
 
@@ -91,6 +98,9 @@ impl Compiler {
     }
 
     fn compile_function(&mut self, module: &IrModule, function: &IrFunction) -> Result<()> {
+        // First pass: assign WASM local indices to all variable names.
+        self.assign_var_locals(function);
+
         let local_count = self.required_local_count(function);
         let locals = if local_count == 0 {
             Vec::new()
@@ -111,6 +121,48 @@ impl Compiler {
         );
 
         Ok(())
+    }
+
+    fn assign_var_locals(&mut self, function: &IrFunction) {
+        self.var_locals.clear();
+        // Compute max SSA temporary index.
+        let max_ssa = function
+            .blocks()
+            .iter()
+            .flat_map(|block| block.instructions())
+            .flat_map(|instruction| match instruction {
+                Instruction::Const { dest, .. } => [Some(dest.0), None, None],
+                Instruction::Binary { dest, lhs, rhs, .. } => {
+                    [Some(dest.0), Some(lhs.0), Some(rhs.0)]
+                }
+                Instruction::CallBuiltin { dest, args, .. } => {
+                    let max_arg = args.iter().map(|value| value.0).max();
+                    [dest.map(|value| value.0), max_arg, None]
+                }
+                Instruction::LoadVar { dest, .. } => [Some(dest.0), None, None],
+                Instruction::StoreVar { name: _, value } => [Some(value.0), None, None],
+            })
+            .flatten()
+            .max()
+            .map_or(0, |max| max + 1);
+
+        // Assign variable names to local indices starting after SSA temporaries.
+        self.next_var_local = max_ssa;
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                let name = match instruction {
+                    Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. } => name,
+                    _ => continue,
+                };
+                self.var_locals
+                    .entry(name.clone())
+                    .or_insert_with(|| {
+                        let idx = self.next_var_local;
+                        self.next_var_local += 1;
+                        idx
+                    });
+            }
+        }
     }
 
     fn compile_block(&mut self, module: &IrModule, block: &BasicBlock) -> Result<()> {
@@ -162,6 +214,24 @@ impl Compiler {
                     Ok(())
                 }
             },
+            Instruction::LoadVar { dest, name } => {
+                let local_idx = self
+                    .var_locals
+                    .get(name)
+                    .with_context(|| format!("variable `{name}` has no assigned WASM local"))?;
+                self.emit(WasmInstruction::LocalGet(*local_idx));
+                self.emit(WasmInstruction::LocalSet(dest.0));
+                Ok(())
+            }
+            Instruction::StoreVar { name, value } => {
+                let local_idx = *self
+                    .var_locals
+                    .get(name)
+                    .with_context(|| format!("variable `{name}` has no assigned WASM local"))?;
+                self.emit(WasmInstruction::LocalGet(value.0));
+                self.emit(WasmInstruction::LocalSet(local_idx));
+                Ok(())
+            }
         }
     }
 
@@ -179,10 +249,12 @@ impl Compiler {
 
                 value::encode_string_ptr(ptr)
             }
+            Constant::Undefined => value::encode_undefined(),
         }
     }
 
     fn required_local_count(&self, function: &IrFunction) -> u32 {
+        // The total locals needed: max(SSA temporaries, variable local indices).
         function
             .blocks()
             .iter()
@@ -196,8 +268,11 @@ impl Compiler {
                     let max_arg = args.iter().map(|value| value.0).max();
                     [dest.map(|value| value.0), max_arg, None]
                 }
+                Instruction::LoadVar { dest, .. } => [Some(dest.0), None, None],
+                Instruction::StoreVar { name: _, value } => [Some(value.0), None, None],
             })
             .flatten()
+            .chain(self.var_locals.values().copied())
             .max()
             .map_or(0, |max| max + 1)
     }
@@ -232,7 +307,7 @@ mod tests {
 
     fn compile_source(source: &str) -> Result<Vec<u8>> {
         let module = wjsm_parser::parse_module(source)?;
-        let program = wjsm_semantic::lower_module(module);
+        let program = wjsm_semantic::lower_module(module)?;
         compile(&program)
     }
 
@@ -273,6 +348,14 @@ mod tests {
             "wasm module should embed nul-terminated string data"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn compile_encodes_undefined_constant() -> Result<()> {
+        let wasm_bytes = compile_source("let x; console.log(x);")?;
+        // Just verify it compiles without error — the runtime test validates output.
+        assert!(!wasm_bytes.is_empty());
         Ok(())
     }
 }

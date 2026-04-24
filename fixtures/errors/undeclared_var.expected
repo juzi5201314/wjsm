@@ -1,0 +1,4 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: semantic lowering error [13..14]: undeclared identifier `z`

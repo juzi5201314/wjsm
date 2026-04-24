@@ -1,4 +1,4 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [1..15]: unsupported statement kind `decl`
+Error: semantic lowering error [1..45]: unsupported declaration kind `function`
