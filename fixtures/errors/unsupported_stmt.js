@@ -1,2 +1,3 @@
-let value = 1;
-console.log(value);
+function greet() {
+  console.log("hello");
+}

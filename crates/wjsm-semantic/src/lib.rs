@@ -7,13 +7,207 @@ use wjsm_ir::{
     Terminator, ValueId,
 };
 
+// ── Scope tree ──────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScopeKind {
+    Block,
+    Function,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VarKind {
+    Var,
+    Let,
+    Const,
+}
+
+#[derive(Debug, Clone)]
+struct VarInfo {
+    kind: VarKind,
+    /// `false` = in TDZ (declared lexically but not yet initialised).
+    declared: bool,
+}
+
+struct Scope {
+    parent: Option<usize>,
+    kind: ScopeKind,
+    id: usize,
+    variables: std::collections::HashMap<String, VarInfo>,
+}
+
+struct ScopeTree {
+    arenas: Vec<Scope>,
+    current: usize,
+}
+
+impl ScopeTree {
+    fn new() -> Self {
+        let root = Scope {
+            parent: None,
+            kind: ScopeKind::Function,
+            id: 0,
+            variables: std::collections::HashMap::new(),
+        };
+        let mut arenas = Vec::new();
+        arenas.push(root);
+        Self {
+            arenas,
+            current: 0,
+        }
+    }
+
+    /// Push a new child scope and enter it.
+    fn push_scope(&mut self, kind: ScopeKind) {
+        let idx = self.arenas.len();
+        let scope = Scope {
+            parent: Some(self.current),
+            kind,
+            id: idx,
+            variables: std::collections::HashMap::new(),
+        };
+        self.arenas.push(scope);
+        self.current = idx;
+    }
+
+    /// Pop the current scope, returning to its parent.
+    fn pop_scope(&mut self) {
+        self.current = self.arenas[self.current]
+            .parent
+            .expect("cannot pop root scope");
+    }
+
+    /// Declare a variable in the appropriate scope.
+    ///
+    /// - `let` / `const` → current (innermost) scope.
+    /// - `var`          → nearest enclosing *function* scope.
+    ///
+    /// Returns `Err(message)` on redeclaration conflict (let/const in same scope).
+    fn declare(&mut self, name: &str, kind: VarKind, declared: bool) -> Result<usize, String> {
+        let target_idx = match kind {
+            VarKind::Var => self.nearest_function_scope(),
+            VarKind::Let | VarKind::Const => self.current,
+        };
+
+        let scope = &mut self.arenas[target_idx];
+
+        // var redeclaration in the same scope is allowed (JS semantics).
+        // let / const redeclaration in the same scope is an error.
+        if let Some(existing) = scope.variables.get(name) {
+            match (existing.kind, kind) {
+                (VarKind::Var, VarKind::Var) => return Ok(scope.id),
+                _ => {
+                    return Err(format!(
+                        "cannot redeclare identifier `{name}` in the same scope"
+                    ));
+                }
+            }
+        }
+
+        scope.variables.insert(
+            name.to_string(),
+            VarInfo { kind, declared },
+        );
+        Ok(scope.id)
+    }
+
+    /// Mark a variable as initialised (exit TDZ).
+    fn mark_initialised(&mut self, name: &str) -> Result<(), String> {
+        // Walk up the scope chain to find the variable.
+        let mut cursor = self.current;
+        loop {
+            let scope = &mut self.arenas[cursor];
+            if let Some(info) = scope.variables.get_mut(name) {
+                info.declared = true;
+                return Ok(());
+            }
+            match scope.parent {
+                Some(parent) => cursor = parent,
+                None => return Err(format!("undeclared identifier `{name}`")),
+            }
+        }
+    }
+
+    /// Look up a variable by name. Returns `(scope_id, VarKind)` if found.
+    ///
+    /// Errors: undeclared variable, or TDZ access.
+    fn lookup(&self, name: &str) -> Result<(usize, VarKind), String> {
+        let mut cursor = self.current;
+        loop {
+            let scope = &self.arenas[cursor];
+            if let Some(info) = scope.variables.get(name) {
+                if !info.declared {
+                    return Err(format!(
+                        "cannot access `{name}` before initialisation"
+                    ));
+                }
+                return Ok((scope.id, info.kind));
+            }
+            match scope.parent {
+                Some(parent) => cursor = parent,
+                None => return Err(format!("undeclared identifier `{name}`")),
+            }
+        }
+    }
+
+
+    /// Resolve a variable's scope id without checking TDZ.
+    /// Used during declaration lowering where we know the var is being initialised.
+    fn resolve_scope_id(&self, name: &str) -> Result<usize, String> {
+        let mut cursor = self.current;
+        loop {
+            let scope = &self.arenas[cursor];
+            if scope.variables.contains_key(name) {
+                return Ok(scope.id);
+            }
+            match scope.parent {
+                Some(parent) => cursor = parent,
+                None => return Err(format!("undeclared identifier `{name}`")),
+            }
+        }
+    }
+
+    /// Check that this variable is not `const` before reassignment.
+    fn check_mutable(&self, name: &str) -> Result<(), String> {
+        let mut cursor = self.current;
+        loop {
+            let scope = &self.arenas[cursor];
+            if let Some(info) = scope.variables.get(name) {
+                if matches!(info.kind, VarKind::Const) {
+                    return Err(format!("cannot reassign a const-declared variable `{name}`"));
+                }
+                return Ok(());
+            }
+            match scope.parent {
+                Some(parent) => cursor = parent,
+                None => return Err(format!("undeclared identifier `{name}`")),
+            }
+        }
+    }
+
+    fn nearest_function_scope(&self) -> usize {
+        let mut cursor = self.current;
+        loop {
+            if matches!(self.arenas[cursor].kind, ScopeKind::Function) {
+                return cursor;
+            }
+            cursor = self.arenas[cursor].parent.expect("root must be function scope");
+        }
+    }
+}
+
+// ── Public API ──────────────────────────────────────────────────────────
+
 pub fn lower_module(module: swc_ast::Module) -> Result<Program, LoweringError> {
     Lowerer::new().lower_module(&module)
 }
 
+// ── Lowerer ─────────────────────────────────────────────────────────────
+
 struct Lowerer {
     module: Module,
     next_value: u32,
+    scopes: ScopeTree,
 }
 
 impl Lowerer {
@@ -21,12 +215,16 @@ impl Lowerer {
         Self {
             module: Module::new(),
             next_value: 0,
+            scopes: ScopeTree::new(),
         }
     }
 
     fn lower_module(mut self, module: &swc_ast::Module) -> Result<Program, LoweringError> {
         let mut function = wjsm_ir::Function::new("main", BasicBlockId(0));
         let mut entry = BasicBlock::new(BasicBlockId(0), Terminator::Return { value: None });
+
+        // Pre-scan: hoist variable declarations so let/const are in TDZ.
+        self.predeclare_stmts(&module.body)?;
 
         for item in &module.body {
             match item {
@@ -63,11 +261,153 @@ impl Lowerer {
                 }
                 Ok(())
             }
+            swc_ast::Stmt::Decl(decl) => {
+                match decl {
+                    swc_ast::Decl::Var(var_decl) => self.lower_var_decl(var_decl, block),
+                    _ => Err(self.error(
+                        stmt.span(),
+                        format!("unsupported declaration kind `{}`", decl_kind(decl)),
+                    )),
+                }
+            }
+            swc_ast::Stmt::Block(block_stmt) => {
+                self.lower_block_stmt(block_stmt, block)
+            }
             _ => Err(self.error(
                 stmt.span(),
                 format!("unsupported statement kind `{}`", stmt_kind(stmt)),
             )),
         }
+    }
+
+    /// Lower `{ ... }` — creates a new block scope, lowers stmts, then pops.
+    fn lower_block_stmt(
+        &mut self,
+        block_stmt: &swc_ast::BlockStmt,
+        block: &mut BasicBlock,
+    ) -> Result<(), LoweringError> {
+        self.scopes.push_scope(ScopeKind::Block);
+        self.predeclare_block_stmts(&block_stmt.stmts)?;
+        for stmt in &block_stmt.stmts {
+            self.lower_stmt(stmt, block)?;
+        }
+        self.scopes.pop_scope();
+        Ok(())
+    }
+
+    /// Pre-scan statements to hoist variable declarations.
+    ///
+    /// - `let`/`const` are pre-declared in the current scope (TDZ).
+    /// - `var` is pre-declared in the nearest function scope (initialised).
+    fn predeclare_stmts(
+        &mut self,
+        stmts: &[swc_ast::ModuleItem],
+    ) -> Result<(), LoweringError> {
+        for item in stmts {
+            let swc_ast::ModuleItem::Stmt(stmt) = item else {
+                continue;
+            };
+            self.predeclare_stmt(stmt)?;
+        }
+        Ok(())
+    }
+
+    fn predeclare_block_stmts(
+        &mut self,
+        stmts: &[swc_ast::Stmt],
+    ) -> Result<(), LoweringError> {
+        for stmt in stmts {
+            self.predeclare_stmt(stmt)?;
+        }
+        Ok(())
+    }
+
+    fn predeclare_stmt(&mut self, stmt: &swc_ast::Stmt) -> Result<(), LoweringError> {
+        match stmt {
+            swc_ast::Stmt::Decl(decl) => match decl {
+                swc_ast::Decl::Var(var_decl) => {
+                    let kind = match var_decl.kind {
+                        swc_ast::VarDeclKind::Var => VarKind::Var,
+                        swc_ast::VarDeclKind::Let => VarKind::Let,
+                        swc_ast::VarDeclKind::Const => VarKind::Const,
+                    };
+                    for declarator in &var_decl.decls {
+                        let name = match &declarator.name {
+                            swc_ast::Pat::Ident(binding_ident) => binding_ident.id.sym.to_string(),
+                            _ => continue, // destructuring not handled in pre-scan
+                        };
+                        // var is hoisted as initialised; let/const enter TDZ.
+                        let declared = matches!(kind, VarKind::Var);
+                        self.scopes
+                            .declare(&name, kind, declared)
+                            .map_err(|msg| self.error(var_decl.span, msg))?;
+                    }
+                }
+                _ => {}
+            },
+            // Do not recurse into blocks in top-level pre-scan;
+            // lower_block_stmt runs its own pre-scan in the correct scope.
+            swc_ast::Stmt::Block(_) => {},
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// Lower `var x = ...` / `let x = ...` / `const x = ...`.
+    fn lower_var_decl(
+        &mut self,
+        var_decl: &swc_ast::VarDecl,
+        block: &mut BasicBlock,
+    ) -> Result<(), LoweringError> {
+        let kind = match var_decl.kind {
+            swc_ast::VarDeclKind::Var => VarKind::Var,
+            swc_ast::VarDeclKind::Let => VarKind::Let,
+            swc_ast::VarDeclKind::Const => VarKind::Const,
+        };
+
+        for declarator in &var_decl.decls {
+            let name = match &declarator.name {
+                swc_ast::Pat::Ident(binding_ident) => binding_ident.id.sym.to_string(),
+                _ => {
+                    return Err(self.error(
+                        declarator.name.span(),
+                        "destructuring patterns are not yet supported",
+                    ));
+                }
+            };
+
+            // Variable is already pre-declared; just get the scope-qualified name.
+            let scope_id = self.scopes
+                .resolve_scope_id(&name)
+                .map_err(|msg| self.error(var_decl.span, msg))?;
+            let ir_name = format!("${scope_id}.{name}");
+
+            if let Some(init) = &declarator.init {
+                let value = self.lower_expr(init, block)?;
+                self.scopes
+                    .mark_initialised(&name)
+                    .map_err(|msg| self.error(var_decl.span, msg))?;
+                block.push_instruction(Instruction::StoreVar { name: ir_name, value });
+            } else {
+                // `let x;` — initialise with undefined.
+                if matches!(kind, VarKind::Const) {
+                    // SWC should reject `const x;` at parse time, but guard anyway.
+                    return Err(self.error(
+                        var_decl.span,
+                        "const declarations must be initialised",
+                    ));
+                }
+                let undef = self.module.add_constant(Constant::Undefined);
+                let dest = self.alloc_value();
+                block.push_instruction(Instruction::Const { dest, constant: undef });
+                self.scopes
+                    .mark_initialised(&name)
+                    .map_err(|msg| self.error(var_decl.span, msg))?;
+                block.push_instruction(Instruction::StoreVar { name: ir_name, value: dest });
+            }
+        }
+
+        Ok(())
     }
 
     fn lower_expr(
@@ -78,10 +418,112 @@ impl Lowerer {
         match expr {
             swc_ast::Expr::Bin(bin) => self.lower_binary(bin, block),
             swc_ast::Expr::Lit(lit) => self.lower_literal(lit, block),
+            swc_ast::Expr::Ident(ident) => self.lower_ident(ident, block),
+            swc_ast::Expr::Assign(assign) => self.lower_assign(assign, block),
             _ => Err(self.error(
                 expr.span(),
                 format!("unsupported expression kind `{}`", expr_kind(expr)),
             )),
+        }
+    }
+
+    /// Lower a variable reference: `x` → `LoadVar { dest, name: "x" }`.
+    fn lower_ident(
+        &mut self,
+        ident: &swc_ast::Ident,
+        block: &mut BasicBlock,
+    ) -> Result<ValueId, LoweringError> {
+        let name = ident.sym.to_string();
+        let (scope_id, _kind) = self.scopes
+            .lookup(&name)
+            .map_err(|msg| self.error(ident.span, msg))?;
+        let ir_name = format!("${scope_id}.{name}");
+
+        let dest = self.alloc_value();
+        block.push_instruction(Instruction::LoadVar { dest, name: ir_name });
+        Ok(dest)
+    }
+
+    /// Lower assignment: `x = expr` → `StoreVar { name: "x", value }`.
+    /// Compound: `x += expr` → load x, compute, store x.
+    fn lower_assign(
+        &mut self,
+        assign: &swc_ast::AssignExpr,
+        block: &mut BasicBlock,
+    ) -> Result<ValueId, LoweringError> {
+        let name = match &assign.left {
+            swc_ast::AssignTarget::Simple(simple) => match simple {
+                swc_ast::SimpleAssignTarget::Ident(binding_ident) => {
+                    binding_ident.id.sym.to_string()
+                }
+                _ => {
+                    return Err(self.error(
+                        assign.left.span(),
+                        "only simple identifier assignment targets are supported",
+                    ));
+                }
+            },
+            _ => {
+                return Err(self.error(
+                    assign.left.span(),
+                    "only simple identifier assignment targets are supported",
+                ));
+            }
+        };
+
+        self.scopes
+            .check_mutable(&name)
+            .map_err(|msg| self.error(assign.span, msg))?;
+
+        let (scope_id, _kind) = self.scopes
+            .lookup(&name)
+            .map_err(|msg| self.error(assign.span, msg))?;
+        let ir_name = format!("${scope_id}.{name}");
+
+        let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+
+        match assign.op {
+            swc_ast::AssignOp::Assign => {
+                // Plain assignment: x = rhs
+                block.push_instruction(Instruction::StoreVar {
+                    name: ir_name,
+                    value: rhs,
+                });
+                Ok(rhs)
+            }
+            op => {
+                // Compound assignment: x += rhs  →  load x, compute, store x
+                let bin_op = assign_op_to_binary(op).ok_or_else(|| {
+                    self.error(
+                        assign.span,
+                        format!("unsupported compound assignment operator"),
+                    )
+                })?;
+
+                // Load current value
+                let loaded = self.alloc_value();
+                block.push_instruction(Instruction::LoadVar {
+                    dest: loaded,
+                    name: ir_name.clone(),
+                });
+
+                // Compute
+                let dest = self.alloc_value();
+                block.push_instruction(Instruction::Binary {
+                    dest,
+                    op: bin_op,
+                    lhs: loaded,
+                    rhs,
+                });
+
+                // Store
+                block.push_instruction(Instruction::StoreVar {
+                    name: ir_name,
+                    value: dest,
+                });
+
+                Ok(dest)
+            }
         }
     }
 
@@ -168,6 +610,8 @@ impl Lowerer {
     }
 }
 
+// ── Helpers ─────────────────────────────────────────────────────────────
+
 fn is_console_log(call: &swc_ast::CallExpr) -> bool {
     let swc_ast::Callee::Expr(callee_expr) = &call.callee else {
         return false;
@@ -184,6 +628,18 @@ fn is_console_log(call: &swc_ast::CallExpr) -> bool {
 
     object.sym == "console" && property.sym == "log"
 }
+
+fn assign_op_to_binary(op: swc_ast::AssignOp) -> Option<BinaryOp> {
+    match op {
+        swc_ast::AssignOp::AddAssign => Some(BinaryOp::Add),
+        swc_ast::AssignOp::SubAssign => Some(BinaryOp::Sub),
+        swc_ast::AssignOp::MulAssign => Some(BinaryOp::Mul),
+        swc_ast::AssignOp::DivAssign => Some(BinaryOp::Div),
+        _ => None,
+    }
+}
+
+// ── Error types ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum LoweringError {
@@ -218,6 +674,8 @@ impl std::fmt::Display for Diagnostic {
     }
 }
 
+// ── Kind strings ────────────────────────────────────────────────────────
+
 fn stmt_kind(stmt: &swc_ast::Stmt) -> &'static str {
     match stmt {
         swc_ast::Stmt::Block(_) => "block",
@@ -239,6 +697,19 @@ fn stmt_kind(stmt: &swc_ast::Stmt) -> &'static str {
         swc_ast::Stmt::ForOf(_) => "for-of",
         swc_ast::Stmt::Decl(_) => "decl",
         swc_ast::Stmt::Expr(_) => "expr",
+    }
+}
+
+fn decl_kind(decl: &swc_ast::Decl) -> &'static str {
+    match decl {
+        swc_ast::Decl::Class(_) => "class",
+        swc_ast::Decl::Fn(_) => "function",
+        swc_ast::Decl::Var(_) => "var",
+        swc_ast::Decl::Using(_) => "using",
+        swc_ast::Decl::TsInterface(_) => "ts-interface",
+        swc_ast::Decl::TsTypeAlias(_) => "ts-type-alias",
+        swc_ast::Decl::TsEnum(_) => "ts-enum",
+        swc_ast::Decl::TsModule(_) => "ts-module",
     }
 }
 

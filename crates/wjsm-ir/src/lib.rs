@@ -65,6 +65,7 @@ impl Module {
 pub enum Constant {
     Number(f64),
     String(String),
+    Undefined,
 }
 
 impl fmt::Display for Constant {
@@ -72,6 +73,7 @@ impl fmt::Display for Constant {
         match self {
             Self::Number(value) => write!(formatter, "number({value})"),
             Self::String(value) => write!(formatter, "string({value:?})"),
+            Self::Undefined => formatter.write_str("undefined"),
         }
     }
 }
@@ -173,6 +175,14 @@ pub enum Instruction {
         builtin: Builtin,
         args: Vec<ValueId>,
     },
+    LoadVar {
+        dest: ValueId,
+        name: String,
+    },
+    StoreVar {
+        name: String,
+        value: ValueId,
+    },
 }
 
 impl fmt::Display for Instruction {
@@ -199,6 +209,12 @@ impl fmt::Display for Instruction {
                     write!(formatter, "{arg}")?;
                 }
                 formatter.write_char(')')
+            }
+            Self::LoadVar { dest, name } => {
+                write!(formatter, "{dest} = load var {name}")
+            }
+            Self::StoreVar { name, value } => {
+                write!(formatter, "store var {name}, {value}")
             }
         }
     }

@@ -1,0 +1,17 @@
+module {
+  constants:
+    c0 = number(1)
+    c1 = number(2)
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.x, %0
+      %1 = const c1
+      %2 = load var $0.x
+      %3 = add %2, %1
+      store var $0.x, %3
+      %4 = load var $0.x
+      call builtin.console.log(%4)
+      return
+}

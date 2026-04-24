@@ -65,6 +65,10 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
         return read_string(caller, ptr);
     }
 
+    if value::is_undefined(val) {
+        return Ok("undefined".to_string());
+    }
+
     Ok(f64::from_bits(val as u64).to_string())
 }
 
@@ -94,7 +98,7 @@ mod tests {
 
     fn compile_source(source: &str) -> Result<Vec<u8>> {
         let module = wjsm_parser::parse_module(source)?;
-        let program = wjsm_semantic::lower_module(module);
+        let program = wjsm_semantic::lower_module(module)?;
         wjsm_backend_wasm::compile(&program)
     }
 

@@ -1,0 +1,12 @@
+module {
+  constants:
+    c0 = number(10)
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.x, %0
+      %1 = load var $0.x
+      call builtin.console.log(%1)
+      return
+}

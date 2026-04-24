@@ -14,8 +14,33 @@ fn arithmetic_fixture_matches_ir_snapshot() {
 }
 
 #[test]
-fn unsupported_statement_reports_diagnostic() {
-    let source = "let value = 1;\nconsole.log(value);\n";
+fn let_decl_fixture_matches_ir_snapshot() {
+    assert_snapshot("let_decl");
+}
+
+#[test]
+fn block_scope_fixture_matches_ir_snapshot() {
+    assert_snapshot("block_scope");
+}
+
+#[test]
+fn assignment_fixture_matches_ir_snapshot() {
+    assert_snapshot("assignment");
+}
+
+#[test]
+fn compound_assign_fixture_matches_ir_snapshot() {
+    assert_snapshot("compound_assign");
+}
+
+#[test]
+fn var_hoist_fixture_matches_ir_snapshot() {
+    assert_snapshot("var_hoist");
+}
+
+#[test]
+fn undeclared_var_reports_diagnostic() {
+    let source = "console.log(z);\n";
     let error = lower_module(parse_module(source).expect("parse should succeed"))
         .expect_err("lowering should fail");
 
@@ -24,7 +49,76 @@ fn unsupported_statement_reports_diagnostic() {
             assert!(
                 diagnostic
                     .message
-                    .contains("unsupported statement kind `decl`")
+                    .contains("undeclared identifier")
+            );
+            assert!(diagnostic.start < diagnostic.end);
+        }
+    }
+}
+
+#[test]
+fn const_reassign_reports_diagnostic() {
+    let source = "const x = 1; x = 2;\n";
+    let error = lower_module(parse_module(source).expect("parse should succeed"))
+        .expect_err("lowering should fail");
+
+    match error {
+        LoweringError::Diagnostic(diagnostic) => {
+            assert!(
+                diagnostic
+                    .message
+                    .contains("cannot reassign a const-declared variable")
+            );
+        }
+    }
+}
+
+#[test]
+fn tdz_access_reports_diagnostic() {
+    let source = "{ console.log(x); let x = 1; }\n";
+    let error = lower_module(parse_module(source).expect("parse should succeed"))
+        .expect_err("lowering should fail");
+
+    match error {
+        LoweringError::Diagnostic(diagnostic) => {
+            assert!(
+                diagnostic
+                    .message
+                    .contains("cannot access `x` before initialisation")
+            );
+        }
+    }
+}
+
+#[test]
+fn let_redeclare_reports_diagnostic() {
+    let source = "let x = 1; let x = 2;\n";
+    let error = lower_module(parse_module(source).expect("parse should succeed"))
+        .expect_err("lowering should fail");
+
+    match error {
+        LoweringError::Diagnostic(diagnostic) => {
+            assert!(
+                diagnostic
+                    .message
+                    .contains("cannot redeclare identifier")
+            );
+        }
+    }
+}
+
+#[test]
+fn unsupported_statement_reports_diagnostic() {
+    let source = "function greet() {}\n";
+    let error = lower_module(parse_module(source).expect("parse should succeed"))
+        .expect_err("lowering should fail");
+
+    match error {
+        LoweringError::Diagnostic(diagnostic) => {
+            assert!(
+                diagnostic
+                    .message
+                    .contains("unsupported declaration kind `function`")
             );
             assert!(diagnostic.start < diagnostic.end);
         }
