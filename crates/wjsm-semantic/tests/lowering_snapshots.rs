@@ -34,8 +34,28 @@ fn compound_assign_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn compound_assign_nested_fixture_matches_ir_snapshot() {
+    assert_snapshot("compound_assign_nested");
+}
+
+#[test]
 fn var_hoist_fixture_matches_ir_snapshot() {
     assert_snapshot("var_hoist");
+}
+
+#[test]
+fn var_hoist_read_before_decl_fixture_matches_ir_snapshot() {
+    assert_snapshot("var_hoist_read_before_decl");
+}
+
+#[test]
+fn var_no_init_redeclare_fixture_matches_ir_snapshot() {
+    assert_snapshot("var_no_init_redeclare");
+}
+
+#[test]
+fn block_var_hoist_before_block_fixture_matches_ir_snapshot() {
+    assert_snapshot("block_var_hoist_before_block");
 }
 
 #[test]
@@ -46,11 +66,7 @@ fn undeclared_var_reports_diagnostic() {
 
     match error {
         LoweringError::Diagnostic(diagnostic) => {
-            assert!(
-                diagnostic
-                    .message
-                    .contains("undeclared identifier")
-            );
+            assert!(diagnostic.message.contains("undeclared identifier"));
             assert!(diagnostic.start < diagnostic.end);
         }
     }
@@ -98,11 +114,7 @@ fn let_redeclare_reports_diagnostic() {
 
     match error {
         LoweringError::Diagnostic(diagnostic) => {
-            assert!(
-                diagnostic
-                    .message
-                    .contains("cannot redeclare identifier")
-            );
+            assert!(diagnostic.message.contains("cannot redeclare identifier"));
         }
     }
 }

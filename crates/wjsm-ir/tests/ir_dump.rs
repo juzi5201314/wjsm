@@ -52,7 +52,6 @@ module {
     assert_eq!(module.dump_text(), expected);
 }
 
-
 #[test]
 fn textual_dump_includes_load_store_undefined() {
     let mut module = Module::new();

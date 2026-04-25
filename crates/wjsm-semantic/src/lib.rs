@@ -51,10 +51,7 @@ impl ScopeTree {
         };
         let mut arenas = Vec::new();
         arenas.push(root);
-        Self {
-            arenas,
-            current: 0,
-        }
+        Self { arenas, current: 0 }
     }
 
     /// Push a new child scope and enter it.
@@ -104,10 +101,9 @@ impl ScopeTree {
             }
         }
 
-        scope.variables.insert(
-            name.to_string(),
-            VarInfo { kind, declared },
-        );
+        scope
+            .variables
+            .insert(name.to_string(), VarInfo { kind, declared });
         Ok(scope.id)
     }
 
@@ -137,9 +133,7 @@ impl ScopeTree {
             let scope = &self.arenas[cursor];
             if let Some(info) = scope.variables.get(name) {
                 if !info.declared {
-                    return Err(format!(
-                        "cannot access `{name}` before initialisation"
-                    ));
+                    return Err(format!("cannot access `{name}` before initialisation"));
                 }
                 return Ok((scope.id, info.kind));
             }
@@ -149,7 +143,6 @@ impl ScopeTree {
             }
         }
     }
-
 
     /// Resolve a variable's scope id without checking TDZ.
     /// Used during declaration lowering where we know the var is being initialised.
@@ -174,7 +167,9 @@ impl ScopeTree {
             let scope = &self.arenas[cursor];
             if let Some(info) = scope.variables.get(name) {
                 if matches!(info.kind, VarKind::Const) {
-                    return Err(format!("cannot reassign a const-declared variable `{name}`"));
+                    return Err(format!(
+                        "cannot reassign a const-declared variable `{name}`"
+                    ));
                 }
                 return Ok(());
             }
@@ -191,7 +186,9 @@ impl ScopeTree {
             if matches!(self.arenas[cursor].kind, ScopeKind::Function) {
                 return cursor;
             }
-            cursor = self.arenas[cursor].parent.expect("root must be function scope");
+            cursor = self.arenas[cursor]
+                .parent
+                .expect("root must be function scope");
         }
     }
 }
@@ -208,6 +205,13 @@ struct Lowerer {
     module: Module,
     next_value: u32,
     scopes: ScopeTree,
+    hoisted_vars: Vec<HoistedVar>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HoistedVar {
+    scope_id: usize,
+    name: String,
 }
 
 impl Lowerer {
@@ -216,6 +220,7 @@ impl Lowerer {
             module: Module::new(),
             next_value: 0,
             scopes: ScopeTree::new(),
+            hoisted_vars: Vec::new(),
         }
     }
 
@@ -225,6 +230,7 @@ impl Lowerer {
 
         // Pre-scan: hoist variable declarations so let/const are in TDZ.
         self.predeclare_stmts(&module.body)?;
+        self.emit_hoisted_var_initializers(&mut entry);
 
         for item in &module.body {
             match item {
@@ -261,18 +267,14 @@ impl Lowerer {
                 }
                 Ok(())
             }
-            swc_ast::Stmt::Decl(decl) => {
-                match decl {
-                    swc_ast::Decl::Var(var_decl) => self.lower_var_decl(var_decl, block),
-                    _ => Err(self.error(
-                        stmt.span(),
-                        format!("unsupported declaration kind `{}`", decl_kind(decl)),
-                    )),
-                }
-            }
-            swc_ast::Stmt::Block(block_stmt) => {
-                self.lower_block_stmt(block_stmt, block)
-            }
+            swc_ast::Stmt::Decl(decl) => match decl {
+                swc_ast::Decl::Var(var_decl) => self.lower_var_decl(var_decl, block),
+                _ => Err(self.error(
+                    stmt.span(),
+                    format!("unsupported declaration kind `{}`", decl_kind(decl)),
+                )),
+            },
+            swc_ast::Stmt::Block(block_stmt) => self.lower_block_stmt(block_stmt, block),
             _ => Err(self.error(
                 stmt.span(),
                 format!("unsupported statement kind `{}`", stmt_kind(stmt)),
@@ -299,30 +301,28 @@ impl Lowerer {
     ///
     /// - `let`/`const` are pre-declared in the current scope (TDZ).
     /// - `var` is pre-declared in the nearest function scope (initialised).
-    fn predeclare_stmts(
-        &mut self,
-        stmts: &[swc_ast::ModuleItem],
-    ) -> Result<(), LoweringError> {
+    fn predeclare_stmts(&mut self, stmts: &[swc_ast::ModuleItem]) -> Result<(), LoweringError> {
         for item in stmts {
             let swc_ast::ModuleItem::Stmt(stmt) = item else {
                 continue;
             };
-            self.predeclare_stmt(stmt)?;
+            self.predeclare_stmt_with_mode(stmt, true)?;
         }
         Ok(())
     }
 
-    fn predeclare_block_stmts(
-        &mut self,
-        stmts: &[swc_ast::Stmt],
-    ) -> Result<(), LoweringError> {
+    fn predeclare_block_stmts(&mut self, stmts: &[swc_ast::Stmt]) -> Result<(), LoweringError> {
         for stmt in stmts {
-            self.predeclare_stmt(stmt)?;
+            self.predeclare_stmt_with_mode(stmt, true)?;
         }
         Ok(())
     }
 
-    fn predeclare_stmt(&mut self, stmt: &swc_ast::Stmt) -> Result<(), LoweringError> {
+    fn predeclare_stmt_with_mode(
+        &mut self,
+        stmt: &swc_ast::Stmt,
+        include_lexical: bool,
+    ) -> Result<(), LoweringError> {
         match stmt {
             swc_ast::Stmt::Decl(decl) => match decl {
                 swc_ast::Decl::Var(var_decl) => {
@@ -336,21 +336,61 @@ impl Lowerer {
                             swc_ast::Pat::Ident(binding_ident) => binding_ident.id.sym.to_string(),
                             _ => continue, // destructuring not handled in pre-scan
                         };
+                        if !matches!(kind, VarKind::Var) && !include_lexical {
+                            continue;
+                        }
+
                         // var is hoisted as initialised; let/const enter TDZ.
                         let declared = matches!(kind, VarKind::Var);
-                        self.scopes
+                        let scope_id = self
+                            .scopes
                             .declare(&name, kind, declared)
                             .map_err(|msg| self.error(var_decl.span, msg))?;
+                        if matches!(kind, VarKind::Var) {
+                            self.record_hoisted_var(scope_id, name);
+                        }
                     }
                 }
                 _ => {}
             },
-            // Do not recurse into blocks in top-level pre-scan;
-            // lower_block_stmt runs its own pre-scan in the correct scope.
-            swc_ast::Stmt::Block(_) => {},
+            swc_ast::Stmt::Block(block_stmt) => {
+                for stmt in &block_stmt.stmts {
+                    self.predeclare_stmt_with_mode(stmt, false)?;
+                }
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    fn record_hoisted_var(&mut self, scope_id: usize, name: String) {
+        if self
+            .hoisted_vars
+            .iter()
+            .any(|var| var.scope_id == scope_id && var.name == name)
+        {
+            return;
+        }
+
+        self.hoisted_vars.push(HoistedVar { scope_id, name });
+    }
+
+    fn emit_hoisted_var_initializers(&mut self, block: &mut BasicBlock) {
+        if self.hoisted_vars.is_empty() {
+            return;
+        }
+
+        let undef = self.module.add_constant(Constant::Undefined);
+        let value = self.alloc_value();
+        block.push_instruction(Instruction::Const {
+            dest: value,
+            constant: undef,
+        });
+
+        for var in &self.hoisted_vars {
+            let name = format!("${}.{}", var.scope_id, var.name);
+            block.push_instruction(Instruction::StoreVar { name, value });
+        }
     }
 
     /// Lower `var x = ...` / `let x = ...` / `const x = ...`.
@@ -377,7 +417,8 @@ impl Lowerer {
             };
 
             // Variable is already pre-declared; just get the scope-qualified name.
-            let scope_id = self.scopes
+            let scope_id = self
+                .scopes
                 .resolve_scope_id(&name)
                 .map_err(|msg| self.error(var_decl.span, msg))?;
             let ir_name = format!("${scope_id}.{name}");
@@ -387,23 +428,33 @@ impl Lowerer {
                 self.scopes
                     .mark_initialised(&name)
                     .map_err(|msg| self.error(var_decl.span, msg))?;
-                block.push_instruction(Instruction::StoreVar { name: ir_name, value });
+                block.push_instruction(Instruction::StoreVar {
+                    name: ir_name,
+                    value,
+                });
             } else {
-                // `let x;` — initialise with undefined.
                 if matches!(kind, VarKind::Const) {
                     // SWC should reject `const x;` at parse time, but guard anyway.
-                    return Err(self.error(
-                        var_decl.span,
-                        "const declarations must be initialised",
-                    ));
+                    return Err(self.error(var_decl.span, "const declarations must be initialised"));
                 }
+                if matches!(kind, VarKind::Var) {
+                    continue;
+                }
+
+                // `let x;` — initialise with undefined at its declaration point.
                 let undef = self.module.add_constant(Constant::Undefined);
                 let dest = self.alloc_value();
-                block.push_instruction(Instruction::Const { dest, constant: undef });
+                block.push_instruction(Instruction::Const {
+                    dest,
+                    constant: undef,
+                });
                 self.scopes
                     .mark_initialised(&name)
                     .map_err(|msg| self.error(var_decl.span, msg))?;
-                block.push_instruction(Instruction::StoreVar { name: ir_name, value: dest });
+                block.push_instruction(Instruction::StoreVar {
+                    name: ir_name,
+                    value: dest,
+                });
             }
         }
 
@@ -434,13 +485,17 @@ impl Lowerer {
         block: &mut BasicBlock,
     ) -> Result<ValueId, LoweringError> {
         let name = ident.sym.to_string();
-        let (scope_id, _kind) = self.scopes
+        let (scope_id, _kind) = self
+            .scopes
             .lookup(&name)
             .map_err(|msg| self.error(ident.span, msg))?;
         let ir_name = format!("${scope_id}.{name}");
 
         let dest = self.alloc_value();
-        block.push_instruction(Instruction::LoadVar { dest, name: ir_name });
+        block.push_instruction(Instruction::LoadVar {
+            dest,
+            name: ir_name,
+        });
         Ok(dest)
     }
 
@@ -475,16 +530,16 @@ impl Lowerer {
             .check_mutable(&name)
             .map_err(|msg| self.error(assign.span, msg))?;
 
-        let (scope_id, _kind) = self.scopes
+        let (scope_id, _kind) = self
+            .scopes
             .lookup(&name)
             .map_err(|msg| self.error(assign.span, msg))?;
         let ir_name = format!("${scope_id}.{name}");
 
-        let rhs = self.lower_expr(assign.right.as_ref(), block)?;
-
         match assign.op {
             swc_ast::AssignOp::Assign => {
                 // Plain assignment: x = rhs
+                let rhs = self.lower_expr(assign.right.as_ref(), block)?;
                 block.push_instruction(Instruction::StoreVar {
                     name: ir_name,
                     value: rhs,
@@ -492,22 +547,18 @@ impl Lowerer {
                 Ok(rhs)
             }
             op => {
-                // Compound assignment: x += rhs  →  load x, compute, store x
+                // Compound assignment reads the old value before evaluating RHS.
                 let bin_op = assign_op_to_binary(op).ok_or_else(|| {
-                    self.error(
-                        assign.span,
-                        format!("unsupported compound assignment operator"),
-                    )
+                    self.error(assign.span, "unsupported compound assignment operator")
                 })?;
 
-                // Load current value
                 let loaded = self.alloc_value();
                 block.push_instruction(Instruction::LoadVar {
                     dest: loaded,
                     name: ir_name.clone(),
                 });
 
-                // Compute
+                let rhs = self.lower_expr(assign.right.as_ref(), block)?;
                 let dest = self.alloc_value();
                 block.push_instruction(Instruction::Binary {
                     dest,
@@ -516,7 +567,6 @@ impl Lowerer {
                     rhs,
                 });
 
-                // Store
                 block.push_instruction(Instruction::StoreVar {
                     name: ir_name,
                     value: dest,

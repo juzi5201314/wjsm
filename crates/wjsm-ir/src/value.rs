@@ -32,7 +32,6 @@ pub fn decode_string_ptr(val: i64) -> u32 {
     (uval & 0xFFFF_FFFF) as u32
 }
 
-
 pub fn encode_undefined() -> i64 {
     (BOX_BASE | (TAG_UNDEFINED << 32)) as i64
 }
