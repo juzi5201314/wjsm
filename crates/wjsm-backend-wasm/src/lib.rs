@@ -154,13 +154,11 @@ impl Compiler {
                     Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. } => name,
                     _ => continue,
                 };
-                self.var_locals
-                    .entry(name.clone())
-                    .or_insert_with(|| {
-                        let idx = self.next_var_local;
-                        self.next_var_local += 1;
-                        idx
-                    });
+                self.var_locals.entry(name.clone()).or_insert_with(|| {
+                    let idx = self.next_var_local;
+                    self.next_var_local += 1;
+                    idx
+                });
             }
         }
     }

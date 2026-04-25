@@ -1,7 +1,7 @@
 module {
   constants:
     c0 = undefined
-    c1 = number(10)
+    c1 = number(1)
 
   fn @main [entry=bb0]:
     bb0:

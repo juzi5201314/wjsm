@@ -9,6 +9,7 @@ module {
       store var $0.x, %0
       %1 = load var $0.x
       %2 = const c1
+      store var $0.x, %2
       %3 = add %1, %2
       store var $0.x, %3
       %4 = load var $0.x
