@@ -22,11 +22,21 @@ enum VarKind {
     Const,
 }
 
+/// 控制预扫描时是否包含 let/const 声明。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LexicalMode {
+    /// 包含 let/const 声明（顶层作用域预扫描）。
+    Include,
+    /// 排除 let/const 声明（块级作用域嵌套扫描）。
+    Exclude,
+}
+
 #[derive(Debug, Clone)]
 struct VarInfo {
     kind: VarKind,
     /// `false` = in TDZ (declared lexically but not yet initialised).
-    declared: bool,
+    /// `true`  = initialised and ready for use.
+    initialised: bool,
 }
 
 struct Scope {
@@ -80,9 +90,9 @@ impl ScopeTree {
     /// - `var`          → nearest enclosing *function* scope.
     ///
     /// Returns `Err(message)` on redeclaration conflict (let/const in same scope).
-    fn declare(&mut self, name: &str, kind: VarKind, declared: bool) -> Result<usize, String> {
+    fn declare(&mut self, name: &str, kind: VarKind, initialised: bool) -> Result<usize, String> {
         let target_idx = match kind {
-            VarKind::Var => self.nearest_function_scope(),
+            VarKind::Var => self.nearest_function_scope()?,
             VarKind::Let | VarKind::Const => self.current,
         };
 
@@ -103,7 +113,7 @@ impl ScopeTree {
 
         scope
             .variables
-            .insert(name.to_string(), VarInfo { kind, declared });
+            .insert(name.to_string(), VarInfo { kind, initialised });
         Ok(scope.id)
     }
 
@@ -114,7 +124,7 @@ impl ScopeTree {
         loop {
             let scope = &mut self.arenas[cursor];
             if let Some(info) = scope.variables.get_mut(name) {
-                info.declared = true;
+                info.initialised = true;
                 return Ok(());
             }
             match scope.parent {
@@ -132,7 +142,7 @@ impl ScopeTree {
         loop {
             let scope = &self.arenas[cursor];
             if let Some(info) = scope.variables.get(name) {
-                if !info.declared {
+                if !info.initialised {
                     return Err(format!("cannot access `{name}` before initialisation"));
                 }
                 return Ok((scope.id, info.kind));
@@ -180,15 +190,15 @@ impl ScopeTree {
         }
     }
 
-    fn nearest_function_scope(&self) -> usize {
+    fn nearest_function_scope(&self) -> Result<usize, String> {
         let mut cursor = self.current;
         loop {
             if matches!(self.arenas[cursor].kind, ScopeKind::Function) {
-                return cursor;
+                return Ok(cursor);
             }
             cursor = self.arenas[cursor]
                 .parent
-                .expect("root must be function scope");
+                .ok_or_else(|| "root must be function scope".to_string())?;
         }
     }
 }
@@ -206,6 +216,8 @@ struct Lowerer {
     next_value: u32,
     scopes: ScopeTree,
     hoisted_vars: Vec<HoistedVar>,
+    /// 用于 O(1) 重复检测的 HashSet。
+    hoisted_vars_set: std::collections::HashSet<(usize, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,6 +233,7 @@ impl Lowerer {
             next_value: 0,
             scopes: ScopeTree::new(),
             hoisted_vars: Vec::new(),
+            hoisted_vars_set: std::collections::HashSet::new(),
         }
     }
 
@@ -306,14 +319,14 @@ impl Lowerer {
             let swc_ast::ModuleItem::Stmt(stmt) = item else {
                 continue;
             };
-            self.predeclare_stmt_with_mode(stmt, true)?;
+            self.predeclare_stmt_with_mode(stmt, LexicalMode::Include)?;
         }
         Ok(())
     }
 
     fn predeclare_block_stmts(&mut self, stmts: &[swc_ast::Stmt]) -> Result<(), LoweringError> {
         for stmt in stmts {
-            self.predeclare_stmt_with_mode(stmt, true)?;
+            self.predeclare_stmt_with_mode(stmt, LexicalMode::Include)?;
         }
         Ok(())
     }
@@ -321,7 +334,7 @@ impl Lowerer {
     fn predeclare_stmt_with_mode(
         &mut self,
         stmt: &swc_ast::Stmt,
-        include_lexical: bool,
+        mode: LexicalMode,
     ) -> Result<(), LoweringError> {
         match stmt {
             swc_ast::Stmt::Decl(decl) => match decl {
@@ -336,7 +349,7 @@ impl Lowerer {
                             swc_ast::Pat::Ident(binding_ident) => binding_ident.id.sym.to_string(),
                             _ => continue, // destructuring not handled in pre-scan
                         };
-                        if !matches!(kind, VarKind::Var) && !include_lexical {
+                        if !matches!(kind, VarKind::Var) && matches!(mode, LexicalMode::Exclude) {
                             continue;
                         }
 
@@ -355,7 +368,7 @@ impl Lowerer {
             },
             swc_ast::Stmt::Block(block_stmt) => {
                 for stmt in &block_stmt.stmts {
-                    self.predeclare_stmt_with_mode(stmt, false)?;
+                    self.predeclare_stmt_with_mode(stmt, LexicalMode::Exclude)?;
                 }
             }
             _ => {}
@@ -364,11 +377,8 @@ impl Lowerer {
     }
 
     fn record_hoisted_var(&mut self, scope_id: usize, name: String) {
-        if self
-            .hoisted_vars
-            .iter()
-            .any(|var| var.scope_id == scope_id && var.name == name)
-        {
+        // 使用 HashSet 进行 O(1) 重复检测。
+        if !self.hoisted_vars_set.insert((scope_id, name.clone())) {
             return;
         }
 
@@ -438,6 +448,11 @@ impl Lowerer {
                     return Err(self.error(var_decl.span, "const declarations must be initialised"));
                 }
                 if matches!(kind, VarKind::Var) {
+                    // var 在预扫描时已标记为 initialised，此处调用是 no-op。
+                    // 但保持代码一致性，仍然调用 mark_initialised。
+                    self.scopes
+                        .mark_initialised(&name)
+                        .map_err(|msg| self.error(var_decl.span, msg))?;
                     continue;
                 }
 
@@ -547,7 +562,16 @@ impl Lowerer {
                 Ok(rhs)
             }
             op => {
-                // Compound assignment reads the old value before evaluating RHS.
+                // 复合赋值：x += rhs
+                //
+                // ECMAScript 规范（EvaluateStringOrNumericBinaryExpression）要求：
+                // 1. 先读取左操作数的旧值（LoadVar）
+                // 2. 再求值右操作数（rhs）
+                // 3. 执行二元运算
+                // 4. 将结果写回左操作数（StoreVar）
+                //
+                // 这个顺序不可交换：如果先求值 rhs 再读取旧值，
+                // 当 rhs 有副作用修改了 x 时语义会出错。
                 let bin_op = assign_op_to_binary(op).ok_or_else(|| {
                     self.error(assign.span, "unsupported compound assignment operator")
                 })?;
