@@ -2,90 +2,67 @@
 
 ## Project Overview
 
-`wjsm` 是一个兼容 Node.js 语法的 JavaScript/TypeScript 运行时，采用独特的 AOT（Ahead-of-Time）编译架构。
+`wjsm` is an AOT JavaScript/TypeScript runtime that compiles JS/TS to WebAssembly.
+It does **not** use V8 — it uses `swc_core` for parsing, `wasm-encoder` for codegen, and `wasmtime` for execution.
 
-与 Deno/Bun 等运行时不同，wjsm **不直接使用 V8 等 JS 引擎解释执行**，而是：
-- 将 JS/TS 代码 AOT 编译为 WebAssembly 模块
-- 通过多种 WASM 运行时（wasmtime、V8 等）执行编译后的代码
-- 实现高性能、低内存占用的 JS 执行环境
+## Workspace Structure
 
-## Project Structure
+This is a Cargo workspace. The root `src/main.rs` is only a thin wrapper; all logic lives in `crates/`:
 
-```
-wjsm/
-├── src/
-│   ├── main.rs           # CLI 入口，定义 build/run 命令
-│   ├── runtime.rs        # WASM 运行时执行（当前使用 wasmtime）
-│   └── compiler/
-│       ├── mod.rs        # 编译器模块导出
-│       ├── codegen.rs    # WASM 代码生成（swc AST → wasm-encoder）
-│       └── value.rs      # JS 值类型编码/解码（NaN boxing）
-├── Cargo.toml            # Rust 项目配置
-├── test.ts               # 测试示例文件
-└── README.md             # 项目文档
-```
+| Crate | Responsibility |
+|---|---|
+| `wjsm-parser` | `swc_core` → `swc_ast::Module` |
+| `wjsm-semantic` | AST lowering → `wjsm_ir::Program` (scope tree, TDZ, var hoisting) |
+| `wjsm-ir` | Intermediate representation (`Module`, `Function`, `BasicBlock`, `Instruction`) |
+| `wjsm-backend-wasm` | IR → WASM bytes (`wasm-encoder`) |
+| `wjsm-backend-jit` | Stub — not implemented yet |
+| `wjsm-runtime` | Execute WASM bytes via `wasmtime` |
+| `wjsm-cli` | CLI entry (`build`, `run` subcommands) |
 
-## Build Commands
+Compilation pipeline: `parser → semantic → backend-wasm → runtime`.
+
+## Build & Run
 
 ```bash
-# 构建项目
+# Build entire workspace
 cargo build
 
-# 发布构建
-cargo build --release
-
-# 编译 JS 文件到 WASM
+# Compile JS/TS to WASM
 cargo run -- build test.ts -o out.wasm
 
-# 直接运行 JS 文件（编译并执行）
+# Compile and execute immediately
 cargo run -- run test.ts
 ```
-
-## Code Style
-
-- 使用 Rust 2024 edition
-- 依赖管理：anyhow, clap, swc_core, wasmtime, wasm-encoder
-- 错误处理：优先使用 `anyhow::Result` 和 `thiserror`
-- 代码注释使用中文，保持简洁清晰
-
-## Architecture Details
-
-### 编译流程
-1. **解析**: `swc_core` 将 JS/TS 源码解析为 AST
-2. **代码生成**: `wasm-encoder` 将 AST 转换为 WASM 字节码
-3. **值编码**: 使用 NaN boxing 技术在 64 位浮点数中编码 JS 值类型
-4. **执行**: `wasmtime` 加载并执行 WASM 模块
-
-### 宿主函数
-当前实现提供以下宿主函数供 WASM 模块调用：
-- `env.console_log(val: i64)`: 输出日志，支持数字和字符串
-
-### 支持的语法（当前 PoC 阶段）
-- `console.log()` 调用
-- 数字字面量和基本算术运算 (+, -, *, /)
-- 字符串字面量
 
 ## Testing
 
-暂无自动化测试套件。通过手动运行测试文件验证功能：
-
 ```bash
-cargo run -- run test.ts
+# Run all tests across workspace
+cargo test
+
+# Run tests for a single crate
+cargo test -p wjsm-semantic
 ```
 
-## Future Roadmap
+- Unit tests live in `src/lib.rs` under `#[cfg(test)]`.
+- Snapshot tests in `crates/wjsm-semantic/tests/lowering_snapshots.rs` compare lowered IR against `.ir` files in `fixtures/semantic/`.
+- Happy-path JS fixtures are in `fixtures/happy/` with `.expected` files for expected stdout.
+- Error fixtures are in `fixtures/errors/`.
+- If you change lowering logic, update `fixtures/semantic/*.ir` manually — there is no auto-bless.
 
-### 短期目标
-- 完整的 JavaScript 表达式支持
-- 变量声明和作用域
-- 控制流（if/else, loop）
-- 函数定义和调用
+## Code Conventions
 
-### 长期目标
-- 模块化系统（ES Modules / CommonJS）
-- 多 WASM 运行时支持（wasmtime, wasmer, V8）
-- 标准库实现（fs, path, http 等）
-- npm 包兼容性
+- Rust 2024 edition.
+- Error handling: `anyhow::Result` for CLI/runtime, `thiserror` for crate-specific errors (e.g. `LoweringError`).
+- Code comments are written in Chinese.
+- IR variable names are scope-qualified: `${scope_id}.{name}` (e.g. `$0.x`).
+
+## Architecture Notes
+
+- **Value encoding**: NaN boxing in `crates/wjsm-ir/src/value.rs`. `i64` carries JS values: numbers as raw `f64` bits, strings via tagged pointer into WASM memory, `undefined` with a dedicated tag.
+- **Scope tree**: `wjsm-semantic` implements lexical scoping with TDZ. `var` is hoisted to function scope and initialised with `undefined`; `let`/`const` enter TDZ until their initializer runs.
+- **WASM contract**: The generated module imports `env.console_log(i64)`, exports `main()`, and exports `memory`.
+- **JIT backend**: `wjsm-backend-jit` currently returns `bail!("JIT backend is not implemented yet")`.
 
 ## Commit Guidelines
 
@@ -93,4 +70,4 @@ cargo run -- run test.ts
 - `fix:` 修复
 - `docs:` 文档更新
 - `refactor:` 重构
-- 保持简洁清晰的提交信息
+- 保持简洁清晰

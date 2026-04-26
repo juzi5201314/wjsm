@@ -2,3 +2,13 @@
 .omx/
 
 codedb.snapshot
+.env
+.gitnexus
+
+# AI workspace cache (local only)
+.antigravity/
+CONTEXT.md
+artifacts/
+
+# Editor local config
+.opencode/
