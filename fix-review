@@ -1,0 +1,108 @@
+# 修复代码审查问题的实施计划
+
+## 目标
+修复代码审查中发现的全部9个问题（2个Critical，3个Warning，4个Info）。
+
+## 问题清单与修复方案
+
+### 🔴 Critical Issues (2个)
+
+#### 1. 变量状态命名混乱 (declared vs initialised)
+**位置**: `crates/wjsm-semantic/src/lib.rs`
+**问题**: `VarInfo.declared` 字段名与 `mark_initialised()` 方法名不一致
+**修复步骤**:
+1. 重命名 `declared` 字段为 `initialised`
+2. 更新字段注释说明含义
+3. 修改 `declare()` 方法中的参数名和赋值逻辑
+4. 修改 `lookup()` 方法中的检查逻辑
+5. 修改 `mark_initialised()` 方法中的赋值逻辑
+
+#### 2. `var` 无初始化器时缺失 `mark_initialised` 调用
+**位置**: `crates/wjsm-semantic/src/lib.rs:371-373`
+**问题**: 处理 `var x;` 时直接 `continue`，未调用 `mark_initialised`
+**修复步骤**:
+1. 在 `lower_var_decl` 方法中，对于 `VarKind::Var` 的情况，添加 `mark_initialised` 调用
+2. 添加注释说明虽为 no-op 但保持代码一致性
+
+### 🟡 Warning Issues (3个)
+
+#### 3. 重复变量检测 O(n²) 性能问题
+**位置**: `crates/wjsm-semantic/src/lib.rs:316-325`
+**问题**: `record_hoisted_var` 使用线性扫描检测重复
+**修复步骤**:
+1. 在 `Lowerer` 结构体中添加 `hoisted_vars_set: HashSet<(usize, String)>` 字段
+2. 在 `record_hoisted_var` 中使用 HashSet 进行 O(1) 重复检测
+3. 确保 `new()` 中初始化该 HashSet
+
+#### 4. 复合赋值表达式求值顺序缺乏注释
+**位置**: `crates/wjsm-semantic/src/lib.rs:487-507`
+**问题**: 先 load 后求 RHS 的顺序是正确的但易被破坏，缺少说明
+**修复步骤**:
+1. 在 `lower_assign` 方法中复合赋值分支添加详细注释
+2. 说明 ECMAScript 规范要求先读取旧值再求 RHS
+
+#### 5. 异常情况下可能导致 panic
+**位置**: `crates/wjsm-semantic/src/lib.rs:196-198`
+**问题**: 使用 `.expect("root must be function scope")`
+**修复步骤**:
+1. 将 `.expect()` 改为 `.ok_or_else()` 返回错误
+2. 添加适当的错误消息
+
+### 🔵 Info Issues (4个)
+
+#### 6. 布尔参数模式不一致
+**位置**: `crates/wjsm-semantic/src/lib.rs:284-290`
+**问题**: `predeclare_stmt_with_mode(stmt, include_lexical: bool)` 可读性差
+**修复步骤**:
+1. 定义枚举 `LexicalMode { IncludeLexical, ExcludeLexical }`
+2. 替换函数签名中的 `bool` 为 `LexicalMode`
+3. 更新所有调用点
+
+#### 7. 注释与实现不匹配
+**位置**: `crates/wjsm-semantic/src/lib.rs:221-222`
+**问题**: 注释只提到 let/const TDZ，未提及 var hoisting
+**修复步骤**:
+1. 更新注释完整描述预扫描的行为
+
+#### 8. 逻辑重复
+**位置**: `crates/wjsm-backend-wasm/src/lib.rs:89-130`, `:227-247`
+**问题**: `assign_var_locals` 和 `required_local_count` 逻辑重复
+**修复步骤**:
+1. 提取辅助方法 `collect_instruction_value_ids(instruction: &Instruction) -> Vec<u32>`
+2. 在两个方法中复用该辅助方法
+
+#### 9. local count 计算逻辑混淆
+**位置**: `crates/wjsm-backend-wasm/src/lib.rs:227-247`
+**问题**: 概念上容易混淆 SSA temps 和 var locals 的计数
+**修复步骤**:
+1. 添加详细注释说明计算逻辑
+2. 可考虑简化直接使用 `self.next_var_local` 作为结果
+
+## 实施顺序
+
+建议按以下顺序实施，避免冲突：
+
+1. 先修改 `wjsm-semantic` crate 中的命名和核心逻辑（问题 1, 2, 5, 6, 7）
+2. 再添加性能优化（问题 3）
+3. 添加复合赋值注释（问题 4）
+4. 最后修改 `wjsm-backend-wasm` crate（问题 8, 9）
+
+## 验证步骤
+
+每修复完一个 crate，运行：
+```bash
+cargo test -p wjsm-semantic
+cargo test -p wjsm-backend-wasm
+```
+
+全部完成后运行完整测试：
+```bash
+cargo test
+```
+
+## 文件变更清单
+
+| 文件 | 变更内容 |
+|------|---------|
+| `crates/wjsm-semantic/src/lib.rs` | 修复问题 1-7 |
+| `crates/wjsm-backend-wasm/src/lib.rs` | 修复问题 8-9 |

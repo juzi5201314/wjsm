@@ -130,19 +130,7 @@ impl Compiler {
             .blocks()
             .iter()
             .flat_map(|block| block.instructions())
-            .flat_map(|instruction| match instruction {
-                Instruction::Const { dest, .. } => [Some(dest.0), None, None],
-                Instruction::Binary { dest, lhs, rhs, .. } => {
-                    [Some(dest.0), Some(lhs.0), Some(rhs.0)]
-                }
-                Instruction::CallBuiltin { dest, args, .. } => {
-                    let max_arg = args.iter().map(|value| value.0).max();
-                    [dest.map(|value| value.0), max_arg, None]
-                }
-                Instruction::LoadVar { dest, .. } => [Some(dest.0), None, None],
-                Instruction::StoreVar { name: _, value } => [Some(value.0), None, None],
-            })
-            .flatten()
+            .flat_map(collect_instruction_value_ids)
             .max()
             .map_or(0, |max| max + 1);
 
@@ -252,24 +240,20 @@ impl Compiler {
     }
 
     fn required_local_count(&self, function: &IrFunction) -> u32 {
-        // The total locals needed: max(SSA temporaries, variable local indices).
+        // 计算当前函数所需的 WASM local 总数。
+        //
+        // WASM local 索引空间由两部分共享：
+        // - SSA 临时变量（指令的 dest/lhs/rhs/value 等）
+        // - var 变量（LoadVar/StoreVar 中的 name 对应的 local）
+        //
+        // 取所有索引的最大值 + 1 即为所需 local 数量。
+        // 注意：assign_var_locals 执行后 next_var_local 等于最后一个 var local 的索引 + 1，
+        // 但这里仍从所有指令和 var_locals 中取 max 以确保安全。
         function
             .blocks()
             .iter()
             .flat_map(|block| block.instructions())
-            .flat_map(|instruction| match instruction {
-                Instruction::Const { dest, .. } => [Some(dest.0), None, None],
-                Instruction::Binary { dest, lhs, rhs, .. } => {
-                    [Some(dest.0), Some(lhs.0), Some(rhs.0)]
-                }
-                Instruction::CallBuiltin { dest, args, .. } => {
-                    let max_arg = args.iter().map(|value| value.0).max();
-                    [dest.map(|value| value.0), max_arg, None]
-                }
-                Instruction::LoadVar { dest, .. } => [Some(dest.0), None, None],
-                Instruction::StoreVar { name: _, value } => [Some(value.0), None, None],
-            })
-            .flatten()
+            .flat_map(collect_instruction_value_ids)
             .chain(self.var_locals.values().copied())
             .max()
             .map_or(0, |max| max + 1)
@@ -295,6 +279,24 @@ impl Compiler {
         }
 
         self.module.finish()
+    }
+}
+
+/// 遍历指令收集所有引用的 ValueId（dest、lhs、rhs、value、args 等），
+/// 用于计算 SSA 临时变量索引范围。
+fn collect_instruction_value_ids(instruction: &Instruction) -> Vec<u32> {
+    match instruction {
+        Instruction::Const { dest, .. } => vec![dest.0],
+        Instruction::Binary { dest, lhs, rhs, .. } => vec![dest.0, lhs.0, rhs.0],
+        Instruction::CallBuiltin { dest, args, .. } => {
+            let mut ids: Vec<u32> = args.iter().map(|v| v.0).collect();
+            if let Some(d) = dest {
+                ids.push(d.0);
+            }
+            ids
+        }
+        Instruction::LoadVar { dest, .. } => vec![dest.0],
+        Instruction::StoreVar { value, .. } => vec![value.0],
     }
 }
 
