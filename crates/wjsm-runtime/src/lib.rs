@@ -91,10 +91,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let iterator_from = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
-            if value::is_string(val) {
-                let ptr = value::decode_string_ptr(val);
-                // Read string from WASM memory
-                let string_data = read_string_bytes(&mut caller, ptr);
+            if let Some(string_data) = read_value_string_bytes(&mut caller, val) {
                 let mut iters = caller.data().iterators.lock().expect("iterators mutex");
                 let handle = iters.len() as u32;
                 iters.push(IteratorState::StringIter {
@@ -149,19 +146,20 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         if *byte_pos < data.len() {
                             let ch = data[*byte_pos] as char;
                             drop(iters);
-                            let mut strings = caller
-                                .data()
-                                .runtime_strings
-                                .lock()
-                                .expect("runtime strings mutex");
-                            let handle = strings.len() as u32;
-                            strings.push(ch.to_string());
-                            value::encode_string_ptr(0x8000_0000 | handle)
+                            store_runtime_string(&caller, ch.to_string())
                         } else {
                             value::encode_undefined()
                         }
                     }
-                    IteratorState::Error => panic!("TypeError: value is not iterable"),
+                    IteratorState::Error => {
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .expect("runtime error mutex") =
+                            Some("TypeError: value is not iterable".to_string());
+                        value::encode_undefined()
+                    }
                 }
             } else {
                 value::encode_undefined()
@@ -199,9 +197,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let enumerator_from = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
-            if value::is_string(val) {
-                let ptr = value::decode_string_ptr(val);
-                let string_data = read_string_bytes(&mut caller, ptr);
+            if let Some(string_data) = read_value_string_bytes(&mut caller, val) {
                 let len = string_data.len();
                 let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
                 let handle = enums.len() as u32;
@@ -250,16 +246,17 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     EnumeratorState::StringEnum { index, .. } => {
                         let key = index.to_string();
                         drop(enums);
-                        let mut strings = caller
-                            .data()
-                            .runtime_strings
-                            .lock()
-                            .expect("runtime strings mutex");
-                        let handle = strings.len() as u32;
-                        strings.push(key);
-                        return value::encode_string_ptr(0x8000_0000 | handle);
+                        return store_runtime_string(&caller, key);
                     }
-                    EnumeratorState::Error => panic!("TypeError: value is not enumerable"),
+                    EnumeratorState::Error => {
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .expect("runtime error mutex") =
+                            Some("TypeError: value is not enumerable".to_string());
+                        return value::encode_undefined();
+                    }
                 }
             }
             value::encode_undefined()
@@ -349,9 +346,8 @@ enum EnumeratorState {
 
 fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<String> {
     if value::is_string(val) {
-        let ptr = value::decode_string_ptr(val);
-        if (ptr & 0x8000_0000) != 0 {
-            let handle = (ptr & 0x7FFF_FFFF) as usize;
+        if value::is_runtime_string_handle(val) {
+            let handle = value::decode_runtime_string_handle(val) as usize;
             let strings = caller
                 .data()
                 .runtime_strings
@@ -362,7 +358,8 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
             }
             return Ok(String::new());
         }
-        return read_string(caller, ptr);
+
+        return read_string(caller, value::decode_string_ptr(val));
     }
 
     if value::is_undefined(val) {
@@ -421,6 +418,35 @@ fn read_string_bytes(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Vec<u8>
         .map_or(data.len(), |offset| start + offset);
 
     data[start..end].to_vec()
+}
+
+fn read_value_string_bytes(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<Vec<u8>> {
+    if !value::is_string(val) {
+        return None;
+    }
+
+    if value::is_runtime_string_handle(val) {
+        let handle = value::decode_runtime_string_handle(val) as usize;
+        let strings = caller
+            .data()
+            .runtime_strings
+            .lock()
+            .expect("runtime strings mutex");
+        return strings.get(handle).map(|string| string.as_bytes().to_vec());
+    }
+
+    Some(read_string_bytes(caller, value::decode_string_ptr(val)))
+}
+
+fn store_runtime_string(caller: &Caller<'_, RuntimeState>, string: String) -> i64 {
+    let mut strings = caller
+        .data()
+        .runtime_strings
+        .lock()
+        .expect("runtime strings mutex");
+    let handle = strings.len() as u32;
+    strings.push(string);
+    value::encode_runtime_string_handle(handle)
 }
 
 #[cfg(test)]

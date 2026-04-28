@@ -11,6 +11,7 @@ pub const TAG_EXCEPTION: u64 = 0x5;
 pub const TAG_ITERATOR: u64 = 0x6;
 pub const TAG_ENUMERATOR: u64 = 0x7;
 
+pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x8;
 pub const BOX_BASE: u64 = MASK_EXPONENT | MASK_QUIET_NAN;
 
 pub fn encode_f64(val: f64) -> i64 {
@@ -19,6 +20,11 @@ pub fn encode_f64(val: f64) -> i64 {
 
 pub fn encode_string_ptr(ptr: u32) -> i64 {
     let payload = (TAG_STRING << 32) | (ptr as u64);
+    (BOX_BASE | payload) as i64
+}
+
+pub fn encode_runtime_string_handle(handle: u32) -> i64 {
+    let payload = (STRING_RUNTIME_HANDLE_FLAG << 32) | (TAG_STRING << 32) | (handle as u64);
     (BOX_BASE | payload) as i64
 }
 
@@ -32,9 +38,18 @@ pub fn is_string(val: i64) -> bool {
     (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_STRING
 }
 
+pub fn is_runtime_string_handle(val: i64) -> bool {
+    let uval = val as u64;
+    is_string(val) && ((uval >> 32) & STRING_RUNTIME_HANDLE_FLAG) != 0
+}
+
 pub fn decode_string_ptr(val: i64) -> u32 {
     let uval = val as u64;
     (uval & 0xFFFF_FFFF) as u32
+}
+
+pub fn decode_runtime_string_handle(val: i64) -> u32 {
+    decode_string_ptr(val)
 }
 
 pub fn encode_undefined() -> i64 {

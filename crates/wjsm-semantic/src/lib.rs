@@ -283,6 +283,7 @@ struct LabelContext {
     kind: LabelKind,
     break_target: BasicBlockId,
     continue_target: Option<BasicBlockId>,
+    iterator_to_close: Option<ValueId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -609,6 +610,7 @@ impl Lowerer {
             kind: LabelKind::Loop,
             break_target: exit,
             continue_target: Some(header),
+            iterator_to_close: None,
         });
 
         let body_flow = self.lower_stmt(&while_stmt.body, StmtFlow::Open(body))?;
@@ -642,6 +644,7 @@ impl Lowerer {
             kind: LabelKind::Loop,
             break_target: exit,
             continue_target: Some(condition),
+            iterator_to_close: None,
         });
 
         let body_flow = self.lower_stmt(&do_while.body, StmtFlow::Open(body))?;
@@ -698,6 +701,7 @@ impl Lowerer {
             kind: LabelKind::Loop,
             break_target: exit,
             continue_target: Some(update),
+            iterator_to_close: None,
         });
 
         // condition
@@ -806,6 +810,7 @@ impl Lowerer {
             kind: LabelKind::Loop,
             break_target: exit,
             continue_target: Some(next),
+            iterator_to_close: None,
         });
 
         // body: get key, assign lhs
@@ -910,6 +915,7 @@ impl Lowerer {
             kind: LabelKind::Loop,
             break_target: close,
             continue_target: Some(next_block),
+            iterator_to_close: Some(iter_handle),
         });
 
         // body: get value, assign lhs
@@ -1045,14 +1051,17 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
 
-        let target = if let Some(label) = &break_stmt.label {
-            self.find_label(&label.sym.to_string(), Some(label.span))?
+        let target_index = if let Some(label) = &break_stmt.label {
+            self.find_label_context_index(&label.sym.to_string(), Some(label.span))?
         } else {
-            self.find_nearest_break_target(break_stmt.span())?
+            self.find_nearest_break_context_index(break_stmt.span())?
         };
+        let target = self.label_stack[target_index].break_target;
+        let iterator_cleanups = self.iterator_cleanups_crossing(target_index);
 
         match self.lower_pending_finalizers(block)? {
             StmtFlow::Open(after_finally) => {
+                self.emit_iterator_closes(after_finally, &iterator_cleanups);
                 self.current_function
                     .set_terminator(after_finally, Terminator::Jump { target });
             }
@@ -1068,20 +1077,26 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
 
-        let target = if let Some(label) = &continue_stmt.label {
-            let ctx = self.find_label_context(&label.sym.to_string(), Some(label.span))?;
-            ctx.continue_target.ok_or_else(|| {
-                self.error(
+        let target_index = if let Some(label) = &continue_stmt.label {
+            let index = self.find_label_context_index(&label.sym.to_string(), Some(label.span))?;
+            if self.label_stack[index].continue_target.is_none() {
+                return Err(self.error(
                     continue_stmt.span(),
                     format!("cannot continue to non-loop label `{}`", label.sym),
-                )
-            })?
+                ));
+            }
+            index
         } else {
-            self.find_nearest_continue_target(continue_stmt.span())?
+            self.find_nearest_continue_context_index(continue_stmt.span())?
         };
+        let target = self.label_stack[target_index]
+            .continue_target
+            .expect("continue target checked above");
+        let iterator_cleanups = self.iterator_cleanups_crossing(target_index);
 
         match self.lower_pending_finalizers(block)? {
             StmtFlow::Open(after_finally) => {
+                self.emit_iterator_closes(after_finally, &iterator_cleanups);
                 self.current_function
                     .set_terminator(after_finally, Terminator::Jump { target });
             }
@@ -1090,12 +1105,10 @@ impl Lowerer {
         Ok(StmtFlow::Terminated)
     }
 
-    fn find_nearest_break_target(&self, span: Span) -> Result<BasicBlockId, LoweringError> {
-        for ctx in self.label_stack.iter().rev() {
+    fn find_nearest_break_context_index(&self, span: Span) -> Result<usize, LoweringError> {
+        for (index, ctx) in self.label_stack.iter().enumerate().rev() {
             match ctx.kind {
-                LabelKind::Loop | LabelKind::Switch | LabelKind::Block => {
-                    return Ok(ctx.break_target);
-                }
+                LabelKind::Loop | LabelKind::Switch | LabelKind::Block => return Ok(index),
             }
         }
         Err(LoweringError::Diagnostic(Diagnostic::new(
@@ -1105,10 +1118,10 @@ impl Lowerer {
         )))
     }
 
-    fn find_nearest_continue_target(&self, span: Span) -> Result<BasicBlockId, LoweringError> {
-        for ctx in self.label_stack.iter().rev() {
-            if let Some(target) = ctx.continue_target {
-                return Ok(target);
+    fn find_nearest_continue_context_index(&self, span: Span) -> Result<usize, LoweringError> {
+        for (index, ctx) in self.label_stack.iter().enumerate().rev() {
+            if ctx.continue_target.is_some() {
+                return Ok(index);
             }
         }
         Err(LoweringError::Diagnostic(Diagnostic::new(
@@ -1118,14 +1131,14 @@ impl Lowerer {
         )))
     }
 
-    fn find_label(
+    fn find_label_context_index(
         &self,
         name: &str,
         error_span: Option<Span>,
-    ) -> Result<BasicBlockId, LoweringError> {
-        for ctx in self.label_stack.iter().rev() {
+    ) -> Result<usize, LoweringError> {
+        for (index, ctx) in self.label_stack.iter().enumerate().rev() {
             if ctx.label.as_deref() == Some(name) {
-                return Ok(ctx.break_target);
+                return Ok(index);
             }
         }
         let (start, end) = match error_span {
@@ -1139,21 +1152,28 @@ impl Lowerer {
         )))
     }
 
-    fn find_label_context(&self, name: &str, error_span: Option<Span>) -> Result<&LabelContext, LoweringError> {
-        for ctx in self.label_stack.iter().rev() {
-            if ctx.label.as_deref() == Some(name) {
-                return Ok(ctx);
-            }
+    fn iterator_cleanups_crossing(&self, target_index: usize) -> Vec<ValueId> {
+        let mut iterators = self
+            .label_stack
+            .iter()
+            .skip(target_index + 1)
+            .filter_map(|ctx| ctx.iterator_to_close)
+            .collect::<Vec<_>>();
+        iterators.reverse();
+        iterators
+    }
+
+    fn emit_iterator_closes(&mut self, block: BasicBlockId, iterators: &[ValueId]) {
+        for iterator in iterators {
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::IteratorClose,
+                    args: vec![*iterator],
+                },
+            );
         }
-        let (start, end) = match error_span {
-            Some(span) => (span.lo.0, span.hi.0),
-            None => (0, 0),
-        };
-        Err(LoweringError::Diagnostic(Diagnostic::new(
-            start,
-            end,
-            format!("unknown label `{name}`"),
-        )))
     }
 
     // ── labeled ─────────────────────────────────────────────────────────────
@@ -1200,6 +1220,7 @@ impl Lowerer {
             kind: LabelKind::Block,
             break_target: exit,
             continue_target: None,
+            iterator_to_close: None,
         });
 
         let inner_flow = self.lower_stmt(&labeled.body, StmtFlow::Open(block))?;
@@ -1293,6 +1314,7 @@ impl Lowerer {
             kind: LabelKind::Switch,
             break_target: exit,
             continue_target: None,
+            iterator_to_close: None,
         });
 
         for (i, case) in switch_stmt.cases.iter().enumerate() {
@@ -1366,10 +1388,7 @@ impl Lowerer {
             swc_ast::Expr::Lit(swc_ast::Lit::Null(_)) => {
                 Ok(self.module.add_constant(Constant::Null))
             }
-            _ => Err(self.error(
-                expr.span(),
-                "switch case must be a literal",
-            )),
+            _ => Err(self.error(expr.span(), "switch case must be a literal")),
         }
     }
 
@@ -2463,15 +2482,22 @@ impl Lowerer {
             return Ok(StmtFlow::Open(block));
         }
 
-        let finalizers: Vec<_> = self.active_finalizers.iter().rev().cloned().collect();
-        let saved = std::mem::take(&mut self.active_finalizers);
+        // abrupt completion 会按从内到外的顺序执行 finally。
+        // 降低某个 finally 时，只把“更外层”的 finalizer 保留在 active 栈里，
+        // 这样 finally 内部的 return/throw/break/continue 能继续展开剩余外层 finally，
+        // 而不是因为当前批量展开把 active_finalizers 清空而跳过它们。
+        let saved = self.active_finalizers.clone();
+        let mut pending = saved.clone();
         let mut flow = StmtFlow::Open(block);
-        for finalizer in &finalizers {
-            flow = self.lower_block_body(finalizer, flow)?;
+
+        while let Some(finalizer) = pending.pop() {
+            self.active_finalizers = pending.clone();
+            flow = self.lower_block_body(&finalizer, flow)?;
             if matches!(flow, StmtFlow::Terminated) {
                 break;
             }
         }
+
         self.active_finalizers = saved;
         Ok(flow)
     }

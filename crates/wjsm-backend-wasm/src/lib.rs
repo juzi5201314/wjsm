@@ -730,6 +730,7 @@ impl Compiler {
 
                 if true_is_merge {
                     self.emit_phi_moves(blocks, idx, true_idx);
+                    self.emit(WasmInstruction::Nop);
                 } else {
                     self.compiled_blocks.insert(true_idx);
                     self.compile_branch_body(module, blocks, true_idx)?;
@@ -738,6 +739,7 @@ impl Compiler {
                 self.emit(WasmInstruction::Else);
                 if false_is_merge {
                     self.emit_phi_moves(blocks, idx, false_idx);
+                    self.emit(WasmInstruction::Nop);
                 } else {
                     self.compiled_blocks.insert(false_idx);
                     self.compile_branch_body(module, blocks, false_idx)?;
@@ -1361,7 +1363,20 @@ impl Compiler {
         self.emit(WasmInstruction::I64Const(value::TAG_STRING as i64));
         self.emit(WasmInstruction::I64Eq);
         self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
-        // 字符串：提取低 32 位作为内存指针，读取首字节
+        // 运行时字符串句柄不对应线性内存指针；当前运行时只会产生非空字符串。
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I64Const(
+            (value::STRING_RUNTIME_HANDLE_FLAG << 32) as i64,
+        ));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(
+            (value::STRING_RUNTIME_HANDLE_FLAG << 32) as i64,
+        ));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+        self.emit(WasmInstruction::I32Const(1));
+        self.emit(WasmInstruction::Else);
+        // 编译期字符串：提取低 32 位作为内存指针，读取首字节
         self.emit(WasmInstruction::LocalGet(val_local));
         self.emit(WasmInstruction::I32WrapI64);
         self.emit(WasmInstruction::I32Load8U(MemArg {
@@ -1376,6 +1391,7 @@ impl Compiler {
         self.emit(WasmInstruction::Else);
         self.emit(WasmInstruction::I32Const(1)); // 非空串 truthy
         self.emit(WasmInstruction::End); // end empty string check
+        self.emit(WasmInstruction::End); // end runtime string check
         self.emit(WasmInstruction::Else);
         // Other NaN-boxed types (handle, etc.) → truthy
         self.emit(WasmInstruction::I32Const(1));
