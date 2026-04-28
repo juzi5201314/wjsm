@@ -65,6 +65,8 @@ impl Module {
 pub enum Constant {
     Number(f64),
     String(String),
+    Bool(bool),
+    Null,
     Undefined,
 }
 
@@ -73,6 +75,8 @@ impl fmt::Display for Constant {
         match self {
             Self::Number(value) => write!(formatter, "number({value})"),
             Self::String(value) => write!(formatter, "string({value:?})"),
+            Self::Bool(value) => write!(formatter, "bool({value})"),
+            Self::Null => formatter.write_str("null"),
             Self::Undefined => formatter.write_str("undefined"),
         }
     }
@@ -110,6 +114,18 @@ impl Function {
         &self.blocks
     }
 
+    pub fn blocks_mut(&mut self) -> &mut [BasicBlock] {
+        &mut self.blocks
+    }
+
+    pub fn block_by_id(&self, id: BasicBlockId) -> Option<&BasicBlock> {
+        self.blocks.iter().find(|b| b.id == id)
+    }
+
+    pub fn block_by_id_mut(&mut self, id: BasicBlockId) -> Option<&mut BasicBlock> {
+        self.blocks.iter_mut().find(|b| b.id == id)
+    }
+
     fn dump_into(&self, out: &mut String) {
         let _ = writeln!(out, "  fn @{} [entry={}]:", self.name, self.entry);
 
@@ -133,7 +149,15 @@ pub struct BasicBlock {
 }
 
 impl BasicBlock {
-    pub fn new(id: BasicBlockId, terminator: Terminator) -> Self {
+    pub fn new(id: BasicBlockId) -> Self {
+        Self {
+            id,
+            instructions: Vec::new(),
+            terminator: Terminator::Unreachable,
+        }
+    }
+
+    pub fn new_with_terminator(id: BasicBlockId, terminator: Terminator) -> Self {
         Self {
             id,
             instructions: Vec::new(),
@@ -156,6 +180,14 @@ impl BasicBlock {
     pub fn terminator(&self) -> &Terminator {
         &self.terminator
     }
+
+    pub fn set_terminator(&mut self, terminator: Terminator) {
+        self.terminator = terminator;
+    }
+
+    pub fn terminator_mut(&mut self) -> &mut Terminator {
+        &mut self.terminator
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -169,6 +201,21 @@ pub enum Instruction {
         op: BinaryOp,
         lhs: ValueId,
         rhs: ValueId,
+    },
+    Unary {
+        dest: ValueId,
+        op: UnaryOp,
+        value: ValueId,
+    },
+    Compare {
+        dest: ValueId,
+        op: CompareOp,
+        lhs: ValueId,
+        rhs: ValueId,
+    },
+    Phi {
+        dest: ValueId,
+        sources: Vec<PhiSource>,
     },
     CallBuiltin {
         dest: Option<ValueId>,
@@ -191,6 +238,22 @@ impl fmt::Display for Instruction {
             Self::Const { dest, constant } => write!(formatter, "{dest} = const {constant}"),
             Self::Binary { dest, op, lhs, rhs } => {
                 write!(formatter, "{dest} = {op} {lhs}, {rhs}")
+            }
+            Self::Unary { dest, op, value } => {
+                write!(formatter, "{dest} = {op} {value}")
+            }
+            Self::Compare { dest, op, lhs, rhs } => {
+                write!(formatter, "{dest} = {op} {lhs}, {rhs}")
+            }
+            Self::Phi { dest, sources } => {
+                write!(formatter, "{dest} = phi [")?;
+                for (index, source) in sources.iter().enumerate() {
+                    if index > 0 {
+                        formatter.write_str(", ")?;
+                    }
+                    write!(formatter, "({}, {})", source.predecessor, source.value)?;
+                }
+                formatter.write_char(']')
             }
             Self::CallBuiltin {
                 dest,
@@ -226,6 +289,8 @@ pub enum BinaryOp {
     Sub,
     Mul,
     Div,
+    Mod,
+    Exp,
 }
 
 impl fmt::Display for BinaryOp {
@@ -235,19 +300,103 @@ impl fmt::Display for BinaryOp {
             Self::Sub => "sub",
             Self::Mul => "mul",
             Self::Div => "div",
+            Self::Mod => "mod",
+            Self::Exp => "exp",
         })
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOp {
+    Not,
+    Neg,
+    Pos,
+    BitNot,
+    Void,
+}
+
+impl fmt::Display for UnaryOp {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Not => "not",
+            Self::Neg => "neg",
+            Self::Pos => "pos",
+            Self::BitNot => "bitnot",
+            Self::Void => "void",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompareOp {
+    Eq,
+    NotEq,
+    StrictEq,
+    StrictNotEq,
+    Lt,
+    LtEq,
+    Gt,
+    GtEq,
+}
+
+impl fmt::Display for CompareOp {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::Eq => "eq",
+            Self::NotEq => "neq",
+            Self::StrictEq => "stricteq",
+            Self::StrictNotEq => "strictneq",
+            Self::Lt => "lt",
+            Self::LtEq => "lteq",
+            Self::Gt => "gt",
+            Self::GtEq => "gteq",
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Builtin {
     ConsoleLog,
+    Debugger,
+    Throw,
+    F64Mod,
+    F64Exp,
+    BeginTry,
+    EndTry,
+    BeginFinally,
+    EndFinally,
+    IteratorFrom,
+    IteratorNext,
+    IteratorClose,
+    IteratorValue,
+    IteratorDone,
+    EnumeratorFrom,
+    EnumeratorNext,
+    EnumeratorKey,
+    EnumeratorDone,
 }
 
 impl fmt::Display for Builtin {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::ConsoleLog => "console.log",
+            Self::Debugger => "debugger",
+            Self::Throw => "throw",
+            Self::F64Mod => "f64.mod",
+            Self::F64Exp => "f64.exp",
+            Self::BeginTry => "begin_try",
+            Self::EndTry => "end_try",
+            Self::BeginFinally => "begin_finally",
+            Self::EndFinally => "end_finally",
+            Self::IteratorFrom => "iterator.from",
+            Self::IteratorNext => "iterator.next",
+            Self::IteratorClose => "iterator.close",
+            Self::IteratorValue => "iterator.value",
+            Self::IteratorDone => "iterator.done",
+            Self::EnumeratorFrom => "enumerator.from",
+            Self::EnumeratorNext => "enumerator.next",
+            Self::EnumeratorKey => "enumerator.key",
+            Self::EnumeratorDone => "enumerator.done",
         })
     }
 }
@@ -255,6 +404,11 @@ impl fmt::Display for Builtin {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Terminator {
     Return { value: Option<ValueId> },
+    Jump { target: BasicBlockId },
+    Branch { condition: ValueId, true_block: BasicBlockId, false_block: BasicBlockId },
+    Switch { value: ValueId, cases: Vec<SwitchCaseTarget>, default_block: BasicBlockId, exit_block: BasicBlockId },
+    Throw { value: ValueId },
+    Unreachable,
 }
 
 impl fmt::Display for Terminator {
@@ -262,7 +416,47 @@ impl fmt::Display for Terminator {
         match self {
             Self::Return { value: Some(value) } => write!(formatter, "return {value}"),
             Self::Return { value: None } => formatter.write_str("return"),
+            Self::Jump { target } => write!(formatter, "jump {target}"),
+            Self::Branch { condition, true_block, false_block } => {
+                write!(formatter, "branch {condition}, {true_block}, {false_block}")
+            }
+            Self::Switch { value, cases, default_block, exit_block } => {
+                write!(formatter, "switch {value} [")?;
+                for (i, case) in cases.iter().enumerate() {
+                    if i > 0 {
+                        formatter.write_str(", ")?;
+                    }
+                    write!(formatter, "case {case}")?;
+                }
+                write!(formatter, "], default {default_block}, exit {exit_block}")
+            }
+            Self::Throw { value } => write!(formatter, "throw {value}"),
+            Self::Unreachable => formatter.write_str("unreachable"),
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SwitchCaseTarget {
+    pub constant: ConstantId,
+    pub target: BasicBlockId,
+}
+
+impl fmt::Display for SwitchCaseTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "c{} -> {}", self.constant.0, self.target)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhiSource {
+    pub predecessor: BasicBlockId,
+    pub value: ValueId,
+}
+
+impl fmt::Display for PhiSource {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "({}, {})", self.predecessor, self.value)
     }
 }
 

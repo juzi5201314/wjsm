@@ -1,0 +1,11 @@
+module {
+  constants:
+    c0 = string("ok")
+
+  fn @main [entry=bb0]:
+    bb0:
+      call builtin.debugger()
+      %0 = const c0
+      call builtin.console.log(%0)
+      return
+}

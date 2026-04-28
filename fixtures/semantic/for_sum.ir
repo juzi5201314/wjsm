@@ -1,0 +1,36 @@
+module {
+  constants:
+    c0 = number(0)
+    c1 = number(1)
+    c2 = number(3)
+    c3 = number(1)
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.sum, %0
+      %1 = const c1
+      store var $0.i, %1
+      jump bb1
+    bb1:
+      %2 = load var $0.i
+      %3 = const c2
+      %4 = lteq %2, %3
+      branch %4, bb2, bb4
+    bb2:
+      %5 = load var $0.sum
+      %6 = load var $0.i
+      %7 = add %5, %6
+      store var $0.sum, %7
+      jump bb3
+    bb3:
+      %8 = load var $0.i
+      %9 = const c3
+      %10 = add %8, %9
+      store var $0.i, %10
+      jump bb1
+    bb4:
+      %11 = load var $0.sum
+      call builtin.console.log(%11)
+      return
+}

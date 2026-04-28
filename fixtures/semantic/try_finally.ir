@@ -1,0 +1,24 @@
+module {
+  constants:
+    c0 = string("try")
+    c1 = string("finally")
+    c2 = string("after")
+
+  fn @main [entry=bb0]:
+    bb0:
+      jump bb1
+    bb1:
+      %0 = const c0
+      call builtin.console.log(%0)
+      jump bb3
+    bb2:
+      jump bb3
+    bb3:
+      %1 = const c1
+      call builtin.console.log(%1)
+      jump bb4
+    bb4:
+      %2 = const c2
+      call builtin.console.log(%2)
+      return
+}

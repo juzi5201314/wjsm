@@ -154,6 +154,101 @@ fn console_log_without_arguments_reports_diagnostic() {
     }
 }
 
+#[test]
+fn if_else_fixture_matches_ir_snapshot() {
+    assert_snapshot("if_else");
+}
+
+#[test]
+fn comparison_fixture_matches_ir_snapshot() {
+    assert_snapshot("comparison");
+}
+
+#[test]
+fn bool_null_fixture_matches_ir_snapshot() {
+    assert_snapshot("bool_null");
+}
+
+#[test]
+fn while_count_fixture_matches_ir_snapshot() {
+    assert_snapshot("while_count");
+}
+
+#[test]
+fn do_while_once_fixture_matches_ir_snapshot() {
+    assert_snapshot("do_while_once");
+}
+
+#[test]
+fn for_sum_fixture_matches_ir_snapshot() {
+    assert_snapshot("for_sum");
+}
+
+#[test]
+fn break_continue_fixture_matches_ir_snapshot() {
+    assert_snapshot("break_continue");
+}
+
+#[test]
+fn return_early_fixture_matches_ir_snapshot() {
+    assert_snapshot("return_early");
+}
+
+#[test]
+fn switch_basic_fixture_matches_ir_snapshot() {
+    assert_snapshot("switch_basic");
+}
+
+#[test]
+fn switch_fallthrough_fixture_matches_ir_snapshot() {
+    assert_snapshot("switch_fallthrough");
+}
+
+#[test]
+fn switch_default_middle_fixture_matches_ir_snapshot() {
+    assert_snapshot("switch_default_middle");
+}
+
+#[test]
+fn switch_in_loop_continue_fixture_matches_ir_snapshot() {
+    assert_snapshot("switch_in_loop_continue");
+}
+
+#[test]
+fn switch_with_let_fixture_matches_ir_snapshot() {
+    assert_snapshot("switch_with_let");
+}
+
+#[test]
+fn try_catch_fixture_matches_ir_snapshot() {
+    assert_snapshot("try_catch");
+}
+
+#[test]
+fn try_finally_fixture_matches_ir_snapshot() {
+    assert_snapshot("try_finally");
+}
+
+#[test]
+fn try_catch_finally_fixture_matches_ir_snapshot() {
+    assert_snapshot("try_catch_finally");
+}
+
+#[test]
+fn for_in_string_fixture_matches_ir_snapshot() {
+    assert_snapshot("for_in_string");
+}
+
+#[test]
+fn for_of_string_fixture_matches_ir_snapshot() {
+    assert_snapshot("for_of_string");
+}
+
+#[test]
+fn empty_debugger_fixture_matches_ir_snapshot() {
+    assert_snapshot("empty_debugger");
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let source_path = root.join("fixtures/happy").join(format!("{name}.js"));
@@ -161,13 +256,21 @@ fn assert_snapshot(name: &str) {
 
     let source = std::fs::read_to_string(&source_path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", source_path.display()));
-    let expected = std::fs::read_to_string(&expected_path)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", expected_path.display()));
 
     let module = parse_module(&source).expect("fixture source should parse");
     let lowered = lower_module(module).expect("fixture lowering should succeed");
+    let actual = lowered.dump_text();
 
-    assert_eq!(lowered.dump_text(), expected);
+    if std::env::var("WJSM_UPDATE_SNAPSHOTS").is_ok() {
+        std::fs::write(&expected_path, &actual)
+            .unwrap_or_else(|error| panic!("failed to write {}: {error}", expected_path.display()));
+        return;
+    }
+
+    let expected = std::fs::read_to_string(&expected_path)
+        .unwrap_or_else(|error| panic!("failed to read {}: {error}", expected_path.display()));
+
+    assert_eq!(actual, expected);
 }
 
 fn workspace_root() -> PathBuf {
