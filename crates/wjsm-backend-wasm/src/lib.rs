@@ -2,8 +2,8 @@ use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use wasm_encoder::{
     BlockType, CodeSection, DataSection, EntityType, ExportKind, ExportSection, Function,
-    FunctionSection, ImportSection, Instruction as WasmInstruction, MemorySection, MemoryType,
-    Module, TypeSection, ValType,
+    FunctionSection, ImportSection, Instruction as WasmInstruction, MemArg, MemorySection,
+    MemoryType, Module, TypeSection, ValType,
 };
 use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction,
@@ -968,44 +968,122 @@ impl Compiler {
         //
         // The result is a NaN-boxed bool (BOX_BASE | TAG_BOOL << 32 | 0 or 1).
 
+        let box_base = value::BOX_BASE as i64;
         match op {
             CompareOp::StrictEq | CompareOp::StrictNotEq => {
-                // StrictEq: values must be same type AND same value.
-                // For Phase 3, if both are f64 (no tag), compare f64 bits.
-                // If both have same tag, compare payload.
-                // Otherwise, false.
-                //
-                // Simplification for Phase 3: just compare raw i64 bits.
-                // This works correctly for f64 values and identical NaN-boxed values.
+                // StrictEq: 类型相同且值相同。
+                // 对于两个 plain f64（非 NaN-boxed），使用 f64.eq：
+                //   - 0 === -0 → true ✓
+                //   - NaN === NaN → false ✓
+                // 对于两个 NaN-boxed 值，使用 i64 eq 比较原始位：
+                //   - null === null → true ✓
+                //   - null === undefined → false（tag 不同）✓
+                //   - bool/string/handle 同类型同值 → true ✓
+                // 混合类型（一个 f64 一个 NaN-boxed）→ false ✓
+
+                // 检查 lhs 是否为 plain f64：(lhs & BOX_BASE) != BOX_BASE
+                self.emit(WasmInstruction::LocalGet(lhs.0));
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64Ne); // 1 if lhs is plain f64
+
+                // 检查 rhs 是否为 plain f64
+                self.emit(WasmInstruction::LocalGet(rhs.0));
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64Ne); // 1 if rhs is plain f64
+
+                // both_f64 = lhs_is_f64 && rhs_is_f64
+                self.emit(WasmInstruction::I32And);
+
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+                // 两者都是 plain f64：使用 f64.eq
+                self.emit(WasmInstruction::LocalGet(lhs.0));
+                self.emit(WasmInstruction::F64ReinterpretI64);
+                self.emit(WasmInstruction::LocalGet(rhs.0));
+                self.emit(WasmInstruction::F64ReinterpretI64);
+                self.emit(WasmInstruction::F64Eq);
+                self.emit(WasmInstruction::Else);
+                // 至少一个是 NaN-boxed：使用 i64 位比较
                 self.emit(WasmInstruction::LocalGet(lhs.0));
                 self.emit(WasmInstruction::LocalGet(rhs.0));
                 self.emit(WasmInstruction::I64Eq);
+                self.emit(WasmInstruction::End);
 
                 if matches!(op, CompareOp::StrictNotEq) {
                     self.emit(WasmInstruction::I32Const(1));
                     self.emit(WasmInstruction::I32Xor);
                 }
 
-                // Convert i32 boolean result to NaN-boxed bool
+                // 将 i32 bool 转为 NaN-boxed bool
                 self.emit(WasmInstruction::I64ExtendI32U);
-                let box_base = value::BOX_BASE as i64;
                 let tag_bool = (value::TAG_BOOL << 32) as i64;
                 self.emit(WasmInstruction::I64Const(box_base | tag_bool));
                 self.emit(WasmInstruction::I64Or);
                 self.emit(WasmInstruction::LocalSet(dest.0));
             }
             CompareOp::Eq | CompareOp::NotEq => {
-                // Loose equality: null == undefined, same type compare.
-                // For Phase 3: approximate with strict equality for most cases.
-                // null == undefined is handled specially.
+                // Loose equality: 在 StrictEq 基础上额外处理 null == undefined
+                // 1. 先计算 StrictEq 结果（同上）
+                // 2. 再 OR 上 null == undefined 的情况
+
+                // ── 第一部分：StrictEq 逻辑 ──
+                self.emit(WasmInstruction::LocalGet(lhs.0));
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64Ne);
+
+                self.emit(WasmInstruction::LocalGet(rhs.0));
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64Ne);
+
+                self.emit(WasmInstruction::I32And);
+
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+                self.emit(WasmInstruction::LocalGet(lhs.0));
+                self.emit(WasmInstruction::F64ReinterpretI64);
+                self.emit(WasmInstruction::LocalGet(rhs.0));
+                self.emit(WasmInstruction::F64ReinterpretI64);
+                self.emit(WasmInstruction::F64Eq);
+                self.emit(WasmInstruction::Else);
                 self.emit(WasmInstruction::LocalGet(lhs.0));
                 self.emit(WasmInstruction::LocalGet(rhs.0));
                 self.emit(WasmInstruction::I64Eq);
+                self.emit(WasmInstruction::End);
 
-                // Also check null == undefined
-                // If lhs is null and rhs is undefined (or vice versa), they're equal
-                // For simplicity in Phase 3, just use i64 equality (works for same-encoded values)
-                // TODO: implement proper loose equality
+                // ── 第二部分：null == undefined 特判 ──
+                // (lhs==null && rhs==undefined) || (lhs==undefined && rhs==null)
+                let encoded_null = value::encode_null();
+                let encoded_undef = value::encode_undefined();
+
+                // lhs==null && rhs==undefined
+                self.emit(WasmInstruction::LocalGet(lhs.0));
+                self.emit(WasmInstruction::I64Const(encoded_null as i64));
+                self.emit(WasmInstruction::I64Eq);
+                self.emit(WasmInstruction::LocalGet(rhs.0));
+                self.emit(WasmInstruction::I64Const(encoded_undef as i64));
+                self.emit(WasmInstruction::I64Eq);
+                self.emit(WasmInstruction::I32And);
+
+                // lhs==undefined && rhs==null
+                self.emit(WasmInstruction::LocalGet(lhs.0));
+                self.emit(WasmInstruction::I64Const(encoded_undef as i64));
+                self.emit(WasmInstruction::I64Eq);
+                self.emit(WasmInstruction::LocalGet(rhs.0));
+                self.emit(WasmInstruction::I64Const(encoded_null as i64));
+                self.emit(WasmInstruction::I64Eq);
+                self.emit(WasmInstruction::I32And);
+
+                // OR 两个 null==undefined 情况
+                self.emit(WasmInstruction::I32Or);
+
+                // OR StrictEq 结果
+                self.emit(WasmInstruction::I32Or);
 
                 if matches!(op, CompareOp::NotEq) {
                     self.emit(WasmInstruction::I32Const(1));
@@ -1013,7 +1091,6 @@ impl Compiler {
                 }
 
                 self.emit(WasmInstruction::I64ExtendI32U);
-                let box_base = value::BOX_BASE as i64;
                 let tag_bool = (value::TAG_BOOL << 32) as i64;
                 self.emit(WasmInstruction::I64Const(box_base | tag_bool));
                 self.emit(WasmInstruction::I64Or);
@@ -1275,8 +1352,35 @@ impl Compiler {
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I32WrapI64);
         self.emit(WasmInstruction::Else);
-        // Other NaN-boxed types (string, handle, etc.) → truthy
+        // Check TAG_STRING (0x1): load first byte from memory to detect empty string
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0x7));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_STRING as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+        // 字符串：提取低 32 位作为内存指针，读取首字节
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::I32Load8U(MemArg {
+            offset: 0,
+            align: 0,
+            memory_index: 0,
+        }));
+        // 如果首字节 == 0（nul-terminated 空串）则 falsy，否则 truthy
+        self.emit(WasmInstruction::I32Eqz);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+        self.emit(WasmInstruction::I32Const(0)); // 空串 falsy
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::I32Const(1)); // 非空串 truthy
+        self.emit(WasmInstruction::End); // end empty string check
+        self.emit(WasmInstruction::Else);
+        // Other NaN-boxed types (handle, etc.) → truthy
         self.emit(WasmInstruction::I32Const(1));
+        self.emit(WasmInstruction::End); // end TAG_STRING check
+
         self.emit(WasmInstruction::End); // end TAG_BOOL check
 
         self.emit(WasmInstruction::End); // end TAG_NULL check

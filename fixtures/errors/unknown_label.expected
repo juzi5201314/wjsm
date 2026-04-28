@@ -1,4 +1,4 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [0..1]: unknown label `missing`
+Error: semantic lowering error [7..14]: unknown label `missing`

@@ -289,6 +289,21 @@ fn ternary_nested_fixture_matches_ir_snapshot() {
     assert_snapshot("ternary_nested");
 }
 
+#[test]
+fn empty_string_truthy_fixture_matches_ir_snapshot() {
+    assert_snapshot("empty_string_truthy");
+}
+
+#[test]
+fn try_finally_throw_fixture_matches_ir_snapshot() {
+    assert_snapshot("try_finally_throw");
+}
+
+#[test]
+fn try_finally_return_fixture_matches_ir_snapshot() {
+    assert_snapshot("try_finally_return");
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let source_path = root.join("fixtures/happy").join(format!("{name}.js"));

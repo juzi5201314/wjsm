@@ -90,15 +90,14 @@ pub fn is_falsy(val: i64) -> bool {
         return f == 0.0 || f.is_nan();
     }
     if is_string(val) {
-        // For strings, we use a convention: the first 4 bytes of the string data
-        // store the length. Empty string has length 0 → falsy.
-        // But WASM runtime can't check this at compile time; at runtime
-        // the string length is checked via a host function.
-        // For compile-time checks in the backend, we handle this differently.
-        // For now, truthiness of strings is handled at runtime.
+        // 注意：字符串在内存中以 nul-terminated 方式存储，
+        // 编译期无法直接判断是否为空串。
+        // 空串的 truthiness 由 backend 的 emit_to_bool_i32 在运行时
+        // 通过加载内存首字节来判断（i32.load8_u → eqz → falsy）。
+        // 此处 is_falsy 仅用于 IR 层面的分析，保守地返回 false（即视为 truthy）。
         return false;
     }
-    // All other types (exception/iterator/enumerator handles, objects) are truthy.
+    // 所有其他 NaN-boxed 类型（exception/iterator/enumerator handle 等）均为 truthy。
     false
 }
 

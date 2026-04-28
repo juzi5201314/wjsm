@@ -1,0 +1,32 @@
+module {
+  constants:
+    c0 = string("")
+    c1 = string("bad")
+    c2 = string("ok")
+    c3 = string("hello")
+    c4 = string("truthy")
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      branch %0, bb1, bb2
+    bb1:
+      %1 = const c1
+      call builtin.console.log(%1)
+      jump bb3
+    bb2:
+      %2 = const c2
+      call builtin.console.log(%2)
+      jump bb3
+    bb3:
+      %3 = const c3
+      store var $0.s, %3
+      %4 = load var $0.s
+      branch %4, bb4, bb5
+    bb4:
+      %5 = const c4
+      call builtin.console.log(%5)
+      jump bb5
+    bb5:
+      return
+}

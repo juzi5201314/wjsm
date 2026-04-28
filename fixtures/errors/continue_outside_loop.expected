@@ -1,4 +1,4 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [0..1]: continue outside of loop
+Error: semantic lowering error [1..10]: continue outside of loop
