@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use wasm_encoder::{
     BlockType, CodeSection, DataSection, EntityType, ExportKind, ExportSection, Function,
@@ -6,7 +6,7 @@ use wasm_encoder::{
     Module, TypeSection, ValType,
 };
 use wjsm_ir::{
-    BasicBlock, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction,
+    BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction,
     Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, value,
 };
 
@@ -59,6 +59,95 @@ struct LoopInfo {
     exit_idx: usize,
 }
 
+#[derive(Debug, Clone)]
+struct Cfg {
+    successors: Vec<Vec<usize>>,
+    predecessors: Vec<Vec<usize>>,
+}
+
+impl Cfg {
+    fn from_function(function: &IrFunction) -> Self {
+        let len = function.blocks().len();
+        let mut successors = vec![Vec::new(); len];
+        let mut predecessors = vec![Vec::new(); len];
+
+        for (idx, block) in function.blocks().iter().enumerate() {
+            let mut add_edge = |target: BasicBlockId| {
+                let target_idx = target.0 as usize;
+                if target_idx < len {
+                    successors[idx].push(target_idx);
+                    predecessors[target_idx].push(idx);
+                }
+            };
+
+            match block.terminator() {
+                Terminator::Jump { target } => add_edge(*target),
+                Terminator::Branch {
+                    true_block,
+                    false_block,
+                    ..
+                } => {
+                    add_edge(*true_block);
+                    add_edge(*false_block);
+                }
+                Terminator::Switch {
+                    cases,
+                    default_block,
+                    exit_block,
+                    ..
+                } => {
+                    for case in cases {
+                        add_edge(case.target);
+                    }
+                    add_edge(*default_block);
+                    add_edge(*exit_block);
+                }
+                Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => {}
+            }
+        }
+
+        Self {
+            successors,
+            predecessors,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+enum Region {
+    Linear { start_idx: usize },
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct SwitchCaseRegion {
+    _case_idx: usize,
+    _target_idx: usize,
+}
+
+#[derive(Debug, Clone)]
+struct RegionTree {
+    root: Region,
+}
+
+#[derive(Debug, Clone)]
+enum RegionTreeError {
+    MissingEntry,
+}
+
+impl RegionTree {
+    fn build(function: &IrFunction, cfg: &Cfg) -> Result<Self, RegionTreeError> {
+        let _ = (cfg.successors.len(), cfg.predecessors.len());
+        let start_idx = function.entry().0 as usize;
+        if start_idx >= function.blocks().len() {
+            return Err(RegionTreeError::MissingEntry);
+        }
+        Ok(Self {
+            root: Region::Linear { start_idx },
+        })
+    }
+}
+
 impl Compiler {
     fn new() -> Self {
         let mut types = TypeSection::new();
@@ -67,7 +156,9 @@ impl Compiler {
         // Type 1: () -> ()  — main
         types.ty().function(vec![], vec![]);
         // Type 2: (i64, i64) -> (i64)  — f64_mod, f64_pow
-        types.ty().function(vec![ValType::I64, ValType::I64], vec![ValType::I64]);
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I64], vec![ValType::I64]);
         // Type 3: (i64) -> (i64)  — iterator_from, enumerator_from, iterator_value, enumerator_key, iterator_done, enumerator_done, iterator_next, enumerator_next
         types.ty().function(vec![ValType::I64], vec![ValType::I64]);
         // Type 4: () -> (i64)  — (unused placeholder)
@@ -76,7 +167,9 @@ impl Compiler {
         // (same as type 0 but we keep it separate for clarity)
         // Actually type 0 is already (i64) -> ()
         // Type 5: (i64, i64) -> () — begin_try, etc.
-        types.ty().function(vec![ValType::I64, ValType::I64], vec![]);
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I64], vec![]);
 
         let mut imports = ImportSection::new();
         // Import index 0: console_log: (i64) -> ()
@@ -181,11 +274,11 @@ impl Compiler {
     }
 
     fn compile_function(&mut self, module: &IrModule, function: &IrFunction) -> Result<()> {
-        // Pass 1: lower Phi to locals
-        self.lower_phi_to_locals(function);
-        
-        // Pass 2: assign WASM local indices to all variable names.
+        // Pass 1: assign WASM local indices to all variable names.
         self.assign_var_locals(function);
+
+        // Pass 2: lower Phi to dedicated locals after variable locals to avoid index overlap.
+        self.lower_phi_to_locals(function);
 
         let local_count = self.required_local_count(function);
         let locals = if local_count == 0 {
@@ -195,9 +288,12 @@ impl Compiler {
         };
         self.current_func = Some(Function::new(locals));
 
-        // Structured compilation starting from entry block
+        let cfg = Cfg::from_function(function);
+        let region_tree = RegionTree::build(function, &cfg)
+            .map_err(|error| anyhow::anyhow!("failed to build region tree: {error:?}"))?;
+
         self.compiled_blocks.clear();
-        self.compile_structured(module, function, 0)?;
+        self.compile_region_tree(module, function, &region_tree)?;
 
         self.emit(WasmInstruction::End);
         self.codes.function(
@@ -209,12 +305,23 @@ impl Compiler {
         Ok(())
     }
 
+    fn compile_region_tree(
+        &mut self,
+        module: &IrModule,
+        function: &IrFunction,
+        region_tree: &RegionTree,
+    ) -> Result<()> {
+        match &region_tree.root {
+            Region::Linear { start_idx } => self.compile_structured(module, function, *start_idx),
+        }
+    }
+
     /// Phi lowering pass: for each Phi instruction, allocate a WASM local for its dest,
     /// and schedule moves from source values in predecessor blocks.
     fn lower_phi_to_locals(&mut self, function: &IrFunction) {
         self.phi_locals.clear();
         let mut next_local = self.next_var_local;
-        
+
         for block in function.blocks() {
             for instruction in block.instructions() {
                 if let Instruction::Phi { dest, .. } = instruction {
@@ -223,6 +330,7 @@ impl Compiler {
                 }
             }
         }
+        self.next_var_local = next_local;
     }
 
     fn assign_var_locals(&mut self, function: &IrFunction) {
@@ -279,7 +387,7 @@ impl Compiler {
             // 在循环头打开 block/loop
             if let Some(loop_info) = loops.iter().find(|l| l.header_idx == idx) {
                 self.emit(WasmInstruction::Block(BlockType::Empty)); // break target
-                self.emit(WasmInstruction::Loop(BlockType::Empty));  // continue target
+                self.emit(WasmInstruction::Loop(BlockType::Empty)); // continue target
                 self.loop_stack.push(loop_info.clone());
             }
 
@@ -341,7 +449,11 @@ impl Compiler {
                     // 循环头条件（while/for 模式）：
                     // true → body, false → exit
                     // 发射：condition → i32.eqz → br_if (break if falsy)
-                    if self.loop_stack.last().map_or(false, |l| l.header_idx == idx) {
+                    if self
+                        .loop_stack
+                        .last()
+                        .map_or(false, |l| l.header_idx == idx)
+                    {
                         self.emit_to_bool_i32(condition.0);
                         self.emit(WasmInstruction::I32Eqz);
                         let break_depth = self.loop_break_depth(false_idx).unwrap_or(1);
@@ -369,17 +481,19 @@ impl Compiler {
                     let true_is_merge = self.is_merge_block(blocks, false_idx, true_idx);
                     let false_is_merge = self.is_merge_block(blocks, true_idx, false_idx);
 
-                    // 编译 true 分支（如果不是 merge block）
-                    if !true_is_merge {
+                    // 编译 true 分支；若 true 直接通向 merge，也必须在该路径执行 Phi move。
+                    if true_is_merge {
+                        self.emit_phi_moves(blocks, idx, true_idx);
+                    } else {
                         self.compiled_blocks.insert(true_idx);
                         self.compile_branch_body(module, blocks, true_idx)?;
-                    } else {
-                        // 空 true 分支 — 发射 nop 使 if block 有效
-                        self.emit(WasmInstruction::Nop);
                     }
 
-                    // 编译 false 分支（如果不是 merge block）
-                    if !false_is_merge {
+                    // 编译 false 分支；false 直达 merge 时用 else 分支承载 Phi move。
+                    if false_is_merge {
+                        self.emit(WasmInstruction::Else);
+                        self.emit_phi_moves(blocks, idx, false_idx);
+                    } else {
                         self.emit(WasmInstruction::Else);
                         self.compiled_blocks.insert(false_idx);
                         self.compile_branch_body(module, blocks, false_idx)?;
@@ -408,7 +522,12 @@ impl Compiler {
                         idx = merge;
                     }
                 }
-                Terminator::Switch { value, cases, default_block, exit_block } => {
+                Terminator::Switch {
+                    value,
+                    cases,
+                    default_block,
+                    exit_block,
+                } => {
                     let num_cases = cases.len();
                     let default_idx = default_block.0 as usize;
                     let exit_idx = exit_block.0 as usize;
@@ -432,8 +551,8 @@ impl Compiler {
                     // 发射比较链
                     for (i, case) in cases.iter().enumerate() {
                         self.emit(WasmInstruction::LocalGet(value.0));
-                        let const_val = self
-                            .encode_constant(&module.constants()[case.constant.0 as usize])?;
+                        let const_val =
+                            self.encode_constant(&module.constants()[case.constant.0 as usize])?;
                         self.emit(WasmInstruction::I64Const(const_val));
                         self.emit(WasmInstruction::I64Eq);
                         self.emit(WasmInstruction::BrIf(i as u32));
@@ -461,14 +580,7 @@ impl Compiler {
                     // 编译 default body
                     self.emit(WasmInstruction::End); // 关闭 default block
                     self.compiled_blocks.insert(default_idx);
-                    self.compile_switch_case(
-                        module,
-                        blocks,
-                        default_idx,
-                        exit_idx,
-                        0,
-                        1,
-                    )?;
+                    self.compile_switch_case(module, blocks, default_idx, exit_idx, 0, 1)?;
 
                     // 关闭 exit block
                     self.emit(WasmInstruction::End);
@@ -499,7 +611,6 @@ impl Compiler {
 
         Ok(())
     }
-
 
     /// 编译 switch case body。处理 break (br 到 switch exit)、fall-through（no-op）、
     /// 循环 break/continue（调整 depth）以及 Return/Throw。
@@ -617,15 +728,17 @@ impl Compiler {
                 let true_is_merge = self.is_merge_block(blocks, false_idx, true_idx);
                 let false_is_merge = self.is_merge_block(blocks, true_idx, false_idx);
 
-                if !true_is_merge {
+                if true_is_merge {
+                    self.emit_phi_moves(blocks, idx, true_idx);
+                } else {
                     self.compiled_blocks.insert(true_idx);
                     self.compile_branch_body(module, blocks, true_idx)?;
-                } else {
-                    self.emit(WasmInstruction::Nop);
                 }
 
-                if !false_is_merge {
-                    self.emit(WasmInstruction::Else);
+                self.emit(WasmInstruction::Else);
+                if false_is_merge {
+                    self.emit_phi_moves(blocks, idx, false_idx);
+                } else {
                     self.compiled_blocks.insert(false_idx);
                     self.compile_branch_body(module, blocks, false_idx)?;
                 }
@@ -661,7 +774,6 @@ impl Compiler {
             }
         }
     }
-
 
     /// Check if `false_idx` is the natural merge block for a branch where
     /// true path is at `true_idx` and false path is at `false_idx`.
@@ -761,13 +873,9 @@ impl Compiler {
             Instruction::Unary { dest, op, value } => {
                 match op {
                     UnaryOp::Not => {
-                        // !x: emit truthiness check, then negate
                         self.emit_to_bool_i32(value.0);
-                        // Negate: 0→1, 1→0
                         self.emit(WasmInstruction::I32Const(1));
                         self.emit(WasmInstruction::I32Xor);
-                        // Convert i32 result back to i64 NaN-boxed bool
-                        // encode_bool: BOX_BASE | (TAG_BOOL << 32) | (val & 1)
                         self.emit(WasmInstruction::I64ExtendI32U);
                         let box_base = value::BOX_BASE as i64;
                         let tag_bool = (value::TAG_BOOL << 32) as i64;
@@ -776,7 +884,6 @@ impl Compiler {
                         self.emit(WasmInstruction::LocalSet(dest.0));
                     }
                     UnaryOp::Neg => {
-                        // -x: negate f64 value
                         self.emit(WasmInstruction::LocalGet(value.0));
                         self.emit(WasmInstruction::F64ReinterpretI64);
                         self.emit(WasmInstruction::F64Neg);
@@ -784,8 +891,6 @@ impl Compiler {
                         self.emit(WasmInstruction::LocalSet(dest.0));
                     }
                     UnaryOp::Pos => {
-                        // +x: identity for numbers (convert to number)
-                        // For Phase 3, just copy the value
                         self.emit(WasmInstruction::LocalGet(value.0));
                         self.emit(WasmInstruction::LocalSet(dest.0));
                     }
@@ -793,9 +898,17 @@ impl Compiler {
                         bail!("bitwise NOT not yet supported");
                     }
                     UnaryOp::Void => {
-                        // void x: evaluate x for side effects, return undefined
-                        let _ = value; // consume but ignore
+                        let _ = value;
                         self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                        self.emit(WasmInstruction::LocalSet(dest.0));
+                    }
+                    UnaryOp::IsNullish => {
+                        self.emit_is_nullish_i32(value.0);
+                        self.emit(WasmInstruction::I64ExtendI32U);
+                        let box_base = value::BOX_BASE as i64;
+                        let tag_bool = (value::TAG_BOOL << 32) as i64;
+                        self.emit(WasmInstruction::I64Const(box_base | tag_bool));
+                        self.emit(WasmInstruction::I64Or);
                         self.emit(WasmInstruction::LocalSet(dest.0));
                     }
                 }
@@ -804,29 +917,21 @@ impl Compiler {
             Instruction::Compare { dest, op, lhs, rhs } => {
                 self.compile_compare(*dest, *op, *lhs, *rhs)
             }
-            Instruction::Phi { dest, sources } => {
-                // Phi was lowered in the pre-pass; here we just need to handle the move.
-                // The predecessor blocks should have inserted moves before their terminators.
-                // For now, emit a no-op (the actual moves are handled by the predecessor).
-                // If no phi_local was allocated, just load from the first source as fallback.
-                if let Some(phi_local) = self.phi_locals.get(&dest.0) {
-                    // The phi_local already contains the value from the predecessor move
-                    self.emit(WasmInstruction::LocalGet(*phi_local));
-                    self.emit(WasmInstruction::LocalSet(dest.0));
-                } else if let Some(first) = sources.first() {
-                    // Fallback: copy from first source
-                    self.emit(WasmInstruction::LocalGet(first.value.0));
-                    self.emit(WasmInstruction::LocalSet(dest.0));
-                }
+            Instruction::Phi { dest, .. } => {
+                let phi_local = self
+                    .phi_locals
+                    .get(&dest.0)
+                    .copied()
+                    .with_context(|| format!("phi {dest} has no assigned WASM local"))?;
+                self.emit(WasmInstruction::LocalGet(phi_local));
+                self.emit(WasmInstruction::LocalSet(dest.0));
                 Ok(())
             }
             Instruction::CallBuiltin {
                 dest,
                 builtin,
                 args,
-            } => {
-                self.compile_builtin_call(*dest, builtin, args)
-            }
+            } => self.compile_builtin_call(*dest, builtin, args),
             Instruction::LoadVar { dest, name } => {
                 let local_idx = self
                     .var_locals
@@ -967,11 +1072,7 @@ impl Compiler {
                 let rhs = args.get(1).context("F64Mod/Exp expects 2 arguments")?;
                 self.emit(WasmInstruction::LocalGet(lhs.0));
                 self.emit(WasmInstruction::LocalGet(rhs.0));
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .unwrap_or(0);
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(d.0));
@@ -990,7 +1091,9 @@ impl Compiler {
                 Ok(())
             }
             Builtin::IteratorFrom | Builtin::EnumeratorFrom => {
-                let val = args.first().context("IteratorFrom/EnumeratorFrom expects 1 arg")?;
+                let val = args
+                    .first()
+                    .context("IteratorFrom/EnumeratorFrom expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(val.0));
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));
@@ -1000,7 +1103,9 @@ impl Compiler {
                 Ok(())
             }
             Builtin::IteratorNext | Builtin::EnumeratorNext => {
-                let handle = args.first().context("IteratorNext/EnumeratorNext expects 1 arg")?;
+                let handle = args
+                    .first()
+                    .context("IteratorNext/EnumeratorNext expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(handle.0));
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));
@@ -1017,7 +1122,9 @@ impl Compiler {
                 Ok(())
             }
             Builtin::IteratorValue | Builtin::EnumeratorKey => {
-                let handle = args.first().context("IteratorValue/EnumeratorKey expects 1 arg")?;
+                let handle = args
+                    .first()
+                    .context("IteratorValue/EnumeratorKey expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(handle.0));
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));
@@ -1027,7 +1134,9 @@ impl Compiler {
                 Ok(())
             }
             Builtin::IteratorDone | Builtin::EnumeratorDone => {
-                let handle = args.first().context("IteratorDone/EnumeratorDone expects 1 arg")?;
+                let handle = args
+                    .first()
+                    .context("IteratorDone/EnumeratorDone expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(handle.0));
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));
@@ -1065,6 +1174,39 @@ impl Compiler {
         }
     }
 
+    /// Emit WASM instructions that test whether a NaN-boxed i64 value is null or undefined.
+    fn emit_is_nullish_i32(&mut self, val_local: u32) {
+        let box_base = value::BOX_BASE as i64;
+
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I64Const(box_base));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(box_base));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0x7));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_UNDEFINED as i64));
+        self.emit(WasmInstruction::I64Eq);
+
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0x7));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_NULL as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::I32Or);
+
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::End);
+    }
+
     // ── Truthiness helpers ───────────────────────────────────────────────────
 
     /// Emit WASM instructions that convert a NaN-boxed i64 value to an i32 boolean
@@ -1080,16 +1222,16 @@ impl Compiler {
         // 5. Otherwise (string, handle) → truthy
         //
         // Implementation using a series of nested if/else:
-        
+
         let box_base = value::BOX_BASE as i64;
-        
+
         // Check if the value is NaN-boxed (has BOX_BASE pattern)
         self.emit(WasmInstruction::LocalGet(val_local));
         self.emit(WasmInstruction::I64Const(box_base));
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(box_base));
         self.emit(WasmInstruction::I64Eq);
-        
+
         // If NaN-boxed, check the tag
         self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
         // NaN-boxed path: check tag
@@ -1098,14 +1240,14 @@ impl Compiler {
         self.emit(WasmInstruction::I64ShrU);
         self.emit(WasmInstruction::I64Const(0x7));
         self.emit(WasmInstruction::I64And);
-        
+
         // Check TAG_UNDEFINED (0x2)
         self.emit(WasmInstruction::I64Const(value::TAG_UNDEFINED as i64));
         self.emit(WasmInstruction::I64Eq);
         self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
         self.emit(WasmInstruction::I32Const(0)); // undefined is falsy
         self.emit(WasmInstruction::Else);
-        
+
         // Check TAG_NULL (0x3)
         self.emit(WasmInstruction::LocalGet(val_local));
         self.emit(WasmInstruction::I64Const(32));
@@ -1117,7 +1259,7 @@ impl Compiler {
         self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
         self.emit(WasmInstruction::I32Const(0)); // null is falsy
         self.emit(WasmInstruction::Else);
-        
+
         // Check TAG_BOOL (0x4)
         self.emit(WasmInstruction::LocalGet(val_local));
         self.emit(WasmInstruction::I64Const(32));
@@ -1136,11 +1278,11 @@ impl Compiler {
         // Other NaN-boxed types (string, handle, etc.) → truthy
         self.emit(WasmInstruction::I32Const(1));
         self.emit(WasmInstruction::End); // end TAG_BOOL check
-        
+
         self.emit(WasmInstruction::End); // end TAG_NULL check
-        
+
         self.emit(WasmInstruction::End); // end TAG_UNDEFINED check
-        
+
         self.emit(WasmInstruction::Else);
         // Not NaN-boxed → it's a raw f64
         // Check for +0, -0, and NaN
@@ -1166,7 +1308,7 @@ impl Compiler {
         self.emit(WasmInstruction::I32Const(1)); // non-zero number is truthy
         self.emit(WasmInstruction::End); // end NaN check
         self.emit(WasmInstruction::End); // end == 0 check
-        
+
         self.emit(WasmInstruction::End); // end NaN-boxed check
     }
 

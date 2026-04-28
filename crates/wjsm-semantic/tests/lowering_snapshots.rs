@@ -235,6 +235,16 @@ fn try_catch_finally_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn throw_uncaught_fixture_matches_ir_snapshot() {
+    assert_snapshot("throw_uncaught");
+}
+
+#[test]
+fn try_finally_nested_fixture_matches_ir_snapshot() {
+    assert_snapshot("try_finally_nested");
+}
+
+#[test]
 fn for_in_string_fixture_matches_ir_snapshot() {
     assert_snapshot("for_in_string");
 }
@@ -245,8 +255,38 @@ fn for_of_string_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn for_of_nested_break_continue_fixture_matches_ir_snapshot() {
+    assert_snapshot("for_of_nested_break_continue");
+}
+
+#[test]
 fn empty_debugger_fixture_matches_ir_snapshot() {
     assert_snapshot("empty_debugger");
+}
+
+#[test]
+fn logical_and_or_fixture_matches_ir_snapshot() {
+    assert_snapshot("logical_and_or");
+}
+
+#[test]
+fn nullish_fixture_matches_ir_snapshot() {
+    assert_snapshot("nullish");
+}
+
+#[test]
+fn ternary_phi_fixture_matches_ir_snapshot() {
+    assert_snapshot("ternary_phi");
+}
+
+#[test]
+fn labeled_fixture_matches_ir_snapshot() {
+    assert_snapshot("labeled");
+}
+
+#[test]
+fn ternary_nested_fixture_matches_ir_snapshot() {
+    assert_snapshot("ternary_nested");
 }
 
 fn assert_snapshot(name: &str) {

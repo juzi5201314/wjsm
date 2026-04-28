@@ -1,0 +1,54 @@
+module {
+  constants:
+    c0 = number(0)
+    c1 = number(0)
+    c2 = number(1)
+    c3 = number(1)
+    c4 = number(2)
+    c5 = number(1)
+    c6 = number(2)
+    c7 = number(0)
+    c8 = number(3)
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.hit, %0
+      %1 = const c1
+      branch %1, bb1, bb2
+    bb1:
+      %2 = const c2
+      store var $0.hit, %2
+      jump bb2
+    bb2:
+      %3 = phi [(bb0, %1), (bb1, %2)]
+      call builtin.console.log(%3)
+      %4 = const c3
+      branch %4, bb4, bb3
+    bb3:
+      %5 = const c4
+      store var $0.hit, %5
+      jump bb4
+    bb4:
+      %6 = phi [(bb2, %4), (bb3, %5)]
+      call builtin.console.log(%6)
+      %7 = load var $0.hit
+      call builtin.console.log(%7)
+      %8 = const c5
+      branch %8, bb5, bb6
+    bb5:
+      %9 = const c6
+      jump bb6
+    bb6:
+      %10 = phi [(bb4, %8), (bb5, %9)]
+      call builtin.console.log(%10)
+      %11 = const c7
+      branch %11, bb8, bb7
+    bb7:
+      %12 = const c8
+      jump bb8
+    bb8:
+      %13 = phi [(bb6, %11), (bb7, %12)]
+      call builtin.console.log(%13)
+      return
+}

@@ -4,9 +4,8 @@ use swc_core::common::Spanned;
 use swc_core::ecma::ast as swc_ast;
 use thiserror::Error;
 use wjsm_ir::{
-    BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, ConstantId,
-    Function, Instruction, Module, Program, SwitchCaseTarget, Terminator,
-    UnaryOp, ValueId,
+    BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, ConstantId, Function,
+    Instruction, Module, PhiSource, Program, SwitchCaseTarget, Terminator, UnaryOp, ValueId,
 };
 
 // ── Scope tree ──────────────────────────────────────────────────────────
@@ -334,8 +333,9 @@ struct Lowerer {
     finally_stack: Vec<FinallyContext>,
     try_contexts: Vec<TryContext>,
     next_temp: u32,
+    pending_loop_label: Option<String>,
+    active_finalizers: Vec<swc_ast::BlockStmt>,
 }
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct HoistedVar {
     scope_id: usize,
@@ -355,6 +355,8 @@ impl Lowerer {
             finally_stack: Vec::new(),
             try_contexts: Vec::new(),
             next_temp: 0,
+            pending_loop_label: None,
+            active_finalizers: Vec::new(),
         }
     }
 
@@ -387,7 +389,10 @@ impl Lowerer {
         // If the last block is still open and hasn't been terminated, give it a Return.
         match flow {
             StmtFlow::Open(block) => {
-                let term = self.current_function.block(block).map(|b| b.terminator().clone());
+                let term = self
+                    .current_function
+                    .block(block)
+                    .map(|b| b.terminator().clone());
                 if let Some(Terminator::Unreachable) = term {
                     self.current_function
                         .set_terminator(block, Terminator::Return { value: None });
@@ -411,9 +416,7 @@ impl Lowerer {
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
         match stmt {
-            swc_ast::Stmt::Expr(expr_stmt) => {
-                self.lower_expr_stmt(expr_stmt, flow)
-            }
+            swc_ast::Stmt::Expr(expr_stmt) => self.lower_expr_stmt(expr_stmt, flow),
             swc_ast::Stmt::Decl(decl) => match decl {
                 swc_ast::Decl::Var(var_decl) => self.lower_var_decl(var_decl, flow),
                 _ => Err(self.error(
@@ -583,11 +586,13 @@ impl Lowerer {
             .set_terminator(block, Terminator::Jump { target: header });
         let true_val = self.alloc_value();
         let true_const = self.module.add_constant(Constant::Bool(true));
-        self.current_function
-            .append_instruction(header, Instruction::Const {
+        self.current_function.append_instruction(
+            header,
+            Instruction::Const {
                 dest: true_val,
                 constant: true_const,
-            });
+            },
+        );
 
         let cond = self.lower_expr(&while_stmt.test, header)?;
         self.current_function.set_terminator(
@@ -600,14 +605,16 @@ impl Lowerer {
         );
 
         self.label_stack.push(LabelContext {
-            label: None,
+            label: self.pending_loop_label.take(),
             kind: LabelKind::Loop,
             break_target: exit,
             continue_target: Some(header),
         });
 
         let body_flow = self.lower_stmt(&while_stmt.body, StmtFlow::Open(body))?;
-        let _ = self.current_function.ensure_jump_or_terminated(body_flow, header);
+        let _ = self
+            .current_function
+            .ensure_jump_or_terminated(body_flow, header);
 
         self.label_stack.pop();
 
@@ -631,14 +638,16 @@ impl Lowerer {
             .set_terminator(block, Terminator::Jump { target: body });
 
         self.label_stack.push(LabelContext {
-            label: None,
+            label: self.pending_loop_label.take(),
             kind: LabelKind::Loop,
             break_target: exit,
             continue_target: Some(condition),
         });
 
         let body_flow = self.lower_stmt(&do_while.body, StmtFlow::Open(body))?;
-        let _ = self.current_function.ensure_jump_or_terminated(body_flow, condition);
+        let _ = self
+            .current_function
+            .ensure_jump_or_terminated(body_flow, condition);
 
         let cond = self.lower_expr(&do_while.test, condition)?;
         self.current_function.set_terminator(
@@ -685,7 +694,7 @@ impl Lowerer {
             .set_terminator(block, Terminator::Jump { target: header });
 
         self.label_stack.push(LabelContext {
-            label: None,
+            label: self.pending_loop_label.take(),
             kind: LabelKind::Loop,
             break_target: exit,
             continue_target: Some(update),
@@ -793,7 +802,7 @@ impl Lowerer {
         );
 
         self.label_stack.push(LabelContext {
-            label: None,
+            label: self.pending_loop_label.take(),
             kind: LabelKind::Loop,
             break_target: exit,
             continue_target: Some(next),
@@ -897,9 +906,9 @@ impl Lowerer {
 
         // Register label context: break → close (which then jumps to exit)
         self.label_stack.push(LabelContext {
-            label: None,
+            label: self.pending_loop_label.take(),
             kind: LabelKind::Loop,
-            break_target: exit,
+            break_target: close,
             continue_target: Some(next_block),
         });
 
@@ -1020,14 +1029,12 @@ impl Lowerer {
                 }
                 Ok(())
             }
-            swc_ast::ForHead::UsingDecl(_) => {
-                Err(self.error(
-                    DUMMY_SP,
-                    "using declarations in for...in/for...of are not yet supported",
-                ))
-            }
+            swc_ast::ForHead::UsingDecl(_) => Err(self.error(
+                DUMMY_SP,
+                "using declarations in for...in/for...of are not yet supported",
+            )),
+        }
     }
-}
 
     // ── break / continue ────────────────────────────────────────────────────
 
@@ -1039,13 +1046,18 @@ impl Lowerer {
         let block = self.ensure_open(flow)?;
 
         let target = if let Some(label) = &break_stmt.label {
-            self.find_label(&label.sym.to_string(), None)?
+            self.find_label(&label.sym.to_string(), Some(label.span))?
         } else {
             self.find_nearest_break_target()?
         };
 
-        self.current_function
-            .set_terminator(block, Terminator::Jump { target });
+        match self.lower_pending_finalizers(block)? {
+            StmtFlow::Open(after_finally) => {
+                self.current_function
+                    .set_terminator(after_finally, Terminator::Jump { target });
+            }
+            StmtFlow::Terminated => {}
+        }
         Ok(StmtFlow::Terminated)
     }
 
@@ -1056,29 +1068,26 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
 
-        if let Some(label) = &continue_stmt.label {
+        let target = if let Some(label) = &continue_stmt.label {
             let ctx = self.find_label_context(&label.sym.to_string())?;
-            match ctx.continue_target {
-                Some(target) => {
-                    self.current_function
-                        .set_terminator(block, Terminator::Jump { target });
-                    Ok(StmtFlow::Terminated)
-                }
-                None => Err(self.error(
+            ctx.continue_target.ok_or_else(|| {
+                self.error(
                     continue_stmt.span(),
-                    format!(
-                        "cannot continue to non-loop label `{}`",
-                        label.sym
-                    ),
-                )),
-            }
+                    format!("cannot continue to non-loop label `{}`", label.sym),
+                )
+            })?
         } else {
-            // find nearest loop
-            let target = self.find_nearest_continue_target()?;
-            self.current_function
-                .set_terminator(block, Terminator::Jump { target });
-            Ok(StmtFlow::Terminated)
+            self.find_nearest_continue_target()?
+        };
+
+        match self.lower_pending_finalizers(block)? {
+            StmtFlow::Open(after_finally) => {
+                self.current_function
+                    .set_terminator(after_finally, Terminator::Jump { target });
+            }
+            StmtFlow::Terminated => {}
         }
+        Ok(StmtFlow::Terminated)
     }
 
     fn find_nearest_break_target(&self) -> Result<BasicBlockId, LoweringError> {
@@ -1091,7 +1100,11 @@ impl Lowerer {
             }
         }
         // This error is caught by the caller
-        Err(LoweringError::Diagnostic(Diagnostic::new(0, 0, "break outside of loop or switch")))
+        Err(LoweringError::Diagnostic(Diagnostic::new(
+            0,
+            0,
+            "break outside of loop or switch",
+        )))
     }
 
     fn find_nearest_continue_target(&self) -> Result<BasicBlockId, LoweringError> {
@@ -1100,16 +1113,28 @@ impl Lowerer {
                 return Ok(target);
             }
         }
-        Err(LoweringError::Diagnostic(Diagnostic::new(0, 0, "continue outside of loop")))
+        Err(LoweringError::Diagnostic(Diagnostic::new(
+            0,
+            0,
+            "continue outside of loop",
+        )))
     }
 
-    fn find_label(&self, name: &str, _error_span: Option<Span>) -> Result<BasicBlockId, LoweringError> {
+    fn find_label(
+        &self,
+        name: &str,
+        _error_span: Option<Span>,
+    ) -> Result<BasicBlockId, LoweringError> {
         for ctx in self.label_stack.iter().rev() {
             if ctx.label.as_deref() == Some(name) {
                 return Ok(ctx.break_target);
             }
         }
-        Err(LoweringError::Diagnostic(Diagnostic::new(0, 0, format!("unknown label `{name}`"))))
+        Err(LoweringError::Diagnostic(Diagnostic::new(
+            0,
+            0,
+            format!("unknown label `{name}`"),
+        )))
     }
 
     fn find_label_context(&self, name: &str) -> Result<&LabelContext, LoweringError> {
@@ -1118,7 +1143,11 @@ impl Lowerer {
                 return Ok(ctx);
             }
         }
-        Err(LoweringError::Diagnostic(Diagnostic::new(0, 0, format!("unknown label `{name}`"))))
+        Err(LoweringError::Diagnostic(Diagnostic::new(
+            0,
+            0,
+            format!("unknown label `{name}`"),
+        )))
     }
 
     // ── labeled ─────────────────────────────────────────────────────────────
@@ -1131,60 +1160,49 @@ impl Lowerer {
         let block = self.ensure_open(flow)?;
         let label_name = labeled.label.sym.to_string();
 
-        // Determine if the body is a loop, to set continue_target accordingly.
+        if self
+            .label_stack
+            .iter()
+            .any(|ctx| ctx.label.as_deref() == Some(label_name.as_str()))
+            || self.pending_loop_label.as_deref() == Some(label_name.as_str())
+        {
+            return Err(self.error(
+                labeled.label.span,
+                format!("duplicate label `{label_name}`"),
+            ));
+        }
+
         let is_loop_body = matches!(
             labeled.body.as_ref(),
-            swc_ast::Stmt::While(_) | swc_ast::Stmt::DoWhile(_) | swc_ast::Stmt::For(_)
-                | swc_ast::Stmt::ForIn(_) | swc_ast::Stmt::ForOf(_)
+            swc_ast::Stmt::While(_)
+                | swc_ast::Stmt::DoWhile(_)
+                | swc_ast::Stmt::For(_)
+                | swc_ast::Stmt::ForIn(_)
+                | swc_ast::Stmt::ForOf(_)
         );
 
-        // For a labeled loop, we need to create a structure where the label context
-        // wraps around the loop. The body itself will push another loop context.
         if is_loop_body {
-            let exit = self.current_function.new_block();
-            self.label_stack.push(LabelContext {
-                label: Some(label_name.clone()),
-                kind: LabelKind::Loop,
-                break_target: exit,
-                continue_target: None, // will be set by the loop's own context
-            });
-
-            let inner_flow = self.lower_stmt(&labeled.body, StmtFlow::Open(block))?;
-            let after = self
-                .current_function
-                .ensure_jump_or_terminated(inner_flow, exit);
-
-            self.label_stack.pop();
-
-            // Update the continue target from the inner loop context
-            if let Some(_inner_ctx) = self
-                .label_stack
-                .iter()
-                .rev()
-                .find(|c| c.label.as_deref() == Some(&label_name))
-            {
-                // Can't modify, but the inner context already has the continue target set.
-            }
-
-            Ok(after)
-        } else {
-            // Non-loop label: only provides break target
-            let exit = self.current_function.new_block();
-            self.label_stack.push(LabelContext {
-                label: Some(label_name),
-                kind: LabelKind::Block,
-                break_target: exit,
-                continue_target: None,
-            });
-
-            let inner_flow = self.lower_stmt(&labeled.body, StmtFlow::Open(block))?;
-            let after = self
-                .current_function
-                .ensure_jump_or_terminated(inner_flow, exit);
-
-            self.label_stack.pop();
-            Ok(after)
+            let previous = self.pending_loop_label.replace(label_name);
+            let inner_flow = self.lower_stmt(&labeled.body, StmtFlow::Open(block));
+            self.pending_loop_label = previous;
+            return inner_flow;
         }
+
+        let exit = self.current_function.new_block();
+        self.label_stack.push(LabelContext {
+            label: Some(label_name),
+            kind: LabelKind::Block,
+            break_target: exit,
+            continue_target: None,
+        });
+
+        let inner_flow = self.lower_stmt(&labeled.body, StmtFlow::Open(block))?;
+        let after = self
+            .current_function
+            .ensure_jump_or_terminated(inner_flow, exit);
+
+        self.label_stack.pop();
+        Ok(after)
     }
 
     // ── return ──────────────────────────────────────────────────────────────
@@ -1202,8 +1220,14 @@ impl Lowerer {
             None
         };
 
-        self.current_function
-            .set_terminator(block, Terminator::Return { value });
+        let return_block = self.resolve_store_block(block);
+        match self.lower_pending_finalizers(return_block)? {
+            StmtFlow::Open(after_finally) => {
+                self.current_function
+                    .set_terminator(after_finally, Terminator::Return { value });
+            }
+            StmtFlow::Terminated => {}
+        }
         Ok(StmtFlow::Terminated)
     }
 
@@ -1245,11 +1269,7 @@ impl Lowerer {
         }
 
         // Set switch terminator at the discriminant block
-        let default_target = if found_default {
-            default_block
-        } else {
-            exit
-        };
+        let default_target = if found_default { default_block } else { exit };
 
         self.current_function.set_terminator(
             block,
@@ -1323,21 +1343,28 @@ impl Lowerer {
         Ok(discr)
     }
 
-    fn extract_constant_from_expr(&mut self, expr: &swc_ast::Expr) -> Result<ConstantId, LoweringError> {
+    fn extract_constant_from_expr(
+        &mut self,
+        expr: &swc_ast::Expr,
+    ) -> Result<ConstantId, LoweringError> {
         match expr {
             swc_ast::Expr::Lit(swc_ast::Lit::Num(num)) => {
                 Ok(self.module.add_constant(Constant::Number(num.value)))
             }
-            swc_ast::Expr::Lit(swc_ast::Lit::Str(s)) => {
-                Ok(self.module.add_constant(Constant::String(s.value.to_string_lossy().into_owned())))
-            }
+            swc_ast::Expr::Lit(swc_ast::Lit::Str(s)) => Ok(self
+                .module
+                .add_constant(Constant::String(s.value.to_string_lossy().into_owned()))),
             swc_ast::Expr::Lit(swc_ast::Lit::Bool(b)) => {
                 Ok(self.module.add_constant(Constant::Bool(b.value)))
             }
             swc_ast::Expr::Lit(swc_ast::Lit::Null(_)) => {
                 Ok(self.module.add_constant(Constant::Null))
             }
-            _ => Err(LoweringError::Diagnostic(Diagnostic::new(0, 0, "switch case must be a literal")))
+            _ => Err(LoweringError::Diagnostic(Diagnostic::new(
+                0,
+                0,
+                "switch case must be a literal",
+            ))),
         }
     }
 
@@ -1349,13 +1376,10 @@ impl Lowerer {
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
-
         let value = self.lower_expr(&throw_stmt.arg, block)?;
 
-        // 检查是否有 enclosing try/catch，如果有则重定向到 catch_entry
         if let Some(try_ctx) = self.try_contexts.last() {
             if let Some(catch_entry) = try_ctx.catch_entry {
-                // 存储异常值到 temp 变量，然后跳转到 catch
                 let exc_var = try_ctx.exception_var.clone();
                 self.current_function.append_instruction(
                     block,
@@ -1364,15 +1388,24 @@ impl Lowerer {
                         value,
                     },
                 );
-                self.current_function
-                    .set_terminator(block, Terminator::Jump { target: catch_entry });
+                self.current_function.set_terminator(
+                    block,
+                    Terminator::Jump {
+                        target: catch_entry,
+                    },
+                );
                 return Ok(StmtFlow::Terminated);
             }
         }
 
-        // 没有 enclosing try/catch，使用 Throw terminator
-        self.current_function
-            .set_terminator(block, Terminator::Throw { value });
+        let throw_block = self.resolve_store_block(block);
+        match self.lower_pending_finalizers(throw_block)? {
+            StmtFlow::Open(after_finally) => {
+                self.current_function
+                    .set_terminator(after_finally, Terminator::Throw { value });
+            }
+            StmtFlow::Terminated => {}
+        }
         Ok(StmtFlow::Terminated)
     }
 
@@ -1403,6 +1436,10 @@ impl Lowerer {
             catch_entry: if has_catch { Some(catch_entry) } else { None },
             exception_var: exc_var,
         });
+
+        if let Some(finally) = &try_stmt.finalizer {
+            self.active_finalizers.push(finally.clone());
+        }
 
         // Lower try body
         let try_flow = self.lower_block_body(&try_stmt.block, StmtFlow::Open(try_body))?;
@@ -1454,7 +1491,8 @@ impl Lowerer {
                 }
 
                 // Lower catch body
-                let catch_body_flow = self.lower_block_body(&catch.body, StmtFlow::Open(catch_entry))?;
+                let catch_body_flow =
+                    self.lower_block_body(&catch.body, StmtFlow::Open(catch_entry))?;
                 let _ = self
                     .current_function
                     .ensure_jump_or_terminated(catch_body_flow, finally_entry);
@@ -1465,6 +1503,7 @@ impl Lowerer {
                     .current_function
                     .ensure_jump_or_terminated(StmtFlow::Open(catch_entry), finally_entry);
             }
+            self.active_finalizers.pop();
 
             // Lower finally
             let finally_flow = self.lower_block_body(finally, StmtFlow::Open(finally_entry))?;
@@ -1810,9 +1849,7 @@ impl Lowerer {
 
         match bin.op {
             // Logical operators — short circuit, may create new blocks
-            LogicalAnd | LogicalOr | NullishCoalescing => {
-                self.lower_logical(bin, block)
-            }
+            LogicalAnd | LogicalOr | NullishCoalescing => self.lower_logical(bin, block),
             // Comparison operators
             EqEq | NotEq | EqEqEq | NotEqEq | Lt | LtEq | Gt | GtEq => {
                 self.lower_comparison(bin, block)
@@ -1829,10 +1866,8 @@ impl Lowerer {
                     Div => BinaryOp::Div,
                     _ => unreachable!(),
                 };
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Binary { dest, op, lhs, rhs },
-                );
+                self.current_function
+                    .append_instruction(block, Instruction::Binary { dest, op, lhs, rhs });
                 Ok(dest)
             }
             // Mod / Exp → CallBuiltin
@@ -1878,14 +1913,15 @@ impl Lowerer {
                     },
                 );
                 // For now, return an error
-                Err(self.error(bin.span(), format!("unsupported binary operator `{}`", binary_op_name(bin.op))))
-            }
-            other => {
                 Err(self.error(
                     bin.span(),
-                    format!("unsupported binary operator `{}`", binary_op_name(other)),
+                    format!("unsupported binary operator `{}`", binary_op_name(bin.op)),
                 ))
             }
+            other => Err(self.error(
+                bin.span(),
+                format!("unsupported binary operator `{}`", binary_op_name(other)),
+            )),
         }
     }
 
@@ -1911,70 +1947,73 @@ impl Lowerer {
             _ => unreachable!(),
         };
 
-        self.current_function.append_instruction(
-            block,
-            Instruction::Compare { dest, op, lhs, rhs },
-        );
+        self.current_function
+            .append_instruction(block, Instruction::Compare { dest, op, lhs, rhs });
         Ok(dest)
     }
 
     /// Lower logical operators `&&`, `||`, `??` with short-circuit CFG.
-    /// Uses a temporary variable instead of Phi to carry the result to the merge block.
+    /// The merge block receives a real Phi so expression-level control flow is explicit in IR.
     fn lower_logical(
         &mut self,
         bin: &swc_ast::BinExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let lhs = self.lower_expr(bin.left.as_ref(), block)?;
-        let temp_name = self.alloc_temp_name();
-
-        // Store lhs to temp before the Branch (lhs is always the short-circuit value).
-        self.current_function.append_instruction(
-            block,
-            Instruction::StoreVar {
-                name: temp_name.clone(),
-                value: lhs,
-            },
-        );
-
         let rhs_block = self.current_function.new_block();
         let merge = self.current_function.new_block();
+
+        let condition = if matches!(bin.op, swc_ast::BinaryOp::NullishCoalescing) {
+            let is_nullish = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Unary {
+                    dest: is_nullish,
+                    op: UnaryOp::IsNullish,
+                    value: lhs,
+                },
+            );
+            is_nullish
+        } else {
+            lhs
+        };
 
         let (true_block, false_block) = match bin.op {
             swc_ast::BinaryOp::LogicalAnd => (rhs_block, merge),
             swc_ast::BinaryOp::LogicalOr => (merge, rhs_block),
-            swc_ast::BinaryOp::NullishCoalescing => (merge, rhs_block),
+            swc_ast::BinaryOp::NullishCoalescing => (rhs_block, merge),
             _ => unreachable!(),
         };
 
         self.current_function.set_terminator(
             block,
             Terminator::Branch {
-                condition: lhs,
+                condition,
                 true_block,
                 false_block,
             },
         );
 
-        // rhs_block: compute rhs and store to temp.
         let rhs = self.lower_expr(bin.right.as_ref(), rhs_block)?;
-        self.current_function.append_instruction(
-            rhs_block,
-            Instruction::StoreVar {
-                name: temp_name.clone(),
-                value: rhs,
-            },
-        );
+        let rhs_end = self.resolve_store_block(rhs_block);
         self.current_function
-            .set_terminator(rhs_block, Terminator::Jump { target: merge });
+            .set_terminator(rhs_end, Terminator::Jump { target: merge });
 
-        // merge: load result from temp.
         let result = self.alloc_value();
         self.current_function.append_instruction(
             merge,
-            Instruction::LoadVar {
+            Instruction::Phi {
                 dest: result,
-                name: temp_name,
+                sources: vec![
+                    PhiSource {
+                        predecessor: block,
+                        value: lhs,
+                    },
+                    PhiSource {
+                        predecessor: rhs_end,
+                        value: rhs,
+                    },
+                ],
             },
         );
 
@@ -2057,16 +2096,8 @@ impl Lowerer {
                 );
                 Ok(dest)
             }
-            TypeOf => {
-                Err(self.error(
-                    unary.span(),
-                    "typeof operator is not yet supported",
-                ))
-            }
-            _ => Err(self.error(
-                unary.span(),
-                format!("unsupported unary operator"),
-            )),
+            TypeOf => Err(self.error(unary.span(), "typeof operator is not yet supported")),
+            _ => Err(self.error(unary.span(), format!("unsupported unary operator"))),
         }
     }
 
@@ -2078,7 +2109,6 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let test = self.lower_expr(&cond.test, block)?;
-        let temp_name = self.alloc_temp_name();
 
         let cons_block = self.current_function.new_block();
         let alt_block = self.current_function.new_block();
@@ -2093,37 +2123,31 @@ impl Lowerer {
             },
         );
 
-        // cons_block: compute cons and store to temp.
         let cons_val = self.lower_expr(&cond.cons, cons_block)?;
-        self.current_function.append_instruction(
-            cons_block,
-            Instruction::StoreVar {
-                name: temp_name.clone(),
-                value: cons_val,
-            },
-        );
+        let cons_end = self.resolve_store_block(cons_block);
         self.current_function
-            .set_terminator(cons_block, Terminator::Jump { target: merge });
+            .set_terminator(cons_end, Terminator::Jump { target: merge });
 
-        // alt_block: compute alt and store to temp.
         let alt_val = self.lower_expr(&cond.alt, alt_block)?;
-        self.current_function.append_instruction(
-            alt_block,
-            Instruction::StoreVar {
-                name: temp_name.clone(),
-                value: alt_val,
-            },
-        );
+        let alt_end = self.resolve_store_block(alt_block);
         self.current_function
-            .set_terminator(alt_block, Terminator::Jump { target: merge });
+            .set_terminator(alt_end, Terminator::Jump { target: merge });
 
-        // merge: load result from temp.
         let result = self.alloc_value();
         self.current_function.append_instruction(
             merge,
-            Instruction::LoadVar {
+            Instruction::Phi {
                 dest: result,
-                name: temp_name,
+                sources: vec![
+                    PhiSource {
+                        predecessor: cons_end,
+                        value: cons_val,
+                    },
+                    PhiSource {
+                        predecessor: alt_end,
+                        value: alt_val,
+                    },
+                ],
             },
         );
 
@@ -2167,10 +2191,8 @@ impl Lowerer {
 
         let constant = self.module.add_constant(constant);
         let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const { dest, constant },
-        );
+        self.current_function
+            .append_instruction(block, Instruction::Const { dest, constant });
         Ok(dest)
     }
 
@@ -2179,10 +2201,8 @@ impl Lowerer {
     fn load_bool_constant(&mut self, val: bool, block: BasicBlockId) -> ValueId {
         let constant = self.module.add_constant(Constant::Bool(val));
         let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const { dest, constant },
-        );
+        self.current_function
+            .append_instruction(block, Instruction::Const { dest, constant });
         dest
     }
 
@@ -2191,13 +2211,11 @@ impl Lowerer {
     fn ensure_open(&self, flow: StmtFlow) -> Result<BasicBlockId, LoweringError> {
         match flow {
             StmtFlow::Open(block) => Ok(block),
-            StmtFlow::Terminated => {
-                Err(LoweringError::Diagnostic(Diagnostic::new(
-                    0,
-                    0,
-                    "cannot lower statement after a terminated path",
-                )))
-            }
+            StmtFlow::Terminated => Err(LoweringError::Diagnostic(Diagnostic::new(
+                0,
+                0,
+                "cannot lower statement after a terminated path",
+            ))),
         }
     }
 
@@ -2291,6 +2309,10 @@ impl Lowerer {
                 }
                 self.predeclare_stmt_with_mode(&for_of.body, LexicalMode::Exclude)?;
             }
+            swc_ast::Stmt::Labeled(labeled) => {
+                self.predeclare_stmt_with_mode(&labeled.body, mode)?;
+            }
+
             _ => {}
         }
         Ok(())
@@ -2343,10 +2365,8 @@ impl Lowerer {
 
         for var in &self.hoisted_vars {
             let name = format!("${}.{}", var.scope_id, var.name);
-            self.current_function.append_instruction(
-                block,
-                Instruction::StoreVar { name, value },
-            );
+            self.current_function
+                .append_instruction(block, Instruction::StoreVar { name, value });
         }
     }
 
@@ -2366,27 +2386,89 @@ impl Lowerer {
 
     /// Check if a block has been terminated by lower_expr (e.g. ternary/short-circuit).
     /// If so, find the merge block where subsequent instructions should go.
+    /// Check if a block has been terminated by lower_expr (e.g. ternary/short-circuit).
+    /// If so, find the merge block where subsequent instructions should go.
     fn resolve_store_block(&self, block: BasicBlockId) -> BasicBlockId {
-        if let Some(b) = self.current_function.block(block) {
-            match b.terminator() {
-                Terminator::Unreachable => return block,
-                Terminator::Branch { true_block, .. } => {
-                    // Find the merge block: look at true_block's Jump target
-                    if let Some(true_b) = self.current_function.block(*true_block) {
-                        match true_b.terminator() {
-                            Terminator::Jump { target } => return *target,
-                            _ => {}
-                        }
-                    }
+        let Some(b) = self.current_function.block(block) else {
+            return block;
+        };
+
+        let Terminator::Branch {
+            true_block,
+            false_block,
+            ..
+        } = b.terminator()
+        else {
+            return block;
+        };
+
+        let jump_target = |id: BasicBlockId| -> Option<BasicBlockId> {
+            self.current_function
+                .block(id)
+                .and_then(|candidate| match candidate.terminator() {
+                    Terminator::Jump { target } => Some(*target),
+                    _ => None,
+                })
+        };
+
+        match (jump_target(*true_block), jump_target(*false_block)) {
+            (Some(left), Some(right)) if left == right => left,
+            (Some(target), _) => target,
+            (_, Some(target)) => target,
+            _ => {
+                let true_has_phi =
+                    self.current_function
+                        .block(*true_block)
+                        .map_or(false, |candidate| {
+                            candidate
+                                .instructions()
+                                .iter()
+                                .any(|instruction| matches!(instruction, Instruction::Phi { .. }))
+                        });
+                if true_has_phi {
+                    return *true_block;
                 }
-                _ => {}
+
+                let false_has_phi =
+                    self.current_function
+                        .block(*false_block)
+                        .map_or(false, |candidate| {
+                            candidate
+                                .instructions()
+                                .iter()
+                                .any(|instruction| matches!(instruction, Instruction::Phi { .. }))
+                        });
+                if false_has_phi {
+                    return *false_block;
+                }
+
+                block
             }
         }
-        block
     }
-
-    fn resolve_open_after_expr(&self, _original_block: BasicBlockId, store_block: BasicBlockId) -> BasicBlockId {
+    fn resolve_open_after_expr(
+        &self,
+        _original_block: BasicBlockId,
+        store_block: BasicBlockId,
+    ) -> BasicBlockId {
         store_block
+    }
+    fn lower_pending_finalizers(&mut self, block: BasicBlockId) -> Result<StmtFlow, LoweringError> {
+        if self.active_finalizers.is_empty() {
+            return Ok(StmtFlow::Open(block));
+        }
+
+        let finalizers: Vec<_> = self.active_finalizers.iter().rev().cloned().collect();
+        let saved = std::mem::take(&mut self.active_finalizers);
+        let mut flow = StmtFlow::Open(block);
+        for finalizer in &finalizers {
+            flow = self.lower_block_body(finalizer, flow)?;
+            if matches!(flow, StmtFlow::Terminated) {
+                break;
+            }
+        }
+        self.active_finalizers = saved;
+        Ok(flow)
     }
 
     fn error(&self, span: Span, message: impl Into<String>) -> LoweringError {

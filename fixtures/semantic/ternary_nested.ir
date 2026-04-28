@@ -1,0 +1,57 @@
+module {
+  constants:
+    c0 = bool(true)
+    c1 = bool(false)
+    c2 = number(1)
+    c3 = number(2)
+    c4 = number(3)
+    c5 = bool(false)
+    c6 = number(1)
+    c7 = bool(true)
+    c8 = number(4)
+    c9 = number(5)
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      branch %0, bb1, bb2
+    bb1:
+      %1 = const c1
+      branch %1, bb4, bb5
+    bb2:
+      %5 = const c4
+      jump bb3
+    bb3:
+      %6 = phi [(bb6, %4), (bb2, %5)]
+      call builtin.console.log(%6)
+      %7 = const c5
+      branch %7, bb7, bb8
+    bb4:
+      %2 = const c2
+      jump bb6
+    bb5:
+      %3 = const c3
+      jump bb6
+    bb6:
+      %4 = phi [(bb4, %2), (bb5, %3)]
+      jump bb3
+    bb7:
+      %8 = const c6
+      jump bb9
+    bb8:
+      %9 = const c7
+      branch %9, bb10, bb11
+    bb9:
+      %13 = phi [(bb7, %8), (bb12, %12)]
+      call builtin.console.log(%13)
+      return
+    bb10:
+      %10 = const c8
+      jump bb12
+    bb11:
+      %11 = const c9
+      jump bb12
+    bb12:
+      %12 = phi [(bb10, %10), (bb11, %11)]
+      jump bb9
+}
