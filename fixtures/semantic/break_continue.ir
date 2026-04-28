@@ -1,0 +1,45 @@
+module {
+  constants:
+    c0 = number(0)
+    c1 = bool(true)
+    c2 = number(10)
+    c3 = number(1)
+    c4 = number(3)
+    c5 = number(6)
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.i, %0
+      jump bb1
+    bb1:
+      %1 = const c1
+      %2 = load var $0.i
+      %3 = const c2
+      %4 = lt %2, %3
+      branch %4, bb2, bb3
+    bb2:
+      %5 = load var $0.i
+      %6 = const c3
+      %7 = add %5, %6
+      store var $0.i, %7
+      %8 = load var $0.i
+      %9 = const c4
+      %10 = eq %8, %9
+      branch %10, bb4, bb5
+    bb3:
+      return
+    bb4:
+      jump bb1
+    bb5:
+      %11 = load var $0.i
+      %12 = const c5
+      %13 = eq %11, %12
+      branch %13, bb6, bb7
+    bb6:
+      jump bb3
+    bb7:
+      %14 = load var $0.i
+      call builtin.console.log(%14)
+      jump bb1
+}

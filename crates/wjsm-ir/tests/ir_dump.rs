@@ -10,7 +10,8 @@ fn textual_dump_includes_constants_blocks_and_builtin_calls() {
     let right = module.add_constant(Constant::String("hello".to_string()));
 
     let mut function = Function::new("main", BasicBlockId(0));
-    let mut entry = BasicBlock::new(BasicBlockId(0), Terminator::Return { value: None });
+    let mut entry = BasicBlock::new(BasicBlockId(0));
+    entry.set_terminator(Terminator::Return { value: None });
     entry.push_instruction(Instruction::Const {
         dest: ValueId(0),
         constant: left,
@@ -59,7 +60,8 @@ fn textual_dump_includes_load_store_undefined() {
     let one = module.add_constant(Constant::Number(1.0));
 
     let mut function = Function::new("main", BasicBlockId(0));
-    let mut entry = BasicBlock::new(BasicBlockId(0), Terminator::Return { value: None });
+    let mut entry = BasicBlock::new(BasicBlockId(0));
+    entry.set_terminator(Terminator::Return { value: None });
     // let x; (implicit undefined)
     entry.push_instruction(Instruction::Const {
         dest: ValueId(0),

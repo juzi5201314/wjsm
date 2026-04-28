@@ -1,0 +1,25 @@
+module {
+  constants:
+    c0 = number(42)
+    c1 = string("after try")
+
+  fn @main [entry=bb0]:
+    bb0:
+      jump bb1
+    bb1:
+      %0 = const c0
+      store var $tmp.0, %0
+      jump bb2
+    bb2:
+      %1 = load var $tmp.0
+      store var $2.e, %1
+      %2 = load var $2.e
+      call builtin.console.log(%2)
+      jump bb4
+    bb3:
+      unreachable
+    bb4:
+      %3 = const c1
+      call builtin.console.log(%3)
+      return
+}

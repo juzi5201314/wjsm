@@ -5,6 +5,11 @@ pub const MASK_PAYLOAD: u64 = 0x0007_FFFF_FFFF_FFFF;
 
 pub const TAG_STRING: u64 = 0x1;
 pub const TAG_UNDEFINED: u64 = 0x2;
+pub const TAG_NULL: u64 = 0x3;
+pub const TAG_BOOL: u64 = 0x4;
+pub const TAG_EXCEPTION: u64 = 0x5;
+pub const TAG_ITERATOR: u64 = 0x6;
+pub const TAG_ENUMERATOR: u64 = 0x7;
 
 pub const BOX_BASE: u64 = MASK_EXPONENT | MASK_QUIET_NAN;
 
@@ -39,4 +44,91 @@ pub fn encode_undefined() -> i64 {
 pub fn is_undefined(val: i64) -> bool {
     let uval = val as u64;
     (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_UNDEFINED
+}
+
+pub fn encode_null() -> i64 {
+    (BOX_BASE | (TAG_NULL << 32)) as i64
+}
+
+pub fn is_null(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_NULL
+}
+
+pub fn encode_bool(val: bool) -> i64 {
+    let payload = (TAG_BOOL << 32) | if val { 1 } else { 0 };
+    (BOX_BASE | payload) as i64
+}
+
+pub fn is_bool(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_BOOL
+}
+
+pub fn decode_bool(val: i64) -> bool {
+    (val as u64 & 1) == 1
+}
+
+/// Returns true if the value is `null` or `undefined` (for `??` operator).
+pub fn is_nullish(val: i64) -> bool {
+    is_null(val) || is_undefined(val)
+}
+
+/// Returns true if the value is JavaScript-falsy.
+///
+/// falsy values: undefined, null, false, +0, -0, NaN, empty string.
+pub fn is_falsy(val: i64) -> bool {
+    if is_undefined(val) || is_null(val) {
+        return true;
+    }
+    if is_bool(val) {
+        return !decode_bool(val);
+    }
+    if is_f64(val) {
+        let f = f64::from_bits(val as u64);
+        // +0, -0, NaN
+        return f == 0.0 || f.is_nan();
+    }
+    if is_string(val) {
+        // For strings, we use a convention: the first 4 bytes of the string data
+        // store the length. Empty string has length 0 → falsy.
+        // But WASM runtime can't check this at compile time; at runtime
+        // the string length is checked via a host function.
+        // For compile-time checks in the backend, we handle this differently.
+        // For now, truthiness of strings is handled at runtime.
+        return false;
+    }
+    // All other types (exception/iterator/enumerator handles, objects) are truthy.
+    false
+}
+
+/// Returns true if the value is JavaScript-truthy.
+pub fn is_truthy(val: i64) -> bool {
+    !is_falsy(val)
+}
+
+/// Encode a handle value (exception, iterator, enumerator) with a given tag.
+pub fn encode_handle(tag: u64, handle: u32) -> i64 {
+    let payload = (tag << 32) | (handle as u64);
+    (BOX_BASE | payload) as i64
+}
+
+/// Decode the handle index from a tagged handle value.
+pub fn decode_handle(val: i64) -> u32 {
+    (val as u64 & 0xFFFF_FFFF) as u32
+}
+
+pub fn is_exception(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_EXCEPTION
+}
+
+pub fn is_iterator(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_ITERATOR
+}
+
+pub fn is_enumerator(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_ENUMERATOR
 }
