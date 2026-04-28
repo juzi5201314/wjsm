@@ -1048,7 +1048,7 @@ impl Lowerer {
         let target = if let Some(label) = &break_stmt.label {
             self.find_label(&label.sym.to_string(), Some(label.span))?
         } else {
-            self.find_nearest_break_target()?
+            self.find_nearest_break_target(break_stmt.span())?
         };
 
         match self.lower_pending_finalizers(block)? {
@@ -1069,7 +1069,7 @@ impl Lowerer {
         let block = self.ensure_open(flow)?;
 
         let target = if let Some(label) = &continue_stmt.label {
-            let ctx = self.find_label_context(&label.sym.to_string())?;
+            let ctx = self.find_label_context(&label.sym.to_string(), Some(label.span))?;
             ctx.continue_target.ok_or_else(|| {
                 self.error(
                     continue_stmt.span(),
@@ -1077,7 +1077,7 @@ impl Lowerer {
                 )
             })?
         } else {
-            self.find_nearest_continue_target()?
+            self.find_nearest_continue_target(continue_stmt.span())?
         };
 
         match self.lower_pending_finalizers(block)? {
@@ -1090,8 +1090,7 @@ impl Lowerer {
         Ok(StmtFlow::Terminated)
     }
 
-    fn find_nearest_break_target(&self) -> Result<BasicBlockId, LoweringError> {
-        // We need a raw error span, so we pass an error constructed at the call site instead.
+    fn find_nearest_break_target(&self, span: Span) -> Result<BasicBlockId, LoweringError> {
         for ctx in self.label_stack.iter().rev() {
             match ctx.kind {
                 LabelKind::Loop | LabelKind::Switch | LabelKind::Block => {
@@ -1099,23 +1098,22 @@ impl Lowerer {
                 }
             }
         }
-        // This error is caught by the caller
         Err(LoweringError::Diagnostic(Diagnostic::new(
-            0,
-            0,
+            span.lo.0,
+            span.hi.0,
             "break outside of loop or switch",
         )))
     }
 
-    fn find_nearest_continue_target(&self) -> Result<BasicBlockId, LoweringError> {
+    fn find_nearest_continue_target(&self, span: Span) -> Result<BasicBlockId, LoweringError> {
         for ctx in self.label_stack.iter().rev() {
             if let Some(target) = ctx.continue_target {
                 return Ok(target);
             }
         }
         Err(LoweringError::Diagnostic(Diagnostic::new(
-            0,
-            0,
+            span.lo.0,
+            span.hi.0,
             "continue outside of loop",
         )))
     }
@@ -1123,29 +1121,37 @@ impl Lowerer {
     fn find_label(
         &self,
         name: &str,
-        _error_span: Option<Span>,
+        error_span: Option<Span>,
     ) -> Result<BasicBlockId, LoweringError> {
         for ctx in self.label_stack.iter().rev() {
             if ctx.label.as_deref() == Some(name) {
                 return Ok(ctx.break_target);
             }
         }
+        let (start, end) = match error_span {
+            Some(span) => (span.lo.0, span.hi.0),
+            None => (0, 0),
+        };
         Err(LoweringError::Diagnostic(Diagnostic::new(
-            0,
-            0,
+            start,
+            end,
             format!("unknown label `{name}`"),
         )))
     }
 
-    fn find_label_context(&self, name: &str) -> Result<&LabelContext, LoweringError> {
+    fn find_label_context(&self, name: &str, error_span: Option<Span>) -> Result<&LabelContext, LoweringError> {
         for ctx in self.label_stack.iter().rev() {
             if ctx.label.as_deref() == Some(name) {
                 return Ok(ctx);
             }
         }
+        let (start, end) = match error_span {
+            Some(span) => (span.lo.0, span.hi.0),
+            None => (0, 0),
+        };
         Err(LoweringError::Diagnostic(Diagnostic::new(
-            0,
-            0,
+            start,
+            end,
             format!("unknown label `{name}`"),
         )))
     }
@@ -1360,11 +1366,10 @@ impl Lowerer {
             swc_ast::Expr::Lit(swc_ast::Lit::Null(_)) => {
                 Ok(self.module.add_constant(Constant::Null))
             }
-            _ => Err(LoweringError::Diagnostic(Diagnostic::new(
-                0,
-                0,
+            _ => Err(self.error(
+                expr.span(),
                 "switch case must be a literal",
-            ))),
+            )),
         }
     }
 

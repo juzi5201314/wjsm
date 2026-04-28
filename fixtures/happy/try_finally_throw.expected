@@ -1,0 +1,6 @@
+exit_code: 1
+--- stdout ---
+finally
+Uncaught exception: 42
+--- stderr ---
+Error: Uncaught exception: 42
