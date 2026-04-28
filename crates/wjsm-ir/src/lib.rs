@@ -313,6 +313,7 @@ pub enum UnaryOp {
     Pos,
     BitNot,
     Void,
+    IsNullish,
 }
 
 impl fmt::Display for UnaryOp {
@@ -323,6 +324,7 @@ impl fmt::Display for UnaryOp {
             Self::Pos => "pos",
             Self::BitNot => "bitnot",
             Self::Void => "void",
+            Self::IsNullish => "is_nullish",
         })
     }
 }
@@ -403,11 +405,26 @@ impl fmt::Display for Builtin {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Terminator {
-    Return { value: Option<ValueId> },
-    Jump { target: BasicBlockId },
-    Branch { condition: ValueId, true_block: BasicBlockId, false_block: BasicBlockId },
-    Switch { value: ValueId, cases: Vec<SwitchCaseTarget>, default_block: BasicBlockId, exit_block: BasicBlockId },
-    Throw { value: ValueId },
+    Return {
+        value: Option<ValueId>,
+    },
+    Jump {
+        target: BasicBlockId,
+    },
+    Branch {
+        condition: ValueId,
+        true_block: BasicBlockId,
+        false_block: BasicBlockId,
+    },
+    Switch {
+        value: ValueId,
+        cases: Vec<SwitchCaseTarget>,
+        default_block: BasicBlockId,
+        exit_block: BasicBlockId,
+    },
+    Throw {
+        value: ValueId,
+    },
     Unreachable,
 }
 
@@ -417,10 +434,19 @@ impl fmt::Display for Terminator {
             Self::Return { value: Some(value) } => write!(formatter, "return {value}"),
             Self::Return { value: None } => formatter.write_str("return"),
             Self::Jump { target } => write!(formatter, "jump {target}"),
-            Self::Branch { condition, true_block, false_block } => {
+            Self::Branch {
+                condition,
+                true_block,
+                false_block,
+            } => {
                 write!(formatter, "branch {condition}, {true_block}, {false_block}")
             }
-            Self::Switch { value, cases, default_block, exit_block } => {
+            Self::Switch {
+                value,
+                cases,
+                default_block,
+                exit_block,
+            } => {
                 write!(formatter, "switch {value} [")?;
                 for (i, case) in cases.iter().enumerate() {
                     if i > 0 {

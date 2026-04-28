@@ -18,13 +18,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // Iterator/enumerator side tables
     let iterators: Arc<Mutex<Vec<IteratorState>>> = Arc::new(Mutex::new(Vec::new()));
     let enumerators: Arc<Mutex<Vec<EnumeratorState>>> = Arc::new(Mutex::new(Vec::new()));
-
+    let runtime_strings: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+    let runtime_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let mut store = Store::new(
         &engine,
         RuntimeState {
             output: Arc::clone(&output),
             iterators: Arc::clone(&iterators),
             enumerators: Arc::clone(&enumerators),
+            runtime_strings: Arc::clone(&runtime_strings),
+            runtime_error: Arc::clone(&runtime_error),
         },
     );
 
@@ -45,33 +48,44 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     );
 
     // ── Import 1: f64_mod(i64, i64) → i64 ───────────────────────────────
-    let f64_mod = Func::wrap(&mut store, |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
-        let af = f64::from_bits(a as u64);
-        let bf = f64::from_bits(b as u64);
-        let result = af - bf * (af / bf).trunc();
-        result.to_bits() as i64
-    });
+    let f64_mod = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let af = f64::from_bits(a as u64);
+            let bf = f64::from_bits(b as u64);
+            let result = af - bf * (af / bf).trunc();
+            result.to_bits() as i64
+        },
+    );
 
     // ── Import 2: f64_pow(i64, i64) → i64 ───────────────────────────────
-    let f64_pow = Func::wrap(&mut store, |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
-        let af = f64::from_bits(a as u64);
-        let bf = f64::from_bits(b as u64);
-        let result = af.powf(bf);
-        result.to_bits() as i64
-    });
+    let f64_pow = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let af = f64::from_bits(a as u64);
+            let bf = f64::from_bits(b as u64);
+            let result = af.powf(bf);
+            result.to_bits() as i64
+        },
+    );
 
-    // ── Import 3: throw(i64) → () ────────────────────────────────────────
-    let throw_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, val: i64| {
-        let rendered = render_value(&mut caller, val).unwrap_or_else(|_| "unknown".to_string());
-        // Write error message to output
-        let mut buffer = caller
-            .data()
-            .output
-            .lock()
-            .expect("runtime output buffer mutex should not be poisoned");
-        writeln!(&mut *buffer, "Uncaught exception: {rendered}").ok();
-        // Trap to halt execution
-    });
+    let throw_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| {
+            let rendered = render_value(&mut caller, val).unwrap_or_else(|_| "unknown".to_string());
+            let mut buffer = caller
+                .data()
+                .output
+                .lock()
+                .expect("runtime output buffer mutex should not be poisoned");
+            writeln!(&mut *buffer, "Uncaught exception: {rendered}").ok();
+            *caller
+                .data()
+                .runtime_error
+                .lock()
+                .expect("runtime error mutex") = Some(format!("Uncaught exception: {rendered}"));
+        },
+    );
 
     // ── Import 4: iterator_from(i64) → i64 ──────────────────────────────
     let iterator_from = Func::wrap(
@@ -81,11 +95,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 let ptr = value::decode_string_ptr(val);
                 // Read string from WASM memory
                 let string_data = read_string_bytes(&mut caller, ptr);
-                let mut iters = caller
-                    .data()
-                    .iterators
-                    .lock()
-                    .expect("iterators mutex");
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
                 let handle = iters.len() as u32;
                 iters.push(IteratorState::StringIter {
                     data: string_data,
@@ -94,11 +104,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 value::encode_handle(value::TAG_ITERATOR, handle)
             } else {
                 // Non-iterable: store an error state
-                let mut iters = caller
-                    .data()
-                    .iterators
-                    .lock()
-                    .expect("iterators mutex");
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
                 let handle = iters.len() as u32;
                 iters.push(IteratorState::Error);
                 value::encode_handle(value::TAG_ITERATOR, handle)
@@ -111,11 +117,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut iters = caller
-                .data()
-                .iterators
-                .lock()
-                .expect("iterators mutex");
+            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             if let Some(iter) = iters.get_mut(handle_idx) {
                 match iter {
                     IteratorState::StringIter { byte_pos, .. } => {
@@ -136,29 +138,30 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 7: iterator_value(i64) → i64 ─────────────────────────────
     let iterator_value = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut iters = caller
-                .data()
-                .iterators
-                .lock()
-                .expect("iterators mutex");
+            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             if let Some(iter) = iters.get_mut(handle_idx) {
                 match iter {
                     IteratorState::StringIter { data, byte_pos } => {
                         if *byte_pos < data.len() {
-                            // Allocate a string in WASM memory for the current character
-                            // For simplicity, return the byte value as a number
-                            let byte = data[*byte_pos] as f64;
-                            value::encode_f64(byte)
+                            let ch = data[*byte_pos] as char;
+                            drop(iters);
+                            let mut strings = caller
+                                .data()
+                                .runtime_strings
+                                .lock()
+                                .expect("runtime strings mutex");
+                            let handle = strings.len() as u32;
+                            strings.push(ch.to_string());
+                            value::encode_string_ptr(0x8000_0000 | handle)
                         } else {
                             value::encode_undefined()
                         }
                     }
-                    IteratorState::Error => value::encode_undefined(),
+                    IteratorState::Error => panic!("TypeError: value is not iterable"),
                 }
             } else {
                 value::encode_undefined()
@@ -171,21 +174,19 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut iters = caller
-                .data()
-                .iterators
-                .lock()
-                .expect("iterators mutex");
+            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             let done = if let Some(iter) = iters.get_mut(handle_idx) {
                 match iter {
-                    IteratorState::StringIter { data, byte_pos } => {
-                        if *byte_pos >= data.len() {
-                            true
-                        } else {
-                            false
-                        }
+                    IteratorState::StringIter { data, byte_pos } => *byte_pos >= data.len(),
+                    IteratorState::Error => {
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .expect("runtime error mutex") =
+                            Some("TypeError: value is not iterable".to_string());
+                        true
                     }
-                    IteratorState::Error => true,
                 }
             } else {
                 true
@@ -202,11 +203,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 let ptr = value::decode_string_ptr(val);
                 let string_data = read_string_bytes(&mut caller, ptr);
                 let len = string_data.len();
-                let mut enums = caller
-                    .data()
-                    .enumerators
-                    .lock()
-                    .expect("enumerators mutex");
+                let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
                 let handle = enums.len() as u32;
                 enums.push(EnumeratorState::StringEnum {
                     length: len,
@@ -214,11 +211,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 });
                 value::encode_handle(value::TAG_ENUMERATOR, handle)
             } else {
-                let mut enums = caller
-                    .data()
-                    .enumerators
-                    .lock()
-                    .expect("enumerators mutex");
+                let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
                 let handle = enums.len() as u32;
                 enums.push(EnumeratorState::Error);
                 value::encode_handle(value::TAG_ENUMERATOR, handle)
@@ -231,11 +224,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut enums = caller
-                .data()
-                .enumerators
-                .lock()
-                .expect("enumerators mutex");
+            let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
             if let Some(enm) = enums.get_mut(handle_idx) {
                 match enm {
                     EnumeratorState::StringEnum { length, index } => {
@@ -255,20 +244,22 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut enums = caller
-                .data()
-                .enumerators
-                .lock()
-                .expect("enumerators mutex");
+            let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
             if let Some(enm) = enums.get_mut(handle_idx) {
                 match enm {
                     EnumeratorState::StringEnum { index, .. } => {
-                        // Return the index as a string
-                        // For simplicity, return the index as a number for now
-                        // TODO: allocate string in WASM memory
-                        return value::encode_f64(*index as f64);
+                        let key = index.to_string();
+                        drop(enums);
+                        let mut strings = caller
+                            .data()
+                            .runtime_strings
+                            .lock()
+                            .expect("runtime strings mutex");
+                        let handle = strings.len() as u32;
+                        strings.push(key);
+                        return value::encode_string_ptr(0x8000_0000 | handle);
                     }
-                    EnumeratorState::Error => {}
+                    EnumeratorState::Error => panic!("TypeError: value is not enumerable"),
                 }
             }
             value::encode_undefined()
@@ -280,15 +271,19 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut enums = caller
-                .data()
-                .enumerators
-                .lock()
-                .expect("enumerators mutex");
+            let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
             let done = if let Some(enm) = enums.get_mut(handle_idx) {
                 match enm {
                     EnumeratorState::StringEnum { length, index } => *index >= *length,
-                    EnumeratorState::Error => true,
+                    EnumeratorState::Error => {
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .expect("runtime error mutex") =
+                            Some("TypeError: value is not enumerable".to_string());
+                        true
+                    }
                 }
             } else {
                 true
@@ -298,25 +293,24 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     );
 
     let imports = [
-        console_log.into(),    // 0
-        f64_mod.into(),        // 1
-        f64_pow.into(),        // 2
-        throw_fn.into(),       // 3
-        iterator_from.into(),  // 4
-        iterator_next.into(),  // 5
-        iterator_close.into(), // 6
-        iterator_value.into(), // 7
-        iterator_done.into(),  // 8
-        enumerator_from.into(),// 9
-        enumerator_next.into(),// 10
-        enumerator_key.into(), // 11
-        enumerator_done.into(),// 12
+        console_log.into(),     // 0
+        f64_mod.into(),         // 1
+        f64_pow.into(),         // 2
+        throw_fn.into(),        // 3
+        iterator_from.into(),   // 4
+        iterator_next.into(),   // 5
+        iterator_close.into(),  // 6
+        iterator_value.into(),  // 7
+        iterator_done.into(),   // 8
+        enumerator_from.into(), // 9
+        enumerator_next.into(), // 10
+        enumerator_key.into(),  // 11
+        enumerator_done.into(), // 12
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
     let main = instance.get_typed_func::<(), ()>(&mut store, "main")?;
-    // Ignore trap from uncaught exceptions (trap is the expected behavior)
-    let _ = main.call(&mut store, ());
+    let call_result = main.call(&mut store, ());
 
     drop(store);
 
@@ -327,6 +321,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let mut writer = writer;
     writer.write_all(&bytes)?;
 
+    if let Some(message) = runtime_error.lock().expect("runtime error mutex").clone() {
+        anyhow::bail!(message);
+    }
+
+    call_result?;
     Ok(writer)
 }
 
@@ -334,6 +333,8 @@ struct RuntimeState {
     output: Arc<Mutex<Vec<u8>>>,
     iterators: Arc<Mutex<Vec<IteratorState>>>,
     enumerators: Arc<Mutex<Vec<EnumeratorState>>>,
+    runtime_strings: Arc<Mutex<Vec<String>>>,
+    runtime_error: Arc<Mutex<Option<String>>>,
 }
 
 enum IteratorState {
@@ -349,6 +350,18 @@ enum EnumeratorState {
 fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<String> {
     if value::is_string(val) {
         let ptr = value::decode_string_ptr(val);
+        if (ptr & 0x8000_0000) != 0 {
+            let handle = (ptr & 0x7FFF_FFFF) as usize;
+            let strings = caller
+                .data()
+                .runtime_strings
+                .lock()
+                .expect("runtime strings mutex");
+            if let Some(value) = strings.get(handle) {
+                return Ok(value.clone());
+            }
+            return Ok(String::new());
+        }
         return read_string(caller, ptr);
     }
 

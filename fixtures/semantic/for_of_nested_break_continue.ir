@@ -1,0 +1,46 @@
+module {
+  constants:
+    c0 = number(0)
+    c1 = string("abc")
+    c2 = number(1)
+    c3 = number(1)
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.total, %0
+      %1 = const c1
+      %2 = call builtin.iterator.from(%1)
+      jump bb1
+    bb1:
+      %3 = call builtin.iterator.done(%2)
+      %4 = not %3
+      branch %4, bb2, bb5
+    bb2:
+      %5 = call builtin.iterator.value(%2)
+      store var $0.ch, %5
+      %6 = load var $0.total
+      %7 = const c2
+      %8 = add %6, %7
+      store var $0.total, %8
+      %9 = load var $0.total
+      %10 = const c3
+      %11 = stricteq %9, %10
+      branch %11, bb6, bb7
+    bb3:
+      call builtin.iterator.next(%2)
+      jump bb1
+    bb4:
+      call builtin.iterator.close(%2)
+      jump bb5
+    bb5:
+      %13 = load var $0.total
+      call builtin.console.log(%13)
+      return
+    bb6:
+      jump bb3
+    bb7:
+      %12 = load var $0.ch
+      call builtin.console.log(%12)
+      jump bb3
+}

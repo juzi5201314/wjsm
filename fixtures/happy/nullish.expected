@@ -1,5 +1,9 @@
 exit_code: 0
 --- stdout ---
-h
-i
+0
+false
+x
+4
+5
+0
 --- stderr ---

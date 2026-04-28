@@ -1,0 +1,72 @@
+module {
+  constants:
+    c0 = number(0)
+    c1 = number(0)
+    c2 = number(1)
+    c3 = bool(false)
+    c4 = number(2)
+    c5 = string("x")
+    c6 = number(3)
+    c7 = null
+    c8 = number(4)
+    c9 = number(0)
+    c10 = undefined
+    c11 = number(5)
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.hit, %0
+      %1 = const c1
+      %2 = is_nullish %1
+      branch %2, bb1, bb2
+    bb1:
+      %3 = const c2
+      store var $0.hit, %3
+      jump bb2
+    bb2:
+      %4 = phi [(bb0, %1), (bb1, %3)]
+      call builtin.console.log(%4)
+      %5 = const c3
+      %6 = is_nullish %5
+      branch %6, bb3, bb4
+    bb3:
+      %7 = const c4
+      store var $0.hit, %7
+      jump bb4
+    bb4:
+      %8 = phi [(bb2, %5), (bb3, %7)]
+      call builtin.console.log(%8)
+      %9 = const c5
+      %10 = is_nullish %9
+      branch %10, bb5, bb6
+    bb5:
+      %11 = const c6
+      store var $0.hit, %11
+      jump bb6
+    bb6:
+      %12 = phi [(bb4, %9), (bb5, %11)]
+      call builtin.console.log(%12)
+      %13 = const c7
+      %14 = is_nullish %13
+      branch %14, bb7, bb8
+    bb7:
+      %15 = const c8
+      jump bb8
+    bb8:
+      %16 = phi [(bb6, %13), (bb7, %15)]
+      call builtin.console.log(%16)
+      %17 = const c9
+      %18 = const c10
+      %19 = is_nullish %18
+      branch %19, bb9, bb10
+    bb9:
+      %20 = const c11
+      jump bb10
+    bb10:
+      %21 = phi [(bb8, %18), (bb9, %20)]
+      call builtin.console.log(%21)
+      %22 = load var $0.hit
+      call builtin.console.log(%22)
+      return
+}

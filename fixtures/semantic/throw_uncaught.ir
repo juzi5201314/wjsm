@@ -1,0 +1,9 @@
+module {
+  constants:
+    c0 = number(42)
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      throw %0
+}

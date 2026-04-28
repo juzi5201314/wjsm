@@ -1,0 +1,4 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: semantic lowering error [6..9]: destructuring patterns in for...in/for...of are not yet supported
