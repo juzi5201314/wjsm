@@ -13,3 +13,4 @@ artifacts/
 
 # Editor local config
 .opencode/
+.claude/
