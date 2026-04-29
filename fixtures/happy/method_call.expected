@@ -1,4 +1,5 @@
 exit_code: 0
 --- stdout ---
-undefined
+1
+2
 --- stderr ---
