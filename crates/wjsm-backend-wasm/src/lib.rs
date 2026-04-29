@@ -63,15 +63,16 @@ struct Compiler {
     /// WASM index of $obj_set helper.
     obj_set_func_idx: u32,
     /// WASM global index for heap pointer.
+    heap_ptr_global_idx: u32,
+    /// WASM global index for function properties array pointer.
+    func_props_global_idx: u32,
     /// Whether the current function returns a value (Type 6 JS functions = true).
     current_func_returns_value: bool,
     /// Base offset for SSA value WASM local indices (0 for main, 8 for Type 6 JS functions).
     ssa_local_base: u32,
-    heap_ptr_global_idx: u32,
     /// String ptr cache: maps string content → data segment offset.
     string_ptr_cache: HashMap<String, u32>,
 }
-
 /// 循环元信息（编译前预扫描得到）。
 #[derive(Debug, Clone)]
 struct LoopInfo {
@@ -199,14 +200,14 @@ impl Compiler {
         types
             .ty()
             .function(vec![ValType::I32], vec![ValType::I32]);
-        // Type 8: (i32, i32) -> (i64)  — $obj_get
+        // Type 8: (i64, i32) -> (i64)  — $obj_get (boxed object + key → value)
         types
             .ty()
-            .function(vec![ValType::I32, ValType::I32], vec![ValType::I64]);
-        // Type 9: (i32, i32, i64) -> ()  — $obj_set
+            .function(vec![ValType::I64, ValType::I32], vec![ValType::I64]);
+        // Type 9: (i64, i32, i64) -> ()  — $obj_set (boxed object + key + value)
         types
             .ty()
-            .function(vec![ValType::I32, ValType::I32, ValType::I64], vec![]);
+            .function(vec![ValType::I64, ValType::I32, ValType::I64], vec![]);
 
         let mut imports = ImportSection::new();
         // Import index 0: console_log: (i64) -> ()
@@ -295,11 +296,11 @@ impl Compiler {
             obj_set_func_idx: 0,
             current_func_returns_value: false,
             heap_ptr_global_idx: 0,
+            func_props_global_idx: 0,
             ssa_local_base: 0,
             string_ptr_cache: HashMap::new(),
         }
     }
-
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
     fn local_idx(&self, val_id: u32) -> u32 {
         val_id + self.ssa_local_base
@@ -355,6 +356,11 @@ impl Compiler {
             }
         }
 
+        // Assign global indices before compile_object_helpers needs them.
+        // Global 0 = func_props_ptr, Global 1 = heap_ptr.
+        self.func_props_global_idx = 0;
+        self.heap_ptr_global_idx = 1;
+
         // Pass 3: Compile object helper functions.
         self.compile_object_helpers();
 
@@ -374,18 +380,31 @@ impl Compiler {
             Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
         );
 
-        // Initialize heap pointer after data segment.
+        // Allocate function properties array at start of heap.
+        // Each function (including helpers) gets a 4-byte slot for its property object pointer.
         let heap_start = (self.data_offset + 7) & !7; // align to 8 bytes
+        let max_table_idx = self.function_table.iter().copied().max().unwrap_or(0) as usize;
+        let func_props_size = ((max_table_idx + 1) * 4) as u32;
+        // Global 0: func_props_ptr (at heap_start, immutable — never changes)
+        self.globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: false,
+                shared: false,
+            },
+            &ConstExpr::i32_const(heap_start as i32),
+        );
+        // Global 1: heap_ptr (starts after func_props array, mutable)
+        let object_heap_start = heap_start + func_props_size;
         self.globals.global(
             GlobalType {
                 val_type: ValType::I32,
                 mutable: true,
                 shared: false,
             },
-            &ConstExpr::i32_const(heap_start as i32),
+            &ConstExpr::i32_const(object_heap_start as i32),
         );
-        self.heap_ptr_global_idx = 0;
-
+        self.heap_ptr_global_idx = 1;
         if !self.string_data.is_empty() {
             self.data.active(
                 0,
@@ -447,12 +466,15 @@ impl Compiler {
     fn compile_js_function(&mut self, module: &IrModule, function: &IrFunction) -> Result<()> {
         self.current_func_returns_value = true;
         self.ssa_local_base = 8;
-        // Map params: slot 0 = this (local 0), slots 1..N = params.
+        // Map params: slot 0 = this (local 0), slots 0..N-1 = params (excluding $this).
         self.var_locals.clear();
         self.var_locals.insert("$this".to_string(), 0);
         for (i, param_name) in function.params().iter().enumerate() {
+            if param_name == "$this" {
+                continue; // $this is already mapped to local 0
+            }
             let ir_name = format!("$0.{param_name}");
-            self.var_locals.insert(ir_name, (i + 1) as u32);
+            self.var_locals.insert(ir_name, i as u32);
         }
 
         // Variable locals start after SSA values (with ssa_local_base offset).
@@ -528,68 +550,96 @@ impl Compiler {
 
     fn compile_object_helpers(&mut self) {
         let heap_global = self.heap_ptr_global_idx;
+        let func_props_global = self.func_props_global_idx;
 
         // ── $obj_new (param $capacity i32) (result i32) — Type 7 ──
-        // (type already registered in Pass 1)
         {
-            let mut func = Function::new(vec![(2, ValType::I32)]); // 2 extra i32 locals: size, ptr
-            // local 0 = $capacity (param)
-            // local 1 = size (i32)
-            // local 2 = ptr (i32)
-            // size = 12 + capacity * 12
+            let mut func = Function::new(vec![(2, ValType::I32)]);
+            // local 0 = $capacity, local 1 = size, local 2 = ptr
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(1));
-            // bump alloc: ptr = heap_ptr; heap_ptr += size
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
             func.instruction(&WasmInstruction::LocalTee(2));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::GlobalSet(heap_global));
-            // ptr[0] = 0 (prototype)
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32Const(0));
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
-            // ptr[4] = capacity
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 4, align: 2, memory_index: 0 }));
-            // ptr[8] = 0 (num_properties)
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32Const(0));
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 8, align: 2, memory_index: 0 }));
-            // return ptr
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
         }
 
-        // ── $obj_get (param $object i32) (param $name_id i32) (result i64) — Type 8 ──
-        // (type already registered in Pass 1)
+        // ── $obj_get (param $boxed i64) (param $name_id i32) (result i64) — Type 8 ──
+        // Resolves boxed value (object or function) to a heap pointer,
+        // then searches properties with prototype chain traversal.
         {
-            // local 0 = $object, local 1 = $name_id
+            // local 0 = $boxed (i64), local 1 = $name_id (i32)
             // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
-            let mut func = Function::new(vec![(3, ValType::I32)]);
-            // num_props = load(object + 8)
+            // local 5 = resolved ptr (i32)
+            let mut func = Function::new(vec![(4, ValType::I32)]);
+
+            // ── Resolve ptr from boxed value ──
             func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::LocalSet(5));
+
+            // Check if FUNCTION tag
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I64Const(0x0000000F00000000u64 as i64));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(0x0000000900000000u64 as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(func_props_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalSet(5));
+            func.instruction(&WasmInstruction::End);
+
+            // If resolved ptr is 0, return undefined
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
+            // ── Prototype chain traversal ──
+            // outer_block: break here when not found → return undefined
+            func.instruction(&WasmInstruction::Block(BlockType::Empty));
+            // proto_loop: iterate through prototype chain
+            func.instruction(&WasmInstruction::Loop(BlockType::Empty));
+
+            // Search own properties of current object (local 5)
+            func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 8, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalSet(2));
-            // i = 0
             func.instruction(&WasmInstruction::I32Const(0));
             func.instruction(&WasmInstruction::LocalSet(3));
-            // loop
-            func.instruction(&WasmInstruction::Block(BlockType::Empty)); // break target
-            func.instruction(&WasmInstruction::Loop(BlockType::Empty)); // continue target
-            // if i >= num_props: break
+
+            // inner_loop: linear search of own properties
+            func.instruction(&WasmInstruction::Block(BlockType::Empty)); // break to follow proto
+            func.instruction(&WasmInstruction::Loop(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32GeU);
-            func.instruction(&WasmInstruction::BrIf(1)); // break
-            // slot_addr = object + 12 + i * 12
-            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::BrIf(1)); // break to follow proto
+            func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(3));
@@ -597,53 +647,96 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalTee(4));
-            // if load(slot) == name_id: return load_i64(slot + 4)
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::I64Load(MemArg { offset: 4, align: 3, memory_index: 0 }));
-            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::Return); // found! return value
             func.instruction(&WasmInstruction::End);
-            // i++
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(3));
-            // continue loop
-            func.instruction(&WasmInstruction::Br(0));
-            func.instruction(&WasmInstruction::End); // end loop
-            func.instruction(&WasmInstruction::End); // end block
-            // not found: return undefined
+            func.instruction(&WasmInstruction::Br(0)); // continue inner loop
+            func.instruction(&WasmInstruction::End); // end inner loop
+            func.instruction(&WasmInstruction::End); // end break block
+
+            // Follow __proto__
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalTee(5));
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::BrIf(1)); // break outer: __proto__ is null
+            func.instruction(&WasmInstruction::Br(0)); // continue proto loop
+            func.instruction(&WasmInstruction::End); // end proto loop
+            func.instruction(&WasmInstruction::End); // end outer block
+
+            // Not found in entire chain
             func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
         }
 
-        // ── $obj_set (param $object i32) (param $name_id i32) (param $value i64) — Type 9 ──
-        // (type already registered in Pass 1)
+        // ── $obj_set (param $boxed i64) (param $name_id i32) (param $value i64) — Type 9 ──
+        // Resolves boxed value to a heap pointer (allocating func_props entry if needed),
+        // then sets the property.
         {
-            // local 4 = num_props (i32), local 5 = i (i32), local 6 = slot_addr (i32)
-            // local 7 = capacity (i32)
-            let mut func = Function::new(vec![(5, ValType::I32)]); // 5 extra i32 locals: unused, num_props, i, slot_addr, capacity
-            // num_props = load(object + 8)
+            // local 0 = $boxed (i64), local 1 = $name_id (i32), local 2 = $value (i64)
+            // local 3 = (unused pad)
+            // local 4 = num_props (i32), local 5 = i (i32), local 6 = slot_addr (i32), local 7 = capacity (i32)
+            // local 8 = resolved ptr (i32), local 9 = func_props slot addr (i32)
+            let mut func = Function::new(vec![(7, ValType::I32)]); // 7 extra i32 locals
+
+            // ── Resolve ptr from boxed value ──
             func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::LocalSet(8));
+
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I64Const(0x0000000F00000000u64 as i64));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(0x0000000900000000u64 as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // slot_addr = func_props + table_idx * 4
+            func.instruction(&WasmInstruction::LocalGet(8)); // table_idx
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(func_props_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalSet(9)); // slot_addr
+            // ptr = func_props[table_idx]
+            func.instruction(&WasmInstruction::LocalGet(9));
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalSet(8));
+            // if ptr == 0: allocate object
+            func.instruction(&WasmInstruction::LocalGet(8));
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I32Const(4)); // capacity
+            func.instruction(&WasmInstruction::Call(self.obj_new_func_idx));
+            func.instruction(&WasmInstruction::LocalSet(8)); // ptr = new object
+            func.instruction(&WasmInstruction::LocalGet(9)); // slot_addr
+            func.instruction(&WasmInstruction::LocalGet(8));
+            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::End);
+
+            // ── Property set (existing logic using resolved ptr in local 8) ──
+            func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 8, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalSet(4));
-            // i = 0
             func.instruction(&WasmInstruction::I32Const(0));
             func.instruction(&WasmInstruction::LocalSet(5));
-            // search loop
-            func.instruction(&WasmInstruction::Block(BlockType::Empty)); // break target (to add_new)
-            func.instruction(&WasmInstruction::Loop(BlockType::Empty)); // continue target
-            // if i >= num_props: break to add_new
+            func.instruction(&WasmInstruction::Block(BlockType::Empty));
+            func.instruction(&WasmInstruction::Loop(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::I32GeU);
-            func.instruction(&WasmInstruction::BrIf(1)); // break
-            // slot_addr = object + 12 + i * 12
-            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::BrIf(1));
+            func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(5));
@@ -651,7 +744,6 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalTee(6));
-            // if load(slot) == name_id: update and return
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Eq);
@@ -661,25 +753,22 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Store(MemArg { offset: 4, align: 3, memory_index: 0 }));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
-            // i++
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(5));
-            func.instruction(&WasmInstruction::Br(0)); // continue
-            func.instruction(&WasmInstruction::End); // end loop
-            func.instruction(&WasmInstruction::End); // end block
+            func.instruction(&WasmInstruction::Br(0));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::End);
             // add_new: check capacity
-            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 4, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalSet(7));
-            // if num_props < capacity: add
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::LocalGet(7));
             func.instruction(&WasmInstruction::I32LtU);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
-            // slot_addr = object + 12 + num_props * 12
-            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(4));
@@ -687,20 +776,17 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalTee(6));
-            // store name_id
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
-            // store value
             func.instruction(&WasmInstruction::LocalGet(6));
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I64Store(MemArg { offset: 4, align: 3, memory_index: 0 }));
-            // store num_props + 1
-            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 8, align: 2, memory_index: 0 }));
-            func.instruction(&WasmInstruction::End); // end if capacity check
+            func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
         }
@@ -1601,28 +1687,35 @@ impl Compiler {
                 Ok(())
             }
             Instruction::GetProp { dest, object, key } => {
-                // Decode object ptr: lower 32 bits of NaN-boxed value.
+                // Pass full boxed i64 value — helper resolves tag internally.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
-                self.emit(WasmInstruction::I32WrapI64);
                 // Key: lower 32 bits (string pointer or name_id).
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
                 self.emit(WasmInstruction::I32WrapI64);
-                // Call $obj_get(ptr, name_id) -> i64
+                // Call $obj_get(boxed, name_id) -> i64
                 self.emit(WasmInstruction::Call(self.obj_get_func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(())
             }
             Instruction::SetProp { object, key, value } => {
-                // Decode object ptr.
+                // Pass full boxed i64 value — helper resolves tag internally.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
-                self.emit(WasmInstruction::I32WrapI64);
                 // Key.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
                 self.emit(WasmInstruction::I32WrapI64);
                 // Value (i64 NaN-boxed).
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
-                // Call $obj_set(ptr, name_id, value)
+                // Call $obj_set(boxed, name_id, value)
                 self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+                Ok(())
+            }
+            Instruction::SetProto { object, value } => {
+                // Store value at object offset 0 (__proto__ slot) — prototype is a raw i32 ptr.
+                self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
                 Ok(())
             }
         }
@@ -2255,6 +2348,7 @@ fn collect_instruction_value_ids(instruction: &Instruction) -> Vec<u32> {
         Instruction::NewObject { dest } => vec![dest.0],
         Instruction::GetProp { dest, object, key } => vec![dest.0, object.0, key.0],
         Instruction::SetProp { object, key, value } => vec![object.0, key.0, value.0],
+        Instruction::SetProto { object, value } => vec![object.0, value.0],
     }
 }
 

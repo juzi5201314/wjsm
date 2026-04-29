@@ -336,6 +336,8 @@ struct Lowerer {
     next_temp: u32,
     pending_loop_label: Option<String>,
     active_finalizers: Vec<swc_ast::BlockStmt>,
+    /// 匿名类 / 匿名函数计数器
+    anon_counter: u32,
     // ── Function context stack ────────────────────────────────────────────
     function_stack: Vec<FunctionBuilder>,
     function_scope_stack: Vec<ScopeTree>,
@@ -364,6 +366,7 @@ impl Lowerer {
             next_temp: 0,
             pending_loop_label: None,
             active_finalizers: Vec::new(),
+            anon_counter: 0,
             function_stack: Vec::new(),
             function_scope_stack: Vec::new(),
             function_hoisted_stack: Vec::new(),
@@ -2247,6 +2250,230 @@ impl Lowerer {
         Ok(StmtFlow::Open(outer_block))
     }
 
+    fn lower_class_expr(
+        &mut self,
+        class_expr: &swc_ast::ClassExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        // 类表达式可选名称（匿名类表达式无名称）
+        let class_name = class_expr
+            .ident
+            .as_ref()
+            .map(|id| id.sym.to_string())
+            .unwrap_or_else(|| format!("anon_class_{}", self.anon_counter));
+        if class_expr.ident.is_none() {
+            self.anon_counter += 1;
+        }
+
+        // 查找构造函数
+        let constructor = class_expr.class.body.iter().find_map(|member| match member {
+            swc_ast::ClassMember::Constructor(c) => Some(c),
+            _ => None,
+        });
+
+        // 创建构造函数
+        let ctor_name = format!("{}.constructor", class_name);
+        self.push_function_context(&ctor_name, BasicBlockId(0));
+
+        let _ = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| self.error(class_expr.span(), msg))?;
+
+        let mut param_names = vec!["$this".to_string()];
+        if let Some(ctor) = constructor {
+            for param in &ctor.params {
+                if let swc_ast::ParamOrTsParamProp::Param(p) = param {
+                    if let swc_ast::Pat::Ident(binding_ident) = &p.pat {
+                        let name = binding_ident.id.sym.to_string();
+                        self.scopes
+                            .declare(&name, VarKind::Let, true)
+                            .map_err(|msg| self.error(class_expr.span(), msg))?;
+                        param_names.push(name);
+                    }
+                }
+            }
+
+            if let Some(body) = &ctor.body {
+                self.predeclare_block_stmts(&body.stmts)?;
+            }
+        }
+
+        let entry = BasicBlockId(0);
+        self.emit_hoisted_var_initializers(entry);
+
+        let mut inner_flow = StmtFlow::Open(entry);
+        if let Some(ctor) = constructor {
+            if let Some(body) = &ctor.body {
+                for stmt in &body.stmts {
+                    inner_flow = self.lower_stmt(stmt, inner_flow)?;
+                }
+            }
+        }
+
+        if let StmtFlow::Open(b) = inner_flow {
+            self.current_function
+                .set_terminator(b, Terminator::Return { value: None });
+        }
+
+        let old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let blocks = old_fn.into_blocks();
+        let mut ir_function = Function::new(&ctor_name, BasicBlockId(0));
+        ir_function.set_params(param_names);
+        for blk in blocks {
+            ir_function.push_block(blk);
+        }
+        let ctor_function_id = self.module.push_function(ir_function);
+
+        self.pop_function_context();
+
+        // 在当前 block 中创建构造函数 FunctionRef 常量
+        let ctor_dest = self.alloc_value();
+        let ctor_ref_const = self
+            .module
+            .add_constant(Constant::FunctionRef(ctor_function_id));
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: ctor_dest,
+                constant: ctor_ref_const,
+            },
+        );
+
+        // 创建 prototype 对象
+        let proto_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject { dest: proto_dest },
+        );
+
+        // Methods
+        for member in &class_expr.class.body {
+            if let swc_ast::ClassMember::Method(method) = member {
+                if !matches!(method.kind, swc_ast::MethodKind::Method) {
+                    continue;
+                }
+
+                let method_name = match &method.key {
+                    swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+                    swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                    _ => continue,
+                };
+
+                let fn_name = format!("{}.{}", class_name, method_name);
+                self.push_function_context(&fn_name, BasicBlockId(0));
+
+                let _ = self
+                    .scopes
+                    .declare("$this", VarKind::Let, true)
+                    .map_err(|msg| self.error(method.span, msg))?;
+
+                let mut method_param_names = vec!["$this".to_string()];
+                for param in &method.function.params {
+                    if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
+                        let name = binding_ident.id.sym.to_string();
+                        self.scopes
+                            .declare(&name, VarKind::Let, true)
+                            .map_err(|msg| self.error(method.span, msg))?;
+                        method_param_names.push(name);
+                    }
+                }
+
+                if let Some(body) = &method.function.body {
+                    self.predeclare_block_stmts(&body.stmts)?;
+                }
+
+                let m_entry = BasicBlockId(0);
+                self.emit_hoisted_var_initializers(m_entry);
+
+                let mut m_flow = StmtFlow::Open(m_entry);
+                if let Some(body) = &method.function.body {
+                    for stmt in &body.stmts {
+                        m_flow = self.lower_stmt(stmt, m_flow)?;
+                    }
+                }
+
+                if let StmtFlow::Open(b) = m_flow {
+                    self.current_function
+                        .set_terminator(b, Terminator::Return { value: None });
+                }
+
+                let m_old_fn = std::mem::replace(
+                    &mut self.current_function,
+                    FunctionBuilder::new("", BasicBlockId(0)),
+                );
+                let m_blocks = m_old_fn.into_blocks();
+                let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                m_ir_function.set_params(method_param_names);
+                for b in m_blocks {
+                    m_ir_function.push_block(b);
+                }
+                let m_function_id = self.module.push_function(m_ir_function);
+
+                self.pop_function_context();
+
+                let m_dest = self.alloc_value();
+                let m_ref_const = self
+                    .module
+                    .add_constant(Constant::FunctionRef(m_function_id));
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: m_dest,
+                        constant: m_ref_const,
+                    },
+                );
+
+                let m_key_const = self
+                    .module
+                    .add_constant(Constant::String(method_name));
+                let m_key_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: m_key_dest,
+                        constant: m_key_const,
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::SetProp {
+                        object: proto_dest,
+                        key: m_key_dest,
+                        value: m_dest,
+                    },
+                );
+            }
+        }
+
+        // Set constructor.prototype = proto_obj
+        let proto_key_const = self
+            .module
+            .add_constant(Constant::String("prototype".to_string()));
+        let proto_key_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: proto_key_dest,
+                constant: proto_key_const,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object: ctor_dest,
+                key: proto_key_dest,
+                value: proto_dest,
+            },
+        );
+
+        Ok(ctor_dest)
+    }
+
+
     // ── Expressions ─────────────────────────────────────────────────────────
 
     fn lower_expr(
@@ -2270,6 +2497,7 @@ impl Lowerer {
             swc_ast::Expr::Member(member) => self.lower_member_expr(member, block),
             swc_ast::Expr::This(_) => self.lower_this(block),
             swc_ast::Expr::New(new_expr) => self.lower_new_expr(new_expr, block),
+            swc_ast::Expr::Class(class_expr) => self.lower_class_expr(class_expr, block),
             _ => Err(self.error(
                 expr.span(),
                 format!("unsupported expression kind `{}`", expr_kind(expr)),
@@ -2455,22 +2683,11 @@ impl Lowerer {
             },
         );
 
-        // Set __proto__ on the new object.
-        let proto_set_key_const =
-            self.module.add_constant(Constant::String("__proto__".to_string()));
-        let proto_set_key = self.alloc_value();
+        // Set __proto__ on the new object directly via SetProto.
         self.current_function.append_instruction(
             block,
-            Instruction::Const {
-                dest: proto_set_key,
-                constant: proto_set_key_const,
-            },
-        );
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
+            Instruction::SetProto {
                 object: obj_val,
-                key: proto_set_key,
                 value: proto_val,
             },
         );
@@ -2505,20 +2722,32 @@ impl Lowerer {
         call: &swc_ast::CallExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
-        let callee_val = match &call.callee {
-            swc_ast::Callee::Expr(expr) => self.lower_expr(expr, block)?,
-            _ => return Err(self.error(call.span, "unsupported callee type")),
-        };
+        let callee_val: ValueId;
+        let this_val: ValueId;
 
-        let undef_const = self.module.add_constant(Constant::Undefined);
-        let this_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: this_val,
-                constant: undef_const,
-            },
-        );
+        match &call.callee {
+            swc_ast::Callee::Expr(expr) => {
+                // 检测 MemberExpr 被调用者 → 提取 obj 作为 this
+                if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
+                    // obj.method() → obj 是 this，method 是 callee
+                    this_val = self.lower_expr(&member_expr.obj, block)?;
+                    callee_val = self.lower_member_expr(member_expr, block)?;
+                } else {
+                    // 普通调用 → this = undefined
+                    let undef_const = self.module.add_constant(Constant::Undefined);
+                    this_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: this_val,
+                            constant: undef_const,
+                        },
+                    );
+                    callee_val = self.lower_expr(expr, block)?;
+                }
+            }
+            _ => return Err(self.error(call.span, "unsupported callee type")),
+        }
 
         let mut args = Vec::new();
         for arg in &call.args {

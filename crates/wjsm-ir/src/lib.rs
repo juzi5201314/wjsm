@@ -272,6 +272,11 @@ pub enum Instruction {
         key: ValueId,
         value: ValueId,
     },
+    /// 直接设置对象的 __proto__ 槽位（offset 0），用于原型链构建。
+    SetProto {
+        object: ValueId,
+        value: ValueId,
+    },
 }
 
 impl fmt::Display for Instruction {
@@ -355,6 +360,9 @@ impl fmt::Display for Instruction {
                 value,
             } => {
                 write!(formatter, "set_prop {object}, {key}, {value}")
+            }
+            Self::SetProto { object, value } => {
+                write!(formatter, "set_proto {object}, {value}")
             }
         }
     }
