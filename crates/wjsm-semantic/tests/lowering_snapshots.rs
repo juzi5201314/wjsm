@@ -118,23 +118,17 @@ fn let_redeclare_reports_diagnostic() {
         }
     }
 }
-
 #[test]
-fn unsupported_statement_reports_diagnostic() {
+fn function_decl_is_supported() {
     let source = "function greet() {}\n";
-    let error = lower_module(parse_module(source).expect("parse should succeed"))
-        .expect_err("lowering should fail");
-
-    match error {
-        LoweringError::Diagnostic(diagnostic) => {
-            assert!(
-                diagnostic
-                    .message
-                    .contains("unsupported declaration kind `function`")
-            );
-            assert!(diagnostic.start < diagnostic.end);
-        }
-    }
+    let result = lower_module(parse_module(source).expect("parse should succeed"));
+    assert!(result.is_ok(), "function declarations should be supported");
+    let program = result.unwrap();
+    let text = program.dump_text();
+    assert!(text.contains("fn @greet"), "should have a 'greet' function");
+    assert!(text.contains("fn @main"), "should still have main");
+    assert!(text.contains("functionref(@0)"), "should reference greet");
+    assert!(text.contains("store var $0.greet"), "should store greet in module scope");
 }
 
 #[test]

@@ -393,6 +393,16 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
         return Ok(format!("[exception:{handle}]"));
     }
 
+    if value::is_object(val) {
+        let ptr = value::decode_object_handle(val);
+        return Ok(format!("[object Object:{ptr}]"));
+    }
+
+    if value::is_function(val) {
+        let idx = value::decode_function_idx(val);
+        return Ok(format!("function [ref:{idx}]"));
+    }
+
     Ok(f64::from_bits(val as u64).to_string())
 }
 

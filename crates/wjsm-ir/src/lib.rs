@@ -68,6 +68,7 @@ pub enum Constant {
     Bool(bool),
     Null,
     Undefined,
+    FunctionRef(FunctionId),
 }
 
 impl fmt::Display for Constant {
@@ -78,6 +79,7 @@ impl fmt::Display for Constant {
             Self::Bool(value) => write!(formatter, "bool({value})"),
             Self::Null => formatter.write_str("null"),
             Self::Undefined => formatter.write_str("undefined"),
+            Self::FunctionRef(id) => write!(formatter, "functionref(@{id})"),
         }
     }
 }
@@ -85,6 +87,7 @@ impl fmt::Display for Constant {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     name: String,
+    params: Vec<String>,
     entry: BasicBlockId,
     blocks: Vec<BasicBlock>,
 }
@@ -93,6 +96,7 @@ impl Function {
     pub fn new(name: impl Into<String>, entry: BasicBlockId) -> Self {
         Self {
             name: name.into(),
+            params: Vec::new(),
             entry,
             blocks: Vec::new(),
         }
@@ -100,6 +104,14 @@ impl Function {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn params(&self) -> &[String] {
+        &self.params
+    }
+
+    pub fn set_params(&mut self, params: Vec<String>) {
+        self.params = params;
     }
 
     pub fn entry(&self) -> BasicBlockId {
@@ -127,7 +139,18 @@ impl Function {
     }
 
     fn dump_into(&self, out: &mut String) {
-        let _ = writeln!(out, "  fn @{} [entry={}]:", self.name, self.entry);
+        if self.params.is_empty() {
+            let _ = writeln!(out, "  fn @{} [entry={}]:", self.name, self.entry);
+        } else {
+            let _ = write!(out, "  fn @{} [params: ", self.name);
+            for (i, param) in self.params.iter().enumerate() {
+                if i > 0 {
+                    let _ = write!(out, ", ");
+                }
+                let _ = write!(out, "{param}");
+            }
+            let _ = writeln!(out, "] [entry={}]:", self.entry);
+        }
 
         for block in &self.blocks {
             let _ = writeln!(out, "    {}:", block.id);
@@ -230,6 +253,25 @@ pub enum Instruction {
         name: String,
         value: ValueId,
     },
+    Call {
+        dest: Option<ValueId>,
+        callee: ValueId,
+        this_val: ValueId,
+        args: Vec<ValueId>,
+    },
+    NewObject {
+        dest: ValueId,
+    },
+    GetProp {
+        dest: ValueId,
+        object: ValueId,
+        key: ValueId,
+    },
+    SetProp {
+        object: ValueId,
+        key: ValueId,
+        value: ValueId,
+    },
 }
 
 impl fmt::Display for Instruction {
@@ -278,6 +320,41 @@ impl fmt::Display for Instruction {
             }
             Self::StoreVar { name, value } => {
                 write!(formatter, "store var {name}, {value}")
+            }
+            Self::Call {
+                dest,
+                callee,
+                this_val,
+                args,
+            } => {
+                if let Some(dest) = dest {
+                    write!(formatter, "{dest} = ")?;
+                }
+                write!(formatter, "call {callee}, this={this_val}")?;
+                if !args.is_empty() {
+                    formatter.write_str(", args=[")?;
+                    for (index, arg) in args.iter().enumerate() {
+                        if index > 0 {
+                            formatter.write_str(", ")?;
+                        }
+                        write!(formatter, "{arg}")?;
+                    }
+                    formatter.write_char(']')?;
+                }
+                Ok(())
+            }
+            Self::NewObject { dest } => {
+                write!(formatter, "{dest} = new_object")
+            }
+            Self::GetProp { dest, object, key } => {
+                write!(formatter, "{dest} = get_prop {object}, {key}")
+            }
+            Self::SetProp {
+                object,
+                key,
+                value,
+            } => {
+                write!(formatter, "set_prop {object}, {key}, {value}")
             }
         }
     }
@@ -497,6 +574,12 @@ impl fmt::Display for ConstantId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FunctionId(pub u32);
+
+impl fmt::Display for FunctionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{}", self.0)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct BasicBlockId(pub u32);
