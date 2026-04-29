@@ -1,9 +1,0 @@
-$ timeout 60s cargo run -- run fixtures/errors/syntax_error.js
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
-     Running `target/debug/wjsm run fixtures/errors/syntax_error.js`
-Error: Parse error: Error { error: (36..37, Expected(",", ";")) }
-
-$ timeout 60s cargo run -- run fixtures/errors/unsupported_stmt.js
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.16s
-     Running `target/debug/wjsm run fixtures/errors/unsupported_stmt.js`
-Error: Unsupported statement type

@@ -1,9 +1,0 @@
-Command: ls -la fixtures
-
-total 24
-drwxr-xr-x  6 soeur soeur 4096 Apr  6 18:27 .
-drwxr-xr-x 11 soeur soeur 4096 Apr  6 18:27 ..
-drwxr-xr-x  2 soeur soeur 4096 Apr  6 18:29 errors
-drwxr-xr-x  2 soeur soeur 4096 Apr  6 18:29 happy
-drwxr-xr-x  2 soeur soeur 4096 Apr  6 18:27 modules
-drwxr-xr-x  2 soeur soeur 4096 Apr  6 18:27 semantic
