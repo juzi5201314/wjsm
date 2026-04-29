@@ -1272,14 +1272,13 @@ impl Lowerer {
         let exit = self.current_function.new_block();
         let mut cases: Vec<SwitchCaseTarget> = Vec::new();
         let mut case_blocks: Vec<BasicBlockId> = Vec::new();
-        let default_block = self.current_function.new_block();
-        let mut found_default = false;
+        let mut default_pos: Option<usize> = None;
 
         // Generate a case block for each case
         for case in &switch_stmt.cases {
             if case.test.is_none() {
-                // default case — we already allocated default_block
-                found_default = true;
+                // default case — 记录其在 cases 中的位置
+                default_pos = Some(case_blocks.len());
             }
 
             let case_block = self.current_function.new_block();
@@ -1295,8 +1294,8 @@ impl Lowerer {
             }
         }
 
-        // Set switch terminator at the discriminant block
-        let default_target = if found_default { default_block } else { exit };
+        // 设置 switch terminator：default 指向 case_blocks[default_pos]，无 default 则指向 exit
+        let default_target = default_pos.map(|p| case_blocks[p]).unwrap_or(exit);
 
         self.current_function.set_terminator(
             block,
@@ -1336,22 +1335,8 @@ impl Lowerer {
                 .ensure_jump_or_terminated(case_flow, next_target);
         }
 
-        // Default case body
-        if found_default {
-            let mut default_flow = StmtFlow::Open(default_block);
-            // Find the default case in the switch
-            for case in &switch_stmt.cases {
-                if case.test.is_none() {
-                    for stmt in &case.cons {
-                        default_flow = self.lower_stmt(stmt, default_flow)?;
-                    }
-                    break;
-                }
-            }
-            let _ = self
-                .current_function
-                .ensure_jump_or_terminated(default_flow, exit);
-        }
+        // NOTE: default case body 已在上面的 case 循环中一并降低，
+        // fallthrough 也由循环中的 ensure_jump_or_terminated 处理，无需单独处理。
 
         self.label_stack.pop();
 
