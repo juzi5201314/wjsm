@@ -304,6 +304,21 @@ fn try_finally_return_fixture_matches_ir_snapshot() {
     assert_snapshot("try_finally_return");
 }
 
+#[test]
+fn switch_default_fallthrough_fixture_matches_ir_snapshot() {
+    assert_snapshot("switch_default_fallthrough");
+}
+
+#[test]
+fn switch_if_else_fixture_matches_ir_snapshot() {
+    assert_snapshot("switch_if_else");
+}
+
+#[test]
+fn switch_while_fixture_matches_ir_snapshot() {
+    assert_snapshot("switch_while");
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let source_path = root.join("fixtures/happy").join(format!("{name}.js"));

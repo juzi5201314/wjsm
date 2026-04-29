@@ -24,7 +24,7 @@ module {
       %7 = add %5, %6
       store var $0.i, %7
       %8 = load var $0.i
-      switch %8 [case c4 -> bb6, case c5 -> bb7], default bb4, exit bb4
+      switch %8 [case c4 -> bb5, case c5 -> bb6], default bb4, exit bb4
     bb3:
       return
     bb4:
@@ -32,9 +32,7 @@ module {
       call builtin.console.log(%9)
       jump bb1
     bb5:
-      unreachable
-    bb6:
       jump bb1
-    bb7:
+    bb6:
       jump bb1
 }

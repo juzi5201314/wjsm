@@ -1,0 +1,43 @@
+module {
+  constants:
+    c0 = number(1)
+    c1 = number(0)
+    c2 = number(1)
+    c3 = bool(true)
+    c4 = number(3)
+    c5 = number(1)
+    c6 = string("default")
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.x, %0
+      %1 = const c1
+      store var $0.i, %1
+      %2 = load var $0.x
+      switch %2 [case c2 -> bb2], default bb3, exit bb1
+    bb1:
+      return
+    bb2:
+      jump bb4
+    bb3:
+      %11 = const c6
+      call builtin.console.log(%11)
+      jump bb1
+    bb4:
+      %3 = const c3
+      %4 = load var $0.i
+      %5 = const c4
+      %6 = lt %4, %5
+      branch %6, bb5, bb6
+    bb5:
+      %7 = load var $0.i
+      %8 = const c5
+      %9 = add %7, %8
+      store var $0.i, %9
+      jump bb4
+    bb6:
+      %10 = load var $0.i
+      call builtin.console.log(%10)
+      jump bb1
+}

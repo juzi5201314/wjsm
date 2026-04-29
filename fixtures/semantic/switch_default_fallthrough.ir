@@ -1,36 +1,30 @@
 module {
   constants:
-    c0 = number(2)
+    c0 = number(99)
     c1 = number(1)
     c2 = number(2)
-    c3 = number(3)
-    c4 = string("one")
+    c3 = string("one")
+    c4 = string("default")
     c5 = string("two")
-    c6 = string("three")
-    c7 = string("default")
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.x, %0
       %1 = load var $0.x
-      switch %1 [case c1 -> bb2, case c2 -> bb3, case c3 -> bb4], default bb5, exit bb1
+      switch %1 [case c1 -> bb2, case c2 -> bb4], default bb3, exit bb1
     bb1:
       return
     bb2:
-      %2 = const c4
+      %2 = const c3
       call builtin.console.log(%2)
       jump bb1
     bb3:
-      %3 = const c5
+      %3 = const c4
       call builtin.console.log(%3)
-      jump bb1
+      jump bb4
     bb4:
-      %4 = const c6
+      %4 = const c5
       call builtin.console.log(%4)
-      jump bb1
-    bb5:
-      %5 = const c7
-      call builtin.console.log(%5)
       jump bb1
 }

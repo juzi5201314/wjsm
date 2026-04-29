@@ -1,0 +1,37 @@
+module {
+  constants:
+    c0 = number(1)
+    c1 = number(1)
+    c2 = number(1)
+    c3 = string("matched")
+    c4 = string("nope")
+    c5 = string("default")
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.x, %0
+      %1 = load var $0.x
+      switch %1 [case c1 -> bb2], default bb3, exit bb1
+    bb1:
+      return
+    bb2:
+      %2 = load var $0.x
+      %3 = const c2
+      %4 = stricteq %2, %3
+      branch %4, bb4, bb5
+    bb3:
+      %7 = const c5
+      call builtin.console.log(%7)
+      jump bb1
+    bb4:
+      %5 = const c3
+      call builtin.console.log(%5)
+      jump bb6
+    bb5:
+      %6 = const c4
+      call builtin.console.log(%6)
+      jump bb6
+    bb6:
+      jump bb1
+}

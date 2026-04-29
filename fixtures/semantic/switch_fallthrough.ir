@@ -8,33 +8,28 @@ module {
     c5 = string("two")
     c6 = string("three")
     c7 = string("default")
-    c8 = string("default")
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.x, %0
       %1 = load var $0.x
-      switch %1 [case c1 -> bb3, case c2 -> bb4, case c3 -> bb5], default bb2, exit bb1
+      switch %1 [case c1 -> bb2, case c2 -> bb3, case c3 -> bb4], default bb5, exit bb1
     bb1:
       return
     bb2:
-      %6 = const c8
-      call builtin.console.log(%6)
-      jump bb1
-    bb3:
       %2 = const c4
       call builtin.console.log(%2)
-      jump bb4
-    bb4:
+      jump bb3
+    bb3:
       %3 = const c5
       call builtin.console.log(%3)
-      jump bb5
-    bb5:
+      jump bb4
+    bb4:
       %4 = const c6
       call builtin.console.log(%4)
       jump bb1
-    bb6:
+    bb5:
       %5 = const c7
       call builtin.console.log(%5)
       jump bb1
