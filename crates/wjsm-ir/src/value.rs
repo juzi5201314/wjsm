@@ -10,8 +10,12 @@ pub const TAG_BOOL: u64 = 0x4;
 pub const TAG_EXCEPTION: u64 = 0x5;
 pub const TAG_ITERATOR: u64 = 0x6;
 pub const TAG_ENUMERATOR: u64 = 0x7;
+pub const TAG_OBJECT: u64 = 0x8;
+pub const TAG_FUNCTION: u64 = 0x9;
 
-pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x8;
+pub const TAG_MASK: u64 = 0xF;
+
+pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x10;
 pub const BOX_BASE: u64 = MASK_EXPONENT | MASK_QUIET_NAN;
 
 pub fn encode_f64(val: f64) -> i64 {
@@ -35,7 +39,7 @@ pub fn is_f64(val: i64) -> bool {
 
 pub fn is_string(val: i64) -> bool {
     let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_STRING
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_STRING
 }
 
 pub fn is_runtime_string_handle(val: i64) -> bool {
@@ -58,7 +62,7 @@ pub fn encode_undefined() -> i64 {
 
 pub fn is_undefined(val: i64) -> bool {
     let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_UNDEFINED
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_UNDEFINED
 }
 
 pub fn encode_null() -> i64 {
@@ -67,7 +71,7 @@ pub fn encode_null() -> i64 {
 
 pub fn is_null(val: i64) -> bool {
     let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_NULL
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_NULL
 }
 
 pub fn encode_bool(val: bool) -> i64 {
@@ -77,7 +81,7 @@ pub fn encode_bool(val: bool) -> i64 {
 
 pub fn is_bool(val: i64) -> bool {
     let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_BOOL
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_BOOL
 }
 
 pub fn decode_bool(val: i64) -> bool {
@@ -105,14 +109,12 @@ pub fn is_falsy(val: i64) -> bool {
         return f == 0.0 || f.is_nan();
     }
     if is_string(val) {
-        // 注意：字符串在内存中以 nul-terminated 方式存储，
-        // 编译期无法直接判断是否为空串。
         // 空串的 truthiness 由 backend 的 emit_to_bool_i32 在运行时
         // 通过加载内存首字节来判断（i32.load8_u → eqz → falsy）。
         // 此处 is_falsy 仅用于 IR 层面的分析，保守地返回 false（即视为 truthy）。
         return false;
     }
-    // 所有其他 NaN-boxed 类型（exception/iterator/enumerator handle 等）均为 truthy。
+    // 所有其他 NaN-boxed 类型（object/function/exception/iterator/enumerator handle 等）均为 truthy。
     false
 }
 
@@ -134,15 +136,47 @@ pub fn decode_handle(val: i64) -> u32 {
 
 pub fn is_exception(val: i64) -> bool {
     let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_EXCEPTION
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_EXCEPTION
 }
 
 pub fn is_iterator(val: i64) -> bool {
     let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_ITERATOR
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_ITERATOR
 }
 
 pub fn is_enumerator(val: i64) -> bool {
     let uval = val as u64;
-    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & 0x7) == TAG_ENUMERATOR
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_ENUMERATOR
+}
+
+// ── Object handle ──────────────────────────────────────────────────────
+
+pub fn encode_object_handle(ptr: u32) -> i64 {
+    let payload = (TAG_OBJECT << 32) | (ptr as u64);
+    (BOX_BASE | payload) as i64
+}
+
+pub fn is_object(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_OBJECT
+}
+
+pub fn decode_object_handle(val: i64) -> u32 {
+    (val as u64 & 0xFFFF_FFFF) as u32
+}
+
+// ── Function value ─────────────────────────────────────────────────────
+
+pub fn encode_function_idx(idx: u32) -> i64 {
+    let payload = (TAG_FUNCTION << 32) | (idx as u64);
+    (BOX_BASE | payload) as i64
+}
+
+pub fn is_function(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_FUNCTION
+}
+
+pub fn decode_function_idx(val: i64) -> u32 {
+    (val as u64 & 0xFFFF_FFFF) as u32
 }

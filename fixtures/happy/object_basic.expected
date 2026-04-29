@@ -1,3 +1,5 @@
 exit_code: 0
 --- stdout ---
+10
+30
 --- stderr ---
