@@ -198,6 +198,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             if let Some(string_data) = read_value_string_bytes(&mut caller, val) {
+                // 字符串枚举：遍历字节索引
                 let len = string_data.len();
                 let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
                 let handle = enums.len() as u32;
@@ -205,6 +206,19 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     length: len,
                     index: 0,
                 });
+                value::encode_handle(value::TAG_ENUMERATOR, handle)
+            } else if value::is_object(val) || value::is_function(val) {
+                // 对象/函数属性枚举
+                let keys = enumerate_object_keys(&mut caller, val);
+                let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
+                let handle = enums.len() as u32;
+                enums.push(EnumeratorState::ObjectEnum { keys, index: 0 });
+                value::encode_handle(value::TAG_ENUMERATOR, handle)
+            } else if value::is_f64(val) {
+                // 数字：无枚举属性（JS 语义：for..in on number = no iteration）
+                let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
+                let handle = enums.len() as u32;
+                enums.push(EnumeratorState::StringEnum { length: 0, index: 0 });
                 value::encode_handle(value::TAG_ENUMERATOR, handle)
             } else {
                 let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
@@ -228,6 +242,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             *index += 1;
                         }
                     }
+                    EnumeratorState::ObjectEnum { keys, index } => {
+                        if *index < keys.len() {
+                            *index += 1;
+                        }
+                    }
                     EnumeratorState::Error => {}
                 }
             }
@@ -245,6 +264,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 match enm {
                     EnumeratorState::StringEnum { index, .. } => {
                         let key = index.to_string();
+                        drop(enums);
+                        return store_runtime_string(&caller, key);
+                    }
+                    EnumeratorState::ObjectEnum { keys, index } => {
+                        let key = keys.get(*index).cloned().unwrap_or_default();
                         drop(enums);
                         return store_runtime_string(&caller, key);
                     }
@@ -272,6 +296,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let done = if let Some(enm) = enums.get_mut(handle_idx) {
                 match enm {
                     EnumeratorState::StringEnum { length, index } => *index >= *length,
+                    EnumeratorState::ObjectEnum { keys, index } => *index >= keys.len(),
                     EnumeratorState::Error => {
                         *caller
                             .data()
@@ -602,6 +627,34 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
         },
     );
+
+    // ── Import 16: string_concat(i64, i64) → i64 ──────────────────────────────
+    let string_concat = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            if value::is_string(a) || value::is_string(b) {
+                // 至少一个操作数是字符串 → 执行字符串连接
+                let a_s = if value::is_string(a) {
+                    read_value_string_bytes(&mut caller, a).unwrap_or_default()
+                } else {
+                    render_value(&mut caller, a).unwrap_or_default().into_bytes()
+                };
+                let b_s = if value::is_string(b) {
+                    read_value_string_bytes(&mut caller, b).unwrap_or_default()
+                } else {
+                    render_value(&mut caller, b).unwrap_or_default().into_bytes()
+                };
+                let mut result = a_s;
+                result.extend(b_s);
+                let s = String::from_utf8(result).unwrap_or_default();
+                store_runtime_string(&caller, s)
+            } else {
+                // 都不是 string → 返回 undefined 作为哨兵值，由 WASM 后端走数值加法
+                value::encode_undefined()
+            }
+        },
+    );
+
     let imports = [
         console_log.into(),     // 0
         f64_mod.into(),         // 1
@@ -619,6 +672,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         typeof_fn.into(),       // 13
         op_in.into(),           // 14
         op_instanceof.into(),   // 15
+        string_concat.into(),   // 16
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -657,6 +711,8 @@ enum IteratorState {
 
 enum EnumeratorState {
     StringEnum { length: usize, index: usize },
+    /// 对象属性枚举：keys 存储属性名列表
+    ObjectEnum { keys: Vec<String>, index: usize },
     Error,
 }
 
@@ -773,6 +829,77 @@ fn store_runtime_string(caller: &Caller<'_, RuntimeState>, string: String) -> i6
     let handle = strings.len() as u32;
     strings.push(string);
     value::encode_runtime_string_handle(handle)
+}
+
+/// 读取对象/函数的所有属性名，用于 for...in 枚举
+fn enumerate_object_keys(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec<String> {
+    // 解析对象指针
+    let ptr: usize = if value::is_object(val) {
+        value::decode_object_handle(val) as usize
+    } else if value::is_function(val) {
+        let func_props_ptr = {
+            let Some(Extern::Global(g)) = caller.get_export("__func_props_ptr") else {
+                return Vec::new();
+            };
+            g.get(&mut *caller).i32().unwrap_or(0) as usize
+        };
+        let func_idx = value::decode_function_idx(val) as usize;
+        let slot_addr = func_props_ptr + func_idx * 8;
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+            return Vec::new();
+        };
+        let d = mem.data(&*caller);
+        if slot_addr + 4 > d.len() {
+            return Vec::new();
+        }
+        let obj_ptr = u32::from_le_bytes([
+            d[slot_addr], d[slot_addr + 1],
+            d[slot_addr + 2], d[slot_addr + 3],
+        ]) as usize;
+        if obj_ptr == 0 {
+            return Vec::new();
+        }
+        obj_ptr
+    } else {
+        return Vec::new();
+    };
+
+    // 读取属性列表
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return Vec::new();
+    };
+    let data = memory.data(&*caller);
+    if ptr + 12 > data.len() {
+        return Vec::new();
+    }
+
+    let num_props = u32::from_le_bytes([
+        data[ptr + 8], data[ptr + 9],
+        data[ptr + 10], data[ptr + 11],
+    ]) as usize;
+
+    let mut name_ids = Vec::with_capacity(num_props);
+    for i in 0..num_props {
+        let slot_offset = ptr + 12 + i * 12;
+        if slot_offset + 4 > data.len() {
+            break;
+        }
+        let name_id = u32::from_le_bytes([
+            data[slot_offset], data[slot_offset + 1],
+            data[slot_offset + 2], data[slot_offset + 3],
+        ]);
+        name_ids.push(name_id);
+    }
+    let _ = data; // 释放对 memory 的借用
+
+    let mut keys = Vec::with_capacity(name_ids.len());
+    for name_id in name_ids {
+        let name_bytes = read_string_bytes(caller, name_id);
+        if let Ok(name) = std::str::from_utf8(&name_bytes) {
+            keys.push(name.to_string());
+        }
+    }
+    keys
 }
 
 #[cfg(test)]

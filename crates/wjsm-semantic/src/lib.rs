@@ -2101,9 +2101,14 @@ impl Lowerer {
 
         // Create prototype object.
         let proto_dest = self.alloc_value();
+        // 计算非构造函数方法数量，作为原型对象的容量
+        let method_count = class_decl.class.body.iter().filter(|m| {
+            matches!(m, swc_ast::ClassMember::Method(m) if matches!(m.kind, swc_ast::MethodKind::Method))
+        }).count() as u32;
+        let proto_capacity = std::cmp::max(4, method_count);
         self.current_function.append_instruction(
             outer_block,
-            Instruction::NewObject { dest: proto_dest },
+            Instruction::NewObject { dest: proto_dest, capacity: proto_capacity },
         );
 
         // For each Method member (non-constructor), create a function and set on prototype.
@@ -2345,9 +2350,14 @@ impl Lowerer {
 
         // 创建 prototype 对象
         let proto_dest = self.alloc_value();
+        // 计算非构造函数方法数量，作为原型对象的容量
+        let method_count = class_expr.class.body.iter().filter(|m| {
+            matches!(m, swc_ast::ClassMember::Method(m) if matches!(m.kind, swc_ast::MethodKind::Method))
+        }).count() as u32;
+        let proto_capacity = std::cmp::max(4, method_count);
         self.current_function.append_instruction(
             block,
-            Instruction::NewObject { dest: proto_dest },
+            Instruction::NewObject { dest: proto_dest, capacity: proto_capacity },
         );
 
         // Methods
@@ -2512,9 +2522,11 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let obj_dest = self.alloc_value();
+        // 容量取 4 和属性数量的较大值，确保对象字面量有足够的槽位
+        let capacity = std::cmp::max(4, obj_expr.props.len() as u32);
         self.current_function.append_instruction(
             block,
-            Instruction::NewObject { dest: obj_dest },
+            Instruction::NewObject { dest: obj_dest, capacity },
         );
 
         for prop in &obj_expr.props {
@@ -2660,7 +2672,7 @@ impl Lowerer {
         let obj_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
-            Instruction::NewObject { dest: obj_val },
+            Instruction::NewObject { dest: obj_val, capacity: 4 },
         );
 
         // Get prototype from constructor.
