@@ -148,45 +148,90 @@
 
 ---
 
-## 十、已知限制与待完善
+## 十、复杂任务块
 
-### 属性描述符系统
-- [ ] `configurable` / `writable` / `enumerable` 标志
-- [ ] `$obj_delete` 的 configurable 检查和严格模式检查（当前始终返回 true/false 仅基于属性存在性）
-- [ ] `Object.defineProperty()` / `Object.getOwnPropertyDescriptor()`
+将第 10 节的全体已知限制与待完善按功能域划分为 5 个独立 Plan，按依赖关系依次执行。
 
-### Object 方法
+**执行顺序**: `10.3 → 10.4 → 10.1 / 10.2 / 10.5`（后三者互无依赖，顺序自由）
+
+---
+
+### 10.1 闭包与词法作用域
+
+**影响层**: IR + 语义 + WASM 后端 + 运行时
+**估算**: 🔴 大（架构级别）
+**内存策略**: 闭包环境只分配不释放，PoC 阶段可接受
+
+- [ ] **闭包（词法变量捕获）完全不支持** — `push_function_context`/`pop_function_context` 完全更换作用域树，嵌套函数/箭头函数无法访问父作用域的变量。需要新增 `CreateClosure`/`LoadCaptured`/`StoreCaptured` IR 指令、逃逸分析、环境堆分配
+- [ ] **箭头函数不捕获词法 `this`** — 当前 `this` 仅作为普通参数 `$this` 传递，统一在闭包机制中解决（`$this` 作为需要词法捕获的变量）
+
+---
+
+### 10.2 运算符隐式类型转换
+
+**影响层**: WASM 后端 + 运行时
+**估算**: 🟡 中
+
+新建运行时宿主函数：`AbstractEq`、`CompareString`、`ToPrimitive`（验证已有 `string_concat`）
+
+- [ ] **`+` 运算符字符串连接** — 验证并完善已有的 `string_concat` 两阶段逻辑（先尝试字符串连接，失败回退 F64Add），确保字符串 + 字符串、字符串 + 数字等组合正确
+- [ ] **`==` 运算符缺少跨类型隐式转换** — 当前只实现了 `null == undefined` 特判和 `I64Eq`/`F64Eq`。需要实现完整 `AbstractEq`：`ToPrimitive`、`ToNumber`、`ToBoolean` 跨类型转换
+- [ ] **`<`/`>`/`<=`/`>=` 只做 f64 数值比较** — 缺少字符串字典序比较、`null`/`undefined` 特殊数值转换、对象的 `ToPrimitive`
+- [ ] **`for...in` 枚举器在运行时只对字符串有实际实现** — `enumerator_from` 对非字符串值仅 push `Error` 状态
+
+> 📌 一元 `+`（UnaryOp::Pos）和 `+` 运算符已有部分实现（`string_concat` 尝试、`ToNumber` 转换），10.2 中验证并修复即可
+
+---
+
+### 10.3 对象系统与属性描述符
+
+**影响层**: IR + WASM 后端 + 运行时
+**估算**: 🟠 中大
+**核心设计**: 属性存储格式从 `[name_id, value]` 扩展为 `[name_id, value, flags]`，flags 包含 configurable/writable/enumerable 各 1 bit
+
+- [ ] **对象属性存储格式重设计** — 新增 flags 元数据槽位，支持每个属性的 configurable/writable/enumerable 标志
+- [ ] **对象初始容量固定为 4，超出后静默丢弃属性** — `$obj_set` 检查 `num_props < capacity` 但无扩容逻辑，满容量时属性静默丢失。需要实现扩容（超出 capacity 时重新分配更大的内存）
+- [ ] **`$obj_delete` 的 configurable 检查和严格模式检查** — 当前始终返回 true/false 仅基于属性存在性，未检查 configurable 标志
+- [ ] **`Object.defineProperty()` / `Object.getOwnPropertyDescriptor()`** — runtime 宿主函数，操作属性描述符
+- [ ] **`SetProto` 不做有效性验证** — 直接向对象内存 offset 0 写入原始 i32 指针，不检查是否为有效对象指针
+- [ ] **函数注册时 `func_props` 使用固定容量** — 每个函数对应 8 字节固定槽位，缺少按需分配
+
+---
+
+### 10.4 Object 方法
+
+**依赖**: 10.3（需要对象系统基础）
+**影响层**: IR + 语义 + WASM 后端 + 运行时
+**估算**: 🟢 中小
+**实现路径**: Builtin 指令方案（与现有 `console.log` 模式一致），新增 `Builtin::HasOwnProperty` 等 IR 指令，语义层识别对应方法名模式
+
 - [ ] `Object.prototype.hasOwnProperty()`
 - [ ] `Object.keys()` / `Object.values()` / `Object.entries()`
 - [ ] `Object.assign()` / `Object.create()`
 - [ ] `Object.getPrototypeOf()` / `Object.setPrototypeOf()`
-- [ ] 其他 Object 静态/原型方法
+- [ ] 其他常用 Object 静态/原型方法
 
-### Symbol 支持
-- [ ] `Symbol.hasInstance`（自定义 instanceof 行为）
-- [ ] 其他 Symbol 属性
+---
 
-### 函数与类实现简化
-- [ ] **箭头函数不捕获词法 `this`** — 当前 `this` 仅作为普通参数 `$this` 传递，箭头函数的 `this` 应当从定义时的外层作用域词法继承
-- [ ] **闭包（词法变量捕获）完全不支持** — `push_function_context`/`pop_function_context` 完全更换作用域树，嵌套函数/箭头函数无法访问父作用域的变量
-- [ ] **函数调用最多支持 7 个普通参数** — WASM Type 6 签名只有 8 个 i64 槽（this + 7 参数），`args.iter().take(7)` 静默丢弃超量参数
+### 10.5 函数·类·语法特性
+
+**影响层**: IR + 语义 + WASM 后端 + 运行时
+**估算**: 🟠 中大
+
+- [ ] **函数调用最多支持 7 个普通参数** — WASM 函数类型限制，`args.iter().take(7)` 静默丢弃超量参数。需要扩展调用约定
 - [ ] **函数参数不支持解构和默认值** — 参数匹配只处理 `Pat::Ident`，其他模式（解构、默认值）被 `filter_map` 静默忽略
 - [ ] **类不支持 getter/setter 方法** — `lower_class_decl` 只处理 `MethodKind::Method`，跳过 getter/setter
 - [ ] **类不支持静态方法和静态块** — 所有方法都放在 prototype 上，`StaticBlock` 等未处理
 - [ ] **`new` 表达式中 prototype 查找不完整** — 仅在函数自身的属性对象上搜索 `prototype`，不走完整 `[[Get]]`（不会遍历函数原型链）
 - [ ] **`this` 绑定规则不完整** — 只实现了 `obj.method()` 模式；缺少 `func.call()`/`apply()`/`bind()`、`method()`（非严格模式下 this → global/undefined）等
-
-### 运算符实现简化
-- [ ] **`+` 运算符只做数值加法，不支持字符串连接** — WASM 后端直接用 `F64ReinterpretI64 → F64Add`，字符串相加产生垃圾结果
-- [ ] **一元 `+`（UnaryOp::Pos）是空操作（no-op）** — 按 JS 规范应执行 `ToNumber(x)`，但当前仅复制值
-- [ ] **`==` 运算符只实现了 `null == undefined` 特判** — 缺少其他类型间的隐式转换（如 `"1" == 1`、`[1] == 1` 等）
-- [ ] **`<`/`>`/`<=`/`>=` 只做 f64 数值比较** — 缺少字符串字典序比较、`null`/`undefined` 特殊数值转换、`ToPrimitive` 等
-- [x] **`++x`/`x++`/`--x`/`x--` 只支持标识符操作数** — `obj.x++`、`arr[i]++` 等成员表达式操作数不支持
-- [x] **`obj.x += 1` 等复合赋值到成员表达式不支持** — 语义层显式返回错误
 - [ ] **对象字面量不支持计算属性名和 spread** — `lower_object_expr` 只接受 `PropName::Ident`/`PropName::Str`，计算属性和 spread 报错
-- [ ] **`for...in` 枚举器在运行时只对字符串有实际实现** — `enumerator_from` 对非字符串值仅 push `Error` 状态
+- [ ] **Symbol 支持** — `Symbol.hasInstance`（自定义 instanceof 行为）+ 其他 Symbol 属性
 
-### 运行时对象系统简化
-- [ ] **对象初始容量固定为 4，超出后静默丢弃属性** — `$obj_set` 检查 `num_props < capacity` 但无扩容逻辑，满容量时属性静默丢失
-- [ ] **`SetProto` 不做有效性验证** — 直接向对象内存 offset 0 写入原始 i32 指针，不检查是否为有效对象指针
-- [ ] **函数注册时 `func_props` 使用固定容量** — 每个函数对应 8 字节固定槽位，缺少按需分配
+---
+
+### 已确认的设计边界（非 Plan 目标）
+
+以下限制已在语义层显式捕获并报错，当前不纳入任何 Plan 的修复范围：
+
+- `++x`/`x++`/`--x`/`x--` 只支持标识符操作数（`obj.x++`、`arr[i]++` 等成员表达式操作数不支持）
+- `obj.x += 1` 等复合赋值到成员表达式不支持（语义层显式返回错误）
