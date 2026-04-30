@@ -62,6 +62,10 @@ struct Compiler {
     obj_get_func_idx: u32,
     /// WASM index of $obj_set helper.
     obj_set_func_idx: u32,
+    /// WASM index of $obj_delete helper.
+    obj_delete_func_idx: u32,
+    /// WASM index of $to_int32 helper.
+    to_int32_func_idx: u32,
     /// WASM global index for heap pointer.
     heap_ptr_global_idx: u32,
     /// WASM global index for function properties array pointer.
@@ -205,10 +209,9 @@ impl Compiler {
             .ty()
             .function(vec![ValType::I64, ValType::I32], vec![ValType::I64]);
         // Type 9: (i64, i32, i64) -> ()  — $obj_set (boxed object + key + value)
-        types
-            .ty()
-            .function(vec![ValType::I64, ValType::I32, ValType::I64], vec![]);
-
+        types.ty().function(vec![ValType::I64, ValType::I32, ValType::I64], vec![]);
+        // Type 10: (i64) -> (i32)  — $to_int32
+        types.ty().function(vec![ValType::I64], vec![ValType::I32]);
         let mut imports = ImportSection::new();
         // Import index 0: console_log: (i64) -> ()
         imports.import("env", "console_log", EntityType::Function(0));
@@ -236,6 +239,12 @@ impl Compiler {
         imports.import("env", "enumerator_key", EntityType::Function(3));
         // Import index 12: enumerator_done: (i64) -> (i64)
         imports.import("env", "enumerator_done", EntityType::Function(3));
+        // Import index 13: typeof: (i64) -> (i64)
+        imports.import("env", "typeof", EntityType::Function(3));
+        // Import index 14: op_in: (i64, i64) -> (i64)
+        imports.import("env", "op_in", EntityType::Function(2));
+        // Import index 15: op_instanceof: (i64, i64) -> (i64)
+        imports.import("env", "op_instanceof", EntityType::Function(2));
 
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
@@ -251,6 +260,9 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::EnumeratorNext, 10);
         builtin_func_indices.insert(Builtin::EnumeratorKey, 11);
         builtin_func_indices.insert(Builtin::EnumeratorDone, 12);
+        builtin_func_indices.insert(Builtin::TypeOf, 13);
+        builtin_func_indices.insert(Builtin::In, 14);
+        builtin_func_indices.insert(Builtin::InstanceOf, 15);
 
         let functions = FunctionSection::new();
 
@@ -287,13 +299,15 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 13, // 13 imports (0-12)
+            _next_import_func: 16, // 16 imports (0-15)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
             obj_new_func_idx: 0,
             obj_get_func_idx: 0,
             obj_set_func_idx: 0,
+            obj_delete_func_idx: 0,
+            to_int32_func_idx: 0,
             current_func_returns_value: false,
             heap_ptr_global_idx: 0,
             func_props_global_idx: 0,
@@ -348,6 +362,17 @@ impl Compiler {
         self.functions.function(9);
         self.function_table.push(self._next_import_func);
         self._next_import_func += 1;
+
+        self.obj_delete_func_idx = self._next_import_func;
+        self.functions.function(8); // Type 8: (i64, i32) -> (i64)
+        self.function_table.push(self._next_import_func);
+        self._next_import_func += 1;
+
+        self.to_int32_func_idx = self._next_import_func;
+        self.functions.function(10); // Type 10: (i64) -> (i32)
+        self.function_table.push(self._next_import_func);
+        self._next_import_func += 1;
+
         for function in module.functions() {
             if function.name() == "main" {
                 self.compile_function(module, function)?;
@@ -355,6 +380,27 @@ impl Compiler {
                 self.compile_js_function(module, function)?;
             }
         }
+
+        // Pre-write typeof type strings to data segment start (nul-terminated)
+        let typeof_strings: &[(u32, &str)] = &[
+            (value::TYPEOF_UNDEFINED_OFFSET, "undefined"),
+            (value::TYPEOF_OBJECT_OFFSET, "object"),
+            (value::TYPEOF_BOOLEAN_OFFSET, "boolean"),
+            (value::TYPEOF_STRING_OFFSET, "string"),
+            (value::TYPEOF_FUNCTION_OFFSET, "function"),
+            (value::TYPEOF_NUMBER_OFFSET, "number"),
+        ];
+        for &(offset, s) in typeof_strings {
+            // Ensure string_data is large enough to hold this offset
+            let end = offset as usize + s.len() + 1; // +1 for nul terminator
+            if self.string_data.len() < end {
+                self.string_data.resize(end, 0);
+            }
+            self.string_data[offset as usize..offset as usize + s.len()].copy_from_slice(s.as_bytes());
+            self.string_data[offset as usize + s.len()] = 0; // nul terminator
+            self.string_ptr_cache.insert(s.to_string(), offset);
+        }
+        self.data_offset = value::TYPEOF_RESERVED_END;
 
         // Assign global indices before compile_object_helpers needs them.
         // Global 0 = func_props_ptr, Global 1 = heap_ptr.
@@ -381,10 +427,10 @@ impl Compiler {
         );
 
         // Allocate function properties array at start of heap.
-        // Each function (including helpers) gets a 4-byte slot for its property object pointer.
+        // Each function (including helpers) gets an 8-byte slot for its property object pointer.
         let heap_start = (self.data_offset + 7) & !7; // align to 8 bytes
         let max_table_idx = self.function_table.iter().copied().max().unwrap_or(0) as usize;
-        let func_props_size = ((max_table_idx + 1) * 4) as u32;
+        let func_props_size = ((max_table_idx + 1) * 8) as u32;
         // Global 0: func_props_ptr (at heap_start, immutable — never changes)
         self.globals.global(
             GlobalType {
@@ -405,6 +451,8 @@ impl Compiler {
             &ConstExpr::i32_const(object_heap_start as i32),
         );
         self.heap_ptr_global_idx = 1;
+        // Export func_props_ptr global so the runtime can read it for `in` operator.
+        self.exports.export("__func_props_ptr", ExportKind::Global, 0);
         if !self.string_data.is_empty() {
             self.data.active(
                 0,
@@ -412,7 +460,6 @@ impl Compiler {
                 self.string_data.clone(),
             );
         }
-
         Ok(())
     }
 
@@ -603,7 +650,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(5));
-            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Const(8));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::GlobalGet(func_props_global));
             func.instruction(&WasmInstruction::I32Add);
@@ -702,7 +749,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             // slot_addr = func_props + table_idx * 4
             func.instruction(&WasmInstruction::LocalGet(8)); // table_idx
-            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Const(8));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::GlobalGet(func_props_global));
             func.instruction(&WasmInstruction::I32Add);
@@ -790,7 +837,228 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
         }
+
+        // ── $obj_delete (param $boxed i64) (param $name_id i32) (result i64) — Type 8 ──
+        // Deletes a property from an object. Returns NaN-boxed bool.
+        {
+            // local 0 = $boxed (i64), local 1 = $name_id (i32)
+            // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
+            // local 5 = resolved ptr (i32), local 6 = last_slot_addr (i32)
+            let mut func = Function::new(vec![(5, ValType::I32)]); // 5 extra i32 locals
+
+            // ── Resolve ptr from boxed value ──
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::LocalSet(5));
+
+            // Check if FUNCTION tag - if so, resolve func_props
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I64Const(0x0000000F00000000u64 as i64));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(0x0000000900000000u64 as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Const(8));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(func_props_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalSet(5));
+            func.instruction(&WasmInstruction::End);
+
+            // If resolved ptr is 0, return false (nothing to delete)
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I64Const(value::encode_bool(false)));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 8, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalSet(2)); // num_props
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::LocalSet(3)); // i = 0
+            func.instruction(&WasmInstruction::Block(BlockType::Empty));
+            func.instruction(&WasmInstruction::Loop(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32GeU);
+            func.instruction(&WasmInstruction::BrIf(1)); // not found
+
+            // Check if this slot has the key
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalTee(4));
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+
+            // Found! Perform swap-remove
+            // num_props--
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32Sub);
+            func.instruction(&WasmInstruction::LocalTee(2));
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 8, align: 2, memory_index: 0 }));
+
+            // If i < num_props (after decrement), copy last to current
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32LtU);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+
+            // Calculate last slot address
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalSet(6));
+
+            // Copy name_id from last to current
+            func.instruction(&WasmInstruction::LocalGet(4));
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+
+            // Copy value from last to current
+            func.instruction(&WasmInstruction::LocalGet(4));
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I64Load(MemArg { offset: 4, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 4, align: 3, memory_index: 0 }));
+
+            func.instruction(&WasmInstruction::End);
+
+            // Return true
+            func.instruction(&WasmInstruction::I64Const(value::encode_bool(true)));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
+            // Continue search
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalSet(3));
+            func.instruction(&WasmInstruction::Br(0));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::End);
+
+            // Not found - return false (property does not exist)
+            func.instruction(&WasmInstruction::I64Const(value::encode_bool(false)));
+            func.instruction(&WasmInstruction::End);
+        self.codes.function(&func);
     }
+
+        // ── $to_int32 (param $val i64) (result i32) — Type 10 ──
+        // Proper JS ToInt32: NaN/±Inf/sentinels → 0; numbers → ToInt32(wrap mod 2³²)
+        {
+            // local 0 = $val (i64, input), local 1 = f64 scratch
+            let mut func = Function::new(vec![(1, ValType::F64)]);
+
+            // Check: is this a raw f64 (not a NaN-box sentinel)?
+            // is_f64: (val & 0x7FF8000000000000) != 0x7FF8000000000000
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I64Const(0x7FF8000000000000u64 as i64));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(0x7FF8000000000000u64 as i64));
+            func.instruction(&WasmInstruction::I64Ne);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+
+            // Raw f64 path — convert to f64
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::F64ReinterpretI64);
+            func.instruction(&WasmInstruction::LocalTee(1));
+
+            // NaN check: f != f
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::F64Ne);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
+            // ±Inf check: abs(f) == inf
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::F64Abs);
+            func.instruction(&WasmInstruction::F64Const(f64::INFINITY.into()));
+            func.instruction(&WasmInstruction::F64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
+            // Fast path: |f| < 2^31 → safe i32.trunc_f64_s
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::F64Abs);
+            func.instruction(&WasmInstruction::F64Const(2147483648.0f64.into())); // 2^31
+            func.instruction(&WasmInstruction::F64Lt);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32TruncF64S);
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
+            // Medium path: |f| < 2^53 → i64.trunc_f64_s + mask 32 bits
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::F64Abs);
+            func.instruction(&WasmInstruction::F64Const(9007199254740992.0f64.into())); // 2^53
+            func.instruction(&WasmInstruction::F64Lt);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I64TruncF64S);
+            func.instruction(&WasmInstruction::I64Const(0xFFFFFFFF));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
+            // Large value path: manual modulo 2^32
+            // mod = f - trunc(f / 2^32) * 2^32, then adjust if negative
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::F64Const(4294967296.0f64.into())); // 2^32
+            func.instruction(&WasmInstruction::F64Div);
+            func.instruction(&WasmInstruction::F64Trunc);
+            func.instruction(&WasmInstruction::F64Const(4294967296.0f64.into()));
+            func.instruction(&WasmInstruction::F64Mul);
+            func.instruction(&WasmInstruction::F64Neg);
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::F64Add); // mod = f - trunc(f/2^32)*2^32
+            func.instruction(&WasmInstruction::LocalTee(1));
+
+            // If mod < 0: add 2^32
+            func.instruction(&WasmInstruction::F64Const(0.0.into()));
+            func.instruction(&WasmInstruction::F64Lt);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::F64Const(4294967296.0f64.into()));
+            func.instruction(&WasmInstruction::F64Add);
+            func.instruction(&WasmInstruction::LocalSet(1));
+            func.instruction(&WasmInstruction::End);
+
+            // Now mod in [0, 2^32) — use unsigned truncation
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32TruncF64U);
+            func.instruction(&WasmInstruction::Return);
+
+            func.instruction(&WasmInstruction::End); // end raw f64 if
+
+            // Not a raw number (sentinel) -> return 0
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::End);
+            self.codes.function(&func);
+        }
+    }
+
     fn compile_region_tree(
         &mut self,
         module: &IrModule,
@@ -801,7 +1069,6 @@ impl Compiler {
             Region::Linear { start_idx } => self.compile_structured(module, function, *start_idx),
         }
     }
-
     /// Phi lowering pass: for each Phi instruction, allocate a WASM local for its dest,
     /// and schedule moves from source values in predecessor blocks.
     fn lower_phi_to_locals(&mut self, function: &IrFunction) {
@@ -1550,23 +1817,73 @@ impl Compiler {
                 Ok(())
             }
             Instruction::Binary { dest, op, lhs, rhs } => {
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::F64ReinterpretI64);
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                self.emit(WasmInstruction::F64ReinterpretI64);
-
                 match op {
-                    BinaryOp::Add => self.emit(WasmInstruction::F64Add),
-                    BinaryOp::Sub => self.emit(WasmInstruction::F64Sub),
-                    BinaryOp::Mul => self.emit(WasmInstruction::F64Mul),
-                    BinaryOp::Div => self.emit(WasmInstruction::F64Div),
+                    // 算术运算（f64 操作）
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                        self.emit(WasmInstruction::F64ReinterpretI64);
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                        self.emit(WasmInstruction::F64ReinterpretI64);
+                        match op {
+                            BinaryOp::Add => self.emit(WasmInstruction::F64Add),
+                            BinaryOp::Sub => self.emit(WasmInstruction::F64Sub),
+                            BinaryOp::Mul => self.emit(WasmInstruction::F64Mul),
+                            BinaryOp::Div => self.emit(WasmInstruction::F64Div),
+                            _ => unreachable!(),
+                        }
+                        self.emit(WasmInstruction::I64ReinterpretF64);
+                        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                    }
+                    // 位运算（i32 操作）
+                    BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
+                        // 左操作数：ToInt32
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+                        // 右操作数：ToInt32
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+                        // 执行位运算
+                        match op {
+                            BinaryOp::BitAnd => self.emit(WasmInstruction::I32And),
+                            BinaryOp::BitOr => self.emit(WasmInstruction::I32Or),
+                            BinaryOp::BitXor => self.emit(WasmInstruction::I32Xor),
+                            _ => unreachable!(),
+                        }
+                        // 转换回 Number
+                        self.emit(WasmInstruction::F64ConvertI32S);
+                        self.emit(WasmInstruction::I64ReinterpretF64);
+                        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                    }
+                    // 移位运算（需要掩码右操作数）
+                    BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr => {
+                        // 左操作数：ToInt32
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+                        // 右操作数：ToInt32 并掩码 0x1F
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+                        self.emit(WasmInstruction::I32Const(0x1F));
+                        self.emit(WasmInstruction::I32And);
+                        // 执行移位
+                        match op {
+                            BinaryOp::Shl => self.emit(WasmInstruction::I32Shl),
+                            BinaryOp::Shr => self.emit(WasmInstruction::I32ShrS),
+                            BinaryOp::UShr => self.emit(WasmInstruction::I32ShrU),
+                            _ => unreachable!(),
+                        }
+                        // 转换回 Number
+                        if matches!(op, BinaryOp::UShr) {
+                            self.emit(WasmInstruction::F64ConvertI32U);
+                        } else {
+                            self.emit(WasmInstruction::F64ConvertI32S);
+                        }
+                        self.emit(WasmInstruction::I64ReinterpretF64);
+                        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                    }
                     BinaryOp::Mod | BinaryOp::Exp => {
                         bail!("Mod/Exp should be lowered to CallBuiltin, not Binary op");
                     }
                 }
-
-                self.emit(WasmInstruction::I64ReinterpretF64);
-                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(())
             }
             Instruction::Unary { dest, op, value } => {
@@ -1594,7 +1911,17 @@ impl Compiler {
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     UnaryOp::BitNot => {
-                        bail!("bitwise NOT not yet supported");
+                        // ~x: ToInt32(x) XOR 0xFFFFFFFF
+                        // 1. Load value and convert to i32 (ToInt32)
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                        self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+                        // 2. XOR with -1 (all ones)
+                        self.emit(WasmInstruction::I32Const(-1));
+                        self.emit(WasmInstruction::I32Xor);
+                        // 3. Convert back to Number (f64) and NaN-box
+                        self.emit(WasmInstruction::F64ConvertI32S);
+                        self.emit(WasmInstruction::I64ReinterpretF64);
+                        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     UnaryOp::Void => {
                         let _ = value;
@@ -1609,6 +1936,11 @@ impl Compiler {
                         self.emit(WasmInstruction::I64Const(box_base | tag_bool));
                         self.emit(WasmInstruction::I64Or);
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                    }
+                    UnaryOp::Delete => {
+                        // delete 操作符在语义层被转换为 DeleteProp 或 Const(true)
+                        // 这里不应该被到达
+                        bail!("UnaryOp::Delete should not be reached - delete is handled by DeleteProp instruction");
                     }
                 }
                 Ok(())
@@ -1707,6 +2039,17 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 // Call $obj_set(boxed, name_id, value)
                 self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+                Ok(())
+            }
+            Instruction::DeleteProp { dest, object, key } => {
+                // delete obj.prop -> bool (成功删除返回 true)
+                self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
+                // Key: lower 32 bits.
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                // Call $obj_delete(boxed, name_id) -> i64 (NaN-boxed bool)
+                self.emit(WasmInstruction::Call(self.obj_delete_func_idx));
+                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(())
             }
             Instruction::SetProto { object, value } => {
@@ -1984,6 +2327,43 @@ impl Compiler {
                     .context("IteratorDone/EnumeratorDone expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(handle.0)));
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::TypeOf => {
+                // typeof(value) -> 返回类型名称字符串指针
+                let val = args.first().context("TypeOf expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(13);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::In => {
+                // prop in object -> bool
+                let object = args.first().context("In expects 2 args (object, prop)")?;
+                let prop = args.get(1).context("In expects 2 args (object, prop)")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(prop.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(14);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::InstanceOf => {
+                // value instanceof constructor -> bool
+                let value = args.first().context("InstanceOf expects 2 args (value, constructor)")?;
+                let constructor = args.get(1).context("InstanceOf expects 2 args (value, constructor)")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(constructor.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(15);
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
@@ -2348,6 +2728,7 @@ fn collect_instruction_value_ids(instruction: &Instruction) -> Vec<u32> {
         Instruction::NewObject { dest } => vec![dest.0],
         Instruction::GetProp { dest, object, key } => vec![dest.0, object.0, key.0],
         Instruction::SetProp { object, key, value } => vec![object.0, key.0, value.0],
+        Instruction::DeleteProp { dest, object, key } => vec![dest.0, object.0, key.0],
         Instruction::SetProto { object, value } => vec![object.0, value.0],
     }
 }
