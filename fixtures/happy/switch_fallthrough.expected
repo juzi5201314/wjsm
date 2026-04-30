@@ -1,6 +1,6 @@
 exit_code: 0
 --- stdout ---
-undefined
-fined
-d
+one
+two
+three
 --- stderr ---

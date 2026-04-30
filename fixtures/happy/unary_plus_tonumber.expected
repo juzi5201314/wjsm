@@ -1,5 +1,8 @@
 exit_code: 0
 --- stdout ---
-body
-finally
+1
+0
+0
+NaN
+42
 --- stderr ---
