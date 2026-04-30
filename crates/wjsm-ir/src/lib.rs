@@ -272,6 +272,12 @@ pub enum Instruction {
         key: ValueId,
         value: ValueId,
     },
+    /// 删除对象属性，返回布尔值表示是否成功删除
+    DeleteProp {
+        dest: ValueId,
+        object: ValueId,
+        key: ValueId,
+    },
     /// 直接设置对象的 __proto__ 槽位（offset 0），用于原型链构建。
     SetProto {
         object: ValueId,
@@ -361,6 +367,9 @@ impl fmt::Display for Instruction {
             } => {
                 write!(formatter, "set_prop {object}, {key}, {value}")
             }
+            Self::DeleteProp { dest, object, key } => {
+                write!(formatter, "{dest} = delete_prop {object}, {key}")
+            }
             Self::SetProto { object, value } => {
                 write!(formatter, "set_proto {object}, {value}")
             }
@@ -376,6 +385,13 @@ pub enum BinaryOp {
     Div,
     Mod,
     Exp,
+    // 位运算
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
+    UShr,
 }
 
 impl fmt::Display for BinaryOp {
@@ -387,6 +403,12 @@ impl fmt::Display for BinaryOp {
             Self::Div => "div",
             Self::Mod => "mod",
             Self::Exp => "exp",
+            Self::BitAnd => "bitand",
+            Self::BitOr => "bitor",
+            Self::BitXor => "bitxor",
+            Self::Shl => "shl",
+            Self::Shr => "shr",
+            Self::UShr => "ushr",
         })
     }
 }
@@ -399,6 +421,7 @@ pub enum UnaryOp {
     BitNot,
     Void,
     IsNullish,
+    Delete,
 }
 
 impl fmt::Display for UnaryOp {
@@ -410,6 +433,7 @@ impl fmt::Display for UnaryOp {
             Self::BitNot => "bitnot",
             Self::Void => "void",
             Self::IsNullish => "is_nullish",
+            Self::Delete => "delete",
         })
     }
 }
@@ -461,6 +485,10 @@ pub enum Builtin {
     EnumeratorNext,
     EnumeratorKey,
     EnumeratorDone,
+    // 运算符
+    TypeOf,
+    In,
+    InstanceOf,
 }
 
 impl fmt::Display for Builtin {
@@ -484,6 +512,9 @@ impl fmt::Display for Builtin {
             Self::EnumeratorNext => "enumerator.next",
             Self::EnumeratorKey => "enumerator.key",
             Self::EnumeratorDone => "enumerator.done",
+            Self::TypeOf => "typeof",
+            Self::In => "op_in",
+            Self::InstanceOf => "op_instanceof",
         })
     }
 }
