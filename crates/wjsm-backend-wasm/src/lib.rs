@@ -76,6 +76,8 @@ struct Compiler {
     ssa_local_base: u32,
     /// String ptr cache: maps string content → data segment offset.
     string_ptr_cache: HashMap<String, u32>,
+    /// WASM local index for string_concat scratch variable.
+    string_concat_scratch_idx: u32,
 }
 /// 循环元信息（编译前预扫描得到）。
 #[derive(Debug, Clone)]
@@ -212,6 +214,10 @@ impl Compiler {
         types.ty().function(vec![ValType::I64, ValType::I32, ValType::I64], vec![]);
         // Type 10: (i64) -> (i32)  — $to_int32
         types.ty().function(vec![ValType::I64], vec![ValType::I32]);
+        // Type 11: (i64, i64) -> (i64)  — string_concat
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I64], vec![ValType::I64]);
         let mut imports = ImportSection::new();
         // Import index 0: console_log: (i64) -> ()
         imports.import("env", "console_log", EntityType::Function(0));
@@ -245,7 +251,8 @@ impl Compiler {
         imports.import("env", "op_in", EntityType::Function(2));
         // Import index 15: op_instanceof: (i64, i64) -> (i64)
         imports.import("env", "op_instanceof", EntityType::Function(2));
-
+        // Import index 16: string_concat: (i64, i64) -> (i64)
+        imports.import("env", "string_concat", EntityType::Function(11));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::F64Mod, 1);
@@ -299,7 +306,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 16, // 16 imports (0-15)
+            _next_import_func: 17, // 17 imports (0-16)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -313,6 +320,7 @@ impl Compiler {
             func_props_global_idx: 0,
             ssa_local_base: 0,
             string_ptr_cache: HashMap::new(),
+            string_concat_scratch_idx: 0,
         }
     }
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -373,15 +381,9 @@ impl Compiler {
         self.function_table.push(self._next_import_func);
         self._next_import_func += 1;
 
-        for function in module.functions() {
-            if function.name() == "main" {
-                self.compile_function(module, function)?;
-            } else {
-                self.compile_js_function(module, function)?;
-            }
-        }
-
         // Pre-write typeof type strings to data segment start (nul-terminated)
+        // 必须在编译用户函数之前设置，否则 encode_constant 会从 offset 0 开始分配字符串，
+        // 随后 typeof 字符串会覆盖用户字符串数据。
         let typeof_strings: &[(u32, &str)] = &[
             (value::TYPEOF_UNDEFINED_OFFSET, "undefined"),
             (value::TYPEOF_OBJECT_OFFSET, "object"),
@@ -391,21 +393,30 @@ impl Compiler {
             (value::TYPEOF_NUMBER_OFFSET, "number"),
         ];
         for &(offset, s) in typeof_strings {
-            // Ensure string_data is large enough to hold this offset
-            let end = offset as usize + s.len() + 1; // +1 for nul terminator
+            let end = offset as usize + s.len() + 1;
             if self.string_data.len() < end {
                 self.string_data.resize(end, 0);
             }
             self.string_data[offset as usize..offset as usize + s.len()].copy_from_slice(s.as_bytes());
-            self.string_data[offset as usize + s.len()] = 0; // nul terminator
+            self.string_data[offset as usize + s.len()] = 0;
             self.string_ptr_cache.insert(s.to_string(), offset);
         }
         self.data_offset = value::TYPEOF_RESERVED_END;
+        // 填充 string_data 到 data_offset，确保后续用户字符串追加到正确偏移量
+        self.string_data.resize(self.data_offset as usize, 0);
 
         // Assign global indices before compile_object_helpers needs them.
-        // Global 0 = func_props_ptr, Global 1 = heap_ptr.
         self.func_props_global_idx = 0;
         self.heap_ptr_global_idx = 1;
+
+        for function in module.functions() {
+            if function.name() == "main" {
+                self.compile_function(module, function)?;
+            } else {
+                self.compile_js_function(module, function)?;
+            }
+        }
+
 
         // Pass 3: Compile object helper functions.
         self.compile_object_helpers();
@@ -473,10 +484,13 @@ impl Compiler {
         self.lower_phi_to_locals(function);
 
         let local_count = self.required_local_count(function);
-        let locals = if local_count == 0 {
+        // 为 string_concat 预留一个 scratch 本地变量
+        self.string_concat_scratch_idx = local_count;
+        let total_locals = local_count + 1;
+        let locals = if total_locals == 0 {
             Vec::new()
         } else {
-            vec![(local_count, ValType::I64)]
+            vec![(total_locals, ValType::I64)]
         };
         self.current_func = Some(Function::new(locals));
 
@@ -550,10 +564,13 @@ impl Compiler {
         self.lower_phi_to_locals(function);
 
         let local_count = self.required_local_count(function);
-        let locals = if local_count == 0 {
+        // 为 string_concat 预留一个 scratch 本地变量
+        self.string_concat_scratch_idx = local_count;
+        let total_locals = local_count + 1;
+        let locals = if total_locals == 0 {
             Vec::new()
         } else {
-            vec![(local_count, ValType::I64)]
+            vec![(total_locals, ValType::I64)]
         };
         self.current_func = Some(Function::new(locals));
 
@@ -1818,14 +1835,39 @@ impl Compiler {
             }
             Instruction::Binary { dest, op, lhs, rhs } => {
                 match op {
-                    // 算术运算（f64 操作）
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                    // 加法：先尝试字符串连接，失败再做数值加法
+                    BinaryOp::Add => {
+                        // 调用 string_concat(lhs, rhs)
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                        self.emit(WasmInstruction::Call(16)); // import 16: string_concat
+                        // 存到 scratch
+                        self.emit(WasmInstruction::LocalSet(self.string_concat_scratch_idx));
+                        // 检查结果是否为 undefined（哨兵值：表示无字符串操作数）
+                        self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
+                        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                        self.emit(WasmInstruction::I64Eq);
+                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                        // 结果是 undefined → 走数值加法 (F64Add)
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                        self.emit(WasmInstruction::F64ReinterpretI64);
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                        self.emit(WasmInstruction::F64ReinterpretI64);
+                        self.emit(WasmInstruction::F64Add);
+                        self.emit(WasmInstruction::I64ReinterpretF64);
+                        self.emit(WasmInstruction::Else);
+                        // 结果是字符串 → 直接使用
+                        self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
+                        self.emit(WasmInstruction::End);
+                        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                    }
+                    // 其他算术运算（f64 操作）
+                    BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
                         self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
                         self.emit(WasmInstruction::F64ReinterpretI64);
                         self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
                         self.emit(WasmInstruction::F64ReinterpretI64);
                         match op {
-                            BinaryOp::Add => self.emit(WasmInstruction::F64Add),
                             BinaryOp::Sub => self.emit(WasmInstruction::F64Sub),
                             BinaryOp::Mul => self.emit(WasmInstruction::F64Mul),
                             BinaryOp::Div => self.emit(WasmInstruction::F64Div),
@@ -1907,7 +1949,67 @@ impl Compiler {
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     UnaryOp::Pos => {
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                        // +x 应执行 ToNumber(x):
+                        //   f64 → 原值; null → 0; true → 1; false → 0;
+                        //   undefined / string / object / 其他 → NaN
+                        let val_local = self.local_idx(value.0);
+                        let box_base = value::BOX_BASE as i64;
+
+                        // 检查是否为 NaN-boxed 值
+                        self.emit(WasmInstruction::LocalGet(val_local));
+                        self.emit(WasmInstruction::I64Const(box_base));
+                        self.emit(WasmInstruction::I64And);
+                        self.emit(WasmInstruction::I64Const(box_base));
+                        self.emit(WasmInstruction::I64Eq);
+
+                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                        // boxed: 按 tag 分派
+                        // 提取 tag
+                        self.emit(WasmInstruction::LocalGet(val_local));
+                        self.emit(WasmInstruction::I64Const(32));
+                        self.emit(WasmInstruction::I64ShrU);
+                        self.emit(WasmInstruction::I64Const(0xF));
+                        self.emit(WasmInstruction::I64And);
+                        // TAG_NULL?
+                        self.emit(WasmInstruction::I64Const(value::TAG_NULL as i64));
+                        self.emit(WasmInstruction::I64Eq);
+                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                        // null → +0
+                        self.emit(WasmInstruction::I64Const(0)); // encode_f64(0.0)
+                        self.emit(WasmInstruction::Else);
+                        // 提取 tag
+                        self.emit(WasmInstruction::LocalGet(val_local));
+                        self.emit(WasmInstruction::I64Const(32));
+                        self.emit(WasmInstruction::I64ShrU);
+                        self.emit(WasmInstruction::I64Const(0xF));
+                        self.emit(WasmInstruction::I64And);
+                        // TAG_BOOL?
+                        self.emit(WasmInstruction::I64Const(value::TAG_BOOL as i64));
+                        self.emit(WasmInstruction::I64Eq);
+                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                        // boolean: 检查 payload
+                        self.emit(WasmInstruction::LocalGet(val_local));
+                        self.emit(WasmInstruction::I64Const(1));
+                        self.emit(WasmInstruction::I64And);
+                        self.emit(WasmInstruction::I64Const(1));
+                        self.emit(WasmInstruction::I64Eq);
+                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                        // true → 1.0
+                        self.emit(WasmInstruction::I64Const(1.0f64.to_bits() as i64));
+                        self.emit(WasmInstruction::Else);
+                        // false → 0.0
+                        self.emit(WasmInstruction::I64Const(0));
+                        self.emit(WasmInstruction::End);
+                        self.emit(WasmInstruction::Else);
+                        // 其他 boxed 类型 → NaN
+                        self.emit(WasmInstruction::I64Const(value::BOX_BASE as i64));
+                        self.emit(WasmInstruction::End);
+                        self.emit(WasmInstruction::End);
+                        self.emit(WasmInstruction::Else);
+                        // not boxed → raw f64, 返回原值
+                        self.emit(WasmInstruction::LocalGet(val_local));
+                        self.emit(WasmInstruction::End);
+
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     UnaryOp::BitNot => {
@@ -2004,9 +2106,9 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Instruction::NewObject { dest } => {
-                // Call $obj_new(capacity=4)
-                self.emit(WasmInstruction::I32Const(4));
+            Instruction::NewObject { dest, capacity } => {
+                // Call $obj_new(capacity)
+                self.emit(WasmInstruction::I32Const(*capacity as i32));
                 self.emit(WasmInstruction::Call(self.obj_new_func_idx));
                 // Result is i32 ptr — encode as object handle.
                 // object_handle = BOX_BASE | (TAG_OBJECT << 32) | ptr
@@ -2053,12 +2155,50 @@ impl Compiler {
                 Ok(())
             }
             Instruction::SetProto { object, value } => {
-                // Store value at object offset 0 (__proto__ slot) — prototype is a raw i32 ptr.
-                self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
+                // 验证 value 是有效的对象/函数引用后再设置 __proto__
+                // 条件: is_boxed(value) AND (tag == OBJECT OR tag == FUNCTION)
+                let val_local = self.local_idx(value.0);
+                let obj_local = self.local_idx(object.0);
+                let box_base = value::BOX_BASE as i64;
+
+                // (1) is_boxed: (val & BOX_BASE) == BOX_BASE → i32
+                self.emit(WasmInstruction::LocalGet(val_local));
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64Eq);
+
+                // (2) tag == OBJECT: ((val >> 32) & 0xF) == TAG_OBJECT → i32
+                self.emit(WasmInstruction::LocalGet(val_local));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I64Const(0xF));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(value::TAG_OBJECT as i64));
+                self.emit(WasmInstruction::I64Eq);
+
+                // (3) tag == FUNCTION: ((val >> 32) & 0xF) == TAG_FUNCTION → i32
+                self.emit(WasmInstruction::LocalGet(val_local));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I64Const(0xF));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
+                self.emit(WasmInstruction::I64Eq);
+
+                // (2) OR (3): tag_valid → i32
+                self.emit(WasmInstruction::I32Or);
+                // (1) AND tag_valid: combined → i32
+                self.emit(WasmInstruction::I32And);
+
+                // 条件分支：仅当 tag 有效时执行 __proto__ 存储
+                self.emit(WasmInstruction::If(BlockType::Empty));
+                self.emit(WasmInstruction::LocalGet(obj_local));
                 self.emit(WasmInstruction::I32WrapI64);
-                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I32WrapI64);
                 self.emit(WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+                self.emit(WasmInstruction::End);
                 Ok(())
             }
         }
@@ -2725,7 +2865,7 @@ fn collect_instruction_value_ids(instruction: &Instruction) -> Vec<u32> {
             }
             ids
         }
-        Instruction::NewObject { dest } => vec![dest.0],
+        Instruction::NewObject { dest, capacity: _ } => vec![dest.0],
         Instruction::GetProp { dest, object, key } => vec![dest.0, object.0, key.0],
         Instruction::SetProp { object, key, value } => vec![object.0, key.0, value.0],
         Instruction::DeleteProp { dest, object, key } => vec![dest.0, object.0, key.0],

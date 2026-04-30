@@ -261,6 +261,7 @@ pub enum Instruction {
     },
     NewObject {
         dest: ValueId,
+        capacity: u32,
     },
     GetProp {
         dest: ValueId,
@@ -354,8 +355,8 @@ impl fmt::Display for Instruction {
                 }
                 Ok(())
             }
-            Self::NewObject { dest } => {
-                write!(formatter, "{dest} = new_object")
+            Self::NewObject { dest, capacity } => {
+                write!(formatter, "{dest} = new_object(capacity={capacity})")
             }
             Self::GetProp { dest, object, key } => {
                 write!(formatter, "{dest} = get_prop {object}, {key}")
