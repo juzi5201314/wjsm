@@ -18,6 +18,17 @@ pub const TAG_MASK: u64 = 0xF;
 pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x10;
 pub const BOX_BASE: u64 = MASK_EXPONENT | MASK_QUIET_NAN;
 
+// ── typeof 类型字符串在 data segment 中的固定偏移量 ──────────────────────
+// 6 个类型字符串（nul 终止）预分配在 data segment 开头，后续字节对齐到 TYPEOF_RESERVED_END
+pub const TYPEOF_UNDEFINED_OFFSET: u32 = 0;   // "undefined\\0" (10 bytes)
+pub const TYPEOF_OBJECT_OFFSET: u32 = 10;     // "object\\0"    (7 bytes)
+pub const TYPEOF_BOOLEAN_OFFSET: u32 = 17;    // "boolean\\0"   (8 bytes)
+pub const TYPEOF_STRING_OFFSET: u32 = 25;     // "string\\0"    (7 bytes)
+pub const TYPEOF_FUNCTION_OFFSET: u32 = 32;   // "function\\0"  (9 bytes)
+pub const TYPEOF_NUMBER_OFFSET: u32 = 41;     // "number\\0"    (7 bytes)
+// offset 48-66 预留给 "symbol\\0" (7) 和 "bigint\\0" (7)
+pub const TYPEOF_RESERVED_END: u32 = 66;      // 用户字符串从该偏移量之后开始
+
 pub fn encode_f64(val: f64) -> i64 {
     val.to_bits() as i64
 }
@@ -26,6 +37,19 @@ pub fn encode_string_ptr(ptr: u32) -> i64 {
     let payload = (TAG_STRING << 32) | (ptr as u64);
     (BOX_BASE | payload) as i64
 }
+
+/// typeof "undefined" → NaN-boxed string ptr (data segment offset 0)
+pub fn encode_typeof_undefined() -> i64 { encode_string_ptr(TYPEOF_UNDEFINED_OFFSET) }
+/// typeof "object" → NaN-boxed string ptr (data segment offset 10)
+pub fn encode_typeof_object() -> i64 { encode_string_ptr(TYPEOF_OBJECT_OFFSET) }
+/// typeof "boolean" → NaN-boxed string ptr (data segment offset 17)
+pub fn encode_typeof_boolean() -> i64 { encode_string_ptr(TYPEOF_BOOLEAN_OFFSET) }
+/// typeof "string" → NaN-boxed string ptr (data segment offset 25)
+pub fn encode_typeof_string() -> i64 { encode_string_ptr(TYPEOF_STRING_OFFSET) }
+/// typeof "function" → NaN-boxed string ptr (data segment offset 32)
+pub fn encode_typeof_function() -> i64 { encode_string_ptr(TYPEOF_FUNCTION_OFFSET) }
+/// typeof "number" → NaN-boxed string ptr (data segment offset 41)
+pub fn encode_typeof_number() -> i64 { encode_string_ptr(TYPEOF_NUMBER_OFFSET) }
 
 pub fn encode_runtime_string_handle(handle: u32) -> i64 {
     let payload = (STRING_RUNTIME_HANDLE_FLAG << 32) | (TAG_STRING << 32) | (handle as u64);
