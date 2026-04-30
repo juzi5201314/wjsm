@@ -1,12 +1,6 @@
 exit_code: 0
 --- stdout ---
-n
-d
-e
-f
-i
-n
-e
-d
-9
+b
+c
+3
 --- stderr ---

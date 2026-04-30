@@ -1,6 +1,6 @@
 exit_code: 0
 --- stdout ---
 42
-undefined
-d
+finally
+after
 --- stderr ---

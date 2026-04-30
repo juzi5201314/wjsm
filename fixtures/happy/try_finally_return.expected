@@ -1,5 +1,5 @@
 exit_code: 0
 --- stdout ---
-undefined
-fined
+try
+finally
 --- stderr ---

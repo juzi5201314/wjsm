@@ -2,7 +2,7 @@ exit_code: 0
 --- stdout ---
 0
 false
-undefined
+x
 4
 5
 0
