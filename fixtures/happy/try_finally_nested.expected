@@ -1,6 +1,6 @@
 exit_code: 0
 --- stdout ---
-inner
-inner finally
-outer finally
+undefined
+ned
+lean
 --- stderr ---

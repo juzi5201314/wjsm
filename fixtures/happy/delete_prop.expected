@@ -1,5 +1,7 @@
 exit_code: 0
 --- stdout ---
-fined
-ject
+1
+true
+undefined
+false
 --- stderr ---
