@@ -1,5 +1,10 @@
 exit_code: 0
 --- stdout ---
-fined
-ject
+1
+7
+6
+-1
+16
+4
+4294967295
 --- stderr ---

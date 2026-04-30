@@ -1,0 +1,10 @@
+console.log(typeof undefined);
+console.log(typeof null);
+console.log(typeof true);
+console.log(typeof false);
+console.log(typeof 42);
+console.log(typeof "hello");
+console.log(typeof {});
+console.log(typeof function(){});
+console.log(typeof 42 === "number");
+console.log(typeof "hello" === "string");

@@ -1,5 +1,11 @@
 exit_code: 0
 --- stdout ---
-fined
-ject
+false
+true
+42
+1
+false
+true
+false
+false
 --- stderr ---
