@@ -17,7 +17,7 @@
 
 ---
 
-## 二、运算符
+## 二、运算符 — ✅ **全部实现**
 
 ### 已实现：全部 ✅
 
@@ -35,19 +35,16 @@
 - [x] 三元 `a ? b : c`（CFG + Phi）
 - [x] 逗号表达式 `a, b`
 - [x] 复合赋值 `+=`、`-=`、`*=`、`/=`
+- [x] **`~` 按位非**（UnaryOp::BitNot，ToInt32 后 XOR -1）
+- [x] **位运算** `|`、`^`、`&`、`<<`、`>>`、`>>>`（BinaryOp，i32 操作）
+- [x] **`typeof`**（Builtin::TypeOf，返回类型字符串）
+- [x] **自增自减** `++x`、`x++`、`--x`、`x--`（UpdateExpr，LoadVar + Add/Sub + StoreVar）
+- [x] **`in`**（Builtin::In，遍历原型链检查属性存在性）
+- [x] **`instanceof`**（Builtin::InstanceOf，原型链检查 — 遍历 `__proto__` 链匹配 constructor.prototype）
+- [x] **`delete`**（MemberExpr → DeleteProp，Ident → Const(true)）
+- [x] **复合赋值扩展** `%=`、`**=`、`>>=`、`<<=`、`>>>=`、`|=`、`&=`、`^=`
+- [x] **逻辑复合赋值** `&&=`、`||=`、`??=`（含短路求值）
 
-### 语义层实现但后端 bail 🚧
-
-- [ ] **`~` 按位非** — 语义层发出 `UnaryOp::BitNot`，后端 bail
-- [ ] **位运算** `|`、`^`、`&`、`<<`、`>>`、`>>>` — 语义层发出 `CallBuiltin` 占位后 bail
-
-### 完全缺失 ❌
-
-- [ ] **`typeof`** — 语义层返回 `"typeof operator is not yet supported"`
-- [ ] **自增自减** `++x`、`x++`、`--x`、`x--`
-- [ ] **`in` / `instanceof`**
-- [ ] **`delete`**
-- [ ] **复合赋值**：`%=`、`**=`、`>>=`、`<<=`、`>>>=`、`|=`、`&=`、`^=`、`&&=`、`||=`、`??=`
 
 ---
 
@@ -147,3 +144,24 @@
 ## 九、JIT 后端 — 🚧 **stub**
 
 - [ ] 整个 `wjsm-backend-jit` 是一个 stub，直接 `bail!("JIT backend is not implemented yet")`
+
+
+---
+
+## 十、已知限制与待完善
+
+### 属性描述符系统
+- [ ] `configurable` / `writable` / `enumerable` 标志
+- [ ] `$obj_delete` 的 configurable 检查和严格模式检查（当前始终返回 true/false 仅基于属性存在性）
+- [ ] `Object.defineProperty()` / `Object.getOwnPropertyDescriptor()`
+
+### Object 方法
+- [ ] `Object.prototype.hasOwnProperty()`
+- [ ] `Object.keys()` / `Object.values()` / `Object.entries()`
+- [ ] `Object.assign()` / `Object.create()`
+- [ ] `Object.getPrototypeOf()` / `Object.setPrototypeOf()`
+- [ ] 其他 Object 静态/原型方法
+
+### Symbol 支持
+- [ ] `Symbol.hasInstance`（自定义 instanceof 行为）
+- [ ] 其他 Symbol 属性
