@@ -2802,12 +2802,6 @@ impl Lowerer {
         // Handle member expression assignment targets (e.g. obj.prop = value).
         if let swc_ast::AssignTarget::Simple(simple) = &assign.left {
             if let swc_ast::SimpleAssignTarget::Member(member_expr) = simple {
-                if assign.op != swc_ast::AssignOp::Assign {
-                    return Err(self.error(
-                        assign.span,
-                        "compound assignment to member expressions is not yet supported",
-                    ));
-                }
                 let obj_val = self.lower_expr(&member_expr.obj, block)?;
                 let key = match &member_expr.prop {
                     swc_ast::MemberProp::Ident(ident) => {
@@ -2827,12 +2821,78 @@ impl Lowerer {
                         "unsupported member property in assignment target",
                     )),
                 };
-                let value_val = self.lower_expr(assign.right.as_ref(), block)?;
+
+                if assign.op == swc_ast::AssignOp::Assign {
+                    // 简单赋值: obj.x = value
+                    let value_val = self.lower_expr(assign.right.as_ref(), block)?;
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::SetProp { object: obj_val, key, value: value_val },
+                    );
+                    return Ok(value_val);
+                }
+
+                // 逻辑复合赋值需要短路求值，走专用路径
+                if matches!(
+                    assign.op,
+                    swc_ast::AssignOp::AndAssign
+                        | swc_ast::AssignOp::OrAssign
+                        | swc_ast::AssignOp::NullishAssign
+                ) {
+                    return self.lower_logical_assign_member(assign, block, obj_val, key);
+                }
+
+                // 算术/位运算复合赋值
+                let bin_op = assign_op_to_binary(assign.op).ok_or_else(|| {
+                    self.error(assign.span, "unsupported compound assignment operator")
+                })?;
+
+                // GetProp 读取当前值
+                let loaded = self.alloc_value();
                 self.current_function.append_instruction(
                     block,
-                    Instruction::SetProp { object: obj_val, key, value: value_val },
+                    Instruction::GetProp { dest: loaded, object: obj_val, key },
                 );
-                return Ok(value_val);
+
+                let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+                let dest = self.alloc_value();
+
+                // Mod 和 Exp 需要使用 CallBuiltin
+                match bin_op {
+                    BinaryOp::Mod => {
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::F64Mod,
+                                args: vec![loaded, rhs],
+                            },
+                        );
+                    }
+                    BinaryOp::Exp => {
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::F64Exp,
+                                args: vec![loaded, rhs],
+                            },
+                        );
+                    }
+                    _ => {
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Binary { dest, op: bin_op, lhs: loaded, rhs },
+                        );
+                    }
+                }
+
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::SetProp { object: obj_val, key, value: dest },
+                );
+
+                return Ok(dest);
             }
         }
 
@@ -3018,6 +3078,103 @@ impl Lowerer {
             assign_end,
             Instruction::StoreVar {
                 name: ir_name,
+                value: rhs,
+            },
+        );
+        self.current_function.set_terminator(
+            assign_end,
+            Terminator::Jump { target: merge },
+        );
+
+        // 5. 在 merge 处用 Phi 合并
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: block,
+                        value: loaded,
+                    },
+                    PhiSource {
+                        predecessor: assign_end,
+                        value: rhs,
+                    },
+                ],
+            },
+        );
+
+        Ok(result)
+    }
+
+    /// Lower logical compound assignment to member expression target (&&=, ||=, ??=)
+    /// with short-circuit CFG, using GetProp/SetProp instead of LoadVar/StoreVar.
+    fn lower_logical_assign_member(
+        &mut self,
+        assign: &swc_ast::AssignExpr,
+        block: BasicBlockId,
+        obj_val: ValueId,
+        key: ValueId,
+    ) -> Result<ValueId, LoweringError> {
+        // 1. 加载当前值 (GetProp)
+        let loaded = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::GetProp {
+                dest: loaded,
+                object: obj_val,
+                key,
+            },
+        );
+
+        // 2. 创建 assign block 和 merge block
+        let assign_block = self.current_function.new_block();
+        let merge = self.current_function.new_block();
+
+        // 3. 确定 condition 和分支目标
+        let condition = if matches!(
+            assign.op,
+            swc_ast::AssignOp::NullishAssign
+        ) {
+            let is_nullish = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Unary {
+                    dest: is_nullish,
+                    op: UnaryOp::IsNullish,
+                    value: loaded,
+                },
+            );
+            is_nullish
+        } else {
+            loaded
+        };
+
+        let (true_target, false_target) = match assign.op {
+            swc_ast::AssignOp::AndAssign => (assign_block, merge),
+            swc_ast::AssignOp::OrAssign => (merge, assign_block),
+            swc_ast::AssignOp::NullishAssign => (assign_block, merge),
+            _ => unreachable!(),
+        };
+
+        self.current_function.set_terminator(
+            block,
+            Terminator::Branch {
+                condition,
+                true_block: true_target,
+                false_block: false_target,
+            },
+        );
+
+        // 4. 在 assign_block 中降低右值并写回 (SetProp)
+        let rhs = self.lower_expr(assign.right.as_ref(), assign_block)?;
+        let assign_end = self.resolve_store_block(assign_block);
+        self.current_function.append_instruction(
+            assign_end,
+            Instruction::SetProp {
+                object: obj_val,
+                key,
                 value: rhs,
             },
         );
@@ -3417,36 +3574,84 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         use swc_ast::UpdateOp;
 
-        // 目前只支持 Ident 作为操作数
-        let name = match update.arg.as_ref() {
-            swc_ast::Expr::Ident(ident) => ident.sym.to_string(),
+        // ── Step 1: 确定存储目标类型并加载当前值 ──
+        enum Target {
+            Var(String),
+            Member { obj: ValueId, key: ValueId },
+        }
+
+        let target = match update.arg.as_ref() {
+            swc_ast::Expr::Ident(ident) => {
+                let name = ident.sym.to_string();
+                self.scopes
+                    .check_mutable(&name)
+                    .map_err(|msg| self.error(update.span(), msg))?;
+                let (scope_id, _kind) = self
+                    .scopes
+                    .lookup(&name)
+                    .map_err(|msg| self.error(update.span(), msg))?;
+                Target::Var(format!("${scope_id}.{name}"))
+            }
+            swc_ast::Expr::Member(member) => {
+                let obj = self.lower_expr(&member.obj, block)?;
+                let key = match &member.prop {
+                    swc_ast::MemberProp::Ident(ident) => {
+                        let key_const = self.module.add_constant(Constant::String(
+                            ident.sym.to_string(),
+                        ));
+                        let key_dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest: key_dest,
+                                constant: key_const,
+                            },
+                        );
+                        key_dest
+                    }
+                    swc_ast::MemberProp::Computed(computed) => {
+                        self.lower_expr(&computed.expr, block)?
+                    }
+                    _ => {
+                        return Err(self.error(
+                            update.span(),
+                            "unsupported member property in update expression target",
+                        ))
+                    }
+                };
+                Target::Member { obj, key }
+            }
             _ => {
                 return Err(self.error(
                     update.span(),
-                    "update expression only supports identifier operands for now",
+                    "update expression only supports identifier or member expression operands",
                 ));
             }
         };
 
-        // 检查变量是否可变（不能是 const）
-        self.scopes.check_mutable(&name).map_err(|msg| self.error(update.span(), msg))?;
-
-        // 获取作用域限定的 IR 名称
-        let (scope_id, _kind) = self
-            .scopes
-            .lookup(&name)
-            .map_err(|msg| self.error(update.span(), msg))?;
-        let ir_name = format!("${scope_id}.{name}");
-
         // 1. 读取当前值
         let old_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::LoadVar {
-                dest: old_val,
-                name: ir_name.clone(),
-            },
-        );
+        match &target {
+            Target::Var(ir_name) => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::LoadVar {
+                        dest: old_val,
+                        name: ir_name.clone(),
+                    },
+                );
+            }
+            Target::Member { obj, key } => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest: old_val,
+                        object: *obj,
+                        key: *key,
+                    },
+                );
+            }
+        }
 
         // 2. 转换为 Number (ToNumber)
         let num_val = self.alloc_value();
@@ -3486,13 +3691,28 @@ impl Lowerer {
             },
         );
 
-        self.current_function.append_instruction(
-            block,
-            Instruction::StoreVar {
-                name: ir_name,
-                value: new_val,
-            },
-        );
+        // 5. 写回 (StoreVar or SetProp)
+        match target {
+            Target::Var(ir_name) => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::StoreVar {
+                        name: ir_name,
+                        value: new_val,
+                    },
+                );
+            }
+            Target::Member { obj, key } => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::SetProp {
+                        object: obj,
+                        key,
+                        value: new_val,
+                    },
+                );
+            }
+        }
 
         Ok(if update.prefix { new_val } else { num_val })
     }
