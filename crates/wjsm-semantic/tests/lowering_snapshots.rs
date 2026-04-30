@@ -313,6 +313,21 @@ fn switch_while_fixture_matches_ir_snapshot() {
     assert_snapshot("switch_while");
 }
 
+#[test]
+fn compound_assign_ext_fixture_matches_ir_snapshot() {
+    assert_snapshot("compound_assign_ext");
+}
+
+#[test]
+fn logical_compound_assign_fixture_matches_ir_snapshot() {
+    assert_snapshot("logical_compound_assign");
+}
+
+#[test]
+fn update_fixture_matches_ir_snapshot() {
+    assert_snapshot("update");
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let source_path = root.join("fixtures/happy").join(format!("{name}.js"));

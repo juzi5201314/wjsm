@@ -2498,6 +2498,7 @@ impl Lowerer {
             swc_ast::Expr::This(_) => self.lower_this(block),
             swc_ast::Expr::New(new_expr) => self.lower_new_expr(new_expr, block),
             swc_ast::Expr::Class(class_expr) => self.lower_class_expr(class_expr, block),
+            swc_ast::Expr::Update(update) => self.lower_update(update, block),
             _ => Err(self.error(
                 expr.span(),
                 format!("unsupported expression kind `{}`", expr_kind(expr)),
@@ -2878,6 +2879,16 @@ impl Lowerer {
                 Ok(rhs)
             }
             op => {
+                // 逻辑复合赋值需要短路求值，走专用路径
+                if matches!(
+                    op,
+                    swc_ast::AssignOp::AndAssign
+                        | swc_ast::AssignOp::OrAssign
+                        | swc_ast::AssignOp::NullishAssign
+) {
+                    return self.lower_logical_assign(assign, block, ir_name);
+                }
+
                 let bin_op = assign_op_to_binary(op).ok_or_else(|| {
                     self.error(assign.span, "unsupported compound assignment operator")
                 })?;
@@ -2893,15 +2904,41 @@ impl Lowerer {
 
                 let rhs = self.lower_expr(assign.right.as_ref(), block)?;
                 let dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Binary {
-                        dest,
-                        op: bin_op,
-                        lhs: loaded,
-                        rhs,
-                    },
-                );
+
+                // Mod 和 Exp 需要使用 CallBuiltin
+                match bin_op {
+                    BinaryOp::Mod => {
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::F64Mod,
+                                args: vec![loaded, rhs],
+                            },
+                        );
+                    }
+                    BinaryOp::Exp => {
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::F64Exp,
+                                args: vec![loaded, rhs],
+                            },
+                        );
+                    }
+                    _ => {
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Binary {
+                                dest,
+                                op: bin_op,
+                                lhs: loaded,
+                                rhs,
+                            },
+                        );
+                    }
+                }
 
                 self.current_function.append_instruction(
                     block,
@@ -2914,6 +2951,101 @@ impl Lowerer {
                 Ok(dest)
             }
         }
+    }
+
+
+    /// Lower logical compound assignment `&&=`, `||=`, `??=` with short-circuit CFG.
+    /// Decomposed into LoadVar + Branch(Phi) + StoreVar just like lower_logical.
+    fn lower_logical_assign(
+        &mut self,
+        assign: &swc_ast::AssignExpr,
+        block: BasicBlockId,
+        ir_name: String,
+    ) -> Result<ValueId, LoweringError> {
+        // 1. 加载当前值
+        let loaded = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: loaded,
+                name: ir_name.clone(),
+            },
+        );
+
+        // 2. 创建 assign block 和 merge block
+        let assign_block = self.current_function.new_block();
+        let merge = self.current_function.new_block();
+
+        // 3. 确定 condition 和分支目标
+        let condition = if matches!(
+            assign.op,
+            swc_ast::AssignOp::NullishAssign
+) {
+            let is_nullish = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Unary {
+                    dest: is_nullish,
+                    op: UnaryOp::IsNullish,
+                    value: loaded,
+                },
+            );
+            is_nullish
+        } else {
+            loaded
+        };
+
+        let (true_target, false_target) = match assign.op {
+            swc_ast::AssignOp::AndAssign => (assign_block, merge),
+            swc_ast::AssignOp::OrAssign => (merge, assign_block),
+            swc_ast::AssignOp::NullishAssign => (assign_block, merge),
+            _ => unreachable!(),
+        };
+
+        self.current_function.set_terminator(
+            block,
+            Terminator::Branch {
+                condition,
+                true_block: true_target,
+                false_block: false_target,
+            },
+        );
+
+        // 4. 在 assign_block 中降低右值并写回
+        let rhs = self.lower_expr(assign.right.as_ref(), assign_block)?;
+        let assign_end = self.resolve_store_block(assign_block);
+        self.current_function.append_instruction(
+            assign_end,
+            Instruction::StoreVar {
+                name: ir_name,
+                value: rhs,
+            },
+        );
+        self.current_function.set_terminator(
+            assign_end,
+            Terminator::Jump { target: merge },
+        );
+
+        // 5. 在 merge 处用 Phi 合并
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: block,
+                        value: loaded,
+                    },
+                    PhiSource {
+                        predecessor: assign_end,
+                        value: rhs,
+                    },
+                ],
+            },
+        );
+
+        Ok(result)
     }
 
     // ── Binary operators ────────────────────────────────────────────────────
@@ -2982,19 +3114,48 @@ impl Lowerer {
                 let lhs = self.lower_expr(bin.left.as_ref(), block)?;
                 let rhs = self.lower_expr(bin.right.as_ref(), block)?;
                 let dest = self.alloc_value();
+                let op = match bin.op {
+                    BitOr => BinaryOp::BitOr,
+                    BitXor => BinaryOp::BitXor,
+                    BitAnd => BinaryOp::BitAnd,
+                    LShift => BinaryOp::Shl,
+                    RShift => BinaryOp::Shr,
+                    ZeroFillRShift => BinaryOp::UShr,
+                    _ => unreachable!(),
+                };
+                self.current_function
+                    .append_instruction(block, Instruction::Binary { dest, op, lhs, rhs });
+                Ok(dest)
+            }
+            // in 操作符：检查对象是否有属性
+            In => {
+                let prop = self.lower_expr(bin.left.as_ref(), block)?;
+                let object = self.lower_expr(bin.right.as_ref(), block)?;
+                let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
-                        builtin: Builtin::ConsoleLog, // placeholder — will be proper bitwise builtins later
-                        args: vec![lhs, rhs],
+                        builtin: Builtin::In,
+                        args: vec![object, prop],
                     },
                 );
-                // For now, return an error
-                Err(self.error(
-                    bin.span(),
-                    format!("unsupported binary operator `{}`", binary_op_name(bin.op)),
-                ))
+                Ok(dest)
+            }
+            // instanceof 操作符：检查原型链
+            InstanceOf => {
+                let value = self.lower_expr(bin.left.as_ref(), block)?;
+                let constructor = self.lower_expr(bin.right.as_ref(), block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::InstanceOf,
+                        args: vec![value, constructor],
+                    },
+                );
+                Ok(dest)
             }
             other => Err(self.error(
                 bin.span(),
@@ -3174,24 +3335,179 @@ impl Lowerer {
                 );
                 Ok(dest)
             }
-            TypeOf => Err(self.error(unary.span(), "typeof operator is not yet supported")),
-            _ => Err(self.error(unary.span(), format!("unsupported unary operator"))),
+            TypeOf => {
+                let arg = self.lower_expr(&unary.arg, block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::TypeOf,
+                        args: vec![arg],
+                    },
+                );
+                Ok(dest)
+            }
+            Delete => {
+                // delete 操作符
+                match unary.arg.as_ref() {
+                    // delete obj.prop → DeleteProp 指令
+                    swc_ast::Expr::Member(member) => {
+                        let object = self.lower_expr(&member.obj, block)?;
+                        let key = match &member.prop {
+                            swc_ast::MemberProp::Ident(ident) => {
+                                let key_str = ident.sym.to_string();
+                                let key_const = self.module.add_constant(Constant::String(key_str));
+                                let key_val = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::Const {
+                                        dest: key_val,
+                                        constant: key_const,
+                                    },
+                                );
+                                key_val
+                            }
+                            swc_ast::MemberProp::Computed(computed) => {
+                                self.lower_expr(&computed.expr, block)?
+                            }
+                            _ => {
+                                return Err(self.error(
+                                    member.span(),
+                                    "delete only supports identifier or computed property keys",
+                                ));
+                            }
+                        };
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::DeleteProp { dest, object, key },
+                        );
+                        Ok(dest)
+                    }
+                    // delete x 对变量总是返回 true（不能删除变量）
+                    swc_ast::Expr::Ident(_) => {
+                        let true_const = self.module.add_constant(Constant::Bool(true));
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest,
+                                constant: true_const,
+                            },
+                        );
+                        Ok(dest)
+                    }
+                    _ => Err(self.error(
+                        unary.span(),
+                        "delete only supports member expressions or identifiers",
+                    )),
+                }
+            }
+            _ => Err(self.error(unary.span(), "unsupported unary operator")),
         }
     }
 
-    // ── Ternary conditional ─────────────────────────────────────────────────
+    // ── Update expression (++x, x++, --x, x--) ─────────────────────────────
+
+    fn lower_update(
+        &mut self,
+        update: &swc_ast::UpdateExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        use swc_ast::UpdateOp;
+
+        // 目前只支持 Ident 作为操作数
+        let name = match update.arg.as_ref() {
+            swc_ast::Expr::Ident(ident) => ident.sym.to_string(),
+            _ => {
+                return Err(self.error(
+                    update.span(),
+                    "update expression only supports identifier operands for now",
+                ));
+            }
+        };
+
+        // 检查变量是否可变（不能是 const）
+        self.scopes.check_mutable(&name).map_err(|msg| self.error(update.span(), msg))?;
+
+        // 获取作用域限定的 IR 名称
+        let (scope_id, _kind) = self
+            .scopes
+            .lookup(&name)
+            .map_err(|msg| self.error(update.span(), msg))?;
+        let ir_name = format!("${scope_id}.{name}");
+
+        // 1. 读取当前值
+        let old_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: old_val,
+                name: ir_name.clone(),
+            },
+        );
+
+        // 2. 转换为 Number (ToNumber)
+        let num_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Unary {
+                dest: num_val,
+                op: UnaryOp::Pos,
+                value: old_val,
+            },
+        );
+
+        // 3. 常量 1.0
+        let one = self.module.add_constant(Constant::Number(1.0));
+        let one_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: one_val,
+                constant: one,
+            },
+        );
+
+        // 4. 执行加法或减法
+        let new_val = self.alloc_value();
+        let op = match update.op {
+            UpdateOp::PlusPlus => BinaryOp::Add,
+            UpdateOp::MinusMinus => BinaryOp::Sub,
+        };
+        self.current_function.append_instruction(
+            block,
+            Instruction::Binary {
+                dest: new_val,
+                op,
+                lhs: num_val,
+                rhs: one_val,
+            },
+        );
+
+        self.current_function.append_instruction(
+            block,
+            Instruction::StoreVar {
+                name: ir_name,
+                value: new_val,
+            },
+        );
+
+        Ok(if update.prefix { new_val } else { num_val })
+    }
 
     fn lower_cond(
         &mut self,
         cond: &swc_ast::CondExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // 评估条件表达式
         let test = self.lower_expr(&cond.test, block)?;
 
         let cons_block = self.current_function.new_block();
         let alt_block = self.current_function.new_block();
         let merge = self.current_function.new_block();
-
         self.current_function.set_terminator(
             block,
             Terminator::Branch {
@@ -3635,6 +3951,14 @@ fn assign_op_to_binary(op: swc_ast::AssignOp) -> Option<BinaryOp> {
         swc_ast::AssignOp::SubAssign => Some(BinaryOp::Sub),
         swc_ast::AssignOp::MulAssign => Some(BinaryOp::Mul),
         swc_ast::AssignOp::DivAssign => Some(BinaryOp::Div),
+        swc_ast::AssignOp::ModAssign => Some(BinaryOp::Mod),
+        swc_ast::AssignOp::ExpAssign => Some(BinaryOp::Exp),
+        swc_ast::AssignOp::BitAndAssign => Some(BinaryOp::BitAnd),
+        swc_ast::AssignOp::BitOrAssign => Some(BinaryOp::BitOr),
+        swc_ast::AssignOp::BitXorAssign => Some(BinaryOp::BitXor),
+        swc_ast::AssignOp::LShiftAssign => Some(BinaryOp::Shl),
+        swc_ast::AssignOp::RShiftAssign => Some(BinaryOp::Shr),
+        swc_ast::AssignOp::ZeroFillRShiftAssign => Some(BinaryOp::UShr),
         _ => None,
     }
 }
