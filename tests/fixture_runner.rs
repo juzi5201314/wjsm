@@ -230,10 +230,7 @@ fn normalize_object_handles(text: &str) -> String {
 
     while i < len {
         // 寻找 "[object " 模式
-        if i + 8 <= len
-            && bytes[i] == b'['
-            && &bytes[i + 1..i + 8] == b"object "
-        {
+        if i + 8 <= len && bytes[i] == b'[' && &bytes[i + 1..i + 8] == b"object " {
             // 找到匹配的 ']'
             if let Some(close) = bytes[i..].iter().position(|&b| b == b']') {
                 let close_abs = i + close;

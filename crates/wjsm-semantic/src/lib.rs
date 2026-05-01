@@ -380,8 +380,12 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new(name, entry),
         ));
-        self.function_scope_stack.push(std::mem::replace(&mut self.scopes, ScopeTree::new()));
-        self.function_hoisted_stack.push((std::mem::take(&mut self.hoisted_vars), std::mem::take(&mut self.hoisted_vars_set)));
+        self.function_scope_stack
+            .push(std::mem::replace(&mut self.scopes, ScopeTree::new()));
+        self.function_hoisted_stack.push((
+            std::mem::take(&mut self.hoisted_vars),
+            std::mem::take(&mut self.hoisted_vars_set),
+        ));
         self.function_next_value_stack.push(self.next_value);
         self.function_next_temp_stack.push(self.next_temp);
         self.next_value = 0;
@@ -395,12 +399,24 @@ impl Lowerer {
 
     fn pop_function_context(&mut self) {
         self.current_function = self.function_stack.pop().expect("function stack underflow");
-        self.scopes = self.function_scope_stack.pop().expect("scope stack underflow");
-        let (vars, set) = self.function_hoisted_stack.pop().expect("hoisted stack underflow");
+        self.scopes = self
+            .function_scope_stack
+            .pop()
+            .expect("scope stack underflow");
+        let (vars, set) = self
+            .function_hoisted_stack
+            .pop()
+            .expect("hoisted stack underflow");
         self.hoisted_vars = vars;
         self.hoisted_vars_set = set;
-        self.next_value = self.function_next_value_stack.pop().expect("next value stack underflow");
-        self.next_temp = self.function_next_temp_stack.pop().expect("next temp stack underflow");
+        self.next_value = self
+            .function_next_value_stack
+            .pop()
+            .expect("next value stack underflow");
+        self.next_temp = self
+            .function_next_temp_stack
+            .pop()
+            .expect("next temp stack underflow");
     }
 
     fn lower_module(mut self, module: &swc_ast::Module) -> Result<Program, LoweringError> {
@@ -463,9 +479,7 @@ impl Lowerer {
             swc_ast::Stmt::Decl(decl) => match decl {
                 swc_ast::Decl::Fn(fn_decl) => self.lower_fn_decl(fn_decl, flow),
                 swc_ast::Decl::Var(var_decl) => self.lower_var_decl(var_decl, flow),
-                swc_ast::Decl::Class(class_decl) => {
-                    self.lower_class_decl(class_decl, flow)
-                }
+                swc_ast::Decl::Class(class_decl) => self.lower_class_decl(class_decl, flow),
                 _ => Err(self.error(
                     stmt.span(),
                     format!("unsupported declaration kind `{}`", decl_kind(decl)),
@@ -1774,22 +1788,27 @@ impl Lowerer {
         let name = fn_decl.ident.sym.to_string();
         self.push_function_context(&name, BasicBlockId(0));
 
-
-
         // Register $this so that this-keyword expressions resolve.
-        let _ = self.scopes.declare("$this", VarKind::Let, true)
+        let _ = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
         // Register parameters in the root scope (already a function scope).
 
-        let param_names: Vec<String> = fn_decl.function.params.iter().filter_map(|param| {
-            match &param.pat {
+        let param_names: Vec<String> = fn_decl
+            .function
+            .params
+            .iter()
+            .filter_map(|param| match &param.pat {
                 swc_ast::Pat::Ident(binding_ident) => Some(binding_ident.id.sym.to_string()),
                 _ => None,
-            }
-        }).collect();
+            })
+            .collect();
 
         for param_name in &param_names {
-            let _ = self.scopes.declare(param_name, VarKind::Let, true)
+            let _ = self
+                .scopes
+                .declare(param_name, VarKind::Let, true)
                 .map_err(|msg| self.error(fn_decl.span(), msg))?;
         }
 
@@ -1811,11 +1830,15 @@ impl Lowerer {
 
         // Add implicit return if the body is still open.
         if let StmtFlow::Open(block) = inner_flow {
-            self.current_function.set_terminator(block, Terminator::Return { value: None });
+            self.current_function
+                .set_terminator(block, Terminator::Return { value: None });
         }
 
         // Finalize the function IR and push it to the module.
-        let old_fn = std::mem::replace(&mut self.current_function, FunctionBuilder::new("", BasicBlockId(0)));
+        let old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_params(param_names);
@@ -1868,25 +1891,34 @@ impl Lowerer {
         self.push_function_context(&name, BasicBlockId(0));
 
         // Register $this so that this-keyword expressions resolve.
-        let _ = self.scopes.declare("$this", VarKind::Let, true)
+        let _ = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(fn_expr.span(), msg))?;
 
         // Register the function's own name (named function expression) so it is accessible within the body.
         if let Some(ref ident) = fn_expr.ident {
-            let _ = self.scopes.declare(&ident.sym.to_string(), VarKind::Let, true)
+            let _ = self
+                .scopes
+                .declare(&ident.sym.to_string(), VarKind::Let, true)
                 .map_err(|msg| self.error(fn_expr.span(), msg))?;
         }
 
         // Register parameters in function scope.
-        let param_names: Vec<String> = fn_expr.function.params.iter().filter_map(|param| {
-            match &param.pat {
+        let param_names: Vec<String> = fn_expr
+            .function
+            .params
+            .iter()
+            .filter_map(|param| match &param.pat {
                 swc_ast::Pat::Ident(binding_ident) => Some(binding_ident.id.sym.to_string()),
                 _ => None,
-            }
-        }).collect();
+            })
+            .collect();
 
         for param_name in &param_names {
-            let _ = self.scopes.declare(param_name, VarKind::Let, true)
+            let _ = self
+                .scopes
+                .declare(param_name, VarKind::Let, true)
                 .map_err(|msg| self.error(fn_expr.span(), msg))?;
         }
 
@@ -1908,15 +1940,21 @@ impl Lowerer {
 
         // Implicit return undefined.
         if let StmtFlow::Open(b) = inner_flow {
-            self.current_function.set_terminator(b, Terminator::Return { value: None });
+            self.current_function
+                .set_terminator(b, Terminator::Return { value: None });
         }
 
         // Finalize IR function and push to module.
-        let old_fn = std::mem::replace(&mut self.current_function, FunctionBuilder::new("", BasicBlockId(0)));
+        let old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_params(param_names);
-        for b in blocks { ir_function.push_block(b); }
+        for b in blocks {
+            ir_function.push_block(b);
+        }
         let function_id = self.module.push_function(ir_function);
 
         // Restore outer context.
@@ -1927,7 +1965,10 @@ impl Lowerer {
         let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
         self.current_function.append_instruction(
             block,
-            Instruction::Const { dest, constant: func_ref_const },
+            Instruction::Const {
+                dest,
+                constant: func_ref_const,
+            },
         );
         Ok(dest)
     }
@@ -1942,19 +1983,27 @@ impl Lowerer {
         self.push_function_context(&name, BasicBlockId(0));
 
         // Register $this so that this-keyword expressions resolve.
-        let _ = self.scopes.declare("$this", VarKind::Let, true)
+        let _ = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(arrow.span, msg))?;
 
-        let param_names: Vec<String> = arrow.params.iter().filter_map(|param| {
-            // param: &Box<Pat>, auto-deref to &Pat via Box<Pat>: Deref
-            let p: &swc_ast::Pat = param;
-            match p {
-                swc_ast::Pat::Ident(binding_ident) => Some(binding_ident.id.sym.to_string()),
-                _ => None,
-            }
-        }).collect();
+        let param_names: Vec<String> = arrow
+            .params
+            .iter()
+            .filter_map(|param| {
+                // param: &Box<Pat>, auto-deref to &Pat via Box<Pat>: Deref
+                let p: &swc_ast::Pat = param;
+                match p {
+                    swc_ast::Pat::Ident(binding_ident) => Some(binding_ident.id.sym.to_string()),
+                    _ => None,
+                }
+            })
+            .collect();
         for param_name in &param_names {
-            let _ = self.scopes.declare(param_name, VarKind::Let, true)
+            let _ = self
+                .scopes
+                .declare(param_name, VarKind::Let, true)
                 .map_err(|msg| self.error(arrow.span, msg))?;
         }
 
@@ -1974,22 +2023,29 @@ impl Lowerer {
                 // Expression body: lower expr, then return it.
                 self.emit_hoisted_var_initializers(entry);
                 let val = self.lower_expr(expr, entry)?;
-                self.current_function.set_terminator(entry, Terminator::Return { value: Some(val) });
+                self.current_function
+                    .set_terminator(entry, Terminator::Return { value: Some(val) });
                 inner_flow = StmtFlow::Terminated;
             }
         }
 
         // Implicit return undefined if no explicit return.
         if let StmtFlow::Open(b) = inner_flow {
-            self.current_function.set_terminator(b, Terminator::Return { value: None });
+            self.current_function
+                .set_terminator(b, Terminator::Return { value: None });
         }
 
         // Finalize IR function.
-        let old_fn = std::mem::replace(&mut self.current_function, FunctionBuilder::new("", BasicBlockId(0)));
+        let old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_params(param_names);
-        for b in blocks { ir_function.push_block(b); }
+        for b in blocks {
+            ir_function.push_block(b);
+        }
         let function_id = self.module.push_function(ir_function);
 
         // Restore outer context.
@@ -2000,7 +2056,10 @@ impl Lowerer {
         let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
         self.current_function.append_instruction(
             block,
-            Instruction::Const { dest, constant: func_ref_const },
+            Instruction::Const {
+                dest,
+                constant: func_ref_const,
+            },
         );
         Ok(dest)
     }
@@ -2013,10 +2072,14 @@ impl Lowerer {
         let class_name = class_decl.ident.sym.to_string();
 
         // Find the constructor.
-        let constructor = class_decl.class.body.iter().find_map(|member| match member {
-            swc_ast::ClassMember::Constructor(c) => Some(c),
-            _ => None,
-        });
+        let constructor = class_decl
+            .class
+            .body
+            .iter()
+            .find_map(|member| match member {
+                swc_ast::ClassMember::Constructor(c) => Some(c),
+                _ => None,
+            });
 
         // Create the constructor function.
         let ctor_name = format!("{}.constructor", class_name);
@@ -2108,7 +2171,10 @@ impl Lowerer {
         let proto_capacity = std::cmp::max(4, method_count);
         self.current_function.append_instruction(
             outer_block,
-            Instruction::NewObject { dest: proto_dest, capacity: proto_capacity },
+            Instruction::NewObject {
+                dest: proto_dest,
+                capacity: proto_capacity,
+            },
         );
 
         // For each Method member (non-constructor), create a function and set on prototype.
@@ -2195,9 +2261,7 @@ impl Lowerer {
                 );
 
                 // Set method on prototype.
-                let m_key_const = self
-                    .module
-                    .add_constant(Constant::String(method_name));
+                let m_key_const = self.module.add_constant(Constant::String(method_name));
                 let m_key_dest = self.alloc_value();
                 self.current_function.append_instruction(
                     outer_block,
@@ -2271,10 +2335,14 @@ impl Lowerer {
         }
 
         // 查找构造函数
-        let constructor = class_expr.class.body.iter().find_map(|member| match member {
-            swc_ast::ClassMember::Constructor(c) => Some(c),
-            _ => None,
-        });
+        let constructor = class_expr
+            .class
+            .body
+            .iter()
+            .find_map(|member| match member {
+                swc_ast::ClassMember::Constructor(c) => Some(c),
+                _ => None,
+            });
 
         // 创建构造函数
         let ctor_name = format!("{}.constructor", class_name);
@@ -2357,7 +2425,10 @@ impl Lowerer {
         let proto_capacity = std::cmp::max(4, method_count);
         self.current_function.append_instruction(
             block,
-            Instruction::NewObject { dest: proto_dest, capacity: proto_capacity },
+            Instruction::NewObject {
+                dest: proto_dest,
+                capacity: proto_capacity,
+            },
         );
 
         // Methods
@@ -2437,9 +2508,7 @@ impl Lowerer {
                     },
                 );
 
-                let m_key_const = self
-                    .module
-                    .add_constant(Constant::String(method_name));
+                let m_key_const = self.module.add_constant(Constant::String(method_name));
                 let m_key_dest = self.alloc_value();
                 self.current_function.append_instruction(
                     block,
@@ -2483,7 +2552,6 @@ impl Lowerer {
         Ok(ctor_dest)
     }
 
-
     // ── Expressions ─────────────────────────────────────────────────────────
 
     fn lower_expr(
@@ -2526,7 +2594,10 @@ impl Lowerer {
         let capacity = std::cmp::max(4, obj_expr.props.len() as u32);
         self.current_function.append_instruction(
             block,
-            Instruction::NewObject { dest: obj_dest, capacity },
+            Instruction::NewObject {
+                dest: obj_dest,
+                capacity,
+            },
         );
 
         for prop in &obj_expr.props {
@@ -2539,11 +2610,10 @@ impl Lowerer {
                             _ => {
                                 return Err(
                                     self.error(kv.key.span(), "unsupported property key kind")
-                                )
+                                );
                             }
                         };
-                        let key_const =
-                            self.module.add_constant(Constant::String(key_str));
+                        let key_const = self.module.add_constant(Constant::String(key_str));
                         let key_dest = self.alloc_value();
                         self.current_function.append_instruction(
                             block,
@@ -2564,8 +2634,7 @@ impl Lowerer {
                     }
                     swc_ast::Prop::Shorthand(ident) => {
                         let key_str = ident.sym.to_string();
-                        let key_const =
-                            self.module.add_constant(Constant::String(key_str));
+                        let key_const = self.module.add_constant(Constant::String(key_str));
                         let key_dest = self.alloc_value();
                         self.current_function.append_instruction(
                             block,
@@ -2585,16 +2654,16 @@ impl Lowerer {
                         );
                     }
                     _ => {
-                        return Err(self.error(
-                            prop.span(),
-                            "unsupported property kind in object literal",
-                        ));
+                        return Err(
+                            self.error(prop.span(), "unsupported property kind in object literal")
+                        );
                     }
                 },
                 swc_ast::PropOrSpread::Spread(_) => {
-                    return Err(
-                        self.error(prop.span(), "spread in object literals is not yet supported")
-                    );
+                    return Err(self.error(
+                        prop.span(),
+                        "spread in object literals is not yet supported",
+                    ));
                 }
             }
         }
@@ -2611,8 +2680,9 @@ impl Lowerer {
 
         let key = match &member.prop {
             swc_ast::MemberProp::Ident(ident) => {
-                let key_const =
-                    self.module.add_constant(Constant::String(ident.sym.to_string()));
+                let key_const = self
+                    .module
+                    .add_constant(Constant::String(ident.sym.to_string()));
                 let key_dest = self.alloc_value();
                 self.current_function.append_instruction(
                     block,
@@ -2623,15 +2693,8 @@ impl Lowerer {
                 );
                 key_dest
             }
-            swc_ast::MemberProp::Computed(computed) => {
-                self.lower_expr(&computed.expr, block)?
-            }
-            _ => {
-                return Err(self.error(
-                    member.span,
-                    "unsupported member property kind",
-                ))
-            }
+            swc_ast::MemberProp::Computed(computed) => self.lower_expr(&computed.expr, block)?,
+            _ => return Err(self.error(member.span, "unsupported member property kind")),
         };
 
         let dest = self.alloc_value();
@@ -2646,10 +2709,7 @@ impl Lowerer {
         Ok(dest)
     }
 
-    fn lower_this(
-        &mut self,
-        block: BasicBlockId,
-    ) -> Result<ValueId, LoweringError> {
+    fn lower_this(&mut self, block: BasicBlockId) -> Result<ValueId, LoweringError> {
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -2672,12 +2732,16 @@ impl Lowerer {
         let obj_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
-            Instruction::NewObject { dest: obj_val, capacity: 4 },
+            Instruction::NewObject {
+                dest: obj_val,
+                capacity: 4,
+            },
         );
 
         // Get prototype from constructor.
-        let proto_key_const =
-            self.module.add_constant(Constant::String("prototype".to_string()));
+        let proto_key_const = self
+            .module
+            .add_constant(Constant::String("prototype".to_string()));
         let proto_key = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -2846,21 +2910,28 @@ impl Lowerer {
                 let obj_val = self.lower_expr(&member_expr.obj, block)?;
                 let key = match &member_expr.prop {
                     swc_ast::MemberProp::Ident(ident) => {
-                        let key_const = self.module.add_constant(Constant::String(ident.sym.to_string()));
+                        let key_const = self
+                            .module
+                            .add_constant(Constant::String(ident.sym.to_string()));
                         let key_dest = self.alloc_value();
                         self.current_function.append_instruction(
                             block,
-                            Instruction::Const { dest: key_dest, constant: key_const },
+                            Instruction::Const {
+                                dest: key_dest,
+                                constant: key_const,
+                            },
                         );
                         key_dest
                     }
                     swc_ast::MemberProp::Computed(computed) => {
                         self.lower_expr(&computed.expr, block)?
                     }
-                    _ => return Err(self.error(
-                        assign.span,
-                        "unsupported member property in assignment target",
-                    )),
+                    _ => {
+                        return Err(self.error(
+                            assign.span,
+                            "unsupported member property in assignment target",
+                        ));
+                    }
                 };
 
                 if assign.op == swc_ast::AssignOp::Assign {
@@ -2868,7 +2939,11 @@ impl Lowerer {
                     let value_val = self.lower_expr(assign.right.as_ref(), block)?;
                     self.current_function.append_instruction(
                         block,
-                        Instruction::SetProp { object: obj_val, key, value: value_val },
+                        Instruction::SetProp {
+                            object: obj_val,
+                            key,
+                            value: value_val,
+                        },
                     );
                     return Ok(value_val);
                 }
@@ -2892,7 +2967,11 @@ impl Lowerer {
                 let loaded = self.alloc_value();
                 self.current_function.append_instruction(
                     block,
-                    Instruction::GetProp { dest: loaded, object: obj_val, key },
+                    Instruction::GetProp {
+                        dest: loaded,
+                        object: obj_val,
+                        key,
+                    },
                 );
 
                 let rhs = self.lower_expr(assign.right.as_ref(), block)?;
@@ -2923,14 +3002,23 @@ impl Lowerer {
                     _ => {
                         self.current_function.append_instruction(
                             block,
-                            Instruction::Binary { dest, op: bin_op, lhs: loaded, rhs },
+                            Instruction::Binary {
+                                dest,
+                                op: bin_op,
+                                lhs: loaded,
+                                rhs,
+                            },
                         );
                     }
                 }
 
                 self.current_function.append_instruction(
                     block,
-                    Instruction::SetProp { object: obj_val, key, value: dest },
+                    Instruction::SetProp {
+                        object: obj_val,
+                        key,
+                        value: dest,
+                    },
                 );
 
                 return Ok(dest);
@@ -2986,7 +3074,7 @@ impl Lowerer {
                     swc_ast::AssignOp::AndAssign
                         | swc_ast::AssignOp::OrAssign
                         | swc_ast::AssignOp::NullishAssign
-) {
+                ) {
                     return self.lower_logical_assign(assign, block, ir_name);
                 }
 
@@ -3054,7 +3142,6 @@ impl Lowerer {
         }
     }
 
-
     /// Lower logical compound assignment `&&=`, `||=`, `??=` with short-circuit CFG.
     /// Decomposed into LoadVar + Branch(Phi) + StoreVar just like lower_logical.
     fn lower_logical_assign(
@@ -3078,10 +3165,7 @@ impl Lowerer {
         let merge = self.current_function.new_block();
 
         // 3. 确定 condition 和分支目标
-        let condition = if matches!(
-            assign.op,
-            swc_ast::AssignOp::NullishAssign
-) {
+        let condition = if matches!(assign.op, swc_ast::AssignOp::NullishAssign) {
             let is_nullish = self.alloc_value();
             self.current_function.append_instruction(
                 block,
@@ -3122,10 +3206,8 @@ impl Lowerer {
                 value: rhs,
             },
         );
-        self.current_function.set_terminator(
-            assign_end,
-            Terminator::Jump { target: merge },
-        );
+        self.current_function
+            .set_terminator(assign_end, Terminator::Jump { target: merge });
 
         // 5. 在 merge 处用 Phi 合并
         let result = self.alloc_value();
@@ -3174,10 +3256,7 @@ impl Lowerer {
         let merge = self.current_function.new_block();
 
         // 3. 确定 condition 和分支目标
-        let condition = if matches!(
-            assign.op,
-            swc_ast::AssignOp::NullishAssign
-        ) {
+        let condition = if matches!(assign.op, swc_ast::AssignOp::NullishAssign) {
             let is_nullish = self.alloc_value();
             self.current_function.append_instruction(
                 block,
@@ -3219,10 +3298,8 @@ impl Lowerer {
                 value: rhs,
             },
         );
-        self.current_function.set_terminator(
-            assign_end,
-            Terminator::Jump { target: merge },
-        );
+        self.current_function
+            .set_terminator(assign_end, Terminator::Jump { target: merge });
 
         // 5. 在 merge 处用 Phi 合并
         let result = self.alloc_value();
@@ -3355,10 +3432,6 @@ impl Lowerer {
                 );
                 Ok(dest)
             }
-            other => Err(self.error(
-                bin.span(),
-                format!("unsupported binary operator `{}`", binary_op_name(other)),
-            )),
         }
     }
 
@@ -3602,7 +3675,6 @@ impl Lowerer {
                     )),
                 }
             }
-            _ => Err(self.error(unary.span(), "unsupported unary operator")),
         }
     }
 
@@ -3637,9 +3709,9 @@ impl Lowerer {
                 let obj = self.lower_expr(&member.obj, block)?;
                 let key = match &member.prop {
                     swc_ast::MemberProp::Ident(ident) => {
-                        let key_const = self.module.add_constant(Constant::String(
-                            ident.sym.to_string(),
-                        ));
+                        let key_const = self
+                            .module
+                            .add_constant(Constant::String(ident.sym.to_string()));
                         let key_dest = self.alloc_value();
                         self.current_function.append_instruction(
                             block,
@@ -3657,7 +3729,7 @@ impl Lowerer {
                         return Err(self.error(
                             update.span(),
                             "unsupported member property in update expression target",
-                        ))
+                        ));
                     }
                 };
                 Target::Member { obj, key }
@@ -4330,35 +4402,5 @@ fn module_decl_kind(decl: &swc_ast::ModuleDecl) -> &'static str {
         swc_ast::ModuleDecl::TsImportEquals(_) => "ts-import-equals",
         swc_ast::ModuleDecl::TsExportAssignment(_) => "ts-export-assignment",
         swc_ast::ModuleDecl::TsNamespaceExport(_) => "ts-namespace-export",
-    }
-}
-
-fn binary_op_name(op: swc_ast::BinaryOp) -> &'static str {
-    match op {
-        swc_ast::BinaryOp::EqEq => "==",
-        swc_ast::BinaryOp::NotEq => "!=",
-        swc_ast::BinaryOp::EqEqEq => "===",
-        swc_ast::BinaryOp::NotEqEq => "!==",
-        swc_ast::BinaryOp::Lt => "<",
-        swc_ast::BinaryOp::LtEq => "<=",
-        swc_ast::BinaryOp::Gt => ">",
-        swc_ast::BinaryOp::GtEq => ">=",
-        swc_ast::BinaryOp::LShift => "<<",
-        swc_ast::BinaryOp::RShift => ">>",
-        swc_ast::BinaryOp::ZeroFillRShift => ">>>",
-        swc_ast::BinaryOp::Add => "+",
-        swc_ast::BinaryOp::Sub => "-",
-        swc_ast::BinaryOp::Mul => "*",
-        swc_ast::BinaryOp::Div => "/",
-        swc_ast::BinaryOp::Mod => "%",
-        swc_ast::BinaryOp::BitOr => "|",
-        swc_ast::BinaryOp::BitXor => "^",
-        swc_ast::BinaryOp::BitAnd => "&",
-        swc_ast::BinaryOp::LogicalOr => "||",
-        swc_ast::BinaryOp::LogicalAnd => "&&",
-        swc_ast::BinaryOp::In => "in",
-        swc_ast::BinaryOp::InstanceOf => "instanceof",
-        swc_ast::BinaryOp::Exp => "**",
-        swc_ast::BinaryOp::NullishCoalescing => "??",
     }
 }
