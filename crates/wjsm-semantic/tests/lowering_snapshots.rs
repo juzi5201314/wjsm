@@ -128,7 +128,10 @@ fn function_decl_is_supported() {
     assert!(text.contains("fn @greet"), "should have a 'greet' function");
     assert!(text.contains("fn @main"), "should still have main");
     assert!(text.contains("functionref(@0)"), "should reference greet");
-    assert!(text.contains("store var $0.greet"), "should store greet in module scope");
+    assert!(
+        text.contains("store var $0.greet"),
+        "should store greet in module scope"
+    );
 }
 
 #[test]
