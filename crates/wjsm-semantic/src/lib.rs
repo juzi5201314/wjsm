@@ -236,12 +236,22 @@ impl FunctionBuilder {
         }
     }
 
+    /// O(1) 通过 id 获取 block 可变引用。
+    ///
+    /// # 性能优化
+    /// 由于 block id 等于其在 blocks 向量中的索引（由 new_block 保证），
+    /// 使用直接索引访问而非 iter_mut().find()，将 O(n) 降为 O(1)。
     fn block_mut(&mut self, id: BasicBlockId) -> Option<&mut BasicBlock> {
-        self.blocks.iter_mut().find(|b| b.id() == id)
+        self.blocks.get_mut(id.0 as usize)
     }
 
+    /// O(1) 通过 id 获取 block 引用。
+    ///
+    /// # 性能优化
+    /// 由于 block id 等于其在 blocks 向量中的索引（由 new_block 保证），
+    /// 使用直接索引访问而非 iter().find()，将 O(n) 降为 O(1)。
     fn block(&self, id: BasicBlockId) -> Option<&BasicBlock> {
-        self.blocks.iter().find(|b| b.id() == id)
+        self.blocks.get(id.0 as usize)
     }
 
     /// Ensure control flow from `from` reaches `target`.
