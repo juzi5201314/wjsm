@@ -70,6 +70,12 @@ struct Compiler {
     heap_ptr_global_idx: u32,
     /// WASM global index for function properties array pointer.
     func_props_global_idx: u32,
+    /// WASM global index for object handle table base address.
+    obj_table_global_idx: u32,
+    /// WASM global index for next available handle table entry count.
+    obj_table_count_global_idx: u32,
+    /// Number of IR functions (for pre-allocation of function property objects).
+    num_ir_functions: u32,
     /// Whether the current function returns a value (Type 6 JS functions = true).
     current_func_returns_value: bool,
     /// Base offset for SSA value WASM local indices (0 for main, 8 for Type 6 JS functions).
@@ -253,6 +259,10 @@ impl Compiler {
         imports.import("env", "op_instanceof", EntityType::Function(2));
         // Import index 16: string_concat: (i64, i64) -> (i64)
         imports.import("env", "string_concat", EntityType::Function(11));
+        // Import index 17: define_property: (i64, i32, i64) -> ()
+        imports.import("env", "define_property", EntityType::Function(9));
+        // Import index 18: get_own_prop_desc: (i64, i32) -> (i64)
+        imports.import("env", "get_own_prop_desc", EntityType::Function(8));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::F64Mod, 1);
@@ -270,6 +280,8 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::TypeOf, 13);
         builtin_func_indices.insert(Builtin::In, 14);
         builtin_func_indices.insert(Builtin::InstanceOf, 15);
+        builtin_func_indices.insert(Builtin::DefineProperty, 17);
+        builtin_func_indices.insert(Builtin::GetOwnPropDesc, 18);
 
         let functions = FunctionSection::new();
 
@@ -306,7 +318,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 17, // 17 imports (0-16)
+            _next_import_func: 19, // 19 imports (0-18)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -318,6 +330,9 @@ impl Compiler {
             current_func_returns_value: false,
             heap_ptr_global_idx: 0,
             func_props_global_idx: 0,
+            obj_table_global_idx: 0,
+            obj_table_count_global_idx: 0,
+            num_ir_functions: 0,
             ssa_local_base: 0,
             string_ptr_cache: HashMap::new(),
             string_concat_scratch_idx: 0,
@@ -408,6 +423,9 @@ impl Compiler {
         // Assign global indices before compile_object_helpers needs them.
         self.func_props_global_idx = 0;
         self.heap_ptr_global_idx = 1;
+        self.obj_table_global_idx = 2;
+        self.obj_table_count_global_idx = 3;
+        self.num_ir_functions = module.functions().len() as u32;
 
         for function in module.functions() {
             if function.name() == "main" {
@@ -437,22 +455,26 @@ impl Compiler {
             Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
         );
 
-        // Allocate function properties array at start of heap.
-        // Each function (including helpers) gets an 8-byte slot for its property object pointer.
+        // Allocate handle table at start of heap.
+        // Handle table replaces func_props: maps handle_index → object ptr (i32).
+        // Function property objects are stored at indices 0..num_functions-1.
+        // Runtime objects are stored at indices num_functions..capacity.
         let heap_start = (self.data_offset + 7) & !7; // align to 8 bytes
-        let max_table_idx = self.function_table.iter().copied().max().unwrap_or(0) as usize;
-        let func_props_size = ((max_table_idx + 1) * 8) as u32;
-        // Global 0: func_props_ptr (at heap_start, immutable — never changes)
+        let num_functions = self.num_ir_functions;
+        let handle_table_entries = std::cmp::max(256, num_functions * 2);
+        let handle_table_size = handle_table_entries * 4;
+
+        // Global 0: func_props_ptr (deprecated, set to 0)
         self.globals.global(
             GlobalType {
                 val_type: ValType::I32,
                 mutable: false,
                 shared: false,
             },
-            &ConstExpr::i32_const(heap_start as i32),
+            &ConstExpr::i32_const(0),
         );
-        // Global 1: heap_ptr (starts after func_props array, mutable)
-        let object_heap_start = heap_start + func_props_size;
+        // Global 1: heap_ptr (starts after handle table, mutable)
+        let object_heap_start = heap_start + handle_table_size;
         self.globals.global(
             GlobalType {
                 val_type: ValType::I32,
@@ -462,8 +484,30 @@ impl Compiler {
             &ConstExpr::i32_const(object_heap_start as i32),
         );
         self.heap_ptr_global_idx = 1;
-        // Export func_props_ptr global so the runtime can read it for `in` operator.
-        self.exports.export("__func_props_ptr", ExportKind::Global, 0);
+        // Global 2: obj_table_ptr (immutable, points to handle table base)
+        self.globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: false,
+                shared: false,
+            },
+            &ConstExpr::i32_const(heap_start as i32),
+        );
+        self.obj_table_global_idx = 2;
+        // Global 3: obj_table_count (mutable, starts at 0, incremented by $obj_new)
+        self.globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::i32_const(0),
+        );
+        self.obj_table_count_global_idx = 3;
+        // Export obj_table_ptr for runtime access (replaces func_props_ptr)
+        self.exports.export("__obj_table_ptr", ExportKind::Global, 2);
+        self.exports.export("__heap_ptr", ExportKind::Global, 1);
+        self.exports.export("__obj_table_count", ExportKind::Global, 3);
         if !self.string_data.is_empty() {
             self.data.active(
                 0,
@@ -493,6 +537,17 @@ impl Compiler {
             vec![(total_locals, ValType::I64)]
         };
         self.current_func = Some(Function::new(locals));
+
+        // 预分配函数属性对象：为每个 IR 函数调用 $obj_new(8)，将返回的 handle_idx
+        // 对应 obj_table[0..num_functions-1]，存储函数属性对象的 ptr。
+        // 这样后续 GetProp/SetProp 可以通过 obj_table 统一查找。
+        if function.name() == "main" {
+            for _ in 0..self.num_ir_functions {
+                self.emit(WasmInstruction::I32Const(8)); // capacity
+                self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+                self.emit(WasmInstruction::Drop); // 丢弃返回的 handle_idx
+            }
+        }
 
         let cfg = Cfg::from_function(function);
         let region_tree = RegionTree::build(function, &cfg)
@@ -614,23 +669,29 @@ impl Compiler {
 
     fn compile_object_helpers(&mut self) {
         let heap_global = self.heap_ptr_global_idx;
-        let func_props_global = self.func_props_global_idx;
+        let obj_table_global = self.obj_table_global_idx;
+        let obj_table_count_global = self.obj_table_count_global_idx;
 
         // ── $obj_new (param $capacity i32) (result i32) — Type 7 ──
+        // 分配对象到堆上，将 ptr 存入 handle 表，返回 handle_idx。
+        // 属性槽格式: [name_id(4), flags(4), value(8)] = 16 字节
         {
-            let mut func = Function::new(vec![(2, ValType::I32)]);
-            // local 0 = $capacity, local 1 = size, local 2 = ptr
+            // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx
+            let mut func = Function::new(vec![(3, ValType::I32)]);
+            // size = 12 + capacity * 16
             func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Const(16));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(1));
+            // ptr = heap_ptr; heap_ptr += size
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
             func.instruction(&WasmInstruction::LocalTee(2));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::GlobalSet(heap_global));
+            // 初始化 header: proto=0, capacity, num_props=0
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32Const(0));
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
@@ -640,42 +701,46 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32Const(0));
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 8, align: 2, memory_index: 0 }));
+            // handle_idx = obj_table_count
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_count_global));
+            func.instruction(&WasmInstruction::LocalTee(3));
+            // obj_table[handle_idx] = ptr
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+            func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+            // obj_table_count++
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_count_global));
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::GlobalSet(obj_table_count_global));
+            // 返回 handle_idx
+            func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
         }
 
         // ── $obj_get (param $boxed i64) (param $name_id i32) (result i64) — Type 8 ──
-        // Resolves boxed value (object or function) to a heap pointer,
-        // then searches properties with prototype chain traversal.
+        // 通过 handle 表解析 boxed value，搜索属性（含原型链）。
         {
             // local 0 = $boxed (i64), local 1 = $name_id (i32)
             // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
             // local 5 = resolved ptr (i32)
             let mut func = Function::new(vec![(4, ValType::I32)]);
 
-            // ── Resolve ptr from boxed value ──
+            // ── 通过 handle 表解析 ptr ──
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
-            func.instruction(&WasmInstruction::LocalSet(5));
-
-            // Check if FUNCTION tag
-            func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::I64Const(0x0000000F00000000u64 as i64));
-            func.instruction(&WasmInstruction::I64And);
-            func.instruction(&WasmInstruction::I64Const(0x0000000900000000u64 as i64));
-            func.instruction(&WasmInstruction::I64Eq);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::LocalGet(5));
-            func.instruction(&WasmInstruction::I32Const(8));
+            func.instruction(&WasmInstruction::I32Const(4));
             func.instruction(&WasmInstruction::I32Mul);
-            func.instruction(&WasmInstruction::GlobalGet(func_props_global));
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalSet(5));
-            func.instruction(&WasmInstruction::End);
 
-            // If resolved ptr is 0, return undefined
+            // ptr == 0 → return undefined
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Eqz);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
@@ -683,31 +748,29 @@ impl Compiler {
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
 
-            // ── Prototype chain traversal ──
-            // outer_block: break here when not found → return undefined
+            // ── 原型链遍历 ──
             func.instruction(&WasmInstruction::Block(BlockType::Empty));
-            // proto_loop: iterate through prototype chain
             func.instruction(&WasmInstruction::Loop(BlockType::Empty));
 
-            // Search own properties of current object (local 5)
+            // 搜索当前对象的属性
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 8, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalSet(2));
             func.instruction(&WasmInstruction::I32Const(0));
             func.instruction(&WasmInstruction::LocalSet(3));
 
-            // inner_loop: linear search of own properties
-            func.instruction(&WasmInstruction::Block(BlockType::Empty)); // break to follow proto
+            func.instruction(&WasmInstruction::Block(BlockType::Empty));
             func.instruction(&WasmInstruction::Loop(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32GeU);
-            func.instruction(&WasmInstruction::BrIf(1)); // break to follow proto
+            func.instruction(&WasmInstruction::BrIf(1));
+            // slot_addr = ptr + 12 + i * 16
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(3));
-            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Const(16));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalTee(4));
@@ -715,80 +778,56 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // 找到！返回 value (offset 8)
             func.instruction(&WasmInstruction::LocalGet(4));
-            func.instruction(&WasmInstruction::I64Load(MemArg { offset: 4, align: 3, memory_index: 0 }));
-            func.instruction(&WasmInstruction::Return); // found! return value
+            func.instruction(&WasmInstruction::I64Load(MemArg { offset: 8, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(3));
-            func.instruction(&WasmInstruction::Br(0)); // continue inner loop
-            func.instruction(&WasmInstruction::End); // end inner loop
-            func.instruction(&WasmInstruction::End); // end break block
+            func.instruction(&WasmInstruction::Br(0));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::End);
 
-            // Follow __proto__
+            // 跟随 __proto__
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalTee(5));
             func.instruction(&WasmInstruction::I32Eqz);
-            func.instruction(&WasmInstruction::BrIf(1)); // break outer: __proto__ is null
-            func.instruction(&WasmInstruction::Br(0)); // continue proto loop
-            func.instruction(&WasmInstruction::End); // end proto loop
-            func.instruction(&WasmInstruction::End); // end outer block
+            func.instruction(&WasmInstruction::BrIf(1));
+            func.instruction(&WasmInstruction::Br(0));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::End);
 
-            // Not found in entire chain
+            // 未找到
             func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
         }
 
         // ── $obj_set (param $boxed i64) (param $name_id i32) (param $value i64) — Type 9 ──
-        // Resolves boxed value to a heap pointer (allocating func_props entry if needed),
-        // then sets the property.
+        // 通过 handle 表解析 boxed value，设置属性。
         {
             // local 0 = $boxed (i64), local 1 = $name_id (i32), local 2 = $value (i64)
             // local 3 = (unused pad)
             // local 4 = num_props (i32), local 5 = i (i32), local 6 = slot_addr (i32), local 7 = capacity (i32)
-            // local 8 = resolved ptr (i32), local 9 = func_props slot addr (i32)
-            let mut func = Function::new(vec![(7, ValType::I32)]); // 7 extra i32 locals
+            // local 8 = resolved ptr (i32), local 9 = handle_idx (i32)
+            let mut func = Function::new(vec![(7, ValType::I32)]);
 
-            // ── Resolve ptr from boxed value ──
+            // ── 通过 handle 表解析 ptr ──
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
-            func.instruction(&WasmInstruction::LocalSet(8));
-
-            func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::I64Const(0x0000000F00000000u64 as i64));
-            func.instruction(&WasmInstruction::I64And);
-            func.instruction(&WasmInstruction::I64Const(0x0000000900000000u64 as i64));
-            func.instruction(&WasmInstruction::I64Eq);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            // slot_addr = func_props + table_idx * 4
-            func.instruction(&WasmInstruction::LocalGet(8)); // table_idx
-            func.instruction(&WasmInstruction::I32Const(8));
+            func.instruction(&WasmInstruction::LocalTee(9));  // save handle_idx
+            func.instruction(&WasmInstruction::I32Const(4));
             func.instruction(&WasmInstruction::I32Mul);
-            func.instruction(&WasmInstruction::GlobalGet(func_props_global));
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
             func.instruction(&WasmInstruction::I32Add);
-            func.instruction(&WasmInstruction::LocalSet(9)); // slot_addr
-            // ptr = func_props[table_idx]
-            func.instruction(&WasmInstruction::LocalGet(9));
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalSet(8));
-            // if ptr == 0: allocate object
-            func.instruction(&WasmInstruction::LocalGet(8));
-            func.instruction(&WasmInstruction::I32Eqz);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::I32Const(4)); // capacity
-            func.instruction(&WasmInstruction::Call(self.obj_new_func_idx));
-            func.instruction(&WasmInstruction::LocalSet(8)); // ptr = new object
-            func.instruction(&WasmInstruction::LocalGet(9)); // slot_addr
-            func.instruction(&WasmInstruction::LocalGet(8));
-            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
-            func.instruction(&WasmInstruction::End);
-            func.instruction(&WasmInstruction::End);
 
-            // ── Property set (existing logic using resolved ptr in local 8) ──
+            // ── 搜索已有属性 ──
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 8, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalSet(4));
@@ -800,11 +839,12 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::I32GeU);
             func.instruction(&WasmInstruction::BrIf(1));
+            // slot_addr = ptr + 12 + i * 16
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(5));
-            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Const(16));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalTee(6));
@@ -812,9 +852,10 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // 找到！更新 value (offset 8)
             func.instruction(&WasmInstruction::LocalGet(6));
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 4, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 8, align: 3, memory_index: 0 }));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(5));
@@ -824,91 +865,163 @@ impl Compiler {
             func.instruction(&WasmInstruction::Br(0));
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
-            // add_new: check capacity
+
+            // ── 未找到 → 检查是否需要扩容 ──
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 4, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalSet(7));
+
+            // 如果 num_props >= capacity，需要扩容
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::LocalGet(7));
-            func.instruction(&WasmInstruction::I32LtU);
+            func.instruction(&WasmInstruction::I32GeU);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
+
+            // 保存旧 ptr
+            func.instruction(&WasmInstruction::LocalGet(8));
+            func.instruction(&WasmInstruction::LocalSet(6)); // old_ptr
+
+            // new_capacity = capacity * 2
+            func.instruction(&WasmInstruction::LocalGet(7));
+            func.instruction(&WasmInstruction::I32Const(2));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::LocalSet(7));
+
+            // new_ptr = heap_ptr
+            func.instruction(&WasmInstruction::GlobalGet(heap_global));
+            func.instruction(&WasmInstruction::LocalSet(8));
+
+            // heap_ptr += 12 + new_capacity * 16
+            func.instruction(&WasmInstruction::GlobalGet(heap_global));
+            func.instruction(&WasmInstruction::LocalGet(7));
+            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::GlobalSet(heap_global));
+
+            // 拷贝旧数据到新内存
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::LocalSet(5)); // copy_offset = 0
+            func.instruction(&WasmInstruction::Block(BlockType::Empty));
+            func.instruction(&WasmInstruction::Loop(BlockType::Empty));
+            // copy_offset >= 12 + num_props * 16?
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::LocalGet(4));
+            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32GeU);
+            func.instruction(&WasmInstruction::BrIf(1)); // break
+            // new_ptr[copy_offset] = old_ptr[copy_offset] (i32)
+            func.instruction(&WasmInstruction::LocalGet(8));
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+            // copy_offset += 4
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalSet(5));
+            func.instruction(&WasmInstruction::Br(0));
+            func.instruction(&WasmInstruction::End); // end loop
+            func.instruction(&WasmInstruction::End); // end block
+
+            // 更新 handle 表：obj_table[handle_idx] = new_ptr
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+            func.instruction(&WasmInstruction::LocalGet(9));
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(8));
+            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+
+            // 更新 header 中的 capacity
+            func.instruction(&WasmInstruction::LocalGet(8));
+            func.instruction(&WasmInstruction::LocalGet(7));
+            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 4, align: 2, memory_index: 0 }));
+
+            func.instruction(&WasmInstruction::End); // end if reallocation
+
+            // 添加新属性（无论是否扩容）
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(4));
-            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Const(16));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalTee(6));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I32Const(7));
+            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 4, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalGet(6));
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 4, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 8, align: 3, memory_index: 0 }));
+            // num_props++
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 8, align: 2, memory_index: 0 }));
-            func.instruction(&WasmInstruction::End);
-            func.instruction(&WasmInstruction::End);
+
+            func.instruction(&WasmInstruction::End); // end function
             self.codes.function(&func);
         }
 
         // ── $obj_delete (param $boxed i64) (param $name_id i32) (result i64) — Type 8 ──
-        // Deletes a property from an object. Returns NaN-boxed bool.
+        // 通过 handle 表解析 boxed value，删除属性。返回 NaN-boxed bool。
         {
             // local 0 = $boxed (i64), local 1 = $name_id (i32)
             // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
             // local 5 = resolved ptr (i32), local 6 = last_slot_addr (i32)
-            let mut func = Function::new(vec![(5, ValType::I32)]); // 5 extra i32 locals
+            let mut func = Function::new(vec![(5, ValType::I32)]);
 
-            // ── Resolve ptr from boxed value ──
+            // ── 通过 handle 表解析 ptr ──
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
-            func.instruction(&WasmInstruction::LocalSet(5));
-
-            // Check if FUNCTION tag - if so, resolve func_props
-            func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::I64Const(0x0000000F00000000u64 as i64));
-            func.instruction(&WasmInstruction::I64And);
-            func.instruction(&WasmInstruction::I64Const(0x0000000900000000u64 as i64));
-            func.instruction(&WasmInstruction::I64Eq);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::LocalGet(5));
-            func.instruction(&WasmInstruction::I32Const(8));
+            func.instruction(&WasmInstruction::I32Const(4));
             func.instruction(&WasmInstruction::I32Mul);
-            func.instruction(&WasmInstruction::GlobalGet(func_props_global));
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalSet(5));
-            func.instruction(&WasmInstruction::End);
 
-            // If resolved ptr is 0, return false (nothing to delete)
+            // ptr == 0 → return false
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Eqz);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::I64Const(value::encode_bool(false)));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
+
+            // 搜索属性
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 8, align: 2, memory_index: 0 }));
-            func.instruction(&WasmInstruction::LocalSet(2)); // num_props
+            func.instruction(&WasmInstruction::LocalSet(2));
             func.instruction(&WasmInstruction::I32Const(0));
-            func.instruction(&WasmInstruction::LocalSet(3)); // i = 0
+            func.instruction(&WasmInstruction::LocalSet(3));
             func.instruction(&WasmInstruction::Block(BlockType::Empty));
             func.instruction(&WasmInstruction::Loop(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32GeU);
-            func.instruction(&WasmInstruction::BrIf(1)); // not found
+            func.instruction(&WasmInstruction::BrIf(1));
 
-            // Check if this slot has the key
+            // slot_addr = ptr + 12 + i * 16
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(3));
-            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Const(16));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalTee(4));
@@ -917,7 +1030,18 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
 
-            // Found! Perform swap-remove
+
+            // 检查 configurable 标志 (flags bit 0)
+            func.instruction(&WasmInstruction::LocalGet(4)); // slot_addr
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 4, align: 2, memory_index: 0 })); // flags
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32And); // flags & 1
+            func.instruction(&WasmInstruction::I32Eqz); // (flags & 1) == 0 → not configurable
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I64Const(value::encode_bool(false)));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            // 找到！执行 swap-remove
             // num_props--
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32Const(1));
@@ -926,42 +1050,48 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 8, align: 2, memory_index: 0 }));
 
-            // If i < num_props (after decrement), copy last to current
+            // 如果 i < num_props（减后），将最后一个槽复制到当前位置
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32LtU);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
 
-            // Calculate last slot address
+            // last_slot_addr = ptr + 12 + num_props * 16
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I32Const(12));
+            func.instruction(&WasmInstruction::I32Const(16));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(6));
 
-            // Copy name_id from last to current
+            // 复制 name_id
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::LocalGet(6));
             func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
 
-            // Copy value from last to current
+            // 复制 flags
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::LocalGet(6));
-            func.instruction(&WasmInstruction::I64Load(MemArg { offset: 4, align: 3, memory_index: 0 }));
-            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 4, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 4, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 4, align: 2, memory_index: 0 }));
+
+            // 复制 value
+            func.instruction(&WasmInstruction::LocalGet(4));
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I64Load(MemArg { offset: 8, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 8, align: 3, memory_index: 0 }));
 
             func.instruction(&WasmInstruction::End);
 
-            // Return true
+            // 返回 true
             func.instruction(&WasmInstruction::I64Const(value::encode_bool(true)));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
 
-            // Continue search
+            // 继续搜索
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::I32Add);
@@ -970,7 +1100,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
 
-            // Not found - return false (property does not exist)
+            // 未找到 - 返回 false
             func.instruction(&WasmInstruction::I64Const(value::encode_bool(false)));
             func.instruction(&WasmInstruction::End);
         self.codes.function(&func);
@@ -2192,11 +2322,25 @@ impl Compiler {
                 self.emit(WasmInstruction::I32And);
 
                 // 条件分支：仅当 tag 有效时执行 __proto__ 存储
+                // 需要通过 handle 表解析 obj 和 value 的真实 ptr
                 self.emit(WasmInstruction::If(BlockType::Empty));
+                // 解析 obj handle → real obj ptr
                 self.emit(WasmInstruction::LocalGet(obj_local));
                 self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::I32Const(4));
+                self.emit(WasmInstruction::I32Mul);
+                self.emit(WasmInstruction::GlobalGet(self.obj_table_global_idx));
+                self.emit(WasmInstruction::I32Add);
+                self.emit(WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+                // 解析 value handle → real value ptr
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::I32Const(4));
+                self.emit(WasmInstruction::I32Mul);
+                self.emit(WasmInstruction::GlobalGet(self.obj_table_global_idx));
+                self.emit(WasmInstruction::I32Add);
+                self.emit(WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
+                // 存储：obj[0] = value_ptr
                 self.emit(WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
                 self.emit(WasmInstruction::End);
                 Ok(())
@@ -2513,6 +2657,37 @@ impl Compiler {
             Builtin::BeginTry | Builtin::EndTry | Builtin::BeginFinally | Builtin::EndFinally => {
                 // Phase 6
                 bail!("builtin {builtin} not yet implemented");
+            }
+            Builtin::DefineProperty => {
+                // define_property(obj: i64, key: i64, desc: i64) -> ()
+                let obj_arg = args.first().context("DefineProperty expects 3 args")?;
+                let key_arg = args.get(1).context("DefineProperty expects 3 args")?;
+                let desc_arg = args.get(2).context("DefineProperty expects 3 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(desc_arg.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(17);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::GetOwnPropDesc => {
+                // get_own_prop_desc(obj: i64, key: i64) -> i64
+                let obj_arg = args.first().context("GetOwnPropDesc expects 2 args")?;
+                let key_arg = args.get(1).context("GetOwnPropDesc expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(18);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
             }
         }
     }

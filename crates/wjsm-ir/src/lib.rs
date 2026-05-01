@@ -490,6 +490,9 @@ pub enum Builtin {
     TypeOf,
     In,
     InstanceOf,
+    // 对象属性描述符
+    DefineProperty,
+    GetOwnPropDesc,
 }
 
 impl fmt::Display for Builtin {
@@ -516,6 +519,8 @@ impl fmt::Display for Builtin {
             Self::TypeOf => "typeof",
             Self::In => "op_in",
             Self::InstanceOf => "op_instanceof",
+            Self::DefineProperty => "define_property",
+            Self::GetOwnPropDesc => "get_own_prop_desc",
         })
     }
 }
