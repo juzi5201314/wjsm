@@ -7,6 +7,7 @@ use wasm_encoder::{
     RefType, TableSection, TableType, TypeSection, ValType,
 };
 use wjsm_ir::{
+    constants,
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction,
     Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, value,
 };
@@ -400,12 +401,12 @@ impl Compiler {
         // 必须在编译用户函数之前设置，否则 encode_constant 会从 offset 0 开始分配字符串，
         // 随后 typeof 字符串会覆盖用户字符串数据。
         let typeof_strings: &[(u32, &str)] = &[
-            (value::TYPEOF_UNDEFINED_OFFSET, "undefined"),
-            (value::TYPEOF_OBJECT_OFFSET, "object"),
-            (value::TYPEOF_BOOLEAN_OFFSET, "boolean"),
-            (value::TYPEOF_STRING_OFFSET, "string"),
-            (value::TYPEOF_FUNCTION_OFFSET, "function"),
-            (value::TYPEOF_NUMBER_OFFSET, "number"),
+            (constants::TYPEOF_UNDEFINED_OFFSET, "undefined"),
+            (constants::TYPEOF_OBJECT_OFFSET, "object"),
+            (constants::TYPEOF_BOOLEAN_OFFSET, "boolean"),
+            (constants::TYPEOF_STRING_OFFSET, "string"),
+            (constants::TYPEOF_FUNCTION_OFFSET, "function"),
+            (constants::TYPEOF_NUMBER_OFFSET, "number"),
         ];
         for &(offset, s) in typeof_strings {
             let end = offset as usize + s.len() + 1;
@@ -416,7 +417,28 @@ impl Compiler {
             self.string_data[offset as usize + s.len()] = 0;
             self.string_ptr_cache.insert(s.to_string(), offset);
         }
-        self.data_offset = value::TYPEOF_RESERVED_END;
+
+        // Pre-write property descriptor strings after typeof strings
+        // 用于 Object.getOwnPropertyDescriptor 返回的描述符对象
+        let prop_desc_strings: &[(u32, &str)] = &[
+            (constants::PROP_DESC_VALUE_OFFSET, "value"),
+            (constants::PROP_DESC_WRITABLE_OFFSET, "writable"),
+            (constants::PROP_DESC_ENUMERABLE_OFFSET, "enumerable"),
+            (constants::PROP_DESC_CONFIGURABLE_OFFSET, "configurable"),
+            (constants::PROP_DESC_GET_OFFSET, "get"),
+            (constants::PROP_DESC_SET_OFFSET, "set"),
+        ];
+        for &(offset, s) in prop_desc_strings {
+            let end = offset as usize + s.len() + 1;
+            if self.string_data.len() < end {
+                self.string_data.resize(end, 0);
+            }
+            self.string_data[offset as usize..offset as usize + s.len()].copy_from_slice(s.as_bytes());
+            self.string_data[offset as usize + s.len()] = 0;
+            self.string_ptr_cache.insert(s.to_string(), offset);
+        }
+
+        self.data_offset = constants::USER_STRING_START;
         // 填充 string_data 到 data_offset，确保后续用户字符串追加到正确偏移量
         self.string_data.resize(self.data_offset as usize, 0);
 
@@ -674,13 +696,13 @@ impl Compiler {
 
         // ── $obj_new (param $capacity i32) (result i32) — Type 7 ──
         // 分配对象到堆上，将 ptr 存入 handle 表，返回 handle_idx。
-        // 属性槽格式: [name_id(4), flags(4), value(8)] = 16 字节
+        // 属性槽格式: [name_id(4), flags(4), value(8), getter(8), setter(8)] = 32 字节
         {
             // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx
             let mut func = Function::new(vec![(3, ValType::I32)]);
-            // size = 12 + capacity * 16
+            // size = 12 + capacity * 32
             func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
@@ -727,8 +749,8 @@ impl Compiler {
         {
             // local 0 = $boxed (i64), local 1 = $name_id (i32)
             // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
-            // local 5 = resolved ptr (i32)
-            let mut func = Function::new(vec![(4, ValType::I32)]);
+            // local 5 = resolved ptr (i32), local 6 = flags (i32), local 7 = getter (i64)
+            let mut func = Function::new(vec![(5, ValType::I32), (1, ValType::I64)]);
 
             // ── 通过 handle 表解析 ptr ──
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -765,12 +787,12 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32GeU);
             func.instruction(&WasmInstruction::BrIf(1));
-            // slot_addr = ptr + 12 + i * 16
+            // slot_addr = ptr + 12 + i * 32
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(3));
-            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalTee(4));
@@ -778,7 +800,46 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
-            // 找到！返回 value (offset 8)
+            // 找到！检查是否为访问器属性
+            // 加载 flags (offset 4)
+            func.instruction(&WasmInstruction::LocalGet(4));
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 4, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalTee(6));
+            // 检查 is_accessor 位
+            func.instruction(&WasmInstruction::I32Const(constants::FLAG_IS_ACCESSOR));
+            func.instruction(&WasmInstruction::I32And);
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Ne);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // 是访问器属性，加载 getter (offset 16)
+            func.instruction(&WasmInstruction::LocalGet(4));
+            func.instruction(&WasmInstruction::I64Load(MemArg { offset: 16, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalTee(7));
+            // 检查 getter 是否为 undefined
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // getter 是 undefined，返回 undefined
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            // 调用 getter: 推入 this (local 0) + 7 个 undefined 参数
+            func.instruction(&WasmInstruction::LocalGet(0)); // this
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            // 解码 getter 的函数表索引
+            func.instruction(&WasmInstruction::LocalGet(7));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            // call_indirect type 6, table 0
+            func.instruction(&WasmInstruction::CallIndirect { type_index: 6, table_index: 0 });
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            // 是数据属性，返回 value (offset 8)
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::I64Load(MemArg { offset: 8, align: 3, memory_index: 0 }));
             func.instruction(&WasmInstruction::Return);
@@ -813,8 +874,8 @@ impl Compiler {
             // local 0 = $boxed (i64), local 1 = $name_id (i32), local 2 = $value (i64)
             // local 3 = (unused pad)
             // local 4 = num_props (i32), local 5 = i (i32), local 6 = slot_addr (i32), local 7 = capacity (i32)
-            // local 8 = resolved ptr (i32), local 9 = handle_idx (i32)
-            let mut func = Function::new(vec![(7, ValType::I32)]);
+            // local 8 = resolved ptr (i32), local 9 = handle_idx (i32), local 10 = flags (i32), local 11 = setter (i64)
+            let mut func = Function::new(vec![(8, ValType::I32), (1, ValType::I64)]);
 
             // ── 通过 handle 表解析 ptr ──
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -839,12 +900,12 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::I32GeU);
             func.instruction(&WasmInstruction::BrIf(1));
-            // slot_addr = ptr + 12 + i * 16
+            // slot_addr = ptr + 12 + i * 32
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(5));
-            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalTee(6));
@@ -852,7 +913,46 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
-            // 找到！更新 value (offset 8)
+            // 找到！检查是否为访问器属性
+            // 加载 flags (offset 4)
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I32Load(MemArg { offset: 4, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalTee(10));
+            // 检查 is_accessor 位
+            func.instruction(&WasmInstruction::I32Const(constants::FLAG_IS_ACCESSOR));
+            func.instruction(&WasmInstruction::I32And);
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Ne);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // 是访问器属性，加载 setter (offset 24)
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I64Load(MemArg { offset: 24, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalTee(11));
+            // 检查 setter 是否为 undefined
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // setter 是 undefined，直接返回（静默失败）
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            // 调用 setter: 推入 this (local 0), value (local 2), + 6 个 undefined 参数
+            func.instruction(&WasmInstruction::LocalGet(0)); // this
+            func.instruction(&WasmInstruction::LocalGet(2)); // value
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            // 解码 setter 的函数表索引
+            func.instruction(&WasmInstruction::LocalGet(11));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            // call_indirect type 6, table 0
+            func.instruction(&WasmInstruction::CallIndirect { type_index: 6, table_index: 0 });
+            func.instruction(&WasmInstruction::Drop); // 丢弃返回值
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            // 是数据属性，更新 value (offset 8)
             func.instruction(&WasmInstruction::LocalGet(6));
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I64Store(MemArg { offset: 8, align: 3, memory_index: 0 }));
@@ -891,10 +991,10 @@ impl Compiler {
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
             func.instruction(&WasmInstruction::LocalSet(8));
 
-            // heap_ptr += 12 + new_capacity * 16
+            // heap_ptr += 12 + new_capacity * 32
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
             func.instruction(&WasmInstruction::LocalGet(7));
-            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
@@ -906,10 +1006,10 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalSet(5)); // copy_offset = 0
             func.instruction(&WasmInstruction::Block(BlockType::Empty));
             func.instruction(&WasmInstruction::Loop(BlockType::Empty));
-            // copy_offset >= 12 + num_props * 16?
+            // copy_offset >= 12 + num_props * 32?
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::LocalGet(4));
-            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
@@ -954,18 +1054,26 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(4));
-            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalTee(6));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalGet(6));
-            func.instruction(&WasmInstruction::I32Const(7));
+            // 默认 flags: configurable | enumerable | writable
+            func.instruction(&WasmInstruction::I32Const(constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE));
             func.instruction(&WasmInstruction::I32Store(MemArg { offset: 4, align: 2, memory_index: 0 }));
             func.instruction(&WasmInstruction::LocalGet(6));
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I64Store(MemArg { offset: 8, align: 3, memory_index: 0 }));
+            // 初始化 getter 和 setter 为 undefined（防御性）
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 16, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 24, align: 3, memory_index: 0 }));
             // num_props++
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::LocalGet(4));
@@ -1016,12 +1124,12 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32GeU);
             func.instruction(&WasmInstruction::BrIf(1));
 
-            // slot_addr = ptr + 12 + i * 16
+            // slot_addr = ptr + 12 + i * 32
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(3));
-            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalTee(4));
@@ -1056,12 +1164,12 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32LtU);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
 
-            // last_slot_addr = ptr + 12 + num_props * 16
+            // last_slot_addr = ptr + 12 + num_props * 32
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(6));
@@ -1084,6 +1192,17 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Load(MemArg { offset: 8, align: 3, memory_index: 0 }));
             func.instruction(&WasmInstruction::I64Store(MemArg { offset: 8, align: 3, memory_index: 0 }));
 
+            // 复制 getter
+            func.instruction(&WasmInstruction::LocalGet(4));
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I64Load(MemArg { offset: 16, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 16, align: 3, memory_index: 0 }));
+
+            // 复制 setter
+            func.instruction(&WasmInstruction::LocalGet(4));
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I64Load(MemArg { offset: 24, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 24, align: 3, memory_index: 0 }));
             func.instruction(&WasmInstruction::End);
 
             // 返回 true

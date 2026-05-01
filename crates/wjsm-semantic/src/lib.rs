@@ -2749,6 +2749,7 @@ impl Lowerer {
                             if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
                                 let builtin = match &*prop_ident.sym {
                                     "defineProperty" => Some(Builtin::DefineProperty),
+                                    "getOwnPropertyDescriptor" => Some(Builtin::GetOwnPropDesc),
                                     _ => None,
                                 };
                                 if let Some(builtin) = builtin {

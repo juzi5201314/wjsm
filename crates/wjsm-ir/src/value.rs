@@ -1,3 +1,8 @@
+use crate::constants::{
+    TYPEOF_UNDEFINED_OFFSET, TYPEOF_OBJECT_OFFSET, TYPEOF_BOOLEAN_OFFSET,
+    TYPEOF_STRING_OFFSET, TYPEOF_FUNCTION_OFFSET, TYPEOF_NUMBER_OFFSET,
+};
+
 pub const MASK_SIGN: u64 = 0x8000_0000_0000_0000;
 pub const MASK_EXPONENT: u64 = 0x7FF0_0000_0000_0000;
 pub const MASK_QUIET_NAN: u64 = 0x0008_0000_0000_0000;
@@ -17,17 +22,6 @@ pub const TAG_MASK: u64 = 0xF;
 
 pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x10;
 pub const BOX_BASE: u64 = MASK_EXPONENT | MASK_QUIET_NAN;
-
-// ── typeof 类型字符串在 data segment 中的固定偏移量 ──────────────────────
-// 6 个类型字符串（nul 终止）预分配在 data segment 开头，后续字节对齐到 TYPEOF_RESERVED_END
-pub const TYPEOF_UNDEFINED_OFFSET: u32 = 0;   // "undefined\\0" (10 bytes)
-pub const TYPEOF_OBJECT_OFFSET: u32 = 10;     // "object\\0"    (7 bytes)
-pub const TYPEOF_BOOLEAN_OFFSET: u32 = 17;    // "boolean\\0"   (8 bytes)
-pub const TYPEOF_STRING_OFFSET: u32 = 25;     // "string\\0"    (7 bytes)
-pub const TYPEOF_FUNCTION_OFFSET: u32 = 32;   // "function\\0"  (9 bytes)
-pub const TYPEOF_NUMBER_OFFSET: u32 = 41;     // "number\\0"    (7 bytes)
-// offset 48-66 预留给 "symbol\\0" (7) 和 "bigint\\0" (7)
-pub const TYPEOF_RESERVED_END: u32 = 66;      // 用户字符串从该偏移量之后开始
 
 pub fn encode_f64(val: f64) -> i64 {
     val.to_bits() as i64
