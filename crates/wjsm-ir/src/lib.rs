@@ -361,11 +361,7 @@ impl fmt::Display for Instruction {
             Self::GetProp { dest, object, key } => {
                 write!(formatter, "{dest} = get_prop {object}, {key}")
             }
-            Self::SetProp {
-                object,
-                key,
-                value,
-            } => {
+            Self::SetProp { object, key, value } => {
                 write!(formatter, "set_prop {object}, {key}, {value}")
             }
             Self::DeleteProp { dest, object, key } => {
