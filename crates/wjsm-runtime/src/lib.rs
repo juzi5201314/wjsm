@@ -380,35 +380,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 String::new()
             };
 
-            // 解析对象指针：object 直接解码，function 需要查 func_props
-            // 注意：函数路径需要可变借用 caller，因此分开处理
-            let mut ptr = if value::is_object(object) {
-                value::decode_object_handle(object) as usize
-            } else {
-                // 函数: 通过 func_props_ptr 全局变量查找属性对象
-                let func_props_ptr = {
-                    let Some(Extern::Global(g)) = caller.get_export("__func_props_ptr") else {
-                        return value::encode_bool(false);
-                    };
-                    g.get(&mut caller).i32().unwrap_or(0) as usize
-                };
-                let func_idx = value::decode_function_idx(object) as usize;
-                let slot_addr = func_props_ptr + func_idx * 8;
-                let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                    return value::encode_bool(false);
-                };
-                let d = mem.data(&caller);
-                if slot_addr + 4 > d.len() {
-                    return value::encode_bool(false);
-                }
-                let obj_ptr = u32::from_le_bytes([
-                    d[slot_addr], d[slot_addr + 1],
-                    d[slot_addr + 2], d[slot_addr + 3],
-                ]) as usize;
-                if obj_ptr == 0 {
-                    return value::encode_bool(false);
-                }
-                obj_ptr
+            // 解析对象指针：通过 handle 表统一解析（支持 object 和 function）
+            let mut ptr = match resolve_handle(&mut caller, object) {
+                Some(p) => p,
+                None => return value::encode_bool(false),
             };
 
             // 搜索属性，遍历原型链
@@ -429,7 +404,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
                 let name_ids: Vec<u32> = (0..num_props)
                     .filter_map(|i| {
-                        let slot_offset = ptr + 12 + i * 12;
+                        let slot_offset = ptr + 12 + i * 16;
                         if slot_offset + 4 <= data.len() {
                             Some(u32::from_le_bytes([
                                 data[slot_offset], data[slot_offset + 1],
@@ -488,32 +463,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
 
             // 3. 获取 constructor 的属性列表并查找 "prototype" 属性
-            let ctor_ptr = if value::is_object(constructor) {
-                value::decode_object_handle(constructor) as usize
-            } else {
-                let func_props_ptr = {
-                    let Some(Extern::Global(g)) = caller.get_export("__func_props_ptr") else {
-                        return value::encode_bool(false);
-                    };
-                    g.get(&mut caller).i32().unwrap_or(0) as usize
-                };
-                let func_idx = value::decode_function_idx(constructor) as usize;
-                let slot_addr = func_props_ptr + func_idx * 8;
-                let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                    return value::encode_bool(false);
-                };
-                let d = mem.data(&caller);
-                if slot_addr + 4 > d.len() {
-                    return value::encode_bool(false);
-                }
-                let obj_ptr = u32::from_le_bytes([
-                    d[slot_addr], d[slot_addr + 1],
-                    d[slot_addr + 2], d[slot_addr + 3],
-                ]) as usize;
-                if obj_ptr == 0 {
-                    return value::encode_bool(false);
-                }
-                obj_ptr
+            let ctor_ptr = match resolve_handle(&mut caller, constructor) {
+                Some(p) => p,
+                None => return value::encode_bool(false),
             };
 
             // 扫描 constructor 的属性查找 "prototype"
@@ -532,17 +484,17 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
                 (0..num_props)
                     .filter_map(|i| {
-                        let slot_offset = ctor_ptr + 12 + i * 12;
-                        if slot_offset + 12 <= data.len() {
+                        let slot_offset = ctor_ptr + 12 + i * 16;
+                        if slot_offset + 16 <= data.len() {
                             let name_id = u32::from_le_bytes([
                                 data[slot_offset], data[slot_offset + 1],
                                 data[slot_offset + 2], data[slot_offset + 3],
                             ]);
                             let val_bytes = [
-                                data[slot_offset + 4], data[slot_offset + 5],
-                                data[slot_offset + 6], data[slot_offset + 7],
                                 data[slot_offset + 8], data[slot_offset + 9],
                                 data[slot_offset + 10], data[slot_offset + 11],
+                                data[slot_offset + 12], data[slot_offset + 13],
+                                data[slot_offset + 14], data[slot_offset + 15],
                             ];
                             Some((name_id, val_bytes))
                         } else {
@@ -572,49 +524,25 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             };
 
             // 5. 遍历 value 的原型链
-            let proto_target = value::decode_object_handle(prototype) as u32;
-            let mut current = value;
+            let proto_target = match resolve_handle(&mut caller, prototype) {
+                Some(p) => p as u32,
+                None => return value::encode_bool(false),
+            };
+            let mut current_ptr = match resolve_handle(&mut caller, value) {
+                Some(p) => p,
+                None => return value::encode_bool(false),
+            };
             loop {
-                let ptr = if value::is_object(current) {
-                    value::decode_object_handle(current) as usize
-                } else if value::is_function(current) {
-                    let func_props_ptr = {
-                        let Some(Extern::Global(g)) = caller.get_export("__func_props_ptr") else {
-                            return value::encode_bool(false);
-                        };
-                        g.get(&mut caller).i32().unwrap_or(0) as usize
-                    };
-                    let func_idx = value::decode_function_idx(current) as usize;
-                    let slot_addr = func_props_ptr + func_idx * 8;
-                    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                        return value::encode_bool(false);
-                    };
-                    let d = mem.data(&caller);
-                    if slot_addr + 4 > d.len() {
-                        return value::encode_bool(false);
-                    }
-                    let obj_ptr = u32::from_le_bytes([
-                        d[slot_addr], d[slot_addr + 1],
-                        d[slot_addr + 2], d[slot_addr + 3],
-                    ]) as usize;
-                    if obj_ptr == 0 {
-                        return value::encode_bool(false);
-                    }
-                    obj_ptr
-                } else {
-                    return value::encode_bool(false);
-                };
-
                 let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
                     return value::encode_bool(false);
                 };
                 let data = memory.data(&caller);
-                if ptr + 4 > data.len() {
+                if current_ptr + 4 > data.len() {
                     return value::encode_bool(false);
                 }
                 let proto = u32::from_le_bytes([
-                    data[ptr], data[ptr + 1],
-                    data[ptr + 2], data[ptr + 3],
+                    data[current_ptr], data[current_ptr + 1],
+                    data[current_ptr + 2], data[current_ptr + 3],
                 ]);
 
                 if proto == 0 {
@@ -623,7 +551,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 if proto == proto_target {
                     return value::encode_bool(true);
                 }
-                current = value::encode_object_handle(proto);
+                current_ptr = proto as usize;
             }
         },
     );
@@ -655,6 +583,162 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
+    // ── Import 17: define_property(i64, i32, i64) → () ────────────────────
+    let define_property_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32, desc: i64| {
+            // 检查 obj 和 desc 是否是对象或函数
+            if (!value::is_object(obj) && !value::is_function(obj)) ||
+               (!value::is_object(desc) && !value::is_function(desc)) {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: Object.defineProperty called on non-object".to_string());
+                return;
+            }
+            let obj_ptr = match resolve_handle(&mut caller, obj) {
+                Some(p) => p,
+                None => return,
+            };
+            let desc_ptr = match resolve_handle(&mut caller, desc) {
+                Some(p) => p,
+                None => return,
+            };
+            let name_id = key as u32;
+            // 读取描述符属性
+            let prop_value = read_object_property_by_name(&mut caller, desc_ptr, "value");
+            let prop_writable = read_object_property_by_name(&mut caller, desc_ptr, "writable");
+            let prop_enumerable = read_object_property_by_name(&mut caller, desc_ptr, "enumerable");
+            let prop_configurable = read_object_property_by_name(&mut caller, desc_ptr, "configurable");
+            // 计算 flags: bit0=configurable, bit1=enumerable, bit2=writable
+            let mut flags: i32 = 0;
+            if prop_writable.map_or(true, |v| !value::is_falsy(v)) {
+                flags |= 1 << 2;
+            }
+            if prop_enumerable.map_or(true, |v| !value::is_falsy(v)) {
+                flags |= 1 << 1;
+            }
+            if prop_configurable.map_or(true, |v| !value::is_falsy(v)) {
+                flags |= 1;
+            }
+            let val = prop_value.unwrap_or(value::encode_undefined());
+            // 查找已有属性
+            let found = find_property_slot_by_name_id(&mut caller, obj_ptr, name_id);
+            if let Some((slot_offset, _old_flags, _old_val)) = found {
+                // 更新已有属性
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                    return;
+                };
+                let data = memory.data_mut(&mut caller);
+                data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+                data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+            } else {
+                // 添加新属性
+                let (capacity, num_props) = {
+                    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                        return;
+                    };
+                    let data = memory.data(&caller);
+                    if obj_ptr + 12 > data.len() {
+                        return;
+                    }
+                    let capacity = u32::from_le_bytes([
+                        data[obj_ptr + 4], data[obj_ptr + 5],
+                        data[obj_ptr + 6], data[obj_ptr + 7],
+                    ]) as usize;
+                    let num_props = u32::from_le_bytes([
+                        data[obj_ptr + 8], data[obj_ptr + 9],
+                        data[obj_ptr + 10], data[obj_ptr + 11],
+                    ]) as usize;
+                    (capacity, num_props)
+                };
+
+                // 实际写入用的对象指针（可能因扩容而改变）
+                let mut actual_obj_ptr = obj_ptr;
+
+                // 如果容量不足，执行 host 侧扩容
+                if num_props >= capacity {
+                    // 读取全局变量
+                    let obj_table_ptr = {
+                        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
+                            return;
+                        };
+                        g.get(&mut caller).i32().unwrap_or(0) as usize
+                    };
+                    let heap_ptr = {
+                        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
+                            return;
+                        };
+                        g.get(&mut caller).i32().unwrap_or(0) as usize
+                    };
+                    let handle_idx = (obj as u64 & 0xFFFF_FFFF) as u32;
+
+                    // 计算新容量和新大小
+                    let new_capacity = if capacity == 0 { 1 } else { capacity * 2 };
+                    let new_size = 12 + new_capacity * 16;
+
+                    // 复制旧数据到新位置并更新元数据
+                    {
+                        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                            return;
+                        };
+                        let data = memory.data_mut(&mut caller);
+                        if heap_ptr + new_size > data.len() {
+                            return;
+                        }
+
+                        // 复制旧数据（header + 已有属性）
+                        let old_size = 12 + num_props * 16;
+                        data.copy_within(actual_obj_ptr..actual_obj_ptr + old_size, heap_ptr);
+
+                        // 更新新对象的 capacity
+                        data[heap_ptr + 4..heap_ptr + 8].copy_from_slice(&(new_capacity as u32).to_le_bytes());
+
+                        // 更新 handle 表
+                        let slot_addr = obj_table_ptr + handle_idx as usize * 4;
+                        if slot_addr + 4 <= data.len() {
+                            data[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
+                        }
+                    }
+
+                    // 更新 __heap_ptr 全局变量
+                    {
+                        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
+                            return;
+                        };
+                        let _ = g.set(&mut caller, Val::I32((heap_ptr + new_size) as i32));
+                    }
+
+                    actual_obj_ptr = heap_ptr;
+                }
+
+                // 写入新属性
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                    return;
+                };
+                let data = memory.data_mut(&mut caller);
+                let slot_offset = actual_obj_ptr + 12 + num_props * 16;
+                if slot_offset + 16 > data.len() {
+                    return;
+                }
+                data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+                data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+                data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+                let new_num_props = num_props + 1;
+                data[actual_obj_ptr + 8..actual_obj_ptr + 12].copy_from_slice(&(new_num_props as u32).to_le_bytes());
+            }
+        },
+    );
+
+    let get_own_prop_desc_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _obj: i64, _key: i32| -> i64 {
+            // TODO: 实现 get_own_prop_desc（需要创建描述符对象）
+            // 当前是 stub，记录运行时错误以便调试
+            *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                Some("TypeError: Object.getOwnPropertyDescriptor is not yet implemented".to_string());
+            value::encode_undefined()
+        },
+    );
+
     let imports = [
         console_log.into(),     // 0
         f64_mod.into(),         // 1
@@ -673,6 +757,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         op_in.into(),           // 14
         op_instanceof.into(),   // 15
         string_concat.into(),   // 16
+        define_property_fn.into(), // 17
+        get_own_prop_desc_fn.into(), // 18
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -831,37 +917,147 @@ fn store_runtime_string(caller: &Caller<'_, RuntimeState>, string: String) -> i6
     value::encode_runtime_string_handle(handle)
 }
 
+/// 通过 handle 表解析 boxed value 的真实对象指针。
+/// 支持 TAG_OBJECT 和 TAG_FUNCTION（统一走 handle 表）。
+fn resolve_handle(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
+    let obj_table_ptr = {
+        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
+            return None;
+        };
+        g.get(&mut *caller).i32().unwrap_or(0) as usize
+    };
+    let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    let slot_addr = obj_table_ptr + handle_idx * 4;
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return None;
+    };
+    let d = mem.data(&*caller);
+    if slot_addr + 4 > d.len() {
+        return None;
+    }
+    let ptr = u32::from_le_bytes([
+        d[slot_addr], d[slot_addr + 1],
+        d[slot_addr + 2], d[slot_addr + 3],
+    ]) as usize;
+    if ptr == 0 {
+        return None;
+    }
+    Some(ptr)
+}
+
+/// 从对象中按名称读取属性值（用于 define_property 等）
+fn read_object_property_by_name(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    prop_name: &str,
+) -> Option<i64> {
+    let num_props = {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data(&*caller);
+        if obj_ptr + 12 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr + 8], data[obj_ptr + 9],
+            data[obj_ptr + 10], data[obj_ptr + 11],
+        ]) as usize
+    };
+    let mut name_ids = Vec::with_capacity(num_props);
+    {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data(&*caller);
+        for i in 0..num_props {
+            let slot_offset = obj_ptr + 12 + i * 16;
+            if slot_offset + 4 > data.len() {
+                break;
+            }
+            name_ids.push(u32::from_le_bytes([
+                data[slot_offset], data[slot_offset + 1],
+                data[slot_offset + 2], data[slot_offset + 3],
+            ]));
+        }
+    }
+    for (i, name_id) in name_ids.iter().enumerate() {
+        let name_bytes = read_string_bytes(caller, *name_id);
+        if name_bytes == prop_name.as_bytes() {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return None;
+            };
+            let data = memory.data(&*caller);
+            let slot_offset = obj_ptr + 12 + i * 16;
+            if slot_offset + 16 > data.len() {
+                return None;
+            }
+            return Some(i64::from_le_bytes([
+                data[slot_offset + 8], data[slot_offset + 9],
+                data[slot_offset + 10], data[slot_offset + 11],
+                data[slot_offset + 12], data[slot_offset + 13],
+                data[slot_offset + 14], data[slot_offset + 15],
+            ]));
+        }
+    }
+    None
+}
+
+/// 从对象中按 name_id 查找属性的 slot_offset
+fn find_property_slot_by_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    name_id: u32,
+) -> Option<(usize, i32, i64)> {
+    let num_props = {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data(&*caller);
+        if obj_ptr + 12 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr + 8], data[obj_ptr + 9],
+            data[obj_ptr + 10], data[obj_ptr + 11],
+        ]) as usize
+    };
+    for i in 0..num_props {
+        let slot_offset = obj_ptr + 12 + i * 16;
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data(&*caller);
+        if slot_offset + 16 > data.len() {
+            break;
+        }
+        let slot_name_id = u32::from_le_bytes([
+            data[slot_offset], data[slot_offset + 1],
+            data[slot_offset + 2], data[slot_offset + 3],
+        ]);
+        if slot_name_id == name_id {
+            let flags = i32::from_le_bytes([
+                data[slot_offset + 4], data[slot_offset + 5],
+                data[slot_offset + 6], data[slot_offset + 7],
+            ]);
+            let val = i64::from_le_bytes([
+                data[slot_offset + 8], data[slot_offset + 9],
+                data[slot_offset + 10], data[slot_offset + 11],
+                data[slot_offset + 12], data[slot_offset + 13],
+                data[slot_offset + 14], data[slot_offset + 15],
+            ]);
+            return Some((slot_offset, flags, val));
+        }
+    }
+    None
+}
+
 /// 读取对象/函数的所有属性名，用于 for...in 枚举
 fn enumerate_object_keys(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec<String> {
-    // 解析对象指针
-    let ptr: usize = if value::is_object(val) {
-        value::decode_object_handle(val) as usize
-    } else if value::is_function(val) {
-        let func_props_ptr = {
-            let Some(Extern::Global(g)) = caller.get_export("__func_props_ptr") else {
-                return Vec::new();
-            };
-            g.get(&mut *caller).i32().unwrap_or(0) as usize
-        };
-        let func_idx = value::decode_function_idx(val) as usize;
-        let slot_addr = func_props_ptr + func_idx * 8;
-        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-            return Vec::new();
-        };
-        let d = mem.data(&*caller);
-        if slot_addr + 4 > d.len() {
-            return Vec::new();
-        }
-        let obj_ptr = u32::from_le_bytes([
-            d[slot_addr], d[slot_addr + 1],
-            d[slot_addr + 2], d[slot_addr + 3],
-        ]) as usize;
-        if obj_ptr == 0 {
-            return Vec::new();
-        }
-        obj_ptr
-    } else {
-        return Vec::new();
+    // 解析对象指针：通过 handle 表统一解析
+    let ptr: usize = match resolve_handle(caller, val) {
+        Some(p) => p,
+        None => return Vec::new(),
     };
 
     // 读取属性列表
@@ -880,7 +1076,7 @@ fn enumerate_object_keys(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec
 
     let mut name_ids = Vec::with_capacity(num_props);
     for i in 0..num_props {
-        let slot_offset = ptr + 12 + i * 12;
+        let slot_offset = ptr + 12 + i * 16;
         if slot_offset + 4 > data.len() {
             break;
         }

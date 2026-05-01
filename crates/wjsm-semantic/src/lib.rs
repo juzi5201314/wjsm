@@ -2743,6 +2743,34 @@ impl Lowerer {
                 // 检测 MemberExpr 被调用者 → 提取 obj 作为 this
                 if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
                     // obj.method() → obj 是 this，method 是 callee
+                    // 检测 Object.defineProperty
+                    if let swc_ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref() {
+                        if &*obj_ident.sym == "Object" {
+                            if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
+                                let builtin = match &*prop_ident.sym {
+                                    "defineProperty" => Some(Builtin::DefineProperty),
+                                    _ => None,
+                                };
+                                if let Some(builtin) = builtin {
+                                    let mut args = Vec::new();
+                                    for arg in &call.args {
+                                        let arg_val = self.lower_expr(&arg.expr, block)?;
+                                        args.push(arg_val);
+                                    }
+                                    let dest = self.alloc_value();
+                                    self.current_function.append_instruction(
+                                        block,
+                                        Instruction::CallBuiltin {
+                                            dest: Some(dest),
+                                            builtin,
+                                            args,
+                                        },
+                                    );
+                                    return Ok(dest);
+                                }
+                            }
+                        }
+                    }
                     this_val = self.lower_expr(&member_expr.obj, block)?;
                     callee_val = self.lower_member_expr(member_expr, block)?;
                 } else {
