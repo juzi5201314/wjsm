@@ -167,7 +167,40 @@ impl ScopeTree {
         }
     }
 
+
+    /// 赋值时查找变量：组合 `check_mutable` 和 `lookup`，
+    /// 一次 scope chain 遍历完成 const 检查 + TDZ 检查。
+    ///
+    /// # 性能优化
+    /// `lower_assign` 原本先调 `check_mutable` 再调 `lookup`，
+    /// 分别遍历 scope chain 各一次。合并为一次遍历减少冗余的 HashMap 查找，
+    /// 在深层嵌套作用域中有最多约 50% 的查找节省。
+    fn lookup_for_assign(&self, name: &str) -> Result<(usize, VarKind), String> {
+        let mut cursor = self.current;
+        loop {
+            let scope = &self.arenas[cursor];
+            if let Some(info) = scope.variables.get(name) {
+                if matches!(info.kind, VarKind::Const) {
+                    return Err(format!(
+                        "cannot reassign a const-declared variable `{name}`"
+                    ));
+                }
+                if !info.initialised {
+                    return Err(format!("cannot access `{name}` before initialisation"));
+                }
+                return Ok((scope.id, info.kind));
+            }
+            match scope.parent {
+                Some(parent) => cursor = parent,
+                None => return Err(format!("undeclared identifier `{name}`")),
+            }
+        }
+    }
+
     /// Check that this variable is not `const` before reassignment.
+    /// 注意：`lower_assign` 现在使用 `lookup_for_assign` 在一次遍历中同时完成
+    /// const 检查和 scope 解析，此方法保留以供未来使用。
+    #[allow(dead_code)]
     fn check_mutable(&self, name: &str) -> Result<(), String> {
         let mut cursor = self.current;
         loop {
@@ -1351,8 +1384,10 @@ impl Lowerer {
         let discr = self.lower_expr(&switch_stmt.discriminant, block)?;
 
         let exit = self.current_function.new_block();
-        let mut cases: Vec<SwitchCaseTarget> = Vec::new();
-        let mut case_blocks: Vec<BasicBlockId> = Vec::new();
+        // 性能优化：预分配容量避免循环中多次 reallocation
+        let case_count = switch_stmt.cases.len();
+        let mut cases: Vec<SwitchCaseTarget> = Vec::with_capacity(case_count);
+        let mut case_blocks: Vec<BasicBlockId> = Vec::with_capacity(case_count);
         let mut default_pos: Option<usize> = None;
 
         // Generate a case block for each case
@@ -2782,7 +2817,9 @@ impl Lowerer {
         );
 
         // Lower arguments.
-        let mut arg_vals = Vec::new();
+        // 性能优化：预分配容量避免循环中多次 reallocation
+        let cap = new_expr.args.as_ref().map_or(0, |a| a.len());
+        let mut arg_vals = Vec::with_capacity(cap);
         if let Some(args) = &new_expr.args {
             for arg in args {
                 let arg_val = self.lower_expr(&arg.expr, block)?;
@@ -2829,7 +2866,8 @@ impl Lowerer {
                                     _ => None,
                                 };
                                 if let Some(builtin) = builtin {
-                                    let mut args = Vec::new();
+                                    // 性能优化：预分配容量避免循环中多次 reallocation
+                                    let mut args = Vec::with_capacity(call.args.len());
                                     for arg in &call.args {
                                         let arg_val = self.lower_expr(&arg.expr, block)?;
                                         args.push(arg_val);
@@ -2867,7 +2905,8 @@ impl Lowerer {
             _ => return Err(self.error(call.span, "unsupported callee type")),
         }
 
-        let mut args = Vec::new();
+        // 性能优化：预分配容量避免循环中多次 reallocation
+        let mut args = Vec::with_capacity(call.args.len());
         for arg in &call.args {
             let arg_val = self.lower_expr(&arg.expr, block)?;
             args.push(arg_val);
@@ -3057,13 +3096,11 @@ impl Lowerer {
             }
         };
 
-        self.scopes
-            .check_mutable(&name)
-            .map_err(|msg| self.error(assign.span, msg))?;
-
+        // 性能优化：使用 lookup_for_assign 一次遍历完成 const 检查 + TDZ 检查 + scope 解析，
+        // 避免 check_mutable and lookup 各自遍历 scope chain 的冗余。
         let (scope_id, _kind) = self
             .scopes
-            .lookup(&name)
+            .lookup_for_assign(&name)
             .map_err(|msg| self.error(assign.span, msg))?;
         let ir_name = format!("${scope_id}.{name}");
 
@@ -3708,12 +3745,10 @@ impl Lowerer {
         let target = match update.arg.as_ref() {
             swc_ast::Expr::Ident(ident) => {
                 let name = ident.sym.to_string();
-                self.scopes
-                    .check_mutable(&name)
-                    .map_err(|msg| self.error(update.span(), msg))?;
+                // 性能优化：使用 lookup_for_assign 一次遍历完成 const 检查 + TDZ 检查 + scope 解析
                 let (scope_id, _kind) = self
                     .scopes
-                    .lookup(&name)
+                    .lookup_for_assign(&name)
                     .map_err(|msg| self.error(update.span(), msg))?;
                 Target::Var(format!("${scope_id}.{name}"))
             }
