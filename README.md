@@ -1,138 +1,88 @@
 # wjsm
 
-一个兼容 Node.js 语法的 JavaScript/TypeScript 运行时，采用 AOT（Ahead-of-Time）编译架构。
+一个采用 AOT 编译架构的 JavaScript/TypeScript 运行时，将 JS/TS 代码预编译为 WebAssembly 执行。
 
-## 🎯 项目愿景
+## 项目文档
 
-类似于 [Deno](https://deno.land/) 和 [Bun](https://bun.sh/)，wjsm 致力于成为一个高性能的 JavaScript/TypeScript 运行时。但与它们不同的是，**wjsm 不直接使用 V8 等 JS 引擎来解释执行代码**，而是：
+完整项目文档请参阅 [PROJECT_GUIDE.md](./PROJECT_GUIDE.md)，包含：
+- 技术架构详解
+- 核心概念（IR 设计、NaN-boxing、作用域分析）
+- 功能现状
+- 开发指南
 
-1. **AOT 编译**：将 JS/TS 代码（ECMAScript）编译为 WebAssembly 模块
-2. **多运行时支持**：支持多种 WASM 运行时执行编译后的代码（如 [wasmtime](https://wasmtime.dev/)、V8 的 WASM 支持等）
-3. **原生性能**：通过 WASM 的接近原生性能，同时保持 JS/TS 的开发体验
+## 快速开始
 
-## ✨ 核心特性
-
-- 📦 **AOT 编译**：将 JS/TS 预编译为 WASM，实现更快的启动时间和可预测的内存使用
-- 🔵 **TypeScript 一流支持**：使用 [SWC](https://swc.rs/) 解析器，原生支持 TS 语法，无需额外的转译步骤
-- 🚀 **多 WASM 运行时兼容**：计划支持 wasmtime、Wasmer、V8 等多种 WASM 运行时
-- 🔒 **沙箱安全**：利用 WASM 的内存安全特性，提供开箱即用的安全沙箱
-- 📦 **Node.js 兼容**：目标是兼容常用的 Node.js API 和模块系统
-
-## 🏗️ 架构
-
-```
-┌─────────────────┐
-│   JS/TS 源代码   │
-│  (Node.js 风格)  │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   SWC Parser    │  ← 解析为 AST
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  wasm-encoder   │  ← 生成 WASM 字节码
-│   (Codegen)     │
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│    WASM 模块     │
-└────────┬────────┘
-         │
-    ┌────┴────┐
-    ▼         ▼
-┌────────┐ ┌────────┐
-│wasmtime│ │  V8    │  ← 多种运行时支持（计划中）
-│(当前)  │ │(计划中)│
-└────────┘ └────────┘
-```
-
-### 当前实现
-
-- **Parser**: 使用 `swc_core` 解析 JS/TS AST
-- **Codegen**: 使用 `wasm-encoder` 生成 WASM 字节码
-- **Runtime**: 使用 `wasmtime` 执行 WASM，提供 `console.log` 等宿主函数
-- **Value Encoding**: 采用 NaN boxing 技术编码 JS 值类型
-
-## 🚀 快速开始
-
-### 构建项目
+### 编译
 
 ```bash
-# 克隆仓库
-git clone <repo-url>
-cd wjsm
-
-# 构建
 cargo build --release
 ```
 
-### 使用 CLI
+### 使用
 
 ```bash
-# 编译 JS/TS 文件到 WASM
+# 编译 JS/TS 到 WASM
 ./target/release/wjsm build test.ts -o out.wasm
 
-# 直接运行 JS/TS 文件（编译并执行）
+# 直接运行
 ./target/release/wjsm run test.ts
-
-# 使用 cargo 运行
-cargo run -- build test.ts -o out.wasm
-cargo run -- run test.ts
 ```
 
-### 示例代码
+## 示例
 
 ```typescript
-// test.ts
-console.log("Hello World");
+console.log("Hello, wjsm!");
 console.log(1 + 2 * 3);
 ```
 
-运行结果：
-```
-Hello World
+```bash
+$ ./target/release/wjsm run test.ts
+Hello, wjsm!
 7
 ```
 
-## 🛠️ 技术栈
+## Roadmap
 
-- **Rust 2024 Edition**: 项目主体语言
-- **SWC**: 高速 JavaScript/TypeScript 解析器
-- **wasm-encoder**: WASM 模块编码器
-- **wasmtime**: WebAssembly 运行时（当前默认）
-- **anyhow/thiserror**: 错误处理
-- **clap**: CLI 框架
+### 语言特性
 
-## 📋 开发路线图
+| 类别 | 特性 | 状态 |
+|------|------|------|
+| 表达式 | 算术、位运算、比较、逻辑运算符 | ✅ 已完成 |
+| 表达式 | 三元、逗号、复合赋值、自增自减 | ✅ 已完成 |
+| 声明 | var/let/const、块级作用域、TDZ | ✅ 已完成 |
+| 控制流 | if/else、switch、while/for/do-while | ✅ 已完成 |
+| 控制流 | for...in/for...of、break/continue | ✅ 已完成 |
+| 控制流 | try/catch/finally、throw | ✅ 已完成 |
+| 函数/类 | 函数声明/表达式、箭头函数 | ✅ 已完成 |
+| 函数/类 | class 声明、new 表达式、prototype | ✅ 已完成 |
+| 对象 | 对象字面量、属性访问、in/instanceof | ✅ 已完成 |
+| 对象 | Object.defineProperty/getOwnPropertyDescriptor | ✅ 已完成 |
+| 字面量 | BigInt、正则、模板字符串、数组 | 🔲 计划中 |
+| 高级 | 解构、async/await、装饰器 | 🔲 计划中 |
 
-### 当前阶段（PoC）
-- [x] 基础 AOT 编译流程
-- [x] `console.log` 支持
-- [x] 基本算术运算
-- [x] 字符串字面量
+### 运行时
 
-### 短期目标
-- [ ] 完整的 JavaScript 表达式支持
-- [ ] 变量声明和作用域
-- [ ] 控制流（if/else, loop）
-- [ ] 函数定义和调用
-- [ ] 更多 Node.js API 兼容
+| 特性 | 状态 |
+|------|------|
+| 基础堆分配（bump allocator） | ✅ 已完成 |
+| 原型链遍历 | ✅ 已完成 |
+| 宿主函数（console.log 等） | ✅ 已完成 |
+| 完整 GC | 🔲 计划中 |
+| 闭包/词法作用域 | 🔲 计划中 |
+| 模块系统（ESM/CJS） | 🔲 计划中 |
 
-### 长期目标
-- [ ] 模块化系统（ES Modules / CommonJS）
-- [ ] 多 WASM 运行时支持（wasmtime, wasmer, V8）
-- [ ] 标准库实现（fs, path, http 等）
-- [ ] npm 包兼容性
-- [ ] 性能优化和 JIT 支持
+### 后端
 
-## 🤝 贡献
+| 特性 | 状态 |
+|------|------|
+| WASM 后端（wasmtime） | ✅ 已完成 |
+| JIT 后端 | 🔲 计划中 |
+| 多运行时支持 | 🔲 计划中 |
 
-欢迎提交 Issue 和 PR！
+---
 
-## 📄 许可证
+✅ = 已完成 | 🔲 = 计划中
+
+## 许可证
 
 [待添加]
