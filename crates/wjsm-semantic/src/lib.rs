@@ -458,11 +458,13 @@ impl Lowerer {
         // If the last block is still open and hasn't been terminated, give it a Return.
         match flow {
             StmtFlow::Open(block) => {
-                let term = self
+                // 性能优化：使用 matches! 直接匹配引用，避免克隆整个 Terminator。
+                // Terminator 可能包含 Vec（Switch 变体），克隆有内存分配开销。
+                let is_unreachable = self
                     .current_function
                     .block(block)
-                    .map(|b| b.terminator().clone());
-                if let Some(Terminator::Unreachable) = term {
+                    .map_or(false, |b| matches!(b.terminator(), Terminator::Unreachable));
+                if is_unreachable {
                     self.current_function
                         .set_terminator(block, Terminator::Return { value: None });
                 }
