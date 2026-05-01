@@ -1,6 +1,6 @@
 use crate::constants::{
-    TYPEOF_UNDEFINED_OFFSET, TYPEOF_OBJECT_OFFSET, TYPEOF_BOOLEAN_OFFSET,
-    TYPEOF_STRING_OFFSET, TYPEOF_FUNCTION_OFFSET, TYPEOF_NUMBER_OFFSET,
+    TYPEOF_BOOLEAN_OFFSET, TYPEOF_FUNCTION_OFFSET, TYPEOF_NUMBER_OFFSET, TYPEOF_OBJECT_OFFSET,
+    TYPEOF_STRING_OFFSET, TYPEOF_UNDEFINED_OFFSET,
 };
 
 pub const MASK_SIGN: u64 = 0x8000_0000_0000_0000;
@@ -33,17 +33,29 @@ pub fn encode_string_ptr(ptr: u32) -> i64 {
 }
 
 /// typeof "undefined" → NaN-boxed string ptr (data segment offset 0)
-pub fn encode_typeof_undefined() -> i64 { encode_string_ptr(TYPEOF_UNDEFINED_OFFSET) }
+pub fn encode_typeof_undefined() -> i64 {
+    encode_string_ptr(TYPEOF_UNDEFINED_OFFSET)
+}
 /// typeof "object" → NaN-boxed string ptr (data segment offset 10)
-pub fn encode_typeof_object() -> i64 { encode_string_ptr(TYPEOF_OBJECT_OFFSET) }
+pub fn encode_typeof_object() -> i64 {
+    encode_string_ptr(TYPEOF_OBJECT_OFFSET)
+}
 /// typeof "boolean" → NaN-boxed string ptr (data segment offset 17)
-pub fn encode_typeof_boolean() -> i64 { encode_string_ptr(TYPEOF_BOOLEAN_OFFSET) }
+pub fn encode_typeof_boolean() -> i64 {
+    encode_string_ptr(TYPEOF_BOOLEAN_OFFSET)
+}
 /// typeof "string" → NaN-boxed string ptr (data segment offset 25)
-pub fn encode_typeof_string() -> i64 { encode_string_ptr(TYPEOF_STRING_OFFSET) }
+pub fn encode_typeof_string() -> i64 {
+    encode_string_ptr(TYPEOF_STRING_OFFSET)
+}
 /// typeof "function" → NaN-boxed string ptr (data segment offset 32)
-pub fn encode_typeof_function() -> i64 { encode_string_ptr(TYPEOF_FUNCTION_OFFSET) }
+pub fn encode_typeof_function() -> i64 {
+    encode_string_ptr(TYPEOF_FUNCTION_OFFSET)
+}
 /// typeof "number" → NaN-boxed string ptr (data segment offset 41)
-pub fn encode_typeof_number() -> i64 { encode_string_ptr(TYPEOF_NUMBER_OFFSET) }
+pub fn encode_typeof_number() -> i64 {
+    encode_string_ptr(TYPEOF_NUMBER_OFFSET)
+}
 
 pub fn encode_runtime_string_handle(handle: u32) -> i64 {
     let payload = (STRING_RUNTIME_HANDLE_FLAG << 32) | (TAG_STRING << 32) | (handle as u64);
