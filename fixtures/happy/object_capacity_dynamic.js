@@ -1,0 +1,11 @@
+var obj = {a: 1, b: 2};
+obj.c = 3;
+obj.d = 4;
+obj.e = 5;
+obj.f = 6;
+console.log(obj.a);
+console.log(obj.b);
+console.log(obj.c);
+console.log(obj.d);
+console.log(obj.e);
+console.log(obj.f);
