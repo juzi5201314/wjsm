@@ -2030,9 +2030,6 @@ impl Compiler {
                     let num_cases = cases.len();
                     let nested_default_idx = default_block.0 as usize;
                     let nested_exit_idx = nested_exit.0 as usize;
-                    let nested_case_indices: Vec<usize> =
-                        cases.iter().map(|c| c.target.0 as usize).collect();
-
                     // 发射嵌套 switch 的 WASM blocks
                     self.emit(WasmInstruction::Block(BlockType::Empty));
                     self.emit(WasmInstruction::Block(BlockType::Empty));
@@ -2054,9 +2051,10 @@ impl Compiler {
                     self.emit(WasmInstruction::Br(num_cases as u32));
 
                     // 编译嵌套 case bodies
-                    for i in 0..num_cases {
+                    // 性能优化：直接迭代 cases，避免创建中间向量。
+                    for (i, case) in cases.iter().enumerate() {
                         self.emit(WasmInstruction::End);
-                        let cidx = nested_case_indices[i];
+                        let cidx = case.target.0 as usize;
                         self.compiled_blocks.insert(cidx);
                         let nested_break = (num_cases - i) as u32;
                         let nested_extra = extra_depth + (num_cases - i) as u32 + 1;
