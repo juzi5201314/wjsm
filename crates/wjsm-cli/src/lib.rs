@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use std::io::{self, Read};
 use std::fs;
 use wjsm_backend_wasm as backend_wasm;
 use wjsm_parser as parser;
@@ -29,11 +30,10 @@ enum Commands {
     },
     #[command(about = "Run a JS/TS file directly")]
     Run {
-        #[arg(help = "The input file to run")]
+        #[arg(help = "The input file to run, or - for stdin")]
         input: String,
     },
 }
-
 pub fn main_entry() -> Result<()> {
     let cli = Cli::parse();
     execute(cli)
@@ -48,7 +48,13 @@ pub fn execute(cli: Cli) -> Result<()> {
             println!("Successfully compiled {} to {}", input, output);
         }
         Commands::Run { input } => {
-            let source = fs::read_to_string(&input)?;
+            let source = if input == "-" {
+                let mut buf = String::new();
+                io::stdin().read_to_string(&mut buf)?;
+                buf
+            } else {
+                fs::read_to_string(&input)?
+            };
             let wasm_bytes = compile_source(&source)?;
             runtime::execute(&wasm_bytes)?;
         }
