@@ -14,3 +14,6 @@ artifacts/
 # Editor local config
 .opencode/
 .claude/
+# test262 — cloned automatically by build.rs, do not commit
+crates/wjsm-test262/test262/
+test262/
