@@ -1,20 +1,29 @@
 module {
   constants:
-    c0 = bool(true)
-    c1 = string("yes")
-    c2 = string("no")
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = bool(true)
+    c4 = string("yes")
+    c5 = string("no")
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      branch %0, bb1, bb2
-    bb1:
+      store var $0.undefined, %0
       %1 = const c1
-      call builtin.console.log(%1)
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      branch %3, bb1, bb2
+    bb1:
+      %4 = const c4
+      call builtin.console.log(%4)
       jump bb3
     bb2:
-      %2 = const c2
-      call builtin.console.log(%2)
+      %5 = const c5
+      call builtin.console.log(%5)
       jump bb3
     bb3:
       return

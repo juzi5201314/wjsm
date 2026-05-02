@@ -1,45 +1,54 @@
 module {
   constants:
-    c0 = number(0)
-    c1 = bool(true)
-    c2 = number(10)
-    c3 = number(1)
-    c4 = number(3)
-    c5 = number(6)
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(0)
+    c4 = bool(true)
+    c5 = number(10)
+    c6 = number(1)
+    c7 = number(3)
+    c8 = number(6)
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      store var $0.i, %0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.i, %3
       jump bb1
     bb1:
-      %1 = const c1
-      %2 = load var $0.i
-      %3 = const c2
-      %4 = lt %2, %3
-      branch %4, bb2, bb3
-    bb2:
+      %4 = const c4
       %5 = load var $0.i
-      %6 = const c3
-      %7 = add %5, %6
-      store var $0.i, %7
+      %6 = const c5
+      %7 = lt %5, %6
+      branch %7, bb2, bb3
+    bb2:
       %8 = load var $0.i
-      %9 = const c4
-      %10 = eq %8, %9
-      branch %10, bb4, bb5
+      %9 = const c6
+      %10 = add %8, %9
+      store var $0.i, %10
+      %11 = load var $0.i
+      %12 = const c7
+      %13 = eq %11, %12
+      branch %13, bb4, bb5
     bb3:
       return
     bb4:
       jump bb1
     bb5:
-      %11 = load var $0.i
-      %12 = const c5
-      %13 = eq %11, %12
-      branch %13, bb6, bb7
+      %14 = load var $0.i
+      %15 = const c8
+      %16 = eq %14, %15
+      branch %16, bb6, bb7
     bb6:
       jump bb3
     bb7:
-      %14 = load var $0.i
-      call builtin.console.log(%14)
+      %17 = load var $0.i
+      call builtin.console.log(%17)
       jump bb1
 }

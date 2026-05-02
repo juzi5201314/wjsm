@@ -1,30 +1,39 @@
 module {
   constants:
-    c0 = number(99)
-    c1 = number(1)
-    c2 = number(2)
-    c3 = string("one")
-    c4 = string("default")
-    c5 = string("two")
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(99)
+    c4 = number(1)
+    c5 = number(2)
+    c6 = string("one")
+    c7 = string("default")
+    c8 = string("two")
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      store var $0.x, %0
-      %1 = load var $0.x
-      switch %1 [case c1 -> bb2, case c2 -> bb4], default bb3, exit bb1
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.x, %3
+      %4 = load var $0.x
+      switch %4 [case c4 -> bb2, case c5 -> bb4], default bb3, exit bb1
     bb1:
       return
     bb2:
-      %2 = const c3
-      call builtin.console.log(%2)
+      %5 = const c6
+      call builtin.console.log(%5)
       jump bb1
     bb3:
-      %3 = const c4
-      call builtin.console.log(%3)
+      %6 = const c7
+      call builtin.console.log(%6)
       jump bb4
     bb4:
-      %4 = const c5
-      call builtin.console.log(%4)
+      %7 = const c8
+      call builtin.console.log(%7)
       jump bb1
 }

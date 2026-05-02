@@ -1,4 +1,13 @@
-exit_code: 1
+exit_code: 0
 --- stdout ---
+undefined
+object
+boolean
+boolean
+number
+string
+object
+function
+true
+true
 --- stderr ---
-Error: semantic lowering error [20..29]: undeclared identifier `undefined`

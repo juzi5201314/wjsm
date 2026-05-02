@@ -1,4 +1,6 @@
 exit_code: 0
 --- stdout ---
-42
+undefined
+NaN
+inf
 --- stderr ---

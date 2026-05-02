@@ -1,16 +1,25 @@
 module {
   constants:
-    c0 = number(1)
-    c1 = number(2)
-    c2 = number(3)
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(1)
+    c4 = number(2)
+    c5 = number(3)
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
+      store var $0.undefined, %0
       %1 = const c1
+      store var $0.NaN, %1
       %2 = const c2
-      %3 = mul %1, %2
-      %4 = add %0, %3
-      call builtin.console.log(%4)
+      store var $0.Infinity, %2
+      %3 = const c3
+      %4 = const c4
+      %5 = const c5
+      %6 = mul %4, %5
+      %7 = add %3, %6
+      call builtin.console.log(%7)
       return
 }

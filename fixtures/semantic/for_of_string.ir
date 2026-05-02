@@ -1,27 +1,36 @@
 module {
   constants:
-    c0 = string("hi")
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = string("hi")
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      %1 = call builtin.iterator.from(%0)
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      %4 = call builtin.iterator.from(%3)
       jump bb1
     bb1:
-      %2 = call builtin.iterator.done(%1)
-      %3 = not %2
-      branch %3, bb2, bb5
+      %5 = call builtin.iterator.done(%4)
+      %6 = not %5
+      branch %6, bb2, bb5
     bb2:
-      %4 = call builtin.iterator.value(%1)
-      store var $0.c, %4
-      %5 = load var $0.c
-      call builtin.console.log(%5)
+      %7 = call builtin.iterator.value(%4)
+      store var $0.c, %7
+      %8 = load var $0.c
+      call builtin.console.log(%8)
       jump bb3
     bb3:
-      call builtin.iterator.next(%1)
+      call builtin.iterator.next(%4)
       jump bb1
     bb4:
-      call builtin.iterator.close(%1)
+      call builtin.iterator.close(%4)
       jump bb5
     bb5:
       return

@@ -1,11 +1,20 @@
 module {
   constants:
-    c0 = string("ok")
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = string("ok")
 
   fn @main [entry=bb0]:
     bb0:
-      call builtin.debugger()
       %0 = const c0
-      call builtin.console.log(%0)
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      call builtin.debugger()
+      %3 = const c3
+      call builtin.console.log(%3)
       return
 }

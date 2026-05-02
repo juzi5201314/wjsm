@@ -1,35 +1,44 @@
 module {
   constants:
-    c0 = number(0)
-    c1 = bool(true)
-    c2 = number(5)
-    c3 = number(1)
-    c4 = number(2)
-    c5 = number(4)
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(0)
+    c4 = bool(true)
+    c5 = number(5)
+    c6 = number(1)
+    c7 = number(2)
+    c8 = number(4)
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      store var $0.i, %0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.i, %3
       jump bb1
     bb1:
-      %1 = const c1
-      %2 = load var $0.i
-      %3 = const c2
-      %4 = lt %2, %3
-      branch %4, bb2, bb3
-    bb2:
+      %4 = const c4
       %5 = load var $0.i
-      %6 = const c3
-      %7 = add %5, %6
-      store var $0.i, %7
+      %6 = const c5
+      %7 = lt %5, %6
+      branch %7, bb2, bb3
+    bb2:
       %8 = load var $0.i
-      switch %8 [case c4 -> bb5, case c5 -> bb6], default bb4, exit bb4
+      %9 = const c6
+      %10 = add %8, %9
+      store var $0.i, %10
+      %11 = load var $0.i
+      switch %11 [case c7 -> bb5, case c8 -> bb6], default bb4, exit bb4
     bb3:
       return
     bb4:
-      %9 = load var $0.i
-      call builtin.console.log(%9)
+      %12 = load var $0.i
+      call builtin.console.log(%12)
       jump bb1
     bb5:
       jump bb1

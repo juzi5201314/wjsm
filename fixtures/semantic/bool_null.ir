@@ -1,20 +1,29 @@
 module {
   constants:
-    c0 = bool(true)
-    c1 = bool(false)
-    c2 = null
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = bool(true)
+    c4 = bool(false)
+    c5 = null
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      store var $0.a, %0
+      store var $0.undefined, %0
       %1 = const c1
-      store var $0.b, %1
-      %2 = load var $0.a
-      call builtin.console.log(%2)
-      %3 = load var $0.b
-      call builtin.console.log(%3)
-      %4 = const c2
-      call builtin.console.log(%4)
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.a, %3
+      %4 = const c4
+      store var $0.b, %4
+      %5 = load var $0.a
+      call builtin.console.log(%5)
+      %6 = load var $0.b
+      call builtin.console.log(%6)
+      %7 = const c5
+      call builtin.console.log(%7)
       return
 }

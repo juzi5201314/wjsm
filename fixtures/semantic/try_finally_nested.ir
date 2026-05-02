@@ -1,39 +1,48 @@
 module {
   constants:
-    c0 = string("inner")
-    c1 = number(1)
-    c2 = string("inner finally")
-    c3 = string("outer finally")
-    c4 = string("inner finally")
-    c5 = string("outer finally")
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = string("inner")
+    c4 = number(1)
+    c5 = string("inner finally")
+    c6 = string("outer finally")
+    c7 = string("inner finally")
+    c8 = string("outer finally")
 
   fn @main [entry=bb0]:
     bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
       jump bb1
     bb1:
       jump bb5
     bb2:
       jump bb3
     bb3:
-      %5 = const c5
-      call builtin.console.log(%5)
+      %8 = const c8
+      call builtin.console.log(%8)
       jump bb4
     bb4:
       return
     bb5:
-      %0 = const c0
-      call builtin.console.log(%0)
-      %1 = const c1
-      %2 = const c2
-      call builtin.console.log(%2)
       %3 = const c3
       call builtin.console.log(%3)
-      return %1
+      %4 = const c4
+      %5 = const c5
+      call builtin.console.log(%5)
+      %6 = const c6
+      call builtin.console.log(%6)
+      return %4
     bb6:
       jump bb7
     bb7:
-      %4 = const c4
-      call builtin.console.log(%4)
+      %7 = const c7
+      call builtin.console.log(%7)
       jump bb8
     bb8:
       jump bb3
