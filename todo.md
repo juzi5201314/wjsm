@@ -84,6 +84,7 @@
 - [ ] **闭包（词法捕获 + 堆分配环境）**
 - [ ] **`this` 绑定完整规则** — 仅实现了 `obj.method()` 和箭头函数闭包捕获 `$this`
 - [ ] **除 `console.log` 外的所有宿主 API**（`console.error`、`setTimeout`、`fetch` 等）
+- [ ] **`eval` 函数** — 动态编译执行 JavaScript 代码字符串，需要运行时编译器支持（test262 大量使用）
 
 ---
 
