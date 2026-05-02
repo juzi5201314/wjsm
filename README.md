@@ -12,6 +12,16 @@
 
 ## 快速开始
 
+### 获取代码
+
+```bash
+# clone 时自动初始化 submodule（包含 test262 测试套件）
+git clone --recurse-submodules https://github.com/your-repo/wjsm.git
+
+# 如果已经 clone，手动初始化 submodule
+git submodule update --init test262
+```
+
 ### 编译
 
 ```bash
