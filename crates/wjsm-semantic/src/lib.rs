@@ -527,6 +527,10 @@ impl Lowerer {
         let mut flow = StmtFlow::Open(entry);
 
         for item in &module.body {
+            // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+            if matches!(flow, StmtFlow::Terminated) {
+                continue;
+            }
             match item {
                 swc_ast::ModuleItem::Stmt(stmt) => {
                     flow = self.lower_stmt(stmt, flow)?;
@@ -677,6 +681,10 @@ impl Lowerer {
 
         let mut flow = flow;
         for stmt in &block_stmt.stmts {
+            // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+            if matches!(flow, StmtFlow::Terminated) {
+                continue;
+            }
             flow = self.lower_stmt(stmt, flow)?;
         }
 
@@ -1492,6 +1500,10 @@ impl Lowerer {
             let mut case_flow = StmtFlow::Open(case_block);
 
             for stmt in &case.cons {
+                // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+                if matches!(case_flow, StmtFlow::Terminated) {
+                    continue;
+                }
                 case_flow = self.lower_stmt(stmt, case_flow)?;
             }
 
@@ -1754,6 +1766,10 @@ impl Lowerer {
 
         let mut flow = flow;
         for stmt in &block_stmt.stmts {
+            // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+            if matches!(flow, StmtFlow::Terminated) {
+                continue;
+            }
             flow = self.lower_stmt(stmt, flow)?;
         }
 
@@ -1928,6 +1944,10 @@ impl Lowerer {
         let mut inner_flow = StmtFlow::Open(entry);
         if let Some(body) = &fn_decl.function.body {
             for stmt in &body.stmts {
+                // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+                if matches!(inner_flow, StmtFlow::Terminated) {
+                    continue;
+                }
                 inner_flow = self.lower_stmt(stmt, inner_flow)?;
             }
         }
@@ -2040,6 +2060,10 @@ impl Lowerer {
         let mut inner_flow = StmtFlow::Open(entry);
         if let Some(body) = &fn_expr.function.body {
             for stmt in &body.stmts {
+                // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+                if matches!(inner_flow, StmtFlow::Terminated) {
+                    continue;
+                }
                 inner_flow = self.lower_stmt(stmt, inner_flow)?;
             }
         }
@@ -2124,6 +2148,10 @@ impl Lowerer {
                 self.predeclare_block_stmts(&block_stmt.stmts)?;
                 self.emit_hoisted_var_initializers(entry);
                 for stmt in &block_stmt.stmts {
+                    // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+                    if matches!(inner_flow, StmtFlow::Terminated) {
+                        continue;
+                    }
                     inner_flow = self.lower_stmt(stmt, inner_flow)?;
                 }
             }
@@ -2228,6 +2256,10 @@ impl Lowerer {
         if let Some(ctor) = constructor {
             if let Some(body) = &ctor.body {
                 for stmt in &body.stmts {
+                    // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+                    if matches!(inner_flow, StmtFlow::Terminated) {
+                        continue;
+                    }
                     inner_flow = self.lower_stmt(stmt, inner_flow)?;
                 }
             }
@@ -2331,6 +2363,10 @@ impl Lowerer {
                 let mut m_flow = StmtFlow::Open(m_entry);
                 if let Some(body) = &method.function.body {
                     for stmt in &body.stmts {
+                        // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+                        if matches!(m_flow, StmtFlow::Terminated) {
+                            continue;
+                        }
                         m_flow = self.lower_stmt(stmt, m_flow)?;
                     }
                 }
@@ -2487,6 +2523,10 @@ impl Lowerer {
         if let Some(ctor) = constructor {
             if let Some(body) = &ctor.body {
                 for stmt in &body.stmts {
+                    // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+                    if matches!(inner_flow, StmtFlow::Terminated) {
+                        continue;
+                    }
                     inner_flow = self.lower_stmt(stmt, inner_flow)?;
                 }
             }

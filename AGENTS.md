@@ -106,6 +106,15 @@ The root `Cargo.toml` defines workspace deps at shared versions; individual crat
 
 ## Code Conventions
 
+### JavaScript Specification Compliance
+
+**CRITICAL: wjsm must strictly follow the ECMAScript specification.**
+
+- All language semantics must match the ECMAScript specification exactly.
+- Unreachable code (e.g., statements after `return`, `throw`, `break`, `continue`) is **valid JavaScript** and must not cause compile errors. The compiler should skip unreachable statements silently or emit warnings, but never reject them.
+- Early errors defined by the specification (e.g., duplicate parameter names in strict mode, `super` outside class) must be detected and reported.
+- Non-standard extensions or deviations from the specification require explicit documentation and justification.
+
 ### Rust Edition & Style
 - Rust 2024 edition; edition is set once in `[workspace.package]` and inherited by all crates.
 - No explicit `rustfmt` config — use default `rustfmt` style.
