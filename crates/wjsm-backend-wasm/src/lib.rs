@@ -602,12 +602,11 @@ impl Compiler {
         // Map params: slot 0 = this (local 0), slots 0..N-1 = params (excluding $this).
         self.var_locals.clear();
         self.var_locals.insert("$this".to_string(), 0);
-        for (i, param_name) in function.params().iter().enumerate() {
-            if param_name == "$this" {
+        for (i, param_ir_name) in function.params().iter().enumerate() {
+            if param_ir_name == "$this" || param_ir_name.ends_with(".$this") {
                 continue; // $this is already mapped to local 0
             }
-            let ir_name = format!("$0.{param_name}");
-            self.var_locals.insert(ir_name, i as u32);
+            self.var_locals.insert(param_ir_name.clone(), i as u32);
         }
 
         // Variable locals start after SSA values (with ssa_local_base offset).

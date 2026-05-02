@@ -383,7 +383,6 @@ struct Lowerer {
     anon_counter: u32,
     // ── Function context stack ────────────────────────────────────────────
     function_stack: Vec<FunctionBuilder>,
-    function_scope_stack: Vec<ScopeTree>,
     function_hoisted_stack: Vec<(Vec<HoistedVar>, std::collections::HashSet<(usize, String)>)>,
     function_next_value_stack: Vec<u32>,
     function_next_temp_stack: Vec<u32>,
@@ -396,10 +395,16 @@ struct HoistedVar {
 
 impl Lowerer {
     fn new() -> Self {
+        let mut scopes = ScopeTree::new();
+        // 预注册 ECMAScript 全局内置标识符
+        let _ = scopes.declare("undefined", VarKind::Var, true);
+        let _ = scopes.declare("NaN", VarKind::Var, true);
+        let _ = scopes.declare("Infinity", VarKind::Var, true);
+
         Self {
             module: Module::new(),
             next_value: 0,
-            scopes: ScopeTree::new(),
+            scopes,
             hoisted_vars: Vec::new(),
             hoisted_vars_set: std::collections::HashSet::new(),
             current_function: FunctionBuilder::new("main", BasicBlockId(0)),
@@ -411,7 +416,6 @@ impl Lowerer {
             active_finalizers: Vec::new(),
             anon_counter: 0,
             function_stack: Vec::new(),
-            function_scope_stack: Vec::new(),
             function_hoisted_stack: Vec::new(),
             function_next_value_stack: Vec::new(),
             function_next_temp_stack: Vec::new(),
@@ -423,8 +427,8 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new(name, entry),
         ));
-        self.function_scope_stack
-            .push(std::mem::replace(&mut self.scopes, ScopeTree::new()));
+        // 压入函数作用域到现有作用域树，而非创建新树
+        self.scopes.push_scope(ScopeKind::Function);
         self.function_hoisted_stack.push((
             std::mem::take(&mut self.hoisted_vars),
             std::mem::take(&mut self.hoisted_vars_set),
@@ -442,10 +446,8 @@ impl Lowerer {
 
     fn pop_function_context(&mut self) {
         self.current_function = self.function_stack.pop().expect("function stack underflow");
-        self.scopes = self
-            .function_scope_stack
-            .pop()
-            .expect("scope stack underflow");
+        // 弹出函数作用域，回到外层作用域
+        self.scopes.pop_scope();
         let (vars, set) = self
             .function_hoisted_stack
             .pop()
@@ -468,6 +470,59 @@ impl Lowerer {
 
         let entry = BasicBlockId(0);
         self.emit_hoisted_var_initializers(entry);
+
+        // 初始化全局内置变量：undefined, NaN, Infinity
+        // undefined
+        let undef_const = self.module.add_constant(Constant::Undefined);
+        let undef_val = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::Const {
+                dest: undef_val,
+                constant: undef_const,
+            },
+        );
+        self.current_function.append_instruction(
+            entry,
+            Instruction::StoreVar {
+                name: "$0.undefined".to_string(),
+                value: undef_val,
+            },
+        );
+        // NaN
+        let nan_const = self.module.add_constant(Constant::Number(f64::NAN));
+        let nan_val = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::Const {
+                dest: nan_val,
+                constant: nan_const,
+            },
+        );
+        self.current_function.append_instruction(
+            entry,
+            Instruction::StoreVar {
+                name: "$0.NaN".to_string(),
+                value: nan_val,
+            },
+        );
+        // Infinity
+        let inf_const = self.module.add_constant(Constant::Number(f64::INFINITY));
+        let inf_val = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::Const {
+                dest: inf_val,
+                constant: inf_const,
+            },
+        );
+        self.current_function.append_instruction(
+            entry,
+            Instruction::StoreVar {
+                name: "$0.Infinity".to_string(),
+                value: inf_val,
+            },
+        );
 
         let mut flow = StmtFlow::Open(entry);
 
@@ -1836,7 +1891,7 @@ impl Lowerer {
         self.push_function_context(&name, BasicBlockId(0));
 
         // Register $this so that this-keyword expressions resolve.
-        let _ = self
+        let this_scope_id = self
             .scopes
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
@@ -1852,11 +1907,13 @@ impl Lowerer {
             })
             .collect();
 
+        let mut param_ir_names: Vec<String> = vec![format!("${this_scope_id}.$this")];
         for param_name in &param_names {
-            let _ = self
+            let scope_id = self
                 .scopes
                 .declare(param_name, VarKind::Let, true)
                 .map_err(|msg| self.error(fn_decl.span(), msg))?;
+            param_ir_names.push(format!("${scope_id}.{param_name}"));
         }
 
         // Predeclare hoisted vars in the function body.
@@ -1888,7 +1945,7 @@ impl Lowerer {
         );
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
-        ir_function.set_params(param_names);
+        ir_function.set_params(param_ir_names);
         for block in blocks {
             ir_function.push_block(block);
         }
@@ -1938,7 +1995,7 @@ impl Lowerer {
         self.push_function_context(&name, BasicBlockId(0));
 
         // Register $this so that this-keyword expressions resolve.
-        let _ = self
+        let this_scope_id = self
             .scopes
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(fn_expr.span(), msg))?;
@@ -1962,11 +2019,13 @@ impl Lowerer {
             })
             .collect();
 
+        let mut param_ir_names: Vec<String> = vec![format!("${this_scope_id}.$this")];
         for param_name in &param_names {
-            let _ = self
+            let scope_id = self
                 .scopes
                 .declare(param_name, VarKind::Let, true)
                 .map_err(|msg| self.error(fn_expr.span(), msg))?;
+            param_ir_names.push(format!("${scope_id}.{param_name}"));
         }
 
         // Predeclare hoisted vars in body.
@@ -1998,7 +2057,7 @@ impl Lowerer {
         );
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
-        ir_function.set_params(param_names);
+        ir_function.set_params(param_ir_names);
         for b in blocks {
             ir_function.push_block(b);
         }
@@ -2030,7 +2089,7 @@ impl Lowerer {
         self.push_function_context(&name, BasicBlockId(0));
 
         // Register $this so that this-keyword expressions resolve.
-        let _ = self
+        let this_scope_id = self
             .scopes
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(arrow.span, msg))?;
@@ -2047,11 +2106,13 @@ impl Lowerer {
                 }
             })
             .collect();
+        let mut param_ir_names: Vec<String> = vec![format!("${this_scope_id}.$this")];
         for param_name in &param_names {
-            let _ = self
+            let scope_id = self
                 .scopes
                 .declare(param_name, VarKind::Let, true)
                 .map_err(|msg| self.error(arrow.span, msg))?;
+            param_ir_names.push(format!("${scope_id}.{param_name}"));
         }
 
         let entry = BasicBlockId(0);
@@ -2089,7 +2150,7 @@ impl Lowerer {
         );
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
-        ir_function.set_params(param_names);
+        ir_function.set_params(param_ir_names);
         for b in blocks {
             ir_function.push_block(b);
         }
@@ -2133,22 +2194,22 @@ impl Lowerer {
         self.push_function_context(&ctor_name, BasicBlockId(0));
 
         // Register $this as the first param.
-        let _ = self
+        let this_scope_id = self
             .scopes
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(class_decl.span(), msg))?;
 
         // Register explicit constructor params.
-        let mut param_names = vec!["$this".to_string()];
+        let mut param_ir_names = vec![format!("${this_scope_id}.$this")];
         if let Some(ctor) = constructor {
             for param in &ctor.params {
                 if let swc_ast::ParamOrTsParamProp::Param(p) = param {
                     if let swc_ast::Pat::Ident(binding_ident) = &p.pat {
                         let name = binding_ident.id.sym.to_string();
-                        self.scopes
+                        let scope_id = self.scopes
                             .declare(&name, VarKind::Let, true)
                             .map_err(|msg| self.error(class_decl.span(), msg))?;
-                        param_names.push(name);
+                        param_ir_names.push(format!("${scope_id}.{name}"));
                     }
                 }
             }
@@ -2185,7 +2246,7 @@ impl Lowerer {
         );
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&ctor_name, BasicBlockId(0));
-        ir_function.set_params(param_names);
+        ir_function.set_params(param_ir_names);
         for block in blocks {
             ir_function.push_block(block);
         }
@@ -2242,19 +2303,19 @@ impl Lowerer {
                 self.push_function_context(&fn_name, BasicBlockId(0));
 
                 // Register $this as the first param.
-                let _ = self
+                let this_scope_id = self
                     .scopes
                     .declare("$this", VarKind::Let, true)
                     .map_err(|msg| self.error(method.span, msg))?;
 
-                let mut method_param_names = vec!["$this".to_string()];
+                let mut method_param_ir_names = vec![format!("${this_scope_id}.$this")];
                 for param in &method.function.params {
                     if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
                         let name = binding_ident.id.sym.to_string();
-                        self.scopes
+                        let scope_id = self.scopes
                             .declare(&name, VarKind::Let, true)
                             .map_err(|msg| self.error(method.span, msg))?;
-                        method_param_names.push(name);
+                        method_param_ir_names.push(format!("${scope_id}.{name}"));
                     }
                 }
 
@@ -2286,7 +2347,7 @@ impl Lowerer {
                 );
                 let m_blocks = m_old_fn.into_blocks();
                 let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
-                m_ir_function.set_params(method_param_names);
+                m_ir_function.set_params(method_param_ir_names);
                 for b in m_blocks {
                     m_ir_function.push_block(b);
                 }
@@ -2395,21 +2456,21 @@ impl Lowerer {
         let ctor_name = format!("{}.constructor", class_name);
         self.push_function_context(&ctor_name, BasicBlockId(0));
 
-        let _ = self
+        let this_scope_id = self
             .scopes
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(class_expr.span(), msg))?;
 
-        let mut param_names = vec!["$this".to_string()];
+        let mut param_ir_names = vec![format!("${this_scope_id}.$this")];
         if let Some(ctor) = constructor {
             for param in &ctor.params {
                 if let swc_ast::ParamOrTsParamProp::Param(p) = param {
                     if let swc_ast::Pat::Ident(binding_ident) = &p.pat {
                         let name = binding_ident.id.sym.to_string();
-                        self.scopes
+                        let scope_id = self.scopes
                             .declare(&name, VarKind::Let, true)
                             .map_err(|msg| self.error(class_expr.span(), msg))?;
-                        param_names.push(name);
+                        param_ir_names.push(format!("${scope_id}.{name}"));
                     }
                 }
             }
@@ -2442,7 +2503,7 @@ impl Lowerer {
         );
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&ctor_name, BasicBlockId(0));
-        ir_function.set_params(param_names);
+        ir_function.set_params(param_ir_names);
         for blk in blocks {
             ir_function.push_block(blk);
         }
@@ -2494,19 +2555,19 @@ impl Lowerer {
                 let fn_name = format!("{}.{}", class_name, method_name);
                 self.push_function_context(&fn_name, BasicBlockId(0));
 
-                let _ = self
+                let this_scope_id = self
                     .scopes
                     .declare("$this", VarKind::Let, true)
                     .map_err(|msg| self.error(method.span, msg))?;
 
-                let mut method_param_names = vec!["$this".to_string()];
+                let mut method_param_ir_names = vec![format!("${this_scope_id}.$this")];
                 for param in &method.function.params {
                     if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
                         let name = binding_ident.id.sym.to_string();
-                        self.scopes
+                        let scope_id = self.scopes
                             .declare(&name, VarKind::Let, true)
                             .map_err(|msg| self.error(method.span, msg))?;
-                        method_param_names.push(name);
+                        method_param_ir_names.push(format!("${scope_id}.{name}"));
                     }
                 }
 
@@ -2535,7 +2596,7 @@ impl Lowerer {
                 );
                 let m_blocks = m_old_fn.into_blocks();
                 let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
-                m_ir_function.set_params(method_param_names);
+                m_ir_function.set_params(method_param_ir_names);
                 for b in m_blocks {
                     m_ir_function.push_block(b);
                 }

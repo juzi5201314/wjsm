@@ -1,23 +1,32 @@
 module {
   constants:
-    c0 = bool(true)
-    c1 = number(1)
-    c2 = number(2)
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = bool(true)
+    c4 = number(1)
+    c5 = number(2)
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      branch %0, bb1, bb2
-    bb1:
+      store var $0.undefined, %0
       %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      branch %3, bb1, bb2
+    bb1:
+      %4 = const c4
       jump bb3
     bb2:
-      %2 = const c2
+      %5 = const c5
       jump bb3
     bb3:
-      %3 = phi [(bb1, %1), (bb2, %2)]
-      store var $0.x, %3
-      %4 = load var $0.x
-      call builtin.console.log(%4)
+      %6 = phi [(bb1, %4), (bb2, %5)]
+      store var $0.x, %6
+      %7 = load var $0.x
+      call builtin.console.log(%7)
       return
 }

@@ -1,29 +1,38 @@
 module {
   constants:
-    c0 = string("try")
-    c1 = number(7)
-    c2 = string("finally")
-    c3 = string("finally")
-    c4 = string("after")
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = string("try")
+    c4 = number(7)
+    c5 = string("finally")
+    c6 = string("finally")
+    c7 = string("after")
 
   fn @main [entry=bb0]:
     bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
       jump bb1
     bb1:
-      %0 = const c0
-      call builtin.console.log(%0)
-      %1 = const c1
-      %2 = const c2
-      call builtin.console.log(%2)
-      return %1
+      %3 = const c3
+      call builtin.console.log(%3)
+      %4 = const c4
+      %5 = const c5
+      call builtin.console.log(%5)
+      return %4
     bb2:
       jump bb3
     bb3:
-      %3 = const c3
-      call builtin.console.log(%3)
+      %6 = const c6
+      call builtin.console.log(%6)
       jump bb4
     bb4:
-      %4 = const c4
-      call builtin.console.log(%4)
+      %7 = const c7
+      call builtin.console.log(%7)
       return
 }

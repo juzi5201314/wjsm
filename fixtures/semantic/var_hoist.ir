@@ -1,15 +1,24 @@
 module {
   constants:
     c0 = undefined
-    c1 = number(10)
+    c1 = undefined
+    c2 = number(NaN)
+    c3 = number(inf)
+    c4 = number(10)
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.x, %0
       %1 = const c1
-      store var $0.x, %1
-      %2 = load var $0.x
-      call builtin.console.log(%2)
+      store var $0.undefined, %1
+      %2 = const c2
+      store var $0.NaN, %2
+      %3 = const c3
+      store var $0.Infinity, %3
+      %4 = const c4
+      store var $0.x, %4
+      %5 = load var $0.x
+      call builtin.console.log(%5)
       return
 }

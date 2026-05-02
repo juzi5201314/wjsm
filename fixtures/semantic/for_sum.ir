@@ -1,36 +1,45 @@
 module {
   constants:
-    c0 = number(0)
-    c1 = number(1)
-    c2 = number(3)
-    c3 = number(1)
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(0)
+    c4 = number(1)
+    c5 = number(3)
+    c6 = number(1)
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      store var $0.sum, %0
+      store var $0.undefined, %0
       %1 = const c1
-      store var $0.i, %1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.sum, %3
+      %4 = const c4
+      store var $0.i, %4
       jump bb1
     bb1:
-      %2 = load var $0.i
-      %3 = const c2
-      %4 = lteq %2, %3
-      branch %4, bb2, bb4
+      %5 = load var $0.i
+      %6 = const c5
+      %7 = lteq %5, %6
+      branch %7, bb2, bb4
     bb2:
-      %5 = load var $0.sum
-      %6 = load var $0.i
-      %7 = add %5, %6
-      store var $0.sum, %7
+      %8 = load var $0.sum
+      %9 = load var $0.i
+      %10 = add %8, %9
+      store var $0.sum, %10
       jump bb3
     bb3:
-      %8 = load var $0.i
-      %9 = const c3
-      %10 = add %8, %9
-      store var $0.i, %10
+      %11 = load var $0.i
+      %12 = const c6
+      %13 = add %11, %12
+      store var $0.i, %13
       jump bb1
     bb4:
-      %11 = load var $0.sum
-      call builtin.console.log(%11)
+      %14 = load var $0.sum
+      call builtin.console.log(%14)
       return
 }

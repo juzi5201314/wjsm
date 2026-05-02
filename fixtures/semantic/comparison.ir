@@ -1,22 +1,31 @@
 module {
   constants:
-    c0 = number(5)
-    c1 = number(10)
-    c2 = string("smaller")
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(5)
+    c4 = number(10)
+    c5 = string("smaller")
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      store var $0.x, %0
+      store var $0.undefined, %0
       %1 = const c1
-      store var $0.y, %1
-      %2 = load var $0.x
-      %3 = load var $0.y
-      %4 = lt %2, %3
-      branch %4, bb1, bb2
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.x, %3
+      %4 = const c4
+      store var $0.y, %4
+      %5 = load var $0.x
+      %6 = load var $0.y
+      %7 = lt %5, %6
+      branch %7, bb1, bb2
     bb1:
-      %5 = const c2
-      call builtin.console.log(%5)
+      %8 = const c5
+      call builtin.console.log(%8)
       jump bb2
     bb2:
       return

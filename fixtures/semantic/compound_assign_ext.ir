@@ -1,88 +1,97 @@
 module {
   constants:
-    c0 = number(10)
-    c1 = number(3)
-    c2 = number(2)
-    c3 = number(3)
-    c4 = number(8)
-    c5 = number(1)
-    c6 = number(4)
-    c7 = number(1)
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(10)
+    c4 = number(3)
+    c5 = number(2)
+    c6 = number(3)
+    c7 = number(8)
     c8 = number(1)
-    c9 = number(1)
-    c10 = number(5)
-    c11 = number(2)
-    c12 = number(5)
-    c13 = number(3)
-    c14 = number(5)
-    c15 = number(3)
+    c9 = number(4)
+    c10 = number(1)
+    c11 = number(1)
+    c12 = number(1)
+    c13 = number(5)
+    c14 = number(2)
+    c15 = number(5)
+    c16 = number(3)
+    c17 = number(5)
+    c18 = number(3)
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      store var $0.x, %0
-      %1 = load var $0.x
-      %2 = const c1
-      %3 = call builtin.f64.mod(%1, %2)
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
       store var $0.x, %3
       %4 = load var $0.x
-      call builtin.console.log(%4)
-      %5 = const c2
-      store var $0.y, %5
-      %6 = load var $0.y
-      %7 = const c3
-      %8 = call builtin.f64.exp(%6, %7)
+      %5 = const c4
+      %6 = call builtin.f64.mod(%4, %5)
+      store var $0.x, %6
+      %7 = load var $0.x
+      call builtin.console.log(%7)
+      %8 = const c5
       store var $0.y, %8
       %9 = load var $0.y
-      call builtin.console.log(%9)
-      %10 = const c4
-      store var $0.z, %10
-      %11 = load var $0.z
-      %12 = const c5
-      %13 = shr %11, %12
+      %10 = const c6
+      %11 = call builtin.f64.exp(%9, %10)
+      store var $0.y, %11
+      %12 = load var $0.y
+      call builtin.console.log(%12)
+      %13 = const c7
       store var $0.z, %13
       %14 = load var $0.z
-      call builtin.console.log(%14)
-      %15 = const c6
-      store var $0.w, %15
-      %16 = load var $0.w
-      %17 = const c7
-      %18 = shl %16, %17
+      %15 = const c8
+      %16 = shr %14, %15
+      store var $0.z, %16
+      %17 = load var $0.z
+      call builtin.console.log(%17)
+      %18 = const c9
       store var $0.w, %18
       %19 = load var $0.w
-      call builtin.console.log(%19)
-      %20 = const c8
-      %21 = neg %20
-      store var $0.u, %21
-      %22 = load var $0.u
-      %23 = const c9
-      %24 = ushr %22, %23
+      %20 = const c10
+      %21 = shl %19, %20
+      store var $0.w, %21
+      %22 = load var $0.w
+      call builtin.console.log(%22)
+      %23 = const c11
+      %24 = neg %23
       store var $0.u, %24
       %25 = load var $0.u
-      call builtin.console.log(%25)
-      %26 = const c10
-      store var $0.v, %26
-      %27 = load var $0.v
-      %28 = const c11
-      %29 = bitor %27, %28
+      %26 = const c12
+      %27 = ushr %25, %26
+      store var $0.u, %27
+      %28 = load var $0.u
+      call builtin.console.log(%28)
+      %29 = const c13
       store var $0.v, %29
       %30 = load var $0.v
-      call builtin.console.log(%30)
-      %31 = const c12
-      store var $0.a, %31
-      %32 = load var $0.a
-      %33 = const c13
-      %34 = bitand %32, %33
+      %31 = const c14
+      %32 = bitor %30, %31
+      store var $0.v, %32
+      %33 = load var $0.v
+      call builtin.console.log(%33)
+      %34 = const c15
       store var $0.a, %34
       %35 = load var $0.a
-      call builtin.console.log(%35)
-      %36 = const c14
-      store var $0.b, %36
-      %37 = load var $0.b
-      %38 = const c15
-      %39 = bitxor %37, %38
+      %36 = const c16
+      %37 = bitand %35, %36
+      store var $0.a, %37
+      %38 = load var $0.a
+      call builtin.console.log(%38)
+      %39 = const c17
       store var $0.b, %39
       %40 = load var $0.b
-      call builtin.console.log(%40)
+      %41 = const c18
+      %42 = bitxor %40, %41
+      store var $0.b, %42
+      %43 = load var $0.b
+      call builtin.console.log(%43)
       return
 }

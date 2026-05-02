@@ -1,72 +1,81 @@
 module {
   constants:
-    c0 = number(0)
-    c1 = number(0)
-    c2 = number(1)
-    c3 = bool(false)
-    c4 = number(2)
-    c5 = string("x")
-    c6 = number(3)
-    c7 = null
-    c8 = number(4)
-    c9 = number(0)
-    c10 = undefined
-    c11 = number(5)
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(0)
+    c4 = number(0)
+    c5 = number(1)
+    c6 = bool(false)
+    c7 = number(2)
+    c8 = string("x")
+    c9 = number(3)
+    c10 = null
+    c11 = number(4)
+    c12 = number(0)
+    c13 = undefined
+    c14 = number(5)
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      store var $0.hit, %0
+      store var $0.undefined, %0
       %1 = const c1
-      %2 = is_nullish %1
-      branch %2, bb1, bb2
-    bb1:
-      %3 = const c2
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
       store var $0.hit, %3
+      %4 = const c4
+      %5 = is_nullish %4
+      branch %5, bb1, bb2
+    bb1:
+      %6 = const c5
+      store var $0.hit, %6
       jump bb2
     bb2:
-      %4 = phi [(bb0, %1), (bb1, %3)]
-      call builtin.console.log(%4)
-      %5 = const c3
-      %6 = is_nullish %5
-      branch %6, bb3, bb4
+      %7 = phi [(bb0, %4), (bb1, %6)]
+      call builtin.console.log(%7)
+      %8 = const c6
+      %9 = is_nullish %8
+      branch %9, bb3, bb4
     bb3:
-      %7 = const c4
-      store var $0.hit, %7
+      %10 = const c7
+      store var $0.hit, %10
       jump bb4
     bb4:
-      %8 = phi [(bb2, %5), (bb3, %7)]
-      call builtin.console.log(%8)
-      %9 = const c5
-      %10 = is_nullish %9
-      branch %10, bb5, bb6
+      %11 = phi [(bb2, %8), (bb3, %10)]
+      call builtin.console.log(%11)
+      %12 = const c8
+      %13 = is_nullish %12
+      branch %13, bb5, bb6
     bb5:
-      %11 = const c6
-      store var $0.hit, %11
+      %14 = const c9
+      store var $0.hit, %14
       jump bb6
     bb6:
-      %12 = phi [(bb4, %9), (bb5, %11)]
-      call builtin.console.log(%12)
-      %13 = const c7
-      %14 = is_nullish %13
-      branch %14, bb7, bb8
+      %15 = phi [(bb4, %12), (bb5, %14)]
+      call builtin.console.log(%15)
+      %16 = const c10
+      %17 = is_nullish %16
+      branch %17, bb7, bb8
     bb7:
-      %15 = const c8
+      %18 = const c11
       jump bb8
     bb8:
-      %16 = phi [(bb6, %13), (bb7, %15)]
-      call builtin.console.log(%16)
-      %17 = const c9
-      %18 = const c10
-      %19 = is_nullish %18
-      branch %19, bb9, bb10
+      %19 = phi [(bb6, %16), (bb7, %18)]
+      call builtin.console.log(%19)
+      %20 = const c12
+      %21 = const c13
+      %22 = is_nullish %21
+      branch %22, bb9, bb10
     bb9:
-      %20 = const c11
+      %23 = const c14
       jump bb10
     bb10:
-      %21 = phi [(bb8, %18), (bb9, %20)]
-      call builtin.console.log(%21)
-      %22 = load var $0.hit
-      call builtin.console.log(%22)
+      %24 = phi [(bb8, %21), (bb9, %23)]
+      call builtin.console.log(%24)
+      %25 = load var $0.hit
+      call builtin.console.log(%25)
       return
 }

@@ -1,9 +1,18 @@
 module {
   constants:
-    c0 = number(42)
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(42)
 
   fn @main [entry=bb0]:
     bb0:
       %0 = const c0
-      throw %0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      throw %3
 }
