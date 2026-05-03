@@ -9,11 +9,11 @@
 | 领域 | 内容 |
 |------|------|
 | 函数与类 | `function` 声明/表达式、箭头函数、`class` 声明/表达式、`new`、`this`、一般调用 |
-| 运算符 | 算术、比较（`==`/`!=`/`===`/`!==`）、逻辑（`&&`/`||`/`??`）、位运算、一元、三元、逗号、复合赋值、`typeof`/`in`/`instanceof`/`delete`、自增自减 |
+| 运算符 | 算术、比较（`==`/`!=` 跨类型 AbstractEq、`===`/`!==` 严格相等、`<`/`>`/`<=`/`>=` AbstractCompare）、逻辑（`&&`/`||`/`??`）、位运算、一元、三元、逗号、复合赋值、`typeof`/`in`/`instanceof`/`delete`、自增自减 |
 | 字面量 | 数字、字符串、`true`/`false`、`null`、`undefined`、对象字面量 `{a:1}`（含 shorthand） |
 | 控制流 | `if`/`else`、`switch`（含 fallthrough + 嵌套）、`while`/`do..while`/`for`/`for..in`/`for..of`、`break`/`continue`（含 label）、`return`、`labeled`、`try`/`catch`/`finally`/`throw`、`debugger` |
 | 对象系统 | 属性读写 `obj.prop`、属性描述符 flags（configurable/writable/enumerable）、`$obj_set` 扩容、`$obj_delete` configurable 检查、`Object.defineProperty`/`getOwnPropertyDescriptor`、`SetProto` 有效性验证、`func_props` 按需分配 |
-| 运行时 | NaN-boxed 值编码（f64/string/bool/null/undefined/object/fn/exception/iterator/enumerator）、`$obj_new` 堆分配、原型链遍历 `$obj_get`、`string_concat` 宿主函数 |
+| 运行时 | NaN-boxed 值编码（f64/string/bool/null/undefined/object/fn/exception/iterator/enumerator）、`$obj_new` 堆分配、原型链遍历 `$obj_get`、`string_concat`、`abstract_eq`（跨类型相等）、`abstract_compare`（关系比较）、`to_number`/`to_primitive` 辅助函数 |
 
 > `with` 语句明确不支持（已废弃特性）。以下限制已在语义层显式报错：`obj.x++` 成员表达式自增自减、`obj.x += 1` 复合赋值到成员表达式。
 
@@ -25,10 +25,10 @@
 
 无外部依赖，可并行执行。
 
-- [ ] **完善 `+` 运算符字符串拼接** — 验证 `string_concat` 两阶段逻辑（字符串+字符串、字符串+数字、数字+数字的自动回退），修复 `end_try` 运行时未注册问题。影响层：运行时
-- [ ] **`==` 跨类型隐式转换（AbstractEq）** — 新增 `AbstractEq` 宿主函数，实现 `ToPrimitive` / `ToNumber` / `ToBoolean` 跨类型转换，补齐 `null == undefined` 已实现之外的全部 `==` 语义。影响层：IR（新增 Builtin）+ 运行时
-- [ ] **`<` `>` `<=` `>=` 扩展比较** — 新增 `AbstractRelationalCompare` 宿主函数，补齐字符串字典序比较、`null`/`undefined` 数值转换、对象 `ToPrimitive`。影响层：IR + WASM 后端 + 运行时
-- [ ] **`for...in` 枚举器支持非字符串值** — 修复 `enumerator_from` 对 `undefined`/`null`/`bool` 等非字符串值仅 push `Error` 状态的问题，按 JS 语义实现 `ToObject` 转换。影响层：运行时
+- [x] **完善 `+` 运算符字符串拼接** — 验证 `string_concat` 两阶段逻辑（字符串+字符串、字符串+数字、数字+数字的自动回退），清理 `end_try` 死代码。影响层：运行时
+- [x] **`==` 跨类型隐式转换** — 新增 `AbstractEq` 宿主函数，实现 `ToPrimitive` / `ToNumber` 跨类型转换，补齐 `null == undefined` 已实现之外的全部 `==` 语义。影响层：IR（新增 Builtin）+ 运行时
+- [x] **`<` `>` `<=` `>=` 扩展比较** — 新增 `AbstractCompare` 宿主函数，补齐字符串字典序比较、`null`/`undefined` 数值转换、对象 `ToPrimitive`。影响层：IR + WASM 后端 + 运行时
+- [x] **`for...in` 枚举器支持非字符串值** — 修复 `enumerator_from` 对 `bool` 等非字符串值的问题，布尔值返回空枚举。影响层：运行时
 
 ### 块 B：函数调用约定与宿主 API
 
