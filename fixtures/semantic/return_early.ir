@@ -23,12 +23,12 @@ module {
     bb1:
       %4 = load var $0.i
       %5 = const c4
-      %6 = lt %4, %5
+      %6 = call builtin.abstract_compare(%4, %5)
       branch %6, bb2, bb4
     bb2:
       %7 = load var $0.i
       %8 = const c5
-      %9 = eq %7, %8
+      %9 = call builtin.abstract_eq(%7, %8)
       branch %9, bb5, bb6
     bb3:
       %11 = load var $0.i

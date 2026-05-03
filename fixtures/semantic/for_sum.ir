@@ -24,22 +24,23 @@ module {
     bb1:
       %5 = load var $0.i
       %6 = const c5
-      %7 = lteq %5, %6
+      %8 = call builtin.abstract_compare(%6, %5)
+      %7 = not %8
       branch %7, bb2, bb4
     bb2:
-      %8 = load var $0.sum
-      %9 = load var $0.i
-      %10 = add %8, %9
-      store var $0.sum, %10
+      %9 = load var $0.sum
+      %10 = load var $0.i
+      %11 = add %9, %10
+      store var $0.sum, %11
       jump bb3
     bb3:
-      %11 = load var $0.i
-      %12 = const c6
-      %13 = add %11, %12
-      store var $0.i, %13
+      %12 = load var $0.i
+      %13 = const c6
+      %14 = add %12, %13
+      store var $0.i, %14
       jump bb1
     bb4:
-      %14 = load var $0.sum
-      call builtin.console.log(%14)
+      %15 = load var $0.sum
+      call builtin.console.log(%15)
       return
 }

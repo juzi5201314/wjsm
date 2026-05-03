@@ -447,27 +447,15 @@ impl fmt::Display for UnaryOp {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompareOp {
-    Eq,
-    NotEq,
     StrictEq,
     StrictNotEq,
-    Lt,
-    LtEq,
-    Gt,
-    GtEq,
 }
 
 impl fmt::Display for CompareOp {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
-            Self::Eq => "eq",
-            Self::NotEq => "neq",
             Self::StrictEq => "stricteq",
             Self::StrictNotEq => "strictneq",
-            Self::Lt => "lt",
-            Self::LtEq => "lteq",
-            Self::Gt => "gt",
-            Self::GtEq => "gteq",
         })
     }
 }
@@ -475,6 +463,11 @@ impl fmt::Display for CompareOp {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Builtin {
     ConsoleLog,
+    ConsoleError,
+    ConsoleWarn,
+    ConsoleInfo,
+    ConsoleDebug,
+    ConsoleTrace,
     Debugger,
     Throw,
     F64Mod,
@@ -497,12 +490,25 @@ pub enum Builtin {
     // 对象属性描述符
     DefineProperty,
     GetOwnPropDesc,
+    // 宿主 API
+    SetTimeout,
+    ClearTimeout,
+    SetInterval,
+    ClearInterval,
+    Fetch,
+    JsonStringify,
+    JsonParse,
 }
 
 impl fmt::Display for Builtin {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
             Self::ConsoleLog => "console.log",
+            Self::ConsoleError => "console.error",
+            Self::ConsoleWarn => "console.warn",
+            Self::ConsoleInfo => "console.info",
+            Self::ConsoleDebug => "console.debug",
+            Self::ConsoleTrace => "console.trace",
             Self::Debugger => "debugger",
             Self::Throw => "throw",
             Self::F64Mod => "f64.mod",
@@ -523,6 +529,13 @@ impl fmt::Display for Builtin {
             Self::AbstractCompare => "abstract_compare",
             Self::DefineProperty => "define_property",
             Self::GetOwnPropDesc => "get_own_prop_desc",
+            Self::SetTimeout => "setTimeout",
+            Self::ClearTimeout => "clearTimeout",
+            Self::SetInterval => "setInterval",
+            Self::ClearInterval => "clearInterval",
+            Self::Fetch => "fetch",
+            Self::JsonStringify => "JSON.stringify",
+            Self::JsonParse => "JSON.parse",
         })
     }
 }

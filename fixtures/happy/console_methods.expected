@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+log message
+[error] error message
+[warn] warn message
+[info] info message
+[debug] debug message
+--- stderr ---

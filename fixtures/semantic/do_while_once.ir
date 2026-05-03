@@ -29,7 +29,7 @@ module {
     bb2:
       %8 = load var $0.x
       %9 = const c5
-      %10 = lt %8, %9
+      %10 = call builtin.abstract_compare(%8, %9)
       branch %10, bb1, bb3
     bb3:
       return

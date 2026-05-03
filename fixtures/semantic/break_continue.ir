@@ -25,7 +25,7 @@ module {
       %4 = const c4
       %5 = load var $0.i
       %6 = const c5
-      %7 = lt %5, %6
+      %7 = call builtin.abstract_compare(%5, %6)
       branch %7, bb2, bb3
     bb2:
       %8 = load var $0.i
@@ -34,7 +34,7 @@ module {
       store var $0.i, %10
       %11 = load var $0.i
       %12 = const c7
-      %13 = eq %11, %12
+      %13 = call builtin.abstract_eq(%11, %12)
       branch %13, bb4, bb5
     bb3:
       return
@@ -43,7 +43,7 @@ module {
     bb5:
       %14 = load var $0.i
       %15 = const c8
-      %16 = eq %14, %15
+      %16 = call builtin.abstract_eq(%14, %15)
       branch %16, bb6, bb7
     bb6:
       jump bb3

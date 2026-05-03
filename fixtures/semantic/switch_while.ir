@@ -37,7 +37,7 @@ module {
       %6 = const c6
       %7 = load var $0.i
       %8 = const c7
-      %9 = lt %7, %8
+      %9 = call builtin.abstract_compare(%7, %8)
       branch %9, bb5, bb6
     bb5:
       %10 = load var $0.i
