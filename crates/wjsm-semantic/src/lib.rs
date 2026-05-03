@@ -3586,6 +3586,7 @@ impl Lowerer {
     }
 
     /// Lower comparison operators → Compare instruction.
+    /// 注意: == 和 != 使用 abstract_eq builtin 而不是 Compare 指令
     fn lower_comparison(
         &mut self,
         bin: &swc_ast::BinExpr,
@@ -3595,20 +3596,112 @@ impl Lowerer {
         let rhs = self.lower_expr(bin.right.as_ref(), block)?;
         let dest = self.alloc_value();
 
-        let op = match bin.op {
-            swc_ast::BinaryOp::EqEq => CompareOp::Eq,
-            swc_ast::BinaryOp::NotEq => CompareOp::NotEq,
-            swc_ast::BinaryOp::EqEqEq => CompareOp::StrictEq,
-            swc_ast::BinaryOp::NotEqEq => CompareOp::StrictNotEq,
-            swc_ast::BinaryOp::Lt => CompareOp::Lt,
-            swc_ast::BinaryOp::LtEq => CompareOp::LtEq,
-            swc_ast::BinaryOp::Gt => CompareOp::Gt,
-            swc_ast::BinaryOp::GtEq => CompareOp::GtEq,
-            _ => unreachable!(),
-        };
+        match bin.op {
+            // == 使用 abstract_eq builtin
+            swc_ast::BinaryOp::EqEq => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::AbstractEq,
+                        args: vec![lhs, rhs],
+                    },
+                );
+            }
+            // != 使用 abstract_eq builtin 然后 Not
+            swc_ast::BinaryOp::NotEq => {
+                let eq_result = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(eq_result),
+                        builtin: Builtin::AbstractEq,
+                        args: vec![lhs, rhs],
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::Not,
+                        value: eq_result,
+                    },
+                );
+            }
+            // < 使用 abstract_compare builtin
+            swc_ast::BinaryOp::Lt => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::AbstractCompare,
+                        args: vec![lhs, rhs],
+                    },
+                );
+            }
+            // > 相当于 (rhs < lhs)
+            swc_ast::BinaryOp::Gt => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::AbstractCompare,
+                        args: vec![rhs, lhs],
+                    },
+                );
+            }
+            // <= 相当于 NOT (rhs < lhs)
+            swc_ast::BinaryOp::LtEq => {
+                let cmp_result = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(cmp_result),
+                        builtin: Builtin::AbstractCompare,
+                        args: vec![rhs, lhs],
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::Not,
+                        value: cmp_result,
+                    },
+                );
+            }
+            // >= 相当于 NOT (lhs < rhs)
+            swc_ast::BinaryOp::GtEq => {
+                let cmp_result = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(cmp_result),
+                        builtin: Builtin::AbstractCompare,
+                        args: vec![lhs, rhs],
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::Not,
+                        value: cmp_result,
+                    },
+                );
+            }
+            // === 和 !== 仍使用 Compare 指令
+            _ => {
+                let op = match bin.op {
+                    swc_ast::BinaryOp::EqEqEq => CompareOp::StrictEq,
+                    swc_ast::BinaryOp::NotEqEq => CompareOp::StrictNotEq,
+                    _ => unreachable!(),
+                };
+                self.current_function
+                    .append_instruction(block, Instruction::Compare { dest, op, lhs, rhs });
+            }
+        }
 
-        self.current_function
-            .append_instruction(block, Instruction::Compare { dest, op, lhs, rhs });
         Ok(dest)
     }
 

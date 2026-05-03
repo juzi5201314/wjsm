@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+null is null
+undefined is undefined
+true is true
+3
+ab
+--- stderr ---

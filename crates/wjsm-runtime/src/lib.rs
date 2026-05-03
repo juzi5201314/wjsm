@@ -223,6 +223,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     index: 0,
                 });
                 value::encode_handle(value::TAG_ENUMERATOR, handle)
+            } else if value::is_bool(val) {
+                // 布尔值：无枚举属性（JS 语义：for..in on boolean = no iteration）
+                let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
+                let handle = enums.len() as u32;
+                enums.push(EnumeratorState::StringEnum {
+                    length: 0,
+                    index: 0,
+                });
+                value::encode_handle(value::TAG_ENUMERATOR, handle)
             } else {
                 let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
                 let handle = enums.len() as u32;
@@ -905,6 +914,107 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
+
+    // ── Import 19: abstract_eq(i64, i64) → i64 ──────────────────────────────
+    let abstract_eq = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            // 实现 Abstract Equality Comparison (ECMAScript 7.2.15)
+            // 使用迭代而非递归来避免无限循环
+            // 最多迭代 10 次防止死循环
+            let mut x = a;
+            let mut y = b;
+            for _ in 0..10 {
+                // 1. 同类型比较 → StrictEq
+                if type_tag(x) == type_tag(y) {
+                    return strict_eq(&mut caller, x, y);
+                }
+                
+                // 2. null == undefined → true
+                if value::is_null(x) && value::is_undefined(y) {
+                    return value::encode_bool(true);
+                }
+                // 3. undefined == null → true
+                if value::is_undefined(x) && value::is_null(y) {
+                    return value::encode_bool(true);
+                }
+                
+                // 4. Number == String → ToNumber(string) == number
+                if value::is_f64(x) && value::is_string(y) {
+                    y = to_number(&mut caller, y);
+                    continue;
+                }
+                // 5. String == Number → string == ToNumber(number)
+                if value::is_string(x) && value::is_f64(y) {
+                    x = to_number(&mut caller, x);
+                    continue;
+                }
+                
+                // 6. Boolean == any → ToNumber(boolean) == any
+                if value::is_bool(x) {
+                    x = to_number(&mut caller, x);
+                    continue;
+                }
+                // 7. any == Boolean → any == ToNumber(boolean)
+                if value::is_bool(y) {
+                    y = to_number(&mut caller, y);
+                    continue;
+                }
+                
+                // 8. Object == String/Number → ToPrimitive(object) == primitive
+                if (value::is_object(x) || value::is_function(x)) &&
+                   (value::is_string(y) || value::is_f64(y)) {
+                    x = to_primitive(&mut caller, x);
+                    continue;
+                }
+                // 9. String/Number == Object → primitive == ToPrimitive(object)
+                if (value::is_string(x) || value::is_f64(x)) &&
+                   (value::is_object(y) || value::is_function(y)) {
+                    y = to_primitive(&mut caller, y);
+                    continue;
+                }
+                
+                // 10. 其他情况 → false
+                return value::encode_bool(false);
+            }
+            // 迭代次数超限 → false
+            value::encode_bool(false)
+        },
+    );
+
+    // ── Import 20: abstract_compare(i64, i64) → i64 ──────────────────────────────
+    let abstract_compare = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            // 实现 Abstract Relational Comparison (ECMAScript 7.2.17)
+            // 返回值: true (a < b), false (a >= b 或无法比较)
+            
+            // 1. ToPrimitive(a, hint Number), ToPrimitive(b, hint Number)
+            let pa = to_primitive(&mut caller, a);
+            let pb = to_primitive(&mut caller, b);
+            
+            // 2. 若都是 String → 字典序比较
+            if value::is_string(pa) && value::is_string(pb) {
+                let a_str = get_string_value(&mut caller, pa);
+                let b_str = get_string_value(&mut caller, pb);
+                return value::encode_bool(a_str < b_str);
+            }
+            
+            // 3. 否则 → ToNumber(px), ToNumber(py)
+            let na = to_number(&mut caller, pa);
+            let nb = to_number(&mut caller, pb);
+            
+            // 4. 若任一为 NaN → 返回 false
+            let af = f64::from_bits(na as u64);
+            let bf = f64::from_bits(nb as u64);
+            if af.is_nan() || bf.is_nan() {
+                return value::encode_bool(false);
+            }
+            
+            // 5. 否则 → px < py 的数值比较
+            value::encode_bool(af < bf)
+        },
+    );
     let imports = [
         console_log.into(),          // 0
         f64_mod.into(),              // 1
@@ -925,6 +1035,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         string_concat.into(),        // 16
         define_property_fn.into(),   // 17
         get_own_prop_desc_fn.into(), // 18
+        abstract_eq.into(),          // 19
+        abstract_compare.into(),    // 20
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -1430,6 +1542,160 @@ fn allocate_descriptor_object(
 
     // 返回对象 handle
     Some(value::encode_object_handle(handle_idx as u32))
+}
+
+// ── 辅助函数用于 abstract_eq 和 abstract_compare ─────────────────────────
+
+/// ToNumber 抽象操作 (ECMAScript 7.1.4)
+/// 将值转换为 Number 类型
+fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
+    // undefined → NaN
+    if value::is_undefined(val) {
+        return f64::NAN.to_bits() as i64;
+    }
+    
+    // null → +0
+    if value::is_null(val) {
+        return 0.0_f64.to_bits() as i64;
+    }
+    
+    // bool: true → 1, false → 0
+    if value::is_bool(val) {
+        let b = value::decode_bool(val);
+        return (if b { 1.0_f64 } else { 0.0_f64 }).to_bits() as i64;
+    }
+    
+    // f64 → itself
+    if value::is_f64(val) {
+        return val;
+    }
+    
+    // string → parseFloat (可能失败 → NaN)
+    if value::is_string(val) {
+        let s = if value::is_runtime_string_handle(val) {
+            let handle = value::decode_runtime_string_handle(val) as usize;
+            let strings = caller
+                .data()
+                .runtime_strings
+                .lock()
+                .expect("runtime strings mutex");
+            strings.get(handle).cloned().unwrap_or_default()
+        } else {
+            read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
+        };
+        
+        // 尝试解析字符串为数字
+        // 先尝试 trim，然后解析
+        let trimmed = s.trim();
+        if let Ok(num) = trimmed.parse::<f64>() {
+            return num.to_bits() as i64;
+        }
+        // 解析失败返回 NaN
+        return f64::NAN.to_bits() as i64;
+    }
+    
+    // object/function → ToPrimitive(hint: Number) → ToNumber
+    // 简化实现：调用 render_value 返回字符串，然后解析
+    if value::is_object(val) || value::is_function(val) {
+        let prim = to_primitive(caller, val);
+        return to_number(caller, prim);
+    }
+    
+    // 其他类型（iterator, enumerator, exception）→ NaN
+    f64::NAN.to_bits() as i64
+}
+
+/// ToPrimitive 抽象操作 (ECMAScript 7.1.1)
+/// 将对象转换为原始值
+/// 简化实现：调用 render_value 返回字符串
+fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
+    // 已经是原始类型
+    if value::is_f64(val) || value::is_string(val) || 
+       value::is_bool(val) || value::is_undefined(val) || value::is_null(val) {
+        return val;
+    }
+    
+    // object/function → 调用 render_value 返回字符串表示
+    if value::is_object(val) || value::is_function(val) {
+        if let Ok(s) = render_value(caller, val) {
+            // 将字符串存入 runtime_strings
+            let mut strings = caller
+                .data()
+                .runtime_strings
+                .lock()
+                .expect("runtime strings mutex");
+            let handle = strings.len() as u32;
+            strings.push(s);
+            return value::encode_runtime_string_handle(handle);
+        }
+    }
+    
+    // 其他类型直接返回
+    val
+}
+
+/// 严格相等比较 (ECMAScript 7.2.16)
+fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -> i64 {
+    // 类型不同 → false
+    let a_type = type_tag(a);
+    let b_type = type_tag(b);
+    
+    if a_type != b_type {
+        return value::encode_bool(false);
+    }
+    
+    // 同类型比较
+    match a_type {
+        // f64: 注意 NaN !== NaN
+        0 => {
+            let af = f64::from_bits(a as u64);
+            let bf = f64::from_bits(b as u64);
+            if af.is_nan() || bf.is_nan() {
+                return value::encode_bool(false);
+            }
+            value::encode_bool(af == bf)
+        }
+        // string
+        1 => {
+            let a_str = get_string_value(caller, a);
+            let b_str = get_string_value(caller, b);
+            value::encode_bool(a_str == b_str)
+        }
+        // undefined
+        2 => value::encode_bool(true),
+        // null
+        3 => value::encode_bool(true),
+        // bool
+        4 => value::encode_bool(value::decode_bool(a) == value::decode_bool(b)),
+        // object/function/iterator/enumerator/exception: 引用比较
+        _ => value::encode_bool(a == b),
+    }
+}
+
+/// 获取类型标签 (用于 strict_eq)
+/// 返回值: 0=f64, 1=string, 2=undefined, 3=null, 4=bool, 5+=其他
+fn type_tag(val: i64) -> u64 {
+    if value::is_f64(val) { 0 }
+    else if value::is_string(val) { 1 }
+    else if value::is_undefined(val) { 2 }
+    else if value::is_null(val) { 3 }
+    else if value::is_bool(val) { 4 }
+    else { 5 } // object, function, iterator, enumerator, exception
+}
+
+/// 获取字符串值
+fn get_string_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
+    if value::is_runtime_string_handle(val) {
+        let handle = value::decode_runtime_string_handle(val) as usize;
+        let strings = caller
+            .data()
+            .runtime_strings
+            .lock()
+            .expect("runtime strings mutex");
+        strings.get(handle).cloned().unwrap_or_default()
+    } else {
+        read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
+    }
 }
 #[cfg(test)]
 mod tests {
