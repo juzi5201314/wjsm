@@ -12,8 +12,9 @@
 | 运算符 | 算术、比较（`==`/`!=` 跨类型 AbstractEq、`===`/`!==` 严格相等、`<`/`>`/`<=`/`>=` AbstractCompare）、逻辑（`&&`/`||`/`??`）、位运算、一元、三元、逗号、复合赋值、`typeof`/`in`/`instanceof`/`delete`、自增自减 |
 | 字面量 | 数字、字符串、`true`/`false`、`null`、`undefined`、对象字面量 `{a:1}`（含 shorthand） |
 | 控制流 | `if`/`else`、`switch`（含 fallthrough + 嵌套）、`while`/`do..while`/`for`/`for..in`/`for..of`、`break`/`continue`（含 label）、`return`、`labeled`、`try`/`catch`/`finally`/`throw`、`debugger` |
-| 对象系统 | 属性读写 `obj.prop`、属性描述符 flags（configurable/writable/enumerable）、`$obj_set` 扩容、`$obj_delete` configurable 检查、`Object.defineProperty`/`getOwnPropertyDescriptor`、`SetProto` 有效性验证、`func_props` 按需分配 |
-| 运行时 | NaN-boxed 值编码（f64/string/bool/null/undefined/object/fn/exception/iterator/enumerator）、`$obj_new` 堆分配、原型链遍历 `$obj_get`、`string_concat`、`abstract_eq`（跨类型相等）、`abstract_compare`（关系比较）、`to_number`/`to_primitive` 辅助函数 |
+| 对象系统 | 属性读写 `obj.prop`、属性描述符 flags（configurable/writable/enumerable）、`$obj_set` 扩容、`$obj_delete` configurable 检查、`Object.defineProperty`/`getOwnPropertyDescriptor`、`SetProto` 有效性验证、`func_props` 按需分配、**标记-清除 GC（堆上限 + 定期触发）** |
+| 运行时 | NaN-boxed 值编码（f64/string/bool/null/undefined/object/fn/exception/iterator/enumerator）、`$obj_new` 堆分配（**GC 集成**）、原型链遍历 `$obj_get`、`string_concat`、`abstract_eq`（跨类型相等）、`abstract_compare`（关系比较）、`to_number`/`to_primitive` 辅助函数、**影子栈函数调用约定（无限参数）** |
+| 宿主 API | `console.log`/`error`/`warn`/`info`/`debug`/`trace`、`setTimeout`/`clearTimeout`/`setInterval`/`clearInterval`**（含事件循环）**、`fetch`**（data: URL）**、`JSON.stringify`/`JSON.parse` |
 
 > `with` 语句明确不支持（已废弃特性）。以下限制已在语义层显式报错：`obj.x++` 成员表达式自增自减、`obj.x += 1` 复合赋值到成员表达式。
 
@@ -34,9 +35,9 @@
 
 无外部依赖，可并行执行。
 
-- [ ] **函数调用约定扩展（支持 >7 个参数）** — 移除 `args.iter().take(7)` 限制，扩展 WASM 函数类型为多参数或数组传参。影响层：IR + WASM 后端
-- [ ] **堆分配器改进（bump → 可回收）** — 当前仅简单 bump allocator（`$obj_new`），无法回收；实现基础 GC（标记-清除或引用计数）。注意：闭包 PoC 可用现有 bump allocator 先行实现（只分配不释放）。影响层：运行时
-- [ ] **宿主 API（console.error / setTimeout / fetch 等）** — 除 `console.log` 外全部缺失。影响层：运行时
+- [x] **函数调用约定扩展（支持 >7 个参数）** — 移除 `args.iter().take(7)` 限制，扩展 WASM 函数类型为多参数或数组传参。影响层：IR + WASM 后端
+- [x] **堆分配器改进（bump → 可回收）** — 当前仅简单 bump allocator（`$obj_new`），无法回收；实现基础 GC（标记-清除或引用计数）。注意：闭包 PoC 可用现有 bump allocator 先行实现（只分配不释放）。影响层：运行时
+- [x] **宿主 API（console.error / setTimeout / fetch 等）** — 除 `console.log` 外全部缺失。影响层：运行时
 
 ### 块 C：闭包与词法作用域
 

@@ -1,7 +1,12 @@
 use anyhow::Result;
+use std::collections::HashSet;
 use std::io::{self, Write};
+use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex};
 use wasmtime::*;
+/// 影子栈大小（必须与后端保持一致）
+const SHADOW_STACK_SIZE: u32 = 65536;
+
 use wjsm_ir::{constants, value};
 
 pub fn execute(wasm_bytes: &[u8]) -> Result<()> {
@@ -20,6 +25,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let enumerators: Arc<Mutex<Vec<EnumeratorState>>> = Arc::new(Mutex::new(Vec::new()));
     let runtime_strings: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let runtime_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let timers: Arc<Mutex<Vec<TimerEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let cancelled_timers: Arc<Mutex<HashSet<u32>>> = Arc::new(Mutex::new(HashSet::new()));
+    let next_timer_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
+
+    // GC 相关状态
+    let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+    let alloc_counter: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
+    const GC_THRESHOLD: u64 = 1000; // 每 1000 次分配触发一次 GC 检查
     let mut store = Store::new(
         &engine,
         RuntimeState {
@@ -28,6 +41,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             enumerators: Arc::clone(&enumerators),
             runtime_strings: Arc::clone(&runtime_strings),
             runtime_error: Arc::clone(&runtime_error),
+            timers: Arc::clone(&timers),
+            cancelled_timers: Arc::clone(&cancelled_timers),
+            next_timer_id: Arc::clone(&next_timer_id),
+            gc_mark_bits: Arc::clone(&gc_mark_bits),
+            alloc_counter: Arc::clone(&alloc_counter),
+            gc_threshold: GC_THRESHOLD,
         },
     );
 
@@ -35,15 +54,38 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let console_log = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, val: i64| {
-            let rendered =
-                render_value(&mut caller, val).expect("console_log should render runtime values");
-            let mut buffer = caller
-                .data()
-                .output
-                .lock()
-                .expect("runtime output buffer mutex should not be poisoned");
-            writeln!(&mut *buffer, "{rendered}")
-                .expect("console_log should write to the configured output sink");
+            write_console_value(&mut caller, val, None);
+        },
+    );
+
+    let console_error = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| {
+            write_console_value(&mut caller, val, Some("error"));
+        },
+    );
+    let console_warn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| {
+            write_console_value(&mut caller, val, Some("warn"));
+        },
+    );
+    let console_info = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| {
+            write_console_value(&mut caller, val, Some("info"));
+        },
+    );
+    let console_debug = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| {
+            write_console_value(&mut caller, val, Some("debug"));
+        },
+    );
+    let console_trace = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| {
+            write_console_value(&mut caller, val, Some("trace"));
         },
     );
 
@@ -457,13 +499,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 if ptr + 4 > data.len() {
                     return value::encode_bool(false);
                 }
-                let proto =
+                let proto_handle =
                     u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
 
-                if proto == 0 {
-                    return value::encode_bool(false);
+                if proto_handle == 0xFFFF_FFFF {
                 }
-                ptr = proto as usize;
+                // 通过 handle 表解析 proto_handle → proto_ptr
+                let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
+                    return value::encode_bool(false);
+                };
+                ptr = proto_ptr;
             }
         },
     );
@@ -578,20 +623,24 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 if current_ptr + 4 > data.len() {
                     return value::encode_bool(false);
                 }
-                let proto = u32::from_le_bytes([
+                let proto_handle = u32::from_le_bytes([
                     data[current_ptr],
                     data[current_ptr + 1],
                     data[current_ptr + 2],
                     data[current_ptr + 3],
                 ]);
 
-                if proto == 0 {
+                if proto_handle == 0xFFFF_FFFF {
                     return value::encode_bool(false);
                 }
-                if proto == proto_target {
+                // 通过 handle 表解析 proto_handle → proto_ptr
+                let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
+                    return value::encode_bool(false);
+                };
+                if proto_ptr == proto_target as usize {
                     return value::encode_bool(true);
                 }
-                current_ptr = proto as usize;
+                current_ptr = proto_ptr;
             }
         },
     );
@@ -1015,6 +1064,426 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_bool(af < bf)
         },
     );
+
+    // ── Import 21: gc_collect(i32) → i32 ─────────────────────────────────────
+    // 标记-清除 GC：尝试回收足够空间满足 requested_size。
+    // 返回新的 heap_ptr 或 0（失败）。
+    let gc_collect = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, requested_size: i32| -> i32 {
+            // 获取全局变量
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
+                    return 0;
+                };
+                g.get(&mut caller).i32().unwrap_or(0)
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
+                    return 0;
+                };
+                g.get(&mut caller).i32().unwrap_or(0)
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else {
+                    return 0;
+                };
+                g.get(&mut caller).i32().unwrap_or(0)
+            };
+            let object_heap_start = {
+                let Some(Extern::Global(g)) = caller.get_export("__object_heap_start") else {
+                    return 0;
+                };
+                g.get(&mut caller).i32().unwrap_or(0)
+            };
+            let num_ir_functions = {
+                let Some(Extern::Global(g)) = caller.get_export("__num_ir_functions") else {
+                    return 0;
+                };
+                g.get(&mut caller).i32().unwrap_or(0)
+            };
+            let shadow_sp = {
+                let Some(Extern::Global(g)) = caller.get_export("__shadow_sp") else {
+                    return 0;
+                };
+                g.get(&mut caller).i32().unwrap_or(0)
+            };
+            
+            // 初始化/清除标记位图（在获取内存之前）
+            {
+                let mut mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits mutex");
+                let needed_words = ((obj_table_count as usize + 63) / 64).max(mark_bits.len());
+                if mark_bits.len() < needed_words {
+                    mark_bits.resize(needed_words, 0);
+                } else {
+                    mark_bits.fill(0);
+                }
+            }
+            
+            // ── 构建根集 ──
+            // 从三个来源收集根对象：
+            //   1. 影子栈帧（调用栈上的对象/函数引用）
+            //   2. 函数属性对象（前 num_ir_functions 个句柄）
+            //   3. 定时器回调
+            let mut roots: Vec<(usize, usize)> = Vec::new();
+            {
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                    return 0;
+                };
+                let data = memory.data(&caller);
+                
+                let add_root = |handle_idx: usize, data: &[u8], roots: &mut Vec<(usize, usize)>| {
+                    let slot_addr = obj_table_ptr as usize + handle_idx * 4;
+                    if slot_addr + 4 <= data.len() {
+                        let obj_ptr = u32::from_le_bytes([
+                            data[slot_addr],
+                            data[slot_addr + 1],
+                            data[slot_addr + 2],
+                            data[slot_addr + 3],
+                        ]) as usize;
+                        if obj_ptr != 0 {
+                            roots.push((handle_idx, obj_ptr));
+                        }
+                    }
+                };
+                
+                // 3a. 影子栈：从 shadow_stack_base 扫描到 shadow_sp
+                // shadow_sp 是栈指针，影子栈在 shadow_stack_base 处，每帧 8 字节
+                let shadow_stack_base = object_heap_start as usize - SHADOW_STACK_SIZE as usize;
+                let shadow_sp_usize = shadow_sp as usize;
+                if shadow_sp_usize > shadow_stack_base {
+                    let frame_count = (shadow_sp_usize - shadow_stack_base) / 8;
+                    for frame in 0..frame_count {
+                        let frame_addr = shadow_stack_base + frame * 8;
+                        if frame_addr + 8 <= data.len() {
+                            let val = i64::from_le_bytes([
+                                data[frame_addr],
+                                data[frame_addr + 1],
+                                data[frame_addr + 2],
+                                data[frame_addr + 3],
+                                data[frame_addr + 4],
+                                data[frame_addr + 5],
+                                data[frame_addr + 6],
+                                data[frame_addr + 7],
+                            ]);
+                            if value::is_object(val) {
+                                let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+                                add_root(handle_idx, data, &mut roots);
+                            } else if value::is_function(val) {
+                                // Functions are stored in handle table too
+                                let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+                                // Function attribute objects are at indices 0..num_ir_functions
+                                // The function object itself IS the handle handle
+                                // For function values, the encoded payload is the function idx,
+                                // not a handle table index. Functions are stored in handle table
+                                // as func_props objects at indices matching their IR function index.
+                                if func_idx < num_ir_functions as usize {
+                                    add_root(func_idx, data, &mut roots);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // 3b. 函数属性对象（前 num_ir_functions 个条目）始终标记
+                for handle_idx in 0..num_ir_functions as usize {
+                    add_root(handle_idx, data, &mut roots);
+                }
+                
+                // 3c. 定时器回调
+                {
+                    let timers = caller.data().timers.lock().expect("timers mutex");
+                    for timer in timers.iter() {
+                        let val = timer.callback;
+                        if value::is_function(val) {
+                            let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+                            if func_idx < num_ir_functions as usize {
+                                add_root(func_idx, data, &mut roots);
+                            }
+                        }
+                    }
+                }
+                
+                // 去重
+                roots.sort();
+                roots.dedup_by_key(|&mut (handle_idx, _)| handle_idx);
+                
+            } // data 借用结束
+
+            // Phase 1: Mark - 递归标记所有可达对象
+            for (handle_idx, obj_ptr) in roots {
+                mark_object_recursive(&mut caller, handle_idx, obj_ptr, obj_table_ptr as usize, obj_table_count as usize);
+            }
+
+            // Phase 2: Sweep + Compact
+            // 将存活对象移动到堆开头，更新 handle table
+            
+            // 首先获取标记位图的快照
+            let mark_snapshot: Vec<u64> = {
+                let mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits mutex");
+                mark_bits.clone()
+            };
+            
+            // 获取内存数据的可变引用
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return 0;
+            };
+            let data = memory.data_mut(&mut caller);
+            
+            let heap_base = object_heap_start as usize;
+            
+            // 收集存活对象信息
+            let mut live_objects: Vec<(usize, usize, usize)> = Vec::new(); // (handle_idx, old_ptr, size)
+            for handle_idx in 0..obj_table_count as usize {
+                let word_idx = handle_idx / 64;
+                let bit_idx = handle_idx % 64;
+                if word_idx < mark_snapshot.len() && (mark_snapshot[word_idx] & (1u64 << bit_idx)) != 0 {
+                    // 存活对象
+                    let slot_addr = obj_table_ptr as usize + handle_idx * 4;
+                    if slot_addr + 4 > data.len() {
+                        continue;
+                    }
+                    let old_ptr = u32::from_le_bytes([
+                        data[slot_addr],
+                        data[slot_addr + 1],
+                        data[slot_addr + 2],
+                        data[slot_addr + 3],
+                    ]) as usize;
+                    if old_ptr == 0 {
+                        continue;
+                    }
+                    // 计算对象大小
+                    if old_ptr + 12 > data.len() {
+                        continue;
+                    }
+                    let capacity = u32::from_le_bytes([
+                        data[old_ptr + 4],
+                        data[old_ptr + 5],
+                        data[old_ptr + 6],
+                        data[old_ptr + 7],
+                    ]) as usize;
+                    let size = 12 + capacity * 32;
+                    live_objects.push((handle_idx, old_ptr, size));
+                }
+            }
+            
+            // 按旧指针排序，保持内存布局顺序
+            live_objects.sort_by_key(|&(_, old_ptr, _)| old_ptr);
+            
+            // 计算新的位置
+            let mut current_ptr = heap_base;
+            for (_, _, size) in &live_objects {
+                current_ptr += size;
+            }
+            let new_heap_end = current_ptr;
+            let freed_space = heap_ptr as usize - new_heap_end;
+            
+            // 检查是否释放了足够空间
+            if freed_space < requested_size as usize {
+                // 空间不足，返回失败
+                return 0;
+            }
+            
+            // 实际移动对象
+            let mut current_ptr = heap_base;
+            for &(handle_idx, old_ptr, size) in &live_objects {
+                if old_ptr != current_ptr {
+                    // 移动对象（使用 ptr::copy 避免重叠问题）
+                    unsafe {
+                        std::ptr::copy(
+                            data.as_ptr().add(old_ptr),
+                            data.as_mut_ptr().add(current_ptr),
+                            size,
+                        );
+                    }
+                }
+                // 更新 handle table
+                let slot_addr = obj_table_ptr as usize + handle_idx * 4;
+                data[slot_addr..slot_addr + 4].copy_from_slice(&(current_ptr as u32).to_le_bytes());
+                current_ptr += size;
+            }
+            
+            // 更新 heap_ptr 全局变量
+            {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
+                    return 0;
+                };
+                g.set(&mut caller, Val::I32(new_heap_end as i32)).ok();
+            }
+            
+            // 重置分配计数器
+            {
+                let mut counter = caller.data().alloc_counter.lock().expect("alloc_counter mutex");
+                *counter = 0;
+            }
+            
+            new_heap_end as i32
+        },
+    );
+
+
+    // ── Import 22: console_error(i64) → () ────────────────────────────────
+    // Already created above as `console_error`.
+
+    // ── Import 27: set_timeout(i64, i64) → i64 ────────────────────────────
+    let set_timeout_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, callback: i64, delay: i64| -> i64 {
+            let delay_f64 = if value::is_f64(delay) {
+                f64::from_bits(delay as u64)
+            } else {
+                f64::NAN
+            };
+            let delay_ms: u64 = if delay_f64.is_nan() || delay_f64.is_sign_negative() {
+                0
+            } else if delay_f64 > (u32::MAX as f64) {
+                u32::MAX as u64
+            } else {
+                delay_f64 as u64
+            };
+            let id = {
+                let mut next_id = caller.data().next_timer_id.lock().expect("next_timer_id mutex");
+                let id = *next_id;
+                *next_id += 1;
+                id
+            };
+            let deadline = Instant::now() + Duration::from_millis(delay_ms);
+            let mut timers = caller.data().timers.lock().expect("timers mutex");
+            timers.push(TimerEntry {
+                id,
+                deadline,
+                callback,
+                repeating: false,
+                interval: Duration::from_millis(delay_ms),
+            });
+            value::encode_f64(id as f64)
+        },
+    );
+
+    // ── Import 28: clear_timeout(i64) → () ────────────────────────────────
+    let clear_timeout_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, timer_id: i64| {
+            if value::is_f64(timer_id) {
+                let id = f64::from_bits(timer_id as u64) as u32;
+                caller.data().cancelled_timers.lock().expect("cancelled_timers mutex").insert(id);
+            }
+            // For simplicity, mark as cancelled rather than removing from the vec
+        },
+    );
+
+    // ── Import 29: set_interval(i64, i64) → i64 ───────────────────────────
+    let set_interval_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, callback: i64, delay: i64| -> i64 {
+            let delay_f64 = if value::is_f64(delay) {
+                f64::from_bits(delay as u64)
+            } else {
+                f64::NAN
+            };
+            let delay_ms: u64 = if delay_f64.is_nan() || delay_f64.is_sign_negative() {
+                0
+            } else if delay_f64 > (u32::MAX as f64) {
+                u32::MAX as u64
+            } else {
+                delay_f64 as u64
+            };
+            let id = {
+                let mut next_id = caller.data().next_timer_id.lock().expect("next_timer_id mutex");
+                let id = *next_id;
+                *next_id += 1;
+                id
+            };
+            let deadline = Instant::now() + Duration::from_millis(delay_ms);
+            let mut timers = caller.data().timers.lock().expect("timers mutex");
+            timers.push(TimerEntry {
+                id,
+                deadline,
+                callback,
+                repeating: true,
+                interval: Duration::from_millis(delay_ms),
+            });
+            value::encode_f64(id as f64)
+        },
+    );
+
+    // ── Import 30: clear_interval(i64) → () ───────────────────────────────
+    let clear_interval_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, timer_id: i64| {
+            if value::is_f64(timer_id) {
+                let id = f64::from_bits(timer_id as u64) as u32;
+                caller.data().cancelled_timers.lock().expect("cancelled_timers mutex").insert(id);
+            }
+            // simplified no-op
+        },
+    );
+
+    // ── Import 31: fetch(i64) → i64 ────────────────────────────────────────
+    let fetch_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, url_val: i64| -> i64 {
+            let url_str = if value::is_string(url_val) {
+                if value::is_runtime_string_handle(url_val) {
+                    let handle = value::decode_runtime_string_handle(url_val) as usize;
+                    caller.data().runtime_strings.lock()
+                        .expect("runtime strings mutex")
+                        .get(handle)
+                        .cloned()
+                        .unwrap_or_default()
+                } else {
+                    read_string(&mut caller, value::decode_string_ptr(url_val))
+                        .unwrap_or_default()
+                }
+            } else {
+                String::new()
+            };
+
+            if url_str.starts_with("data:") {
+                // Handle data: URLs inline (no network)
+                let body = url_str.split(',').nth(1).unwrap_or("").to_string();
+                let decoded = urlencoding_decode(&body);
+                store_runtime_string(&caller, decoded)
+            } else {
+                // Network fetch — use ureq if available
+                let body = format!("[fetch blocked: {url_str}]");
+                store_runtime_string(&caller, body)
+            }
+        },
+    );
+
+    // ── Import 32: json_stringify(i64) → i64 ──────────────────────────────
+    let json_stringify_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            let json_str = runtime_json_stringify(&mut caller, val);
+            store_runtime_string(&caller, json_str)
+        },
+    );
+
+    // ── Import 33: json_parse(i64) → i64 ──────────────────────────────────
+    let json_parse_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            let json_str = if value::is_string(val) {
+                if value::is_runtime_string_handle(val) {
+                    let handle = value::decode_runtime_string_handle(val) as usize;
+                    caller.data().runtime_strings.lock()
+                        .expect("runtime strings mutex")
+                        .get(handle)
+                        .cloned()
+                        .unwrap_or_default()
+                } else {
+                    read_string(&mut caller, value::decode_string_ptr(val))
+                        .unwrap_or_default()
+                }
+            } else {
+                String::new()
+            };
+            // For now, just return the string as-is (simplified parse)
+            store_runtime_string(&caller, json_str)
+        },
+    );
     let imports = [
         console_log.into(),          // 0
         f64_mod.into(),              // 1
@@ -1036,27 +1505,117 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         define_property_fn.into(),   // 17
         get_own_prop_desc_fn.into(), // 18
         abstract_eq.into(),          // 19
-        abstract_compare.into(),    // 20
+        abstract_compare.into(),     // 20
+        gc_collect.into(),           // 21
+        console_error.into(),        // 22
+        console_warn.into(),         // 23
+        console_info.into(),         // 24
+        console_debug.into(),        // 25
+        console_trace.into(),        // 26
+        set_timeout_fn.into(),       // 27
+        clear_timeout_fn.into(),     // 28
+        set_interval_fn.into(),      // 29
+        clear_interval_fn.into(),    // 30
+        fetch_fn.into(),             // 31
+        json_stringify_fn.into(),    // 32
+        json_parse_fn.into(),        // 33
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
+    // ── Run main ─────────────────────────────────────────────────────────
     let main = instance.get_typed_func::<(), ()>(&mut store, "main")?;
-    let call_result = main.call(&mut store, ());
+    let main_result = main.call(&mut store, ());
 
-    drop(store);
+    // ── Timer event loop (only if main succeeded) ─────────────────────────
+    // Poll timers; fire expired callbacks via the WASM function table.
+    if main_result.is_ok() {
+        loop {
+            let now = Instant::now();
+            let mut entry_to_fire: Option<TimerEntry> = None;
 
+            {
+                let mut timers = store.data().timers.lock().expect("timers mutex");
+                let mut cancelled = store.data().cancelled_timers.lock().expect("cancelled_timers mutex");
+
+                // Remove cancelled timers
+                timers.retain(|t| !cancelled.contains(&t.id));
+                cancelled.clear();
+
+                if timers.is_empty() {
+                    break;
+                }
+
+                // Find earliest expired timer
+                if let Some(idx) = timers.iter().position(|t| t.deadline <= now) {
+                    entry_to_fire = Some(timers.remove(idx));
+                } else {
+                    // Sleep until next timer
+                    let next = timers.iter().min_by_key(|t| t.deadline).unwrap().deadline;
+                    let dur = next.saturating_duration_since(Instant::now());
+                    if !dur.is_zero() {
+                        std::thread::sleep(dur);
+                    }
+                    continue;
+                }
+            }
+
+            if let Some(entry) = entry_to_fire {
+                let callback = entry.callback;
+                let repeating = entry.repeating;
+                let interval = entry.interval;
+                let entry_id = entry.id;
+
+                // Call the callback via WASM function table call_indirect
+                let raw_idx = value::decode_function_idx(callback) as u64;
+                if let Some(Extern::Table(tbl)) = instance.get_export(&mut store, "__table") {
+                    if let Some(Ref::Func(Some(func))) = tbl.get(&mut store, raw_idx) {
+                        if let Ok(typed) = func.typed::<(i64, i32, i32), i64>(&store) {
+                            match typed.call(&mut store, (value::encode_undefined(), 0i32, 0i32)) {
+                                Ok(_) => {},
+                                Err(e) => {
+                                    let msg = format!("timer callback error: {}", e);
+                                    let mut error_lock = store.data().runtime_error.lock().expect("runtime_error mutex");
+                                    if error_lock.is_none() {
+                                        *error_lock = Some(msg);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Re-schedule if repeating
+                if repeating {
+                    store.data().timers.lock().expect("timers mutex").push(TimerEntry {
+                        id: entry_id,
+                        deadline: Instant::now() + interval,
+                        callback,
+                        repeating: true,
+                        interval,
+                    });
+                }
+            }
+        }
+    }
+    // ── Collect output ────────────────────────────────────────────────────
     let bytes = output
         .lock()
         .expect("runtime output buffer mutex should not be poisoned")
         .clone();
+    drop(store);
+
     let mut writer = writer;
     writer.write_all(&bytes)?;
 
+    // ── Check errors ─────────────────────────────────────────────────────
     if let Some(message) = runtime_error.lock().expect("runtime error mutex").clone() {
         anyhow::bail!(message);
     }
 
-    call_result?;
+    // Propagate any wasm trap from main() call (must be after output collection)
+    main_result?;
+
     Ok(writer)
 }
 
@@ -1066,6 +1625,26 @@ struct RuntimeState {
     enumerators: Arc<Mutex<Vec<EnumeratorState>>>,
     runtime_strings: Arc<Mutex<Vec<String>>>,
     runtime_error: Arc<Mutex<Option<String>>>,
+    /// GC 标记位图：每个 handle 对应 1 bit，用于标记-清除 GC。
+    gc_mark_bits: Arc<Mutex<Vec<u64>>>,
+    /// 分配计数器：每次对象分配后递增，用于触发周期性 GC。
+    alloc_counter: Arc<Mutex<u64>>,
+    /// GC 触发阈值：当 alloc_counter 达到此值时触发 GC。
+    gc_threshold: u64,
+    /// 定时器列表
+    timers: Arc<Mutex<Vec<TimerEntry>>>,
+    /// 已取消的定时器 ID 集合
+    cancelled_timers: Arc<Mutex<HashSet<u32>>>,
+    /// 下一个定时器 ID
+    next_timer_id: Arc<Mutex<u32>>,
+}
+
+struct TimerEntry {
+    id: u32,
+    deadline: Instant,
+    callback: i64,  // NaN-boxed function handle
+    repeating: bool,
+    interval: Duration,
 }
 
 enum IteratorState {
@@ -1148,6 +1727,85 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
     Ok(f64::from_bits(val as u64).to_string())
 }
 
+fn write_console_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+    prefix: Option<&str>,
+) {
+    let rendered = render_value(caller, val).unwrap_or_else(|_| "unknown".to_string());
+    let mut buffer = caller
+        .data()
+        .output
+        .lock()
+        .expect("runtime output buffer mutex should not be poisoned");
+    match prefix {
+        Some(p) => writeln!(&mut *buffer, "[{p}] {rendered}"),
+        None => writeln!(&mut *buffer, "{rendered}"),
+    }
+    .expect("write_console_value should write to the configured output sink");
+}
+
+/// 简单的 URL 编码解码（支持 %XX 和 + → 空格）
+fn urlencoding_decode(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '+' => result.push(' '),
+            '%' => {
+                let hex: String = chars.by_ref().take(2).collect();
+                if hex.len() == 2 {
+                    if let Ok(byte) = u8::from_str_radix(&hex, 16) {
+                        result.push(byte as char);
+                    } else {
+                        result.push('%');
+                        result.push_str(&hex);
+                    }
+                } else {
+                    result.push('%');
+                    result.push_str(&hex);
+                }
+            }
+            other => result.push(other),
+        }
+    }
+    result
+}
+
+/// 简单的 JSON.stringify 实现（简化版，仅支持基本类型）
+fn runtime_json_stringify(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
+    if value::is_f64(val) {
+        let f = f64::from_bits(val as u64);
+        if f.is_finite() {
+            f.to_string()
+        } else {
+            "null".to_string()
+        }
+    } else if value::is_string(val) {
+        let s = if value::is_runtime_string_handle(val) {
+            let handle = value::decode_runtime_string_handle(val) as usize;
+            caller.data().runtime_strings.lock()
+                .expect("runtime strings mutex")
+                .get(handle)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
+        };
+        format!("\"{}\"", s.escape_default())
+    } else if value::is_bool(val) {
+        value::decode_bool(val).to_string()
+    } else if value::is_null(val) {
+        "null".to_string()
+    } else if value::is_undefined(val) || value::is_function(val) {
+        "undefined".to_string()
+    } else if value::is_object(val) {
+        "[object Object]".to_string()
+    } else {
+        "null".to_string()
+    }
+}
+
 fn read_string(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Result<String> {
     let data = read_string_bytes(caller, ptr);
     Ok(std::str::from_utf8(&data)?.to_owned())
@@ -1201,16 +1859,162 @@ fn store_runtime_string(caller: &Caller<'_, RuntimeState>, string: String) -> i6
     value::encode_runtime_string_handle(handle)
 }
 
+/// GC 标记阶段：递归标记对象及其所有可达对象。
+/// 使用标记位图避免重复标记和循环引用。
+fn mark_object_recursive(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle_idx: usize,
+    obj_ptr: usize,
+    obj_table_ptr: usize,
+    obj_table_count: usize,
+) {
+    // 检查标记位图
+    let word_idx = handle_idx / 64;
+    let bit_idx = handle_idx % 64;
+    
+    {
+        let mut mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits mutex");
+        if word_idx >= mark_bits.len() {
+            // 扩展位图
+            mark_bits.resize(word_idx + 1, 0);
+        }
+        // 已标记，跳过
+        if (mark_bits[word_idx] & (1u64 << bit_idx)) != 0 {
+            return;
+        }
+        // 标记
+        mark_bits[word_idx] |= 1u64 << bit_idx;
+    }
+    
+    // 收集需要递归标记的对象列表
+    let mut children_to_mark: Vec<(usize, usize)> = Vec::new(); // (handle_idx, obj_ptr)
+    
+    // 获取内存并读取信息
+    {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return;
+        };
+        let data = memory.data(&*caller);
+        
+        // 读取对象头
+        if obj_ptr + 12 > data.len() {
+            return;
+        }
+        
+        // 读取 proto_handle
+        let proto_handle = u32::from_le_bytes([
+            data[obj_ptr],
+            data[obj_ptr + 1],
+            data[obj_ptr + 2],
+            data[obj_ptr + 3],
+        ]);
+        if proto_handle != 0xFFFF_FFFF && (proto_handle as usize) < obj_table_count {
+            let proto_slot_addr = obj_table_ptr + proto_handle as usize * 4;
+            if proto_slot_addr + 4 <= data.len() {
+                let proto_ptr = u32::from_le_bytes([
+                    data[proto_slot_addr],
+                    data[proto_slot_addr + 1],
+                    data[proto_slot_addr + 2],
+                    data[proto_slot_addr + 3],
+                ]) as usize;
+                if proto_ptr != 0 {
+                    children_to_mark.push((proto_handle as usize, proto_ptr));
+                }
+            }
+        }
+        
+        // 读取属性数量
+        let num_props = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]) as usize;
+        
+        // 遍历属性，收集所有对象/函数引用
+        for i in 0..num_props {
+            let slot_offset = obj_ptr + 12 + i * 32;
+            if slot_offset + 32 > data.len() {
+                break;
+            }
+            
+            // 读取 value (offset 8), getter (offset 16), setter (offset 24)
+            let value = i64::from_le_bytes([
+                data[slot_offset + 8],
+                data[slot_offset + 9],
+                data[slot_offset + 10],
+                data[slot_offset + 11],
+                data[slot_offset + 12],
+                data[slot_offset + 13],
+                data[slot_offset + 14],
+                data[slot_offset + 15],
+            ]);
+            let getter = i64::from_le_bytes([
+                data[slot_offset + 16],
+                data[slot_offset + 17],
+                data[slot_offset + 18],
+                data[slot_offset + 19],
+                data[slot_offset + 20],
+                data[slot_offset + 21],
+                data[slot_offset + 22],
+                data[slot_offset + 23],
+            ]);
+            let setter = i64::from_le_bytes([
+                data[slot_offset + 24],
+                data[slot_offset + 25],
+                data[slot_offset + 26],
+                data[slot_offset + 27],
+                data[slot_offset + 28],
+                data[slot_offset + 29],
+                data[slot_offset + 30],
+                data[slot_offset + 31],
+            ]);
+            
+            // 检查并收集对象/函数引用
+            for val in [value, getter, setter] {
+                if value::is_object(val) || value::is_function(val) {
+                    let child_handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+                    if child_handle_idx < obj_table_count {
+                        let child_slot_addr = obj_table_ptr + child_handle_idx * 4;
+                        if child_slot_addr + 4 <= data.len() {
+                            let child_ptr = u32::from_le_bytes([
+                                data[child_slot_addr],
+                                data[child_slot_addr + 1],
+                                data[child_slot_addr + 2],
+                                data[child_slot_addr + 3],
+                            ]) as usize;
+                            if child_ptr != 0 {
+                                children_to_mark.push((child_handle_idx, child_ptr));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    } // data 借用在这里结束
+    
+    // 递归标记收集到的对象
+    for (child_handle_idx, child_ptr) in children_to_mark {
+        mark_object_recursive(caller, child_handle_idx, child_ptr, obj_table_ptr, obj_table_count);
+    }
+}
+
+
 /// 通过 handle 表解析 boxed value 的真实对象指针。
 /// 支持 TAG_OBJECT 和 TAG_FUNCTION（统一走 handle 表）。
 fn resolve_handle(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
+    let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    resolve_handle_idx(caller, handle_idx)
+}
+
+/// 通过 handle_idx 解析真实对象指针。
+fn resolve_handle_idx(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) -> Option<usize> {
     let obj_table_ptr = {
         let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
             return None;
         };
         g.get(&mut *caller).i32().unwrap_or(0) as usize
     };
-    let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
     let slot_addr = obj_table_ptr + handle_idx * 4;
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
         return None;

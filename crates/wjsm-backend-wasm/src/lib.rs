@@ -10,6 +10,10 @@ use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction,
     Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, constants, value,
 };
+// ── Shadow Stack Constants ─────────────────────────────────────────────
+const SHADOW_STACK_SIZE: u32 = 65536;      // 64KB = 8192 个 i64 槽位
+const SHADOW_STACK_ALIGN: u32 = 8;
+
 
 // ── Public API ──────────────────────────────────────────────────────────
 
@@ -84,6 +88,20 @@ struct Compiler {
     string_ptr_cache: HashMap<String, u32>,
     /// WASM local index for string_concat scratch variable.
     string_concat_scratch_idx: u32,
+    /// WASM global index for shadow stack pointer.
+    shadow_sp_global_idx: u32,
+    /// WASM local index for shadow_sp scratch variable (i32, used during Call).
+    shadow_sp_scratch_idx: u32,
+    /// WASM function index for gc_collect host function.
+    gc_collect_func_idx: u32,
+    /// WASM global index for alloc_counter (GC heuristic).
+    alloc_counter_global_idx: u32,
+    /// WASM global index for __object_heap_start (runtime GC heap base).
+    object_heap_start_global_idx: u32,
+    /// WASM global index for __num_ir_functions (runtime GC root set).
+    num_ir_functions_global_idx: u32,
+    /// WASM global index for __shadow_stack_end (shadow stack bounds check).
+    shadow_stack_end_global_idx: u32,
 }
 /// 循环元信息（编译前预扫描得到）。
 #[derive(Debug, Clone)]
@@ -202,11 +220,11 @@ impl Compiler {
         types
             .ty()
             .function(vec![ValType::I64, ValType::I64], vec![]);
-        // Type 6: (i64×8) -> (i64)  — JS function signature
-        //   slot 0 = this, slots 1-7 = arguments
+        // Type 6: (i64, i32, i32) -> (i64)  — JS function signature (shadow stack)
+        //   param 0 = this_val (i64), param 1 = args_base_ptr (i32), param 2 = args_count (i32)
         types
             .ty()
-            .function(vec![ValType::I64; 8], vec![ValType::I64]);
+            .function(vec![ValType::I64, ValType::I32, ValType::I32], vec![ValType::I64]);
         // Type 7: (i32) -> (i32)  — $obj_new, $alloc
         types.ty().function(vec![ValType::I32], vec![ValType::I32]);
         // Type 8: (i64, i32) -> (i64)  — $obj_get (boxed object + key → value)
@@ -266,8 +284,39 @@ impl Compiler {
         imports.import("env", "abstract_eq", EntityType::Function(2));
         // Import index 20: abstract_compare: (i64, i64) -> (i64)
         imports.import("env", "abstract_compare", EntityType::Function(2));
+        // Import index 21: gc_collect: (i32) -> (i32)
+        imports.import("env", "gc_collect", EntityType::Function(7)); // Type 7 = (i32) -> i32
+        // Import index 22: console_error: (i64) -> ()
+        imports.import("env", "console_error", EntityType::Function(0));
+        // Import index 23: console_warn: (i64) -> ()
+        imports.import("env", "console_warn", EntityType::Function(0));
+        // Import index 24: console_info: (i64) -> ()
+        imports.import("env", "console_info", EntityType::Function(0));
+        // Import index 25: console_debug: (i64) -> ()
+        imports.import("env", "console_debug", EntityType::Function(0));
+        // Import index 26: console_trace: (i64) -> ()
+        imports.import("env", "console_trace", EntityType::Function(0));
+        // Import index 27: set_timeout: (i64, i64) -> (i64)
+        imports.import("env", "set_timeout", EntityType::Function(2));
+        // Import index 28: clear_timeout: (i64) -> ()
+        imports.import("env", "clear_timeout", EntityType::Function(0));
+        // Import index 29: set_interval: (i64, i64) -> (i64)
+        imports.import("env", "set_interval", EntityType::Function(2));
+        // Import index 30: clear_interval: (i64) -> ()
+        imports.import("env", "clear_interval", EntityType::Function(0));
+        // Import index 31: fetch: (i64) -> (i64)
+        imports.import("env", "fetch", EntityType::Function(3));
+        // Import index 32: json_stringify: (i64) -> (i64)
+        imports.import("env", "json_stringify", EntityType::Function(3));
+        // Import index 33: json_parse: (i64) -> (i64)
+        imports.import("env", "json_parse", EntityType::Function(3));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
+        builtin_func_indices.insert(Builtin::ConsoleError, 22);
+        builtin_func_indices.insert(Builtin::ConsoleWarn, 23);
+        builtin_func_indices.insert(Builtin::ConsoleInfo, 24);
+        builtin_func_indices.insert(Builtin::ConsoleDebug, 25);
+        builtin_func_indices.insert(Builtin::ConsoleTrace, 26);
         builtin_func_indices.insert(Builtin::F64Mod, 1);
         builtin_func_indices.insert(Builtin::F64Exp, 2);
         builtin_func_indices.insert(Builtin::Throw, 3);
@@ -287,6 +336,13 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::GetOwnPropDesc, 18);
         builtin_func_indices.insert(Builtin::AbstractEq, 19);
         builtin_func_indices.insert(Builtin::AbstractCompare, 20);
+        builtin_func_indices.insert(Builtin::SetTimeout, 27);
+        builtin_func_indices.insert(Builtin::ClearTimeout, 28);
+        builtin_func_indices.insert(Builtin::SetInterval, 29);
+        builtin_func_indices.insert(Builtin::ClearInterval, 30);
+        builtin_func_indices.insert(Builtin::Fetch, 31);
+        builtin_func_indices.insert(Builtin::JsonStringify, 32);
+        builtin_func_indices.insert(Builtin::JsonParse, 33);
 
         let functions = FunctionSection::new();
 
@@ -295,7 +351,7 @@ impl Compiler {
 
         let mut memory = MemorySection::new();
         memory.memory(MemoryType {
-            minimum: 1,
+            minimum: 2, // 2 pages (128KB) to accommodate shadow stack
             maximum: None,
             memory64: false,
             shared: false,
@@ -323,7 +379,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 21, // 21 imports (0-20)
+            _next_import_func: 34, // 34 imports (0-33)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -341,6 +397,13 @@ impl Compiler {
             ssa_local_base: 0,
             string_ptr_cache: HashMap::new(),
             string_concat_scratch_idx: 0,
+            shadow_sp_global_idx: 0,
+            shadow_sp_scratch_idx: 0,
+            gc_collect_func_idx: 21,
+            alloc_counter_global_idx: 0,
+            object_heap_start_global_idx: 6,
+            num_ir_functions_global_idx: 7,
+            shadow_stack_end_global_idx: 8,
         }
     }
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -452,6 +515,8 @@ impl Compiler {
         self.obj_table_global_idx = 2;
         self.obj_table_count_global_idx = 3;
         self.num_ir_functions = module.functions().len() as u32;
+        self.shadow_sp_global_idx = 4;
+        self.alloc_counter_global_idx = 5;
 
         for function in module.functions() {
             if function.name() == "main" {
@@ -498,8 +563,9 @@ impl Compiler {
             },
             &ConstExpr::i32_const(0),
         );
-        // Global 1: heap_ptr (starts after handle table, mutable)
-        let object_heap_start = heap_start + handle_table_size;
+        // Global 1: heap_ptr (starts after handle table + shadow stack, mutable)
+        let shadow_stack_base = heap_start + handle_table_size;
+        let object_heap_start = shadow_stack_base + SHADOW_STACK_SIZE;
         self.globals.global(
             GlobalType {
                 val_type: ValType::I32,
@@ -529,12 +595,68 @@ impl Compiler {
             &ConstExpr::i32_const(0),
         );
         self.obj_table_count_global_idx = 3;
-        // Export obj_table_ptr for runtime access (replaces func_props_ptr)
+        // Global 4: shadow_sp (mutable, starts at shadow_stack_base)
+        self.globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::i32_const(shadow_stack_base as i32),
+        );
+        self.shadow_sp_global_idx = 4;
+        // Global 5: alloc_counter (mutable i32, initial 0, for GC heuristic)
+        self.globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::i32_const(0),
+        );
+        self.alloc_counter_global_idx = 5;
+        // Export alloc_counter for runtime debugging
+        self.exports.export("__alloc_counter", ExportKind::Global, 5);
+        // Export globals for runtime access
         self.exports
             .export("__obj_table_ptr", ExportKind::Global, 2);
         self.exports.export("__heap_ptr", ExportKind::Global, 1);
         self.exports
             .export("__obj_table_count", ExportKind::Global, 3);
+        self.exports.export("__shadow_sp", ExportKind::Global, 4);
+        // Global 6: __object_heap_start (immutable, for runtime GC heap base)
+        self.globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: false,
+                shared: false,
+            },
+            &ConstExpr::i32_const(object_heap_start as i32),
+        );
+        // Global 7: __num_ir_functions (immutable, for runtime GC root set)
+        self.globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: false,
+                shared: false,
+            },
+            &ConstExpr::i32_const(num_functions as i32),
+        );
+        self.object_heap_start_global_idx = 6;
+        self.num_ir_functions_global_idx = 7;
+        self.exports.export("__object_heap_start", ExportKind::Global, 6);
+        self.exports.export("__num_ir_functions", ExportKind::Global, 7);
+        // Global 8: __shadow_stack_end (immutable, for shadow stack bounds check)
+        let shadow_stack_end = shadow_stack_base + SHADOW_STACK_SIZE;
+        self.globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: false,
+                shared: false,
+            },
+            &ConstExpr::i32_const(shadow_stack_end as i32),
+        );
+        self.exports.export("__shadow_stack_end", ExportKind::Global, 8);
         if !self.string_data.is_empty() {
             self.data
                 .active(0, &ConstExpr::i32_const(0), self.string_data.clone());
@@ -552,13 +674,15 @@ impl Compiler {
         self.lower_phi_to_locals(function);
 
         let local_count = self.required_local_count(function);
-        // 为 string_concat 预留一个 scratch 本地变量
+        // 为 string_concat 预留一个 scratch 本地变量 (i64)
+        // 为 shadow_sp 预留一个 scratch 本地变量 (i32)
         self.string_concat_scratch_idx = local_count;
-        let total_locals = local_count + 1;
-        let locals = if total_locals == 0 {
+        self.shadow_sp_scratch_idx = local_count + 1;
+        let total_i64_locals = local_count + 1;
+        let locals = if total_i64_locals == 0 && 1 == 0 {
             Vec::new()
         } else {
-            vec![(total_locals, ValType::I64)]
+            vec![(total_i64_locals, ValType::I64), (1, ValType::I32)]
         };
         self.current_func = Some(Function::new(locals));
 
@@ -604,26 +728,29 @@ impl Compiler {
 
     fn compile_js_function(&mut self, module: &IrModule, function: &IrFunction) -> Result<()> {
         self.current_func_returns_value = true;
-        self.ssa_local_base = 8;
-        // Map params: slot 0 = this (local 0), slots 0..N-1 = params (excluding $this).
+        // Type 6 signature is now (i64, i32, i32) -> i64
+        // WASM params: local 0 = this_val (i64), local 1 = args_base_ptr (i32), local 2 = args_count (i32)
+        // SSA values start at local 3
+        
+        // Map $this to WASM param 0
         self.var_locals.clear();
         self.var_locals.insert("$this".to_string(), 0);
-        for (i, param_ir_name) in function.params().iter().enumerate() {
-            if param_ir_name == "$this" || param_ir_name.ends_with(".$this") {
-                continue; // $this is already mapped to local 0
-            }
-            self.var_locals.insert(param_ir_name.clone(), i as u32);
+        
+        // Count declared params (excluding $this) and allocate locals for them
+        let declared_params: Vec<&String> = function.params().iter()
+            .filter(|p| p.as_str() != "$this" && !p.ends_with(".$this"))
+            .collect();
+        
+        // Allocate locals for declared params starting at ssa_local_base
+        // These will be loaded from shadow stack in the prologue
+        let mut param_local_idx = 3;
+        for param_name in &declared_params {
+            self.var_locals.insert((*param_name).clone(), param_local_idx);
+            param_local_idx += 1;
         }
-
-        // Variable locals start after SSA values (with ssa_local_base offset).
-        let max_ssa = function
-            .blocks()
-            .iter()
-            .flat_map(|block| block.instructions())
-            .map(max_instruction_value_id)
-            .max()
-            .map_or(0, |max| max + 1);
-        self.next_var_local = max_ssa + self.ssa_local_base;
+        self.ssa_local_base = param_local_idx;
+        // Variable locals start after param locals
+        self.next_var_local = param_local_idx;
         // Assign variable locals for LoadVar/StoreVar.
         for block in function.blocks() {
             for instruction in block.instructions() {
@@ -640,22 +767,62 @@ impl Compiler {
         }
         self.lower_phi_to_locals(function);
 
-        let local_count = self.required_local_count(function);
-        // 为 string_concat 预留一个 scratch 本地变量
-        self.string_concat_scratch_idx = local_count;
-        let total_locals = local_count + 1;
-        let locals = if total_locals == 0 {
+        // 计算实际需要的 local 数量
+        // SSA 值从 ssa_local_base 开始分配，需要 ssa_local_base + max_ssa 个 locals
+        // 但 var_locals 已经包含了声明的参数，其索引也是从 ssa_local_base 开始
+        // 所以实际需要的 locals 数量 = max_ssa (SSA 值数量) 
+        // 而不是 ssa_local_base + max_ssa (因为 params 是 WASM 参数，不是声明的 locals)
+        let max_ssa = function.blocks().iter()
+            .flat_map(|block| block.instructions())
+            .map(max_instruction_value_id)
+            .max()
+            .map_or(0, |max| max + 1);
+        
+        // 总 local 数量：SSA 值需要 ssa_local_base + max_ssa 个位置，
+        // 或者 var/phi locals 的最大索引+1
+        let total_locals = (max_ssa + self.ssa_local_base)
+            .max(self.next_var_local)
+            .max(self.phi_locals.values().copied().max().map_or(0, |m| m + 1));
+        
+        // scratch locals 在所有其他 locals 之后
+        // total_locals 已经是绝对索引（包含 params），所以 scratch 就在 total_locals
+        self.string_concat_scratch_idx = total_locals;
+        self.shadow_sp_scratch_idx = total_locals + 1;
+        // total_i64_locals 是声明的 i64 locals 数量（不包括 params）
+        // = scratch 之前的 locals + 1 个 scratch i64
+        // = (total_locals - ssa_local_base) + 1
+        let total_i64_locals = total_locals.saturating_sub(2);
+
+        let locals = if total_i64_locals == 0 && 1 == 0 {
             Vec::new()
         } else {
-            vec![(total_locals, ValType::I64)]
+            vec![(total_i64_locals, ValType::I64), (1, ValType::I32)]
         };
         self.current_func = Some(Function::new(locals));
 
-        // Fill unfilled param slots (this+1 .. 7) with undefined.
-        let num_params = function.params().len();
-        for i in (num_params + 1)..8 {
+        // ── Prologue: Load declared params from shadow stack ──
+        // args_base_ptr is at local 1, args_count is at local 2
+        for (i, param_name) in declared_params.iter().enumerate() {
+            let param_local = *self.var_locals.get(*param_name).unwrap();
+            
+            // if i < args_count: load from shadow stack
+            // else: set to undefined
+            self.emit(WasmInstruction::I32Const(i as i32));  // i
+            self.emit(WasmInstruction::LocalGet(2));          // args_count
+            self.emit(WasmInstruction::I32LtU);               // i < args_count (unsigned)
+            
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            // Load from shadow stack: memory[args_base_ptr + i*8]
+            self.emit(WasmInstruction::LocalGet(1));  // args_base_ptr
+            self.emit(WasmInstruction::I32Const((i * 8) as i32));
+            self.emit(WasmInstruction::I32Add);
+            self.emit(WasmInstruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
+            self.emit(WasmInstruction::LocalSet(param_local));
+            self.emit(WasmInstruction::Else);
+            // Out of bounds: set to undefined
             self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-            self.emit(WasmInstruction::LocalSet(i as u32));
+            self.emit(WasmInstruction::LocalSet(param_local));
+            self.emit(WasmInstruction::End);
         }
 
         let cfg = Cfg::from_function(function);
@@ -697,9 +864,12 @@ impl Compiler {
         // ── $obj_new (param $capacity i32) (result i32) — Type 7 ──
         // 分配对象到堆上，将 ptr 存入 handle 表，返回 handle_idx。
         // 属性槽格式: [name_id(4), flags(4), value(8), getter(8), setter(8)] = 32 字节
+        // GC 检查：如果 heap_ptr + size > memory.size * 64KB，调用 gc_collect
         {
             // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx
             let mut func = Function::new(vec![(3, ValType::I32)]);
+            let gc_collect_idx = self.gc_collect_func_idx;
+            
             // size = 12 + capacity * 32
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32Const(32));
@@ -707,15 +877,68 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(1));
+            
+            // ── GC 检查 ──
+            // 检查: heap_ptr + size > memory.size * 65536
+            // 如果 true，调用 gc_collect(size)
+            
+            // 计算 heap_ptr + size
+            func.instruction(&WasmInstruction::GlobalGet(heap_global));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Add);
+            
+            // 计算 memory.size * 65536 (使用 i64 避免溢出)
+            func.instruction(&WasmInstruction::MemorySize(0));
+            func.instruction(&WasmInstruction::I64ExtendI32U);
+            func.instruction(&WasmInstruction::I64Const(65536));
+            func.instruction(&WasmInstruction::I64Mul);
+            func.instruction(&WasmInstruction::I32WrapI64);
+            
+            // 比较: heap_ptr + size > memory_limit
+            func.instruction(&WasmInstruction::I32GtU);
+            
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // 需要 GC - 调用 gc_collect(size)
+            func.instruction(&WasmInstruction::LocalGet(1)); // size
+            func.instruction(&WasmInstruction::Call(gc_collect_idx));
+            // 检查返回值是否为 0（失败）
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // OOM - unreachable
+            func.instruction(&WasmInstruction::Unreachable);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::End);
+            
+            // ── Proactive GC: check alloc_counter threshold ──
+            // 每 1000 次分配触发一次 gc_collect(0)
+            func.instruction(&WasmInstruction::GlobalGet(self.alloc_counter_global_idx));
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalTee(3)); // reuse handle_idx local as tmp
+            func.instruction(&WasmInstruction::GlobalSet(self.alloc_counter_global_idx));
+            // Re-load counter value for comparison (consumed by GlobalSet)
+            func.instruction(&WasmInstruction::LocalGet(3));
+            // Check if counter >= GC_THRESHOLD (1000)
+            func.instruction(&WasmInstruction::I32Const(1000));
+            func.instruction(&WasmInstruction::I32GeU);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // Call gc_collect(0) — proactive collection
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::Call(gc_collect_idx));
+            func.instruction(&WasmInstruction::Drop); // ignore result
+            // Reset alloc_counter
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::GlobalSet(self.alloc_counter_global_idx));
+            func.instruction(&WasmInstruction::End);
+            
             // ptr = heap_ptr; heap_ptr += size
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
             func.instruction(&WasmInstruction::LocalTee(2));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::GlobalSet(heap_global));
-            // 初始化 header: proto=0, capacity, num_props=0
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Const(-1));  // proto sentinel (0xFFFFFFFF)
             func.instruction(&WasmInstruction::I32Store(MemArg {
                 offset: 0,
                 align: 2,
@@ -766,7 +989,8 @@ impl Compiler {
             // local 0 = $boxed (i64), local 1 = $name_id (i32)
             // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
             // local 5 = resolved ptr (i32), local 6 = flags (i32), local 7 = getter (i64)
-            let mut func = Function::new(vec![(5, ValType::I32), (1, ValType::I64)]);
+            // local 8 = shadow_sp_scratch (i32)
+            let mut func = Function::new(vec![(5, ValType::I32), (2, ValType::I64)]);
 
             // ── 通过 handle 表解析 ptr ──
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -859,15 +1083,11 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
-            // 调用 getter: 推入 this (local 0) + 7 个 undefined 参数
-            func.instruction(&WasmInstruction::LocalGet(0)); // this
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            // 调用 getter: Type 6 签名 (i64, i32, i32) -> i64
+            // this_val = local 0, args_base = 0 (no args), args_count = 0
+            func.instruction(&WasmInstruction::LocalGet(0)); // this_val
+            func.instruction(&WasmInstruction::I32Const(0)); // args_base (doesn't matter, no args)
+            func.instruction(&WasmInstruction::I32Const(0)); // args_count
             // 解码 getter 的函数表索引
             func.instruction(&WasmInstruction::LocalGet(7));
             func.instruction(&WasmInstruction::I32WrapI64);
@@ -895,16 +1115,31 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
 
-            // 跟随 __proto__
+            // 跟随 __proto__（现在存储的是 handle_idx）
+            // 读取 proto_handle = obj[0]
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Load(MemArg {
                 offset: 0,
                 align: 2,
                 memory_index: 0,
             }));
-            func.instruction(&WasmInstruction::LocalTee(5));
-            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::LocalTee(3)); // 暂存 proto_handle 到 local 3
+            // 如果 proto_handle == -1 (哨兵)，退出循环
+            func.instruction(&WasmInstruction::I32Const(-1));
+            func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::BrIf(1));
+            // 通过 handle 表解析 proto_handle → proto_ptr
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(5)); // 更新 ptr 为 proto_ptr
             func.instruction(&WasmInstruction::Br(0));
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
@@ -922,7 +1157,8 @@ impl Compiler {
             // local 3 = (unused pad)
             // local 4 = num_props (i32), local 5 = i (i32), local 6 = slot_addr (i32), local 7 = capacity (i32)
             // local 8 = resolved ptr (i32), local 9 = handle_idx (i32), local 10 = flags (i32), local 11 = setter (i64)
-            let mut func = Function::new(vec![(8, ValType::I32), (1, ValType::I64)]);
+            // local 12 = shadow_sp_scratch (i32)
+            let mut func = Function::new(vec![(8, ValType::I32), (1, ValType::I64), (1, ValType::I32)]);
 
             // ── 通过 handle 表解析 ptr ──
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -1002,15 +1238,24 @@ impl Compiler {
             // setter 是 undefined，直接返回（静默失败）
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
-            // 调用 setter: 推入 this (local 0), value (local 2), + 6 个 undefined 参数
-            func.instruction(&WasmInstruction::LocalGet(0)); // this
+            // 调用 setter: Type 6 签名 (i64, i32, i32) -> i64
+            // 需要将 value (local 2) 写入影子栈
+            // 保存 shadow_sp 到 local 12
+            func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            func.instruction(&WasmInstruction::LocalSet(12));
+            // 写入 value 到影子栈
+            func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::LocalGet(2)); // value
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
+            // shadow_sp += 8 (虽然这里只有1个参数，但保持一致性)
+            func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            func.instruction(&WasmInstruction::I32Const(8));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+            // 推入参数: this_val (local 0), args_base (local 12), args_count (1)
+            func.instruction(&WasmInstruction::LocalGet(0)); // this_val
+            func.instruction(&WasmInstruction::LocalGet(12)); // args_base
+            func.instruction(&WasmInstruction::I32Const(1)); // args_count
             // 解码 setter 的函数表索引
             func.instruction(&WasmInstruction::LocalGet(11));
             func.instruction(&WasmInstruction::I32WrapI64);
@@ -1019,6 +1264,9 @@ impl Compiler {
                 type_index: 6,
                 table_index: 0,
             });
+            // 恢复 shadow_sp
+            func.instruction(&WasmInstruction::LocalGet(12));
+            func.instruction(&WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::Drop); // 丢弃返回值
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
@@ -2554,26 +2802,57 @@ impl Compiler {
                 this_val,
                 args,
             } => {
-                // Push 8 arguments for Type 6 signature: this + 7 args.
-                // slot 0 = this_val
-                self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
-                // slots 1..N = args
-                for arg in args.iter().take(7) {
+                // 使用影子栈传递参数
+                // Type 6 签名: (i64 this_val, i32 args_base, i32 args_count) -> i64
+                
+                // Step 1: 保存 shadow_sp 到 scratch local
+                self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+                
+                
+                // Step 1b: 影子栈边界检查
+                // 确保 scratch + args.len() * 8 <= shadow_stack_end
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const((args.len() * 8) as i32));
+                self.emit(WasmInstruction::I32Add);
+                self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
+                self.emit(WasmInstruction::I32GtU);
+                self.emit(WasmInstruction::If(BlockType::Empty));
+                self.emit(WasmInstruction::Unreachable);
+                self.emit(WasmInstruction::End);
+                // Step 2: 将所有参数写入影子栈
+                for arg in args.iter() {
+                    // memory[shadow_sp] = arg
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                    self.emit(WasmInstruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
+                    // shadow_sp += 8
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::I32Const(8));
+                    self.emit(WasmInstruction::I32Add);
+                    self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
                 }
-                // Fill remaining slots (up to 7) with undefined.
-                for _ in (1 + args.len().min(7))..8 {
-                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-                }
+                
+                // Step 3: 推入 call_indirect 参数
+                // 顺序: this_val (i64), args_base (i32), args_count (i32), func_idx (i32)
+                self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));  // args_base
+                self.emit(WasmInstruction::I32Const(args.len() as i32));  // args_count
                 // Decode function table index from NaN-boxed function value.
-                // The payload low 32 bits = table index.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
                 self.emit(WasmInstruction::I32WrapI64);
-                // call_indirect type 6 (JS function signature), table 0
+                
+                // Step 4: call_indirect type 6
                 self.emit(WasmInstruction::CallIndirect {
                     type_index: 6,
                     table_index: 0,
                 });
+                
+                // Step 5: 恢复 shadow_sp
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                
+                // Step 6: 处理返回值
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
@@ -2679,19 +2958,11 @@ impl Compiler {
                     align: 2,
                     memory_index: 0,
                 }));
-                // 解析 value handle → real value ptr
+                // 直接存储 value 的 handle_idx（不需要解析为 ptr）
+                // handle_idx = value 的低 32 位
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I32WrapI64);
-                self.emit(WasmInstruction::I32Const(4));
-                self.emit(WasmInstruction::I32Mul);
-                self.emit(WasmInstruction::GlobalGet(self.obj_table_global_idx));
-                self.emit(WasmInstruction::I32Add);
-                self.emit(WasmInstruction::I32Load(MemArg {
-                    offset: 0,
-                    align: 2,
-                    memory_index: 0,
-                }));
-                // 存储：obj[0] = value_ptr
+                // 存储：obj[0] = value_handle_idx
                 self.emit(WasmInstruction::I32Store(MemArg {
                     offset: 0,
                     align: 2,
@@ -2774,101 +3045,6 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Or);
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
             }
-            CompareOp::Eq | CompareOp::NotEq => {
-                // Loose equality: 在 StrictEq 基础上额外处理 null == undefined
-                // 1. 先计算 StrictEq 结果（同上）
-                // 2. 再 OR 上 null == undefined 的情况
-
-                // ── 第一部分：StrictEq 逻辑 ──
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64Ne);
-
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(box_base));
-                self.emit(WasmInstruction::I64Ne);
-
-                self.emit(WasmInstruction::I32And);
-
-                self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::F64ReinterpretI64);
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                self.emit(WasmInstruction::F64ReinterpretI64);
-                self.emit(WasmInstruction::F64Eq);
-                self.emit(WasmInstruction::Else);
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                self.emit(WasmInstruction::I64Eq);
-                self.emit(WasmInstruction::End);
-
-                // ── 第二部分：null == undefined 特判 ──
-                // (lhs==null && rhs==undefined) || (lhs==undefined && rhs==null)
-                let encoded_null = value::encode_null();
-                let encoded_undef = value::encode_undefined();
-
-                // lhs==null && rhs==undefined
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::I64Const(encoded_null as i64));
-                self.emit(WasmInstruction::I64Eq);
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                self.emit(WasmInstruction::I64Const(encoded_undef as i64));
-                self.emit(WasmInstruction::I64Eq);
-                self.emit(WasmInstruction::I32And);
-
-                // lhs==undefined && rhs==null
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::I64Const(encoded_undef as i64));
-                self.emit(WasmInstruction::I64Eq);
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                self.emit(WasmInstruction::I64Const(encoded_null as i64));
-                self.emit(WasmInstruction::I64Eq);
-                self.emit(WasmInstruction::I32And);
-
-                // OR 两个 null==undefined 情况
-                self.emit(WasmInstruction::I32Or);
-
-                // OR StrictEq 结果
-                self.emit(WasmInstruction::I32Or);
-
-                if matches!(op, CompareOp::NotEq) {
-                    self.emit(WasmInstruction::I32Const(1));
-                    self.emit(WasmInstruction::I32Xor);
-                }
-
-                self.emit(WasmInstruction::I64ExtendI32U);
-                let tag_bool = (value::TAG_BOOL << 32) as i64;
-                self.emit(WasmInstruction::I64Const(box_base | tag_bool));
-                self.emit(WasmInstruction::I64Or);
-                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-            }
-            CompareOp::Lt | CompareOp::LtEq | CompareOp::Gt | CompareOp::GtEq => {
-                // Numeric comparison: reinterpret as f64 and compare
-                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                self.emit(WasmInstruction::F64ReinterpretI64);
-                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                self.emit(WasmInstruction::F64ReinterpretI64);
-
-                match op {
-                    CompareOp::Lt => self.emit(WasmInstruction::F64Lt),
-                    CompareOp::LtEq => self.emit(WasmInstruction::F64Le),
-                    CompareOp::Gt => self.emit(WasmInstruction::F64Gt),
-                    CompareOp::GtEq => self.emit(WasmInstruction::F64Ge),
-                    _ => unreachable!(),
-                }
-
-                // Convert i32 boolean to NaN-boxed bool
-                self.emit(WasmInstruction::I64ExtendI32U);
-                let box_base = value::BOX_BASE as i64;
-                let tag_bool = (value::TAG_BOOL << 32) as i64;
-                self.emit(WasmInstruction::I64Const(box_base | tag_bool));
-                self.emit(WasmInstruction::I64Or);
-                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-            }
         }
 
         Ok(())
@@ -2881,12 +3057,22 @@ impl Compiler {
         args: &[ValueId],
     ) -> Result<()> {
         match builtin {
-            Builtin::ConsoleLog => {
+            Builtin::ConsoleLog
+            | Builtin::ConsoleError
+            | Builtin::ConsoleWarn
+            | Builtin::ConsoleInfo
+            | Builtin::ConsoleDebug
+            | Builtin::ConsoleTrace => {
                 let first_arg = args
                     .first()
-                    .context("console.log expects at least one argument")?;
+                    .with_context(|| format!("{builtin} expects at least one argument"))?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(first_arg.0)));
-                self.emit(WasmInstruction::Call(0));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
                 Ok(())
             }
             Builtin::Debugger => {
@@ -2903,6 +3089,51 @@ impl Compiler {
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::SetTimeout | Builtin::SetInterval => {
+                let callback = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects 2 arguments"))?;
+                let delay = args
+                    .get(1)
+                    .with_context(|| format!("{builtin} expects 2 arguments"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(callback.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(delay.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::ClearTimeout | Builtin::ClearInterval => {
+                let timer_id = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(timer_id.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::Fetch | Builtin::JsonStringify | Builtin::JsonParse => {
+                let val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
                 }
                 Ok(())
             }
@@ -3519,7 +3750,6 @@ mod tests {
         let source = "if (true) { console.log(\"yes\"); } else { console.log(\"no\"); }";
         let module = wjsm_parser::parse_module(source)?;
         let program = wjsm_semantic::lower_module(module)?;
-        eprintln!("IR:\n{}", program.dump_text());
         Ok(())
     }
 }

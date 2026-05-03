@@ -618,13 +618,7 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
         let result_block = match expr_stmt.expr.as_ref() {
-            swc_ast::Expr::Call(call) => {
-                if is_console_log(call) {
-                    self.lower_console_log_call(call, block)?
-                } else {
-                    self.lower_call(call, block)?
-                }
-            }
+            swc_ast::Expr::Call(call) => self.lower_call(call, block)?,
             expr => {
                 let _ = self.lower_expr(expr, block)?;
                 self.resolve_store_block(block)
@@ -633,32 +627,6 @@ impl Lowerer {
         Ok(StmtFlow::Open(result_block))
     }
 
-    fn lower_console_log_call(
-        &mut self,
-        call: &swc_ast::CallExpr,
-        block: BasicBlockId,
-    ) -> Result<BasicBlockId, LoweringError> {
-        let first_arg = call
-            .args
-            .first()
-            .ok_or_else(|| self.error(call.span(), "console.log requires at least 1 argument"))?;
-
-        let value = self.lower_expr(first_arg.expr.as_ref(), block)?;
-
-        // If lower_expr terminated the block (e.g. ternary/short-circuit),
-        // place the CallBuiltin in the merge block instead.
-        let call_block = self.resolve_store_block(block);
-
-        self.current_function.append_instruction(
-            call_block,
-            Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::ConsoleLog,
-                args: vec![value],
-            },
-        );
-        Ok(call_block)
-    }
 
     fn lower_call(
         &mut self,
@@ -2944,6 +2912,39 @@ impl Lowerer {
 
     // ── Identifiers ─────────────────────────────────────────────────────────
 
+    fn lower_host_builtin_call_expr(
+        &mut self,
+        call: &swc_ast::CallExpr,
+        block: BasicBlockId,
+        builtin: Builtin,
+    ) -> Result<ValueId, LoweringError> {
+        let (name, min_args) = builtin_call_signature(builtin);
+        if call.args.len() < min_args {
+            return Err(self.error(
+                call.span(),
+                format!("{name} requires at least {min_args} argument"),
+            ));
+        }
+
+        let mut args = Vec::with_capacity(call.args.len());
+        for arg in &call.args {
+            let arg_val = self.lower_expr(&arg.expr, block)?;
+            args.push(arg_val);
+        }
+
+        let dest = self.alloc_value();
+        let call_block = self.resolve_store_block(block);
+        self.current_function.append_instruction(
+            call_block,
+            Instruction::CallBuiltin {
+                dest: Some(dest),
+                builtin,
+                args,
+            },
+        );
+        Ok(dest)
+    }
+
     fn lower_call_expr(
         &mut self,
         call: &swc_ast::CallExpr,
@@ -2954,39 +2955,30 @@ impl Lowerer {
 
         match &call.callee {
             swc_ast::Callee::Expr(expr) => {
+                if let swc_ast::Expr::Ident(ident) = expr.as_ref() {
+                    if let Some(builtin) = builtin_from_global_ident(&ident.sym) {
+                        if self.scopes.lookup(&ident.sym).is_err() {
+                            return self.lower_host_builtin_call_expr(call, block, builtin);
+                        }
+                    }
+                }
+
                 // 检测 MemberExpr 被调用者 → 提取 obj 作为 this
                 if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
-                    // obj.method() → obj 是 this，method 是 callee
-                    // 检测 Object.defineProperty
+                    // 静态宿主 API（console.*, Object.*, JSON.*）不读取对象本身。
                     if let swc_ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref() {
-                        if &*obj_ident.sym == "Object" {
-                            if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
-                                let builtin = match &*prop_ident.sym {
-                                    "defineProperty" => Some(Builtin::DefineProperty),
-                                    "getOwnPropertyDescriptor" => Some(Builtin::GetOwnPropDesc),
-                                    _ => None,
-                                };
-                                if let Some(builtin) = builtin {
-                                    // 性能优化：预分配容量避免循环中多次 reallocation
-                                    let mut args = Vec::with_capacity(call.args.len());
-                                    for arg in &call.args {
-                                        let arg_val = self.lower_expr(&arg.expr, block)?;
-                                        args.push(arg_val);
-                                    }
-                                    let dest = self.alloc_value();
-                                    self.current_function.append_instruction(
-                                        block,
-                                        Instruction::CallBuiltin {
-                                            dest: Some(dest),
-                                            builtin,
-                                            args,
-                                        },
-                                    );
-                                    return Ok(dest);
+                        if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
+                            if let Some(builtin) =
+                                builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
+                            {
+                                if self.scopes.lookup(&obj_ident.sym).is_err() {
+                                    return self.lower_host_builtin_call_expr(call, block, builtin);
                                 }
                             }
                         }
                     }
+
+                    // obj.method() → obj 是 this，method 是 callee
                     this_val = self.lower_expr(&member_expr.obj, block)?;
                     callee_val = self.lower_member_expr(member_expr, block)?;
                 } else {
@@ -4502,21 +4494,64 @@ impl std::fmt::Display for Diagnostic {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-fn is_console_log(call: &swc_ast::CallExpr) -> bool {
-    let swc_ast::Callee::Expr(callee_expr) = &call.callee else {
-        return false;
-    };
-    let swc_ast::Expr::Member(member) = callee_expr.as_ref() else {
-        return false;
-    };
-    let swc_ast::Expr::Ident(object) = member.obj.as_ref() else {
-        return false;
-    };
-    let swc_ast::MemberProp::Ident(property) = &member.prop else {
-        return false;
-    };
 
-    object.sym == "console" && property.sym == "log"
+fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
+    match name {
+        "setTimeout" => Some(Builtin::SetTimeout),
+        "clearTimeout" => Some(Builtin::ClearTimeout),
+        "setInterval" => Some(Builtin::SetInterval),
+        "clearInterval" => Some(Builtin::ClearInterval),
+        "fetch" => Some(Builtin::Fetch),
+        _ => None,
+    }
+}
+
+fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
+    match object {
+        "console" => match property {
+            "log" => Some(Builtin::ConsoleLog),
+            "error" => Some(Builtin::ConsoleError),
+            "warn" => Some(Builtin::ConsoleWarn),
+            "info" => Some(Builtin::ConsoleInfo),
+            "debug" => Some(Builtin::ConsoleDebug),
+            "trace" => Some(Builtin::ConsoleTrace),
+            _ => None,
+        },
+        "Object" => match property {
+            "defineProperty" => Some(Builtin::DefineProperty),
+            "getOwnPropertyDescriptor" => Some(Builtin::GetOwnPropDesc),
+            _ => None,
+        },
+        "JSON" => match property {
+            "stringify" => Some(Builtin::JsonStringify),
+            "parse" => Some(Builtin::JsonParse),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
+    match builtin {
+        Builtin::ConsoleLog => ("console.log", 1),
+        Builtin::ConsoleError => ("console.error", 1),
+        Builtin::ConsoleWarn => ("console.warn", 1),
+        Builtin::ConsoleInfo => ("console.info", 1),
+        Builtin::ConsoleDebug => ("console.debug", 1),
+        Builtin::ConsoleTrace => ("console.trace", 1),
+        Builtin::DefineProperty => ("Object.defineProperty", 3),
+        Builtin::GetOwnPropDesc => ("Object.getOwnPropertyDescriptor", 2),
+        Builtin::SetTimeout => ("setTimeout", 2),
+        Builtin::ClearTimeout => ("clearTimeout", 1),
+        Builtin::SetInterval => ("setInterval", 2),
+        Builtin::ClearInterval => ("clearInterval", 1),
+        Builtin::Fetch => ("fetch", 1),
+        Builtin::JsonStringify => ("JSON.stringify", 1),
+        Builtin::JsonParse => ("JSON.parse", 1),
+        Builtin::AbstractEq => ("abstract-eq", 2),
+        Builtin::AbstractCompare => ("abstract-compare", 2),
+        _ => ("builtin", 0),
+    }
 }
 
 fn assign_op_to_binary(op: swc_ast::AssignOp) -> Option<BinaryOp> {
