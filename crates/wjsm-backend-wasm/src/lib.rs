@@ -198,7 +198,7 @@ impl Compiler {
         types.ty().function(vec![ValType::I64], vec![ValType::I64]);
         // Type 4: () -> (i64)  — (unused placeholder)
         types.ty().function(vec![], vec![ValType::I64]);
-        // Type 5: (i64, i64) -> () — begin_try, etc.
+        // Type 5: (i64, i64) -> () — unused (was begin_try, now removed)
         types
             .ty()
             .function(vec![ValType::I64, ValType::I64], vec![]);
@@ -262,6 +262,10 @@ impl Compiler {
         imports.import("env", "define_property", EntityType::Function(9));
         // Import index 18: get_own_prop_desc: (i64, i32) -> (i64)
         imports.import("env", "get_own_prop_desc", EntityType::Function(8));
+        // Import index 19: abstract_eq: (i64, i64) -> (i64)
+        imports.import("env", "abstract_eq", EntityType::Function(2));
+        // Import index 20: abstract_compare: (i64, i64) -> (i64)
+        imports.import("env", "abstract_compare", EntityType::Function(2));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::F64Mod, 1);
@@ -281,6 +285,8 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::InstanceOf, 15);
         builtin_func_indices.insert(Builtin::DefineProperty, 17);
         builtin_func_indices.insert(Builtin::GetOwnPropDesc, 18);
+        builtin_func_indices.insert(Builtin::AbstractEq, 19);
+        builtin_func_indices.insert(Builtin::AbstractCompare, 20);
 
         let functions = FunctionSection::new();
 
@@ -317,7 +323,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 19, // 19 imports (0-18)
+            _next_import_func: 21, // 21 imports (0-20)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -3019,9 +3025,39 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Builtin::BeginTry | Builtin::EndTry | Builtin::BeginFinally | Builtin::EndFinally => {
-                // Phase 6
-                bail!("builtin {builtin} not yet implemented");
+            Builtin::AbstractEq => {
+                // abstract_eq(a, b) -> bool
+                let lhs = args.first().context("AbstractEq expects 2 args")?;
+                let rhs = args.get(1).context("AbstractEq expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(19);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::AbstractCompare => {
+                // abstract_compare(a, b) -> bool (a < b)
+                let lhs = args.first().context("AbstractCompare expects 2 args")?;
+                let rhs = args.get(1).context("AbstractCompare expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(20);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
             }
             Builtin::DefineProperty => {
                 // define_property(obj: i64, key: i64, desc: i64) -> ()
