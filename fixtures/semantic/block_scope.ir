@@ -19,8 +19,8 @@ module {
       %4 = const c4
       store var $1.x, %4
       %5 = load var $1.x
-      call builtin.console.log(%5)
-      %6 = load var $0.x
-      call builtin.console.log(%6)
+      %6 = call builtin.console.log(%5)
+      %7 = load var $0.x
+      %8 = call builtin.console.log(%7)
       return
 }

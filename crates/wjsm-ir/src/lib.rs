@@ -90,6 +90,9 @@ pub struct Function {
     params: Vec<String>,
     entry: BasicBlockId,
     blocks: Vec<BasicBlock>,
+    /// 该函数捕获的外层变量名列表（闭包用）。
+    /// 语义层逃逸分析后填入，后端用于 env 对象的属性名。
+    captured_names: Vec<String>,
 }
 
 impl Function {
@@ -99,6 +102,7 @@ impl Function {
             params: Vec::new(),
             entry,
             blocks: Vec::new(),
+            captured_names: Vec::new(),
         }
     }
 
@@ -112,6 +116,14 @@ impl Function {
 
     pub fn set_params(&mut self, params: Vec<String>) {
         self.params = params;
+    }
+
+    pub fn captured_names(&self) -> &[String] {
+        &self.captured_names
+    }
+
+    pub fn set_captured_names(&mut self, names: Vec<String>) {
+        self.captured_names = names;
     }
 
     pub fn entry(&self) -> BasicBlockId {
@@ -131,7 +143,7 @@ impl Function {
     }
 
     /// O(1) 通过 id 获取 block 引用。
-    /// 
+    ///
     /// # 性能优化
     /// 由于 block id 等于其在 blocks 向量中的索引（由 FunctionBuilder::new_block 保证），
     /// 使用直接索引访问而非 iter().find()，将 O(n) 降为 O(1)。
@@ -140,7 +152,7 @@ impl Function {
     }
 
     /// O(1) 通过 id 获取 block 可变引用。
-    /// 
+    ///
     /// # 性能优化
     /// 由于 block id 等于其在 blocks 向量中的索引（由 FunctionBuilder::new_block 保证），
     /// 使用直接索引访问而非 iter().find()，将 O(n) 降为 O(1)。
@@ -149,10 +161,21 @@ impl Function {
     }
 
     fn dump_into(&self, out: &mut String) {
+        let _ = write!(out, "  fn @{}", self.name);
+        if !self.captured_names.is_empty() {
+            let _ = write!(out, " [captures: ");
+            for (i, name) in self.captured_names.iter().enumerate() {
+                if i > 0 {
+                    let _ = write!(out, ", ");
+                }
+                let _ = write!(out, "{name}");
+            }
+            let _ = write!(out, "]");
+        }
         if self.params.is_empty() {
-            let _ = writeln!(out, "  fn @{} [entry={}]:", self.name, self.entry);
+            let _ = writeln!(out, " [entry={}]:", self.entry);
         } else {
-            let _ = write!(out, "  fn @{} [params: ", self.name);
+            let _ = write!(out, " [params: ");
             for (i, param) in self.params.iter().enumerate() {
                 if i > 0 {
                     let _ = write!(out, ", ");
@@ -498,6 +521,7 @@ pub enum Builtin {
     Fetch,
     JsonStringify,
     JsonParse,
+    CreateClosure,
 }
 
 impl fmt::Display for Builtin {
@@ -536,6 +560,7 @@ impl fmt::Display for Builtin {
             Self::Fetch => "fetch",
             Self::JsonStringify => "JSON.stringify",
             Self::JsonParse => "JSON.parse",
+            Self::CreateClosure => "create_closure",
         })
     }
 }

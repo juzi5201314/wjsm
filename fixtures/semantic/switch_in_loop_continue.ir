@@ -38,7 +38,7 @@ module {
       return
     bb4:
       %12 = load var $0.i
-      call builtin.console.log(%12)
+      %13 = call builtin.console.log(%12)
       jump bb1
     bb5:
       jump bb1

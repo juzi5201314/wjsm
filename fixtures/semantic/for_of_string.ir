@@ -24,7 +24,7 @@ module {
       %7 = call builtin.iterator.value(%4)
       store var $0.c, %7
       %8 = load var $0.c
-      call builtin.console.log(%8)
+      %9 = call builtin.console.log(%8)
       jump bb3
     bb3:
       call builtin.iterator.next(%4)

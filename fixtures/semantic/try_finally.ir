@@ -18,16 +18,16 @@ module {
       jump bb1
     bb1:
       %3 = const c3
-      call builtin.console.log(%3)
+      %4 = call builtin.console.log(%3)
       jump bb3
     bb2:
       jump bb3
     bb3:
-      %4 = const c4
-      call builtin.console.log(%4)
+      %5 = const c4
+      %6 = call builtin.console.log(%5)
       jump bb4
     bb4:
-      %5 = const c5
-      call builtin.console.log(%5)
+      %7 = const c5
+      %8 = call builtin.console.log(%7)
       return
 }

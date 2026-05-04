@@ -24,25 +24,25 @@ module {
     bb2:
       jump bb3
     bb3:
-      %8 = const c8
-      call builtin.console.log(%8)
+      %12 = const c8
+      %13 = call builtin.console.log(%12)
       jump bb4
     bb4:
       return
     bb5:
       %3 = const c3
-      call builtin.console.log(%3)
-      %4 = const c4
-      %5 = const c5
-      call builtin.console.log(%5)
-      %6 = const c6
-      call builtin.console.log(%6)
-      return %4
+      %4 = call builtin.console.log(%3)
+      %5 = const c4
+      %6 = const c5
+      %7 = call builtin.console.log(%6)
+      %8 = const c6
+      %9 = call builtin.console.log(%8)
+      return %5
     bb6:
       jump bb7
     bb7:
-      %7 = const c7
-      call builtin.console.log(%7)
+      %10 = const c7
+      %11 = call builtin.console.log(%10)
       jump bb8
     bb8:
       jump bb3

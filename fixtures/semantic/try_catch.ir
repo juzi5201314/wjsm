@@ -23,12 +23,12 @@ module {
       %4 = load var $tmp.0
       store var $2.e, %4
       %5 = load var $2.e
-      call builtin.console.log(%5)
+      %6 = call builtin.console.log(%5)
       jump bb4
     bb3:
       unreachable
     bb4:
-      %6 = const c4
-      call builtin.console.log(%6)
+      %7 = const c4
+      %8 = call builtin.console.log(%7)
       return
 }

@@ -19,13 +19,13 @@ module {
     bb1:
       %3 = const c3
       %4 = const c4
-      call builtin.console.log(%4)
+      %5 = call builtin.console.log(%4)
       throw %3
     bb2:
       jump bb3
     bb3:
-      %5 = const c5
-      call builtin.console.log(%5)
+      %6 = const c5
+      %7 = call builtin.console.log(%6)
       jump bb4
     bb4:
       return

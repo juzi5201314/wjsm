@@ -78,6 +78,24 @@ impl ScopeTree {
         self.current = idx;
     }
 
+    /// 获取当前 scope 的 id。
+    fn current_scope_id(&self) -> usize {
+        self.current
+    }
+
+    /// 返回指定 scope 所属的最近函数 scope。
+    fn function_scope_for_scope(&self, mut scope_id: usize) -> usize {
+        loop {
+            let scope = &self.arenas[scope_id];
+            if matches!(scope.kind, ScopeKind::Function) {
+                return scope_id;
+            }
+            scope_id = scope
+                .parent
+                .expect("non-root scope must have a parent function scope");
+        }
+    }
+
     /// Pop the current scope, returning to its parent.
     fn pop_scope(&mut self) {
         self.current = self.arenas[self.current]
@@ -166,7 +184,6 @@ impl ScopeTree {
             }
         }
     }
-
 
     /// 赋值时查找变量：组合 `check_mutable` 和 `lookup`，
     /// 一次 scope chain 遍历完成 const 检查 + TDZ 检查。
@@ -386,11 +403,61 @@ struct Lowerer {
     function_hoisted_stack: Vec<(Vec<HoistedVar>, std::collections::HashSet<(usize, String)>)>,
     function_next_value_stack: Vec<u32>,
     function_next_temp_stack: Vec<u32>,
+    // ── 闭包捕获相关 ──────────────────────────────────────────────────
+    /// 每层函数的捕获绑定列表，push_function_context 时压入空 Vec。
+    captured_names_stack: Vec<Vec<CapturedBinding>>,
+    /// 每层函数的 function scope id，用于判断变量是否逃逸。
+    function_scope_id_stack: Vec<usize>,
+    /// 追踪当前是否在箭头函数中（箭头函数的 this 需要词法捕获）
+    is_arrow_fn_stack: Vec<bool>,
+    /// 每层函数的共享 env 对象 (ValueId) + 已注册的捕获绑定集合。
+    /// 同一外层函数中的多个闭包共享同一个 env 对象，确保可变捕获变量的修改对所有闭包可见。
+    shared_env_stack: Vec<Option<(ValueId, std::collections::HashSet<CapturedBinding>)>>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct HoistedVar {
     scope_id: usize,
     name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct CapturedBinding {
+    name: String,
+    scope_id: Option<usize>,
+}
+
+impl CapturedBinding {
+    fn new(name: impl Into<String>, scope_id: usize) -> Self {
+        Self {
+            name: name.into(),
+            scope_id: Some(scope_id),
+        }
+    }
+
+    fn lexical_this() -> Self {
+        Self {
+            name: "$this".to_string(),
+            scope_id: None,
+        }
+    }
+
+    fn env_key(&self) -> String {
+        match self.scope_id {
+            Some(scope_id) => format!("${scope_id}.{}", self.name),
+            None => self.name.clone(),
+        }
+    }
+
+    fn display_name(&self) -> String {
+        self.env_key()
+    }
+
+    fn var_ir_name(&self) -> String {
+        match self.scope_id {
+            Some(scope_id) => format!("${scope_id}.{}", self.name),
+            None => self.name.clone(),
+        }
+    }
 }
 
 impl Lowerer {
@@ -419,6 +486,10 @@ impl Lowerer {
             function_hoisted_stack: Vec::new(),
             function_next_value_stack: Vec::new(),
             function_next_temp_stack: Vec::new(),
+            captured_names_stack: Vec::new(),
+            function_scope_id_stack: Vec::new(),
+            is_arrow_fn_stack: Vec::new(),
+            shared_env_stack: Vec::new(),
         }
     }
 
@@ -429,6 +500,12 @@ impl Lowerer {
         ));
         // 压入函数作用域到现有作用域树，而非创建新树
         self.scopes.push_scope(ScopeKind::Function);
+        // 记录当前函数的 scope id（用于逃逸分析）
+        let fn_scope_id = self.scopes.current_scope_id();
+        self.function_scope_id_stack.push(fn_scope_id);
+        self.captured_names_stack.push(Vec::new());
+        self.is_arrow_fn_stack.push(false); // 默认非箭头函数，箭头函数会单独设置
+        self.shared_env_stack.push(None); // 新函数上下文，尚无共享 env 对象
         self.function_hoisted_stack.push((
             std::mem::take(&mut self.hoisted_vars),
             std::mem::take(&mut self.hoisted_vars_set),
@@ -448,6 +525,10 @@ impl Lowerer {
         self.current_function = self.function_stack.pop().expect("function stack underflow");
         // 弹出函数作用域，回到外层作用域
         self.scopes.pop_scope();
+        self.function_scope_id_stack.pop();
+        self.captured_names_stack.pop();
+        self.is_arrow_fn_stack.pop();
+        self.shared_env_stack.pop();
         let (vars, set) = self
             .function_hoisted_stack
             .pop()
@@ -464,7 +545,89 @@ impl Lowerer {
             .expect("next temp stack underflow");
     }
 
+    fn current_function_scope_id(&self) -> usize {
+        self.function_scope_id_stack.last().copied().unwrap_or(0)
+    }
+
+    fn binding_owner_function_scope(&self, binding: &CapturedBinding) -> usize {
+        binding
+            .scope_id
+            .map(|scope_id| self.scopes.function_scope_for_scope(scope_id))
+            .unwrap_or_else(|| self.current_function_scope_id())
+    }
+
+    fn binding_belongs_to_current_function(&self, binding: &CapturedBinding) -> bool {
+        self.binding_owner_function_scope(binding) == self.current_function_scope_id()
+    }
+
+    fn record_capture(&mut self, binding: CapturedBinding) {
+        if let Some(captured) = self.captured_names_stack.last_mut() {
+            if !captured.contains(&binding) {
+                captured.push(binding);
+            }
+        }
+    }
+
+    fn captured_display_names(captured: &[CapturedBinding]) -> Vec<String> {
+        captured.iter().map(CapturedBinding::display_name).collect()
+    }
+
+    fn is_shared_binding(&self, binding: &CapturedBinding) -> bool {
+        self.shared_env_stack
+            .last()
+            .and_then(|shared| shared.as_ref())
+            .map_or(false, |(_, names)| names.contains(binding))
+    }
+
+    fn shared_env_value(&self) -> Option<ValueId> {
+        self.shared_env_stack
+            .last()
+            .and_then(|shared| shared.as_ref().map(|(value, _)| *value))
+    }
+
+    fn append_env_key_const(&mut self, block: BasicBlockId, binding: &CapturedBinding) -> ValueId {
+        let key_const = self
+            .module
+            .add_constant(Constant::String(binding.env_key()));
+        let key_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: key_val,
+                constant: key_const,
+            },
+        );
+        key_val
+    }
+
+    fn load_captured_binding(
+        &mut self,
+        block: BasicBlockId,
+        binding: &CapturedBinding,
+    ) -> Result<ValueId, LoweringError> {
+        let env_val = if self.binding_belongs_to_current_function(binding) {
+            self.shared_env_value()
+                .expect("shared binding must have a materialized env")
+        } else {
+            self.record_capture(binding.clone());
+            self.load_env_object(block)
+        };
+        let key_val = self.append_env_key_const(block, binding);
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::GetProp {
+                dest,
+                object: env_val,
+                key: key_val,
+            },
+        );
+        Ok(dest)
+    }
+
     fn lower_module(mut self, module: &swc_ast::Module) -> Result<Program, LoweringError> {
+        // main 函数也需要 shared_env_stack 条目（顶层闭包需要在 main 中创建 env 对象）
+        self.shared_env_stack.push(None);
         // Pre-scan: hoist variable declarations so let/const are in TDZ.
         self.predeclare_stmts(&module.body)?;
 
@@ -626,7 +789,6 @@ impl Lowerer {
         };
         Ok(StmtFlow::Open(result_block))
     }
-
 
     fn lower_call(
         &mut self,
@@ -1874,12 +2036,16 @@ impl Lowerer {
         let name = fn_decl.ident.sym.to_string();
         self.push_function_context(&name, BasicBlockId(0));
 
+        // 声明 $env（闭包环境对象），非闭包时传入 undefined
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
         // Register $this so that this-keyword expressions resolve.
         let this_scope_id = self
             .scopes
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
-        // Register parameters in the root scope (already a function scope).
 
         let param_names: Vec<String> = fn_decl
             .function
@@ -1891,7 +2057,10 @@ impl Lowerer {
             })
             .collect();
 
-        let mut param_ir_names: Vec<String> = vec![format!("${this_scope_id}.$this")];
+        let mut param_ir_names: Vec<String> = vec![
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+        ];
         for param_name in &param_names {
             let scope_id = self
                 .scopes
@@ -1934,6 +2103,9 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_params(param_ir_names);
+        // 设置捕获变量列表（逃逸分析结果）
+        let captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&captured));
         for block in blocks {
             ir_function.push_block(block);
         }
@@ -1942,17 +2114,37 @@ impl Lowerer {
         // Restore the outer function context.
         self.pop_function_context();
 
-        // Emit StoreVar in the outer function to bind the function reference.
+        // 在外层函数中 emit 函数引用（闭包或直接 FunctionRef）
         let outer_block = self.ensure_open(flow)?;
-        let dest = self.alloc_value();
         let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
+        let func_ref_val = self.alloc_value();
         self.current_function.append_instruction(
             outer_block,
             Instruction::Const {
-                dest,
+                dest: func_ref_val,
                 constant: func_ref_const,
             },
         );
+
+        // 如果有捕获变量，使用共享 env 对象 + CreateClosure
+        let callee_val = if captured.is_empty() {
+            // 非闭包函数：直接使用 FunctionRef
+            func_ref_val
+        } else {
+            // 闭包函数：获取共享 env 对象（同一外层函数中多个闭包共享）
+            let env_val = self.ensure_shared_env(outer_block, &captured, fn_decl.span())?;
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                outer_block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![func_ref_val, env_val],
+                },
+            );
+            closure_val
+        };
+
         let (scope_id, _) = self
             .scopes
             .lookup(&name)
@@ -1962,7 +2154,7 @@ impl Lowerer {
             outer_block,
             Instruction::StoreVar {
                 name: ir_name,
-                value: dest,
+                value: callee_val,
             },
         );
 
@@ -1982,6 +2174,11 @@ impl Lowerer {
         );
         self.push_function_context(&name, BasicBlockId(0));
 
+        // 声明 $env（闭包环境对象）
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_expr.span(), msg))?;
         // Register $this so that this-keyword expressions resolve.
         let this_scope_id = self
             .scopes
@@ -2007,7 +2204,10 @@ impl Lowerer {
             })
             .collect();
 
-        let mut param_ir_names: Vec<String> = vec![format!("${this_scope_id}.$this")];
+        let mut param_ir_names: Vec<String> = vec![
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+        ];
         for param_name in &param_names {
             let scope_id = self
                 .scopes
@@ -2050,6 +2250,8 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_params(param_ir_names);
+        let captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&captured));
         for b in blocks {
             ir_function.push_block(b);
         }
@@ -2058,17 +2260,35 @@ impl Lowerer {
         // Restore outer context.
         self.pop_function_context();
 
-        // Emit FunctionRef constant in the current (outer) block.
-        let dest = self.alloc_value();
+        // 在外层函数中 emit 函数引用（闭包或直接 FunctionRef）
         let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
+        let func_ref_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::Const {
-                dest,
+                dest: func_ref_val,
                 constant: func_ref_const,
             },
         );
-        Ok(dest)
+
+        // 如果有捕获变量，使用共享 env 对象 + CreateClosure
+        let callee_val = if captured.is_empty() {
+            func_ref_val
+        } else {
+            let env_val = self.ensure_shared_env(block, &captured, fn_expr.span())?;
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![func_ref_val, env_val],
+                },
+            );
+            closure_val
+        };
+
+        Ok(callee_val)
     }
 
     /// Lower an arrow function expression `(params) => expr` or `(params) => { ... }`.
@@ -2079,8 +2299,15 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         let name = format!("arrow_{}", self.module.functions().len());
         self.push_function_context(&name, BasicBlockId(0));
+        // 标记当前为箭头函数
+        *self.is_arrow_fn_stack.last_mut().unwrap() = true;
 
-        // Register $this so that this-keyword expressions resolve.
+        // 声明 $env（闭包环境对象）
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(arrow.span, msg))?;
+        // 箭头函数声明 $this 参数占位（WASM 调用约定需要），但内部 this 通过 env 捕获读取
         let this_scope_id = self
             .scopes
             .declare("$this", VarKind::Let, true)
@@ -2098,7 +2325,10 @@ impl Lowerer {
                 }
             })
             .collect();
-        let mut param_ir_names: Vec<String> = vec![format!("${this_scope_id}.$this")];
+        let mut param_ir_names: Vec<String> = vec![
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+        ];
         for param_name in &param_names {
             let scope_id = self
                 .scopes
@@ -2147,6 +2377,8 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_params(param_ir_names);
+        let captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&captured));
         for b in blocks {
             ir_function.push_block(b);
         }
@@ -2155,17 +2387,34 @@ impl Lowerer {
         // Restore outer context.
         self.pop_function_context();
 
-        // Emit FunctionRef constant in the outer block.
-        let dest = self.alloc_value();
+        // 在外层函数中 emit 函数引用（闭包或直接 FunctionRef）
         let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
+        let func_ref_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::Const {
-                dest,
+                dest: func_ref_val,
                 constant: func_ref_const,
             },
         );
-        Ok(dest)
+
+        let callee_val = if captured.is_empty() {
+            func_ref_val
+        } else {
+            let env_val = self.ensure_shared_env(block, &captured, arrow.span)?;
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![func_ref_val, env_val],
+                },
+            );
+            closure_val
+        };
+
+        Ok(callee_val)
     }
 
     fn lower_class_decl(
@@ -2189,6 +2438,11 @@ impl Lowerer {
         let ctor_name = format!("{}.constructor", class_name);
         self.push_function_context(&ctor_name, BasicBlockId(0));
 
+        // 声明 $env（闭包环境对象）
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(class_decl.span(), msg))?;
         // Register $this as the first param.
         let this_scope_id = self
             .scopes
@@ -2196,13 +2450,17 @@ impl Lowerer {
             .map_err(|msg| self.error(class_decl.span(), msg))?;
 
         // Register explicit constructor params.
-        let mut param_ir_names = vec![format!("${this_scope_id}.$this")];
+        let mut param_ir_names = vec![
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+        ];
         if let Some(ctor) = constructor {
             for param in &ctor.params {
                 if let swc_ast::ParamOrTsParamProp::Param(p) = param {
                     if let swc_ast::Pat::Ident(binding_ident) = &p.pat {
                         let name = binding_ident.id.sym.to_string();
-                        let scope_id = self.scopes
+                        let scope_id = self
+                            .scopes
                             .declare(&name, VarKind::Let, true)
                             .map_err(|msg| self.error(class_decl.span(), msg))?;
                         param_ir_names.push(format!("${scope_id}.{name}"));
@@ -2247,6 +2505,8 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&ctor_name, BasicBlockId(0));
         ir_function.set_params(param_ir_names);
+        let ctor_captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&ctor_captured));
         for block in blocks {
             ir_function.push_block(block);
         }
@@ -2302,17 +2562,26 @@ impl Lowerer {
                 let fn_name = format!("{}.{}", class_name, method_name);
                 self.push_function_context(&fn_name, BasicBlockId(0));
 
+                // 声明 $env（闭包环境对象）
+                let env_scope_id = self
+                    .scopes
+                    .declare("$env", VarKind::Let, true)
+                    .map_err(|msg| self.error(method.span, msg))?;
                 // Register $this as the first param.
                 let this_scope_id = self
                     .scopes
                     .declare("$this", VarKind::Let, true)
                     .map_err(|msg| self.error(method.span, msg))?;
 
-                let mut method_param_ir_names = vec![format!("${this_scope_id}.$this")];
+                let mut method_param_ir_names = vec![
+                    format!("${env_scope_id}.$env"),
+                    format!("${this_scope_id}.$this"),
+                ];
                 for param in &method.function.params {
                     if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
                         let name = binding_ident.id.sym.to_string();
-                        let scope_id = self.scopes
+                        let scope_id = self
+                            .scopes
                             .declare(&name, VarKind::Let, true)
                             .map_err(|msg| self.error(method.span, msg))?;
                         method_param_ir_names.push(format!("${scope_id}.{name}"));
@@ -2352,6 +2621,8 @@ impl Lowerer {
                 let m_blocks = m_old_fn.into_blocks();
                 let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
                 m_ir_function.set_params(method_param_ir_names);
+                let m_captured = self.captured_names_stack.last().unwrap().clone();
+                m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
                 for b in m_blocks {
                     m_ir_function.push_block(b);
                 }
@@ -2460,18 +2731,27 @@ impl Lowerer {
         let ctor_name = format!("{}.constructor", class_name);
         self.push_function_context(&ctor_name, BasicBlockId(0));
 
+        // 声明 $env（闭包环境对象）
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(class_expr.span(), msg))?;
         let this_scope_id = self
             .scopes
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(class_expr.span(), msg))?;
 
-        let mut param_ir_names = vec![format!("${this_scope_id}.$this")];
+        let mut param_ir_names = vec![
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+        ];
         if let Some(ctor) = constructor {
             for param in &ctor.params {
                 if let swc_ast::ParamOrTsParamProp::Param(p) = param {
                     if let swc_ast::Pat::Ident(binding_ident) = &p.pat {
                         let name = binding_ident.id.sym.to_string();
-                        let scope_id = self.scopes
+                        let scope_id = self
+                            .scopes
                             .declare(&name, VarKind::Let, true)
                             .map_err(|msg| self.error(class_expr.span(), msg))?;
                         param_ir_names.push(format!("${scope_id}.{name}"));
@@ -2512,6 +2792,8 @@ impl Lowerer {
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&ctor_name, BasicBlockId(0));
         ir_function.set_params(param_ir_names);
+        let ctor_captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&ctor_captured));
         for blk in blocks {
             ir_function.push_block(blk);
         }
@@ -2563,16 +2845,24 @@ impl Lowerer {
                 let fn_name = format!("{}.{}", class_name, method_name);
                 self.push_function_context(&fn_name, BasicBlockId(0));
 
+                let env_scope_id = self
+                    .scopes
+                    .declare("$env", VarKind::Let, true)
+                    .map_err(|msg| self.error(method.span, msg))?;
                 let this_scope_id = self
                     .scopes
                     .declare("$this", VarKind::Let, true)
                     .map_err(|msg| self.error(method.span, msg))?;
 
-                let mut method_param_ir_names = vec![format!("${this_scope_id}.$this")];
+                let mut method_param_ir_names = vec![
+                    format!("${env_scope_id}.$env"),
+                    format!("${this_scope_id}.$this"),
+                ];
                 for param in &method.function.params {
                     if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
                         let name = binding_ident.id.sym.to_string();
-                        let scope_id = self.scopes
+                        let scope_id = self
+                            .scopes
                             .declare(&name, VarKind::Let, true)
                             .map_err(|msg| self.error(method.span, msg))?;
                         method_param_ir_names.push(format!("${scope_id}.{name}"));
@@ -2605,6 +2895,8 @@ impl Lowerer {
                 let m_blocks = m_old_fn.into_blocks();
                 let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
                 m_ir_function.set_params(method_param_ir_names);
+                let m_captured = self.captured_names_stack.last().unwrap().clone();
+                m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
                 for b in m_blocks {
                     m_ir_function.push_block(b);
                 }
@@ -2825,16 +3117,161 @@ impl Lowerer {
         Ok(dest)
     }
 
-    fn lower_this(&mut self, block: BasicBlockId) -> Result<ValueId, LoweringError> {
+    /// 加载当前函数的闭包环境对象（$env 参数）
+    fn load_env_object(&mut self, block: BasicBlockId) -> ValueId {
         let dest = self.alloc_value();
+        // 从函数参数中读取 $env
+        // 后端将 $env 映射为 WASM param 0，var_locals["$env"] = 0
         self.current_function.append_instruction(
             block,
             Instruction::LoadVar {
                 dest,
-                name: "$this".to_string(),
+                name: "$env".to_string(),
             },
         );
-        Ok(dest)
+        dest
+    }
+
+    /// 获取或创建当前外层函数的共享 env 对象，并确保所有捕获变量都已写入。
+    /// 同一外层函数中的多个闭包共享同一个 env 对象，保证可变捕获变量的修改对所有闭包可见。
+    fn ensure_shared_env(
+        &mut self,
+        block: BasicBlockId,
+        captured: &[CapturedBinding],
+        _span: Span,
+    ) -> Result<ValueId, LoweringError> {
+        // 步骤 1：读取当前共享 env 状态（不持有引用的情况下）
+        let existing_env_val = self
+            .shared_env_stack
+            .last()
+            .unwrap()
+            .as_ref()
+            .map(|(v, _)| *v);
+        let existing_names = self
+            .shared_env_stack
+            .last()
+            .unwrap()
+            .as_ref()
+            .map(|(_, names)| names.clone())
+            .unwrap_or_default();
+
+        let env_val = match existing_env_val {
+            Some(val) => val,
+            None => {
+                if captured
+                    .iter()
+                    .any(|binding| !self.binding_belongs_to_current_function(binding))
+                {
+                    // 子闭包继续捕获祖先绑定时，复用父 env，保持同一个绑定槽。
+                    self.load_env_object(block)
+                } else {
+                    // 当前函数首次共享本地绑定时创建 env 对象。
+                    let env_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::NewObject {
+                            dest: env_val,
+                            capacity: captured.len() as u32,
+                        },
+                    );
+                    env_val
+                }
+            }
+        };
+
+        // 步骤 2：写入新变量到 env 对象（仅写入尚未存在的变量）
+        for binding in captured {
+            if existing_names.contains(binding) {
+                continue;
+            }
+
+            let current_val = if self.binding_belongs_to_current_function(binding) {
+                let current_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::LoadVar {
+                        dest: current_val,
+                        name: binding.var_ir_name(),
+                    },
+                );
+                current_val
+            } else {
+                self.record_capture(binding.clone());
+                let parent_env = self.load_env_object(block);
+                let parent_key = self.append_env_key_const(block, binding);
+                let current_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest: current_val,
+                        object: parent_env,
+                        key: parent_key,
+                    },
+                );
+                current_val
+            };
+
+            let key_val = self.append_env_key_const(block, binding);
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp {
+                    object: env_val,
+                    key: key_val,
+                    value: current_val,
+                },
+            );
+        }
+
+        // 步骤 3：更新共享 env 状态
+        if existing_env_val.is_none() {
+            let mut name_set = std::collections::HashSet::new();
+            for binding in captured {
+                name_set.insert(binding.clone());
+            }
+            *self.shared_env_stack.last_mut().unwrap() = Some((env_val, name_set));
+        } else {
+            // 追加新变量名到已有集合
+            let shared = self.shared_env_stack.last_mut().unwrap();
+            if let Some((_, names)) = shared {
+                for binding in captured {
+                    names.insert(binding.clone());
+                }
+            }
+        }
+
+        Ok(env_val)
+    }
+
+    fn lower_this(&mut self, block: BasicBlockId) -> Result<ValueId, LoweringError> {
+        // 箭头函数的 this 是词法捕获的，通过 env 对象读取
+        let is_arrow = self.is_arrow_fn_stack.last().copied().unwrap_or(false);
+        if is_arrow {
+            let binding = CapturedBinding::lexical_this();
+            self.record_capture(binding.clone());
+            // 通过 env 对象读取 this
+            let env_val = self.load_env_object(block);
+            let key_val = self.append_env_key_const(block, &binding);
+            let dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::GetProp {
+                    dest,
+                    object: env_val,
+                    key: key_val,
+                },
+            );
+            Ok(dest)
+        } else {
+            let dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest,
+                    name: "$this".to_string(),
+                },
+            );
+            Ok(dest)
+        }
     }
 
     fn lower_new_expr(
@@ -3028,8 +3465,14 @@ impl Lowerer {
             .scopes
             .lookup(&name)
             .map_err(|msg| self.error(ident.span, msg))?;
-        let ir_name = format!("${scope_id}.{name}");
 
+        let binding = CapturedBinding::new(name.clone(), scope_id);
+        if !self.binding_belongs_to_current_function(&binding) || self.is_shared_binding(&binding) {
+            return self.load_captured_binding(block, &binding);
+        }
+
+        // 局部变量：直接 LoadVar
+        let ir_name = format!("${scope_id}.{name}");
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -3195,6 +3638,12 @@ impl Lowerer {
             .scopes
             .lookup_for_assign(&name)
             .map_err(|msg| self.error(assign.span, msg))?;
+
+        let binding = CapturedBinding::new(name.clone(), scope_id);
+        if !self.binding_belongs_to_current_function(&binding) || self.is_shared_binding(&binding) {
+            return self.lower_assign_captured(assign, block, &binding);
+        }
+
         let ir_name = format!("${scope_id}.{name}");
 
         match assign.op {
@@ -3282,6 +3731,197 @@ impl Lowerer {
                 Ok(dest)
             }
         }
+    }
+
+    /// 对捕获变量的赋值：通过 env 对象的 GetProp/SetProp 实现
+    fn lower_assign_captured(
+        &mut self,
+        assign: &swc_ast::AssignExpr,
+        block: BasicBlockId,
+        binding: &CapturedBinding,
+    ) -> Result<ValueId, LoweringError> {
+        let env_val = if self.binding_belongs_to_current_function(binding) {
+            self.shared_env_value()
+                .expect("shared binding must have a materialized env")
+        } else {
+            self.record_capture(binding.clone());
+            self.load_env_object(block)
+        };
+        let key_val = self.append_env_key_const(block, binding);
+
+        match assign.op {
+            swc_ast::AssignOp::Assign => {
+                let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::SetProp {
+                        object: env_val,
+                        key: key_val,
+                        value: rhs,
+                    },
+                );
+                Ok(rhs)
+            }
+            op => {
+                // 逻辑复合赋值需短路求值 → 走专用路径
+                if matches!(
+                    op,
+                    swc_ast::AssignOp::AndAssign
+                        | swc_ast::AssignOp::OrAssign
+                        | swc_ast::AssignOp::NullishAssign
+                ) {
+                    return self
+                        .lower_logical_assign_captured(assign, block, binding, env_val, key_val);
+                }
+                // 算术/位运算复合赋值
+                let bin_op = assign_op_to_binary(op).ok_or_else(|| {
+                    self.error(assign.span, "unsupported compound assignment operator")
+                })?;
+                // 从 env 对象读取当前值
+                let loaded = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest: loaded,
+                        object: env_val,
+                        key: key_val,
+                    },
+                );
+                let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+                let dest = self.alloc_value();
+                match bin_op {
+                    BinaryOp::Mod => {
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::F64Mod,
+                                args: vec![loaded, rhs],
+                            },
+                        );
+                    }
+                    BinaryOp::Exp => {
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::F64Exp,
+                                args: vec![loaded, rhs],
+                            },
+                        );
+                    }
+                    _ => {
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Binary {
+                                dest,
+                                op: bin_op,
+                                lhs: loaded,
+                                rhs,
+                            },
+                        );
+                    }
+                }
+                // 写回 env 对象
+                let key_val2 = self.append_env_key_const(block, binding);
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::SetProp {
+                        object: env_val,
+                        key: key_val2,
+                        value: dest,
+                    },
+                );
+                Ok(dest)
+            }
+        }
+    }
+
+    /// 逻辑复合赋值到捕获变量（通过 env 对象）
+    fn lower_logical_assign_captured(
+        &mut self,
+        assign: &swc_ast::AssignExpr,
+        block: BasicBlockId,
+        binding: &CapturedBinding,
+        env_val: ValueId,
+        key_val: ValueId,
+    ) -> Result<ValueId, LoweringError> {
+        // 从 env 读取当前值
+        let loaded = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::GetProp {
+                dest: loaded,
+                object: env_val,
+                key: key_val,
+            },
+        );
+
+        let assign_block = self.current_function.new_block();
+        let merge = self.current_function.new_block();
+
+        let condition = if matches!(assign.op, swc_ast::AssignOp::NullishAssign) {
+            let is_nullish = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Unary {
+                    dest: is_nullish,
+                    op: UnaryOp::IsNullish,
+                    value: loaded,
+                },
+            );
+            is_nullish
+        } else {
+            loaded
+        };
+
+        let (true_block, false_block) = match assign.op {
+            swc_ast::AssignOp::AndAssign => (assign_block, merge),
+            swc_ast::AssignOp::OrAssign => (merge, assign_block),
+            swc_ast::AssignOp::NullishAssign => (assign_block, merge),
+            _ => unreachable!(),
+        };
+        self.current_function.set_terminator(
+            block,
+            Terminator::Branch {
+                condition,
+                true_block,
+                false_block,
+            },
+        );
+
+        let rhs = self.lower_expr(assign.right.as_ref(), assign_block)?;
+        let assign_end = self.resolve_store_block(assign_block);
+        let key_val2 = self.append_env_key_const(assign_end, binding);
+        self.current_function.append_instruction(
+            assign_end,
+            Instruction::SetProp {
+                object: env_val,
+                key: key_val2,
+                value: rhs,
+            },
+        );
+        self.current_function
+            .set_terminator(assign_end, Terminator::Jump { target: merge });
+
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: block,
+                        value: loaded,
+                    },
+                    PhiSource {
+                        predecessor: assign_end,
+                        value: rhs,
+                    },
+                ],
+            },
+        );
+        Ok(result)
     }
 
     /// Lower logical compound assignment `&&=`, `||=`, `??=` with short-circuit CFG.
@@ -4493,7 +5133,6 @@ impl std::fmt::Display for Diagnostic {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
-
 
 fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
     match name {

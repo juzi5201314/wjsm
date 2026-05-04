@@ -43,13 +43,13 @@ module {
       call builtin.iterator.close(%5)
       jump bb5
     bb5:
-      %16 = load var $0.total
-      call builtin.console.log(%16)
+      %17 = load var $0.total
+      %18 = call builtin.console.log(%17)
       return
     bb6:
       jump bb3
     bb7:
       %15 = load var $0.ch
-      call builtin.console.log(%15)
+      %16 = call builtin.console.log(%15)
       jump bb3
 }
