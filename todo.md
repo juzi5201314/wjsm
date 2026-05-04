@@ -39,12 +39,12 @@
 - [x] **堆分配器改进（bump → 可回收）** — 当前仅简单 bump allocator（`$obj_new`），无法回收；实现基础 GC（标记-清除或引用计数）。注意：闭包 PoC 可用现有 bump allocator 先行实现（只分配不释放）。影响层：运行时
 - [x] **宿主 API（console.error / setTimeout / fetch 等）** — 除 `console.log` 外全部缺失。影响层：运行时
 
-### 块 C：闭包与词法作用域
+### 块 C：闭包与词法作用域 ✅
 
 依赖：块 B 堆分配器（PoC 阶段可用现有 bump allocator 先行）。内部两个任务强耦合，不可拆分。
 
-- [ ] **闭包 — 词法变量捕获** — 新增 `CreateClosure` / `LoadCaptured` / `StoreCaptured` IR 指令；语义层实现逃逸分析，识别被嵌套函数引用的外层变量；WASM 后端生成闭包对象和环境堆分配代码；`push_function_context`/`pop_function_context` 不再完全更换作用域树，改为基于捕获列表。影响层：IR + 语义 + WASM 后端 + 运行时
-- [ ] **箭头函数捕获词法 `this`** — 统一在闭包机制中实现，`$this` 作为需要词法捕获的外部变量。影响层：语义
+- [x] **闭包 — 词法变量捕获** — `CreateClosure` IR 指令 + 语义层逃逸分析 + env 对象传递 + WASM 后端闭包调用链路 + 运行时 `closure_create/get_func/get_env`。实现方案：捕获变量通过 env 对象（`NewObject` + `SetProp`/`GetProp`）传递，闭包通过 `TAG_CLOSURE` 标记区分普通函数引用，调用时运行时解析闭包获取 func_idx + env_obj。
+- [x] **箭头函数捕获词法 `this`** — 箭头函数内 `this` 通过 env 对象词法捕获，`lower_this` 检测箭头函数上下文后走 `GetProp(env, "$this")` 路径。影响层：语义
 
 ### 块 D：数组
 

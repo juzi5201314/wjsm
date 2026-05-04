@@ -21,20 +21,20 @@ module {
       branch %3, bb1, bb2
     bb1:
       %4 = const c4
-      call builtin.console.log(%4)
+      %5 = call builtin.console.log(%4)
       jump bb3
     bb2:
-      %5 = const c5
-      call builtin.console.log(%5)
+      %6 = const c5
+      %7 = call builtin.console.log(%6)
       jump bb3
     bb3:
-      %6 = const c6
-      store var $0.s, %6
-      %7 = load var $0.s
-      branch %7, bb4, bb5
+      %8 = const c6
+      store var $0.s, %8
+      %9 = load var $0.s
+      branch %9, bb4, bb5
     bb4:
-      %8 = const c7
-      call builtin.console.log(%8)
+      %10 = const c7
+      %11 = call builtin.console.log(%10)
       jump bb5
     bb5:
       return

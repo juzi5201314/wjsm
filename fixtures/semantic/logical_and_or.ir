@@ -31,33 +31,33 @@ module {
       jump bb2
     bb2:
       %6 = phi [(bb0, %4), (bb1, %5)]
-      call builtin.console.log(%6)
-      %7 = const c6
-      branch %7, bb4, bb3
+      %7 = call builtin.console.log(%6)
+      %8 = const c6
+      branch %8, bb4, bb3
     bb3:
-      %8 = const c7
-      store var $0.hit, %8
+      %9 = const c7
+      store var $0.hit, %9
       jump bb4
     bb4:
-      %9 = phi [(bb2, %7), (bb3, %8)]
-      call builtin.console.log(%9)
-      %10 = load var $0.hit
-      call builtin.console.log(%10)
-      %11 = const c8
-      branch %11, bb5, bb6
+      %10 = phi [(bb2, %8), (bb3, %9)]
+      %11 = call builtin.console.log(%10)
+      %12 = load var $0.hit
+      %13 = call builtin.console.log(%12)
+      %14 = const c8
+      branch %14, bb5, bb6
     bb5:
-      %12 = const c9
+      %15 = const c9
       jump bb6
     bb6:
-      %13 = phi [(bb4, %11), (bb5, %12)]
-      call builtin.console.log(%13)
-      %14 = const c10
-      branch %14, bb8, bb7
+      %16 = phi [(bb4, %14), (bb5, %15)]
+      %17 = call builtin.console.log(%16)
+      %18 = const c10
+      branch %18, bb8, bb7
     bb7:
-      %15 = const c11
+      %19 = const c11
       jump bb8
     bb8:
-      %16 = phi [(bb6, %14), (bb7, %15)]
-      call builtin.console.log(%16)
+      %20 = phi [(bb6, %18), (bb7, %19)]
+      %21 = call builtin.console.log(%20)
       return
 }

@@ -11,9 +11,8 @@ use wjsm_ir::{
     Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, constants, value,
 };
 // ── Shadow Stack Constants ─────────────────────────────────────────────
-const SHADOW_STACK_SIZE: u32 = 65536;      // 64KB = 8192 个 i64 槽位
-const SHADOW_STACK_ALIGN: u32 = 8;
-
+const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
+// SHADOW_STACK_ALIGN: reserved for future use
 
 // ── Public API ──────────────────────────────────────────────────────────
 
@@ -102,6 +101,12 @@ struct Compiler {
     num_ir_functions_global_idx: u32,
     /// WASM global index for __shadow_stack_end (shadow stack bounds check).
     shadow_stack_end_global_idx: u32,
+    /// WASM function index for closure_create import.
+    closure_create_func_idx: u32,
+    /// WASM function index for closure_get_func import.
+    closure_get_func_idx: u32,
+    /// WASM function index for closure_get_env import.
+    closure_get_env_idx: u32,
 }
 /// 循环元信息（编译前预扫描得到）。
 #[derive(Debug, Clone)]
@@ -222,9 +227,10 @@ impl Compiler {
             .function(vec![ValType::I64, ValType::I64], vec![]);
         // Type 6: (i64, i32, i32) -> (i64)  — JS function signature (shadow stack)
         //   param 0 = this_val (i64), param 1 = args_base_ptr (i32), param 2 = args_count (i32)
-        types
-            .ty()
-            .function(vec![ValType::I64, ValType::I32, ValType::I32], vec![ValType::I64]);
+        types.ty().function(
+            vec![ValType::I64, ValType::I32, ValType::I32],
+            vec![ValType::I64],
+        );
         // Type 7: (i32) -> (i32)  — $obj_new, $alloc
         types.ty().function(vec![ValType::I32], vec![ValType::I32]);
         // Type 8: (i64, i32) -> (i64)  — $obj_get (boxed object + key → value)
@@ -241,6 +247,20 @@ impl Compiler {
         types
             .ty()
             .function(vec![ValType::I64, ValType::I64], vec![ValType::I64]);
+        // Type 12: (i64, i64, i32, i32) -> (i64) — JS 函数签名（含 env_obj）
+        //   param 0 = env_obj (i64), param 1 = this_val (i64), param 2 = args_base_ptr (i32), param 3 = args_count (i32)
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I32, ValType::I32],
+            vec![ValType::I64],
+        );
+        // Type 13: (i32, i64) -> (i64) — closure_create(func_idx, env_obj)
+        types
+            .ty()
+            .function(vec![ValType::I32, ValType::I64], vec![ValType::I64]);
+        // Type 14: (i32) -> (i32) — closure_get_func(closure_idx)
+        types.ty().function(vec![ValType::I32], vec![ValType::I32]);
+        // Type 15: (i32) -> (i64) — closure_get_env(closure_idx)
+        types.ty().function(vec![ValType::I32], vec![ValType::I64]);
         let mut imports = ImportSection::new();
         // Import index 0: console_log: (i64) -> ()
         imports.import("env", "console_log", EntityType::Function(0));
@@ -310,6 +330,12 @@ impl Compiler {
         imports.import("env", "json_stringify", EntityType::Function(3));
         // Import index 33: json_parse: (i64) -> (i64)
         imports.import("env", "json_parse", EntityType::Function(3));
+        // Import index 34: closure_create: (i32, i64) -> (i64)
+        imports.import("env", "closure_create", EntityType::Function(13));
+        // Import index 35: closure_get_func: (i32) -> (i32)
+        imports.import("env", "closure_get_func", EntityType::Function(14));
+        // Import index 36: closure_get_env: (i32) -> (i64)
+        imports.import("env", "closure_get_env", EntityType::Function(15));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 22);
@@ -379,7 +405,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 34, // 34 imports (0-33)
+            _next_import_func: 37, // 37 imports (0-36)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -404,11 +430,58 @@ impl Compiler {
             object_heap_start_global_idx: 6,
             num_ir_functions_global_idx: 7,
             shadow_stack_end_global_idx: 8,
+            closure_create_func_idx: 34,
+            closure_get_func_idx: 35,
+            closure_get_env_idx: 36,
         }
     }
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
     fn local_idx(&self, val_id: u32) -> u32 {
         val_id + self.ssa_local_base
+    }
+
+    /// call_func_idx scratch local (i32) — 存放解析后的函数表索引
+    fn call_func_idx_scratch(&self) -> u32 {
+        self.shadow_sp_scratch_idx + 1
+    }
+
+    /// call_env_obj scratch local (i64) — 存放解析后的闭包环境对象
+    fn call_env_obj_scratch(&self) -> u32 {
+        self.string_concat_scratch_idx + 1
+    }
+
+    fn emit_resolve_callable_for_helper(
+        &self,
+        func: &mut Function,
+        callee_local: u32,
+        func_idx_local: u32,
+        env_obj_local: u32,
+    ) {
+        func.instruction(&WasmInstruction::LocalGet(callee_local));
+        func.instruction(&WasmInstruction::I64Const(32));
+        func.instruction(&WasmInstruction::I64ShrU);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+        func.instruction(&WasmInstruction::I64And);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
+        func.instruction(&WasmInstruction::I64Eq);
+        func.instruction(&WasmInstruction::If(BlockType::Empty));
+
+        func.instruction(&WasmInstruction::LocalGet(callee_local));
+        func.instruction(&WasmInstruction::I32WrapI64);
+        func.instruction(&WasmInstruction::Call(self.closure_get_func_idx));
+        func.instruction(&WasmInstruction::LocalSet(func_idx_local));
+        func.instruction(&WasmInstruction::LocalGet(callee_local));
+        func.instruction(&WasmInstruction::I32WrapI64);
+        func.instruction(&WasmInstruction::Call(self.closure_get_env_idx));
+        func.instruction(&WasmInstruction::LocalSet(env_obj_local));
+
+        func.instruction(&WasmInstruction::Else);
+        func.instruction(&WasmInstruction::LocalGet(callee_local));
+        func.instruction(&WasmInstruction::I32WrapI64);
+        func.instruction(&WasmInstruction::LocalSet(func_idx_local));
+        func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+        func.instruction(&WasmInstruction::LocalSet(env_obj_local));
+        func.instruction(&WasmInstruction::End);
     }
 
     fn compile_module(&mut self, module: &IrModule) -> Result<()> {
@@ -425,7 +498,8 @@ impl Compiler {
                 main_wasm_idx = Some(wasm_idx);
             } else {
                 // JS functions: Type 6 = (i64×8) -> i64
-                self.functions.function(6);
+                // JS functions: Type 12 = (i64, i64, i32, i32) -> i64 (含 env_obj)
+                self.functions.function(12);
             }
 
             self.function_table.push(wasm_idx);
@@ -616,7 +690,8 @@ impl Compiler {
         );
         self.alloc_counter_global_idx = 5;
         // Export alloc_counter for runtime debugging
-        self.exports.export("__alloc_counter", ExportKind::Global, 5);
+        self.exports
+            .export("__alloc_counter", ExportKind::Global, 5);
         // Export globals for runtime access
         self.exports
             .export("__obj_table_ptr", ExportKind::Global, 2);
@@ -644,8 +719,10 @@ impl Compiler {
         );
         self.object_heap_start_global_idx = 6;
         self.num_ir_functions_global_idx = 7;
-        self.exports.export("__object_heap_start", ExportKind::Global, 6);
-        self.exports.export("__num_ir_functions", ExportKind::Global, 7);
+        self.exports
+            .export("__object_heap_start", ExportKind::Global, 6);
+        self.exports
+            .export("__num_ir_functions", ExportKind::Global, 7);
         // Global 8: __shadow_stack_end (immutable, for shadow stack bounds check)
         let shadow_stack_end = shadow_stack_base + SHADOW_STACK_SIZE;
         self.globals.global(
@@ -656,7 +733,8 @@ impl Compiler {
             },
             &ConstExpr::i32_const(shadow_stack_end as i32),
         );
-        self.exports.export("__shadow_stack_end", ExportKind::Global, 8);
+        self.exports
+            .export("__shadow_stack_end", ExportKind::Global, 8);
         if !self.string_data.is_empty() {
             self.data
                 .active(0, &ConstExpr::i32_const(0), self.string_data.clone());
@@ -674,15 +752,18 @@ impl Compiler {
         self.lower_phi_to_locals(function);
 
         let local_count = self.required_local_count(function);
-        // 为 string_concat 预留一个 scratch 本地变量 (i64)
-        // 为 shadow_sp 预留一个 scratch 本地变量 (i32)
+        // scratch locals: i64 在前, i32 在后
+        // string_concat (i64) at local_count
+        // call_env_obj (i64) at local_count+1
+        // shadow_sp (i32) at local_count+2
+        // call_func_idx (i32) at local_count+3
         self.string_concat_scratch_idx = local_count;
-        self.shadow_sp_scratch_idx = local_count + 1;
-        let total_i64_locals = local_count + 1;
-        let locals = if total_i64_locals == 0 && 1 == 0 {
+        self.shadow_sp_scratch_idx = local_count + 2;
+        let total_i64_locals = local_count + 2; // string_concat + call_env_obj
+        let locals = if total_i64_locals == 0 && 2 == 0 {
             Vec::new()
         } else {
-            vec![(total_i64_locals, ValType::I64), (1, ValType::I32)]
+            vec![(total_i64_locals, ValType::I64), (2, ValType::I32)]
         };
         self.current_func = Some(Function::new(locals));
 
@@ -728,25 +809,40 @@ impl Compiler {
 
     fn compile_js_function(&mut self, module: &IrModule, function: &IrFunction) -> Result<()> {
         self.current_func_returns_value = true;
-        // Type 6 signature is now (i64, i32, i32) -> i64
-        // WASM params: local 0 = this_val (i64), local 1 = args_base_ptr (i32), local 2 = args_count (i32)
-        // SSA values start at local 3
-        
-        // Map $this to WASM param 0
+        // Type 12 signature: (i64 env_obj, i64 this_val, i32 args_base, i32 args_count) -> i64
+        // WASM params: local 0 = env_obj (i64), local 1 = this_val (i64),
+        //              local 2 = args_base_ptr (i32), local 3 = args_count (i32)
+
+        // Map $env/$this to WASM params (both bare and scoped names)
         self.var_locals.clear();
-        self.var_locals.insert("$this".to_string(), 0);
-        
-        // Count declared params (excluding $this) and allocate locals for them
-        let declared_params: Vec<&String> = function.params().iter()
-            .filter(|p| p.as_str() != "$this" && !p.ends_with(".$this"))
+        self.var_locals.insert("$env".to_string(), 0);
+        self.var_locals.insert("$this".to_string(), 1);
+
+        // Count declared params (excluding $env/$this in both bare and scoped forms)
+        let declared_params: Vec<&String> = function
+            .params()
+            .iter()
+            .filter(|p| {
+                let s = p.as_str();
+                s != "$env" && s != "$this" && !s.ends_with(".$env") && !s.ends_with(".$this")
+            })
             .collect();
-        
-        // Allocate locals for declared params starting at ssa_local_base
+
+        // Allocate locals for declared params starting at local 4 (after env, this, args_base, args_count)
         // These will be loaded from shadow stack in the prologue
-        let mut param_local_idx = 3;
+        let mut param_local_idx = 4;
         for param_name in &declared_params {
-            self.var_locals.insert((*param_name).clone(), param_local_idx);
+            self.var_locals
+                .insert((*param_name).clone(), param_local_idx);
             param_local_idx += 1;
+        }
+        // Map scoped $env/$this param names to the same locals as bare names
+        for p in function.params() {
+            if p.ends_with(".$env") {
+                self.var_locals.insert(p.clone(), 0);
+            } else if p.ends_with(".$this") {
+                self.var_locals.insert(p.clone(), 1);
+            }
         }
         self.ssa_local_base = param_local_idx;
         // Variable locals start after param locals
@@ -770,53 +866,61 @@ impl Compiler {
         // 计算实际需要的 local 数量
         // SSA 值从 ssa_local_base 开始分配，需要 ssa_local_base + max_ssa 个 locals
         // 但 var_locals 已经包含了声明的参数，其索引也是从 ssa_local_base 开始
-        // 所以实际需要的 locals 数量 = max_ssa (SSA 值数量) 
+        // 所以实际需要的 locals 数量 = max_ssa (SSA 值数量)
         // 而不是 ssa_local_base + max_ssa (因为 params 是 WASM 参数，不是声明的 locals)
-        let max_ssa = function.blocks().iter()
+        let max_ssa = function
+            .blocks()
+            .iter()
             .flat_map(|block| block.instructions())
             .map(max_instruction_value_id)
             .max()
             .map_or(0, |max| max + 1);
-        
+
         // 总 local 数量：SSA 值需要 ssa_local_base + max_ssa 个位置，
         // 或者 var/phi locals 的最大索引+1
         let total_locals = (max_ssa + self.ssa_local_base)
             .max(self.next_var_local)
             .max(self.phi_locals.values().copied().max().map_or(0, |m| m + 1));
-        
-        // scratch locals 在所有其他 locals 之后
-        // total_locals 已经是绝对索引（包含 params），所以 scratch 就在 total_locals
-        self.string_concat_scratch_idx = total_locals;
-        self.shadow_sp_scratch_idx = total_locals + 1;
-        // total_i64_locals 是声明的 i64 locals 数量（不包括 params）
-        // = scratch 之前的 locals + 1 个 scratch i64
-        // = (total_locals - ssa_local_base) + 1
-        let total_i64_locals = total_locals.saturating_sub(2);
 
-        let locals = if total_i64_locals == 0 && 1 == 0 {
+        // scratch locals: 所有 i64 在前，然后所有 i32（WASM locals 按 type 分组）
+        // string_concat (i64) at total_locals
+        // call_env_obj (i64) at total_locals+1
+        // shadow_sp (i32) at total_locals+2
+        // call_func_idx (i32) at total_locals+3
+        self.string_concat_scratch_idx = total_locals;
+        // call_env_obj scratch = string_concat + 1 (i64), computed by call_env_obj_scratch()
+        self.shadow_sp_scratch_idx = total_locals + 2;
+        // call_func_idx = shadow_sp + 1 (i32), computed by call_func_idx_scratch()
+        let total_i64_locals = total_locals.saturating_sub(4) + 2; // string_concat + call_env_obj
+
+        let locals = if total_i64_locals == 0 && 2 == 0 {
             Vec::new()
         } else {
-            vec![(total_i64_locals, ValType::I64), (1, ValType::I32)]
+            vec![(total_i64_locals, ValType::I64), (2, ValType::I32)]
         };
         self.current_func = Some(Function::new(locals));
 
         // ── Prologue: Load declared params from shadow stack ──
-        // args_base_ptr is at local 1, args_count is at local 2
+        // args_base_ptr is at local 2, args_count is at local 3
         for (i, param_name) in declared_params.iter().enumerate() {
             let param_local = *self.var_locals.get(*param_name).unwrap();
-            
+
             // if i < args_count: load from shadow stack
             // else: set to undefined
-            self.emit(WasmInstruction::I32Const(i as i32));  // i
-            self.emit(WasmInstruction::LocalGet(2));          // args_count
-            self.emit(WasmInstruction::I32LtU);               // i < args_count (unsigned)
-            
+            self.emit(WasmInstruction::I32Const(i as i32)); // i
+            self.emit(WasmInstruction::LocalGet(3)); // args_count
+            self.emit(WasmInstruction::I32LtU); // i < args_count (unsigned)
+
             self.emit(WasmInstruction::If(BlockType::Empty));
             // Load from shadow stack: memory[args_base_ptr + i*8]
-            self.emit(WasmInstruction::LocalGet(1));  // args_base_ptr
+            self.emit(WasmInstruction::LocalGet(2)); // args_base_ptr
             self.emit(WasmInstruction::I32Const((i * 8) as i32));
             self.emit(WasmInstruction::I32Add);
-            self.emit(WasmInstruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
+            self.emit(WasmInstruction::I64Load(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
             self.emit(WasmInstruction::LocalSet(param_local));
             self.emit(WasmInstruction::Else);
             // Out of bounds: set to undefined
@@ -869,7 +973,7 @@ impl Compiler {
             // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx
             let mut func = Function::new(vec![(3, ValType::I32)]);
             let gc_collect_idx = self.gc_collect_func_idx;
-            
+
             // size = 12 + capacity * 32
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32Const(32));
@@ -877,26 +981,26 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Const(12));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(1));
-            
+
             // ── GC 检查 ──
             // 检查: heap_ptr + size > memory.size * 65536
             // 如果 true，调用 gc_collect(size)
-            
+
             // 计算 heap_ptr + size
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Add);
-            
+
             // 计算 memory.size * 65536 (使用 i64 避免溢出)
             func.instruction(&WasmInstruction::MemorySize(0));
             func.instruction(&WasmInstruction::I64ExtendI32U);
             func.instruction(&WasmInstruction::I64Const(65536));
             func.instruction(&WasmInstruction::I64Mul);
             func.instruction(&WasmInstruction::I32WrapI64);
-            
+
             // 比较: heap_ptr + size > memory_limit
             func.instruction(&WasmInstruction::I32GtU);
-            
+
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             // 需要 GC - 调用 gc_collect(size)
             func.instruction(&WasmInstruction::LocalGet(1)); // size
@@ -908,7 +1012,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::Unreachable);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
-            
+
             // ── Proactive GC: check alloc_counter threshold ──
             // 每 1000 次分配触发一次 gc_collect(0)
             func.instruction(&WasmInstruction::GlobalGet(self.alloc_counter_global_idx));
@@ -930,7 +1034,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Const(0));
             func.instruction(&WasmInstruction::GlobalSet(self.alloc_counter_global_idx));
             func.instruction(&WasmInstruction::End);
-            
+
             // ptr = heap_ptr; heap_ptr += size
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
             func.instruction(&WasmInstruction::LocalTee(2));
@@ -938,7 +1042,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::GlobalSet(heap_global));
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I32Const(-1));  // proto sentinel (0xFFFFFFFF)
+            func.instruction(&WasmInstruction::I32Const(-1)); // proto sentinel (0xFFFFFFFF)
             func.instruction(&WasmInstruction::I32Store(MemArg {
                 offset: 0,
                 align: 2,
@@ -989,8 +1093,12 @@ impl Compiler {
             // local 0 = $boxed (i64), local 1 = $name_id (i32)
             // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
             // local 5 = resolved ptr (i32), local 6 = flags (i32), local 7 = getter (i64)
-            // local 8 = shadow_sp_scratch (i32)
-            let mut func = Function::new(vec![(5, ValType::I32), (2, ValType::I64)]);
+            // local 8 = getter env_obj (i64), local 9 = getter func_idx (i32)
+            let mut func = Function::new(vec![
+                (5, ValType::I32),
+                (2, ValType::I64),
+                (1, ValType::I32),
+            ]);
 
             // ── 通过 handle 表解析 ptr ──
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -1083,17 +1191,17 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
-            // 调用 getter: Type 6 签名 (i64, i32, i32) -> i64
+            // 调用 getter: Type 12 签名 (env_obj, this_val, args_base, args_count) -> i64
+            self.emit_resolve_callable_for_helper(&mut func, 7, 9, 8);
             // this_val = local 0, args_base = 0 (no args), args_count = 0
+            func.instruction(&WasmInstruction::LocalGet(8)); // env_obj
             func.instruction(&WasmInstruction::LocalGet(0)); // this_val
             func.instruction(&WasmInstruction::I32Const(0)); // args_base (doesn't matter, no args)
             func.instruction(&WasmInstruction::I32Const(0)); // args_count
-            // 解码 getter 的函数表索引
-            func.instruction(&WasmInstruction::LocalGet(7));
-            func.instruction(&WasmInstruction::I32WrapI64);
-            // call_indirect type 6, table 0
+            func.instruction(&WasmInstruction::LocalGet(9)); // func_idx
+            // call_indirect type 12, table 0
             func.instruction(&WasmInstruction::CallIndirect {
-                type_index: 6,
+                type_index: 12,
                 table_index: 0,
             });
             func.instruction(&WasmInstruction::Return);
@@ -1157,8 +1265,13 @@ impl Compiler {
             // local 3 = (unused pad)
             // local 4 = num_props (i32), local 5 = i (i32), local 6 = slot_addr (i32), local 7 = capacity (i32)
             // local 8 = resolved ptr (i32), local 9 = handle_idx (i32), local 10 = flags (i32), local 11 = setter (i64)
-            // local 12 = shadow_sp_scratch (i32)
-            let mut func = Function::new(vec![(8, ValType::I32), (1, ValType::I64), (1, ValType::I32)]);
+            // local 12 = shadow_sp_scratch (i32), local 13 = setter func_idx (i32), local 15 = setter env_obj (i64)
+            let mut func = Function::new(vec![
+                (8, ValType::I32),
+                (1, ValType::I64),
+                (3, ValType::I32),
+                (1, ValType::I64),
+            ]);
 
             // ── 通过 handle 表解析 ptr ──
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -1238,7 +1351,8 @@ impl Compiler {
             // setter 是 undefined，直接返回（静默失败）
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
-            // 调用 setter: Type 6 签名 (i64, i32, i32) -> i64
+            // 调用 setter: Type 12 签名 (env_obj, this_val, args_base, args_count) -> i64
+            self.emit_resolve_callable_for_helper(&mut func, 11, 13, 15);
             // 需要将 value (local 2) 写入影子栈
             // 保存 shadow_sp 到 local 12
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
@@ -1246,22 +1360,25 @@ impl Compiler {
             // 写入 value 到影子栈
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::LocalGet(2)); // value
-            func.instruction(&WasmInstruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
             // shadow_sp += 8 (虽然这里只有1个参数，但保持一致性)
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::I32Const(8));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
-            // 推入参数: this_val (local 0), args_base (local 12), args_count (1)
+            // 推入参数: env_obj, this_val (local 0), args_base (local 12), args_count (1)
+            func.instruction(&WasmInstruction::LocalGet(15)); // env_obj
             func.instruction(&WasmInstruction::LocalGet(0)); // this_val
             func.instruction(&WasmInstruction::LocalGet(12)); // args_base
             func.instruction(&WasmInstruction::I32Const(1)); // args_count
-            // 解码 setter 的函数表索引
-            func.instruction(&WasmInstruction::LocalGet(11));
-            func.instruction(&WasmInstruction::I32WrapI64);
-            // call_indirect type 6, table 0
+            func.instruction(&WasmInstruction::LocalGet(13)); // func_idx
+            // call_indirect type 12, table 0
             func.instruction(&WasmInstruction::CallIndirect {
-                type_index: 6,
+                type_index: 12,
                 table_index: 0,
             });
             // 恢复 shadow_sp
@@ -2803,15 +2920,14 @@ impl Compiler {
                 args,
             } => {
                 // 使用影子栈传递参数
-                // Type 6 签名: (i64 this_val, i32 args_base, i32 args_count) -> i64
-                
+                // Type 12 签名: (i64 env_obj, i64 this_val, i32 args_base, i32 args_count) -> i64
+                // callee 可能是 TAG_FUNCTION 或 TAG_CLOSURE，运行时解析
+
                 // Step 1: 保存 shadow_sp 到 scratch local
                 self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                 self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
-                
-                
+
                 // Step 1b: 影子栈边界检查
-                // 确保 scratch + args.len() * 8 <= shadow_stack_end
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
                 self.emit(WasmInstruction::I32Const((args.len() * 8) as i32));
                 self.emit(WasmInstruction::I32Add);
@@ -2822,37 +2938,72 @@ impl Compiler {
                 self.emit(WasmInstruction::End);
                 // Step 2: 将所有参数写入影子栈
                 for arg in args.iter() {
-                    // memory[shadow_sp] = arg
                     self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
-                    self.emit(WasmInstruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
-                    // shadow_sp += 8
+                    self.emit(WasmInstruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
                     self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                     self.emit(WasmInstruction::I32Const(8));
                     self.emit(WasmInstruction::I32Add);
                     self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
                 }
-                
-                // Step 3: 推入 call_indirect 参数
-                // 顺序: this_val (i64), args_base (i32), args_count (i32), func_idx (i32)
-                self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
-                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));  // args_base
-                self.emit(WasmInstruction::I32Const(args.len() as i32));  // args_count
-                // Decode function table index from NaN-boxed function value.
+
+                // Step 3: 运行时解析 callee → (func_idx, env_obj)
+                // 检查 callee tag == TAG_CLOSURE (0xA)
+                // ((callee >> 32) & 0xF) == 0xA ?
+                let call_func_idx_scratch = self.call_func_idx_scratch();
+                let call_env_obj_scratch = self.call_env_obj_scratch();
+
+                // 计算 tag
+                self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I64Const(0xF));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(0xA)); // TAG_CLOSURE
+                self.emit(WasmInstruction::I64Eq);
+                // if closure
+                self.emit(WasmInstruction::If(BlockType::Empty));
+                // closure path: 调用 closure_get_func + closure_get_env
                 self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
                 self.emit(WasmInstruction::I32WrapI64);
-                
-                // Step 4: call_indirect type 6
+                self.emit(WasmInstruction::Call(self.closure_get_func_idx));
+                self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::Call(self.closure_get_env_idx));
+                self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+                self.emit(WasmInstruction::Else);
+                // function path: func_idx = callee & 0xFFFFFFFF, env_obj = undefined
+                self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+                self.emit(WasmInstruction::End);
+
+                // Step 4: 推入 call_indirect 参数
+                // 顺序: env_obj (i64), this_val (i64), args_base (i32), args_count (i32), func_idx (i32)
+                self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(args.len() as i32));
+                self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
+
+                // Step 5: call_indirect type 12
                 self.emit(WasmInstruction::CallIndirect {
-                    type_index: 6,
+                    type_index: 12,
                     table_index: 0,
                 });
-                
-                // Step 5: 恢复 shadow_sp
+
+                // Step 6: 恢复 shadow_sp
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
                 self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
-                
-                // Step 6: 处理返回值
+
+                // Step 7: 处理返回值
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
@@ -3120,6 +3271,31 @@ impl Compiler {
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::CreateClosure => {
+                // args: [func_ref_val, env_obj_val]
+                // func_ref_val 是 NaN-boxed 函数值 → 提取 table_idx (i32.wrap_i64)
+                // env_obj_val 是 NaN-boxed 环境对象 (i64)
+                // 调用 closure_create(table_idx, env_obj) → i64 (TAG_CLOSURE 编码)
+                let func_ref_val = args
+                    .get(0)
+                    .with_context(|| "CreateClosure expects func_ref arg")?;
+                let env_obj_val = args
+                    .get(1)
+                    .with_context(|| "CreateClosure expects env_obj arg")?;
+                // 推入 func_idx (i32): 从 NaN-boxed 函数值提取
+                self.emit(WasmInstruction::LocalGet(self.local_idx(func_ref_val.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                // 推入 env_obj (i64)
+                self.emit(WasmInstruction::LocalGet(self.local_idx(env_obj_val.0)));
+                // 调用 closure_create
+                self.emit(WasmInstruction::Call(self.closure_create_func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
                 }
                 Ok(())
             }

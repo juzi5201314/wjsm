@@ -35,47 +35,47 @@ module {
       jump bb2
     bb2:
       %7 = phi [(bb0, %4), (bb1, %6)]
-      call builtin.console.log(%7)
-      %8 = const c6
-      %9 = is_nullish %8
-      branch %9, bb3, bb4
+      %8 = call builtin.console.log(%7)
+      %9 = const c6
+      %10 = is_nullish %9
+      branch %10, bb3, bb4
     bb3:
-      %10 = const c7
-      store var $0.hit, %10
+      %11 = const c7
+      store var $0.hit, %11
       jump bb4
     bb4:
-      %11 = phi [(bb2, %8), (bb3, %10)]
-      call builtin.console.log(%11)
-      %12 = const c8
-      %13 = is_nullish %12
-      branch %13, bb5, bb6
+      %12 = phi [(bb2, %9), (bb3, %11)]
+      %13 = call builtin.console.log(%12)
+      %14 = const c8
+      %15 = is_nullish %14
+      branch %15, bb5, bb6
     bb5:
-      %14 = const c9
-      store var $0.hit, %14
+      %16 = const c9
+      store var $0.hit, %16
       jump bb6
     bb6:
-      %15 = phi [(bb4, %12), (bb5, %14)]
-      call builtin.console.log(%15)
-      %16 = const c10
-      %17 = is_nullish %16
-      branch %17, bb7, bb8
+      %17 = phi [(bb4, %14), (bb5, %16)]
+      %18 = call builtin.console.log(%17)
+      %19 = const c10
+      %20 = is_nullish %19
+      branch %20, bb7, bb8
     bb7:
-      %18 = const c11
+      %21 = const c11
       jump bb8
     bb8:
-      %19 = phi [(bb6, %16), (bb7, %18)]
-      call builtin.console.log(%19)
-      %20 = const c12
-      %21 = const c13
-      %22 = is_nullish %21
-      branch %22, bb9, bb10
+      %22 = phi [(bb6, %19), (bb7, %21)]
+      %23 = call builtin.console.log(%22)
+      %24 = const c12
+      %25 = const c13
+      %26 = is_nullish %25
+      branch %26, bb9, bb10
     bb9:
-      %23 = const c14
+      %27 = const c14
       jump bb10
     bb10:
-      %24 = phi [(bb8, %21), (bb9, %23)]
-      call builtin.console.log(%24)
-      %25 = load var $0.hit
-      call builtin.console.log(%25)
+      %28 = phi [(bb8, %25), (bb9, %27)]
+      %29 = call builtin.console.log(%28)
+      %30 = load var $0.hit
+      %31 = call builtin.console.log(%30)
       return
 }

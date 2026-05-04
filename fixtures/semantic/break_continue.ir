@@ -49,6 +49,6 @@ module {
       jump bb3
     bb7:
       %17 = load var $0.i
-      call builtin.console.log(%17)
+      %18 = call builtin.console.log(%17)
       jump bb1
 }

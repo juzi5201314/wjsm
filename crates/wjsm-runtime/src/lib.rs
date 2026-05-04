@@ -1,8 +1,8 @@
 use anyhow::Result;
 use std::collections::HashSet;
 use std::io::{self, Write};
-use std::time::{Duration, Instant};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use wasmtime::*;
 /// 影子栈大小（必须与后端保持一致）
 const SHADOW_STACK_SIZE: u32 = 65536;
@@ -28,6 +28,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let timers: Arc<Mutex<Vec<TimerEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let cancelled_timers: Arc<Mutex<HashSet<u32>>> = Arc::new(Mutex::new(HashSet::new()));
     let next_timer_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
+    let closures: Arc<Mutex<Vec<ClosureEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
@@ -47,6 +48,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             gc_mark_bits: Arc::clone(&gc_mark_bits),
             alloc_counter: Arc::clone(&alloc_counter),
             gc_threshold: GC_THRESHOLD,
+            closures: Arc::clone(&closures),
         },
     );
 
@@ -380,7 +382,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 value::encode_typeof_boolean()
             } else if value::is_string(val) {
                 value::encode_typeof_string()
-            } else if value::is_function(val) {
+            } else if value::is_callable(val) {
                 value::encode_typeof_function()
             } else if value::is_object(val) {
                 value::encode_typeof_object()
@@ -502,8 +504,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 let proto_handle =
                     u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
 
-                if proto_handle == 0xFFFF_FFFF {
-                }
+                if proto_handle == 0xFFFF_FFFF {}
                 // 通过 handle 表解析 proto_handle → proto_ptr
                 let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
                     return value::encode_bool(false);
@@ -711,8 +712,30 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let prop_set = read_object_property_by_name(&mut caller, desc_ptr, "set");
 
             // 检查是否为访问器属性（有 get 或 set）
-            let is_accessor = prop_get.as_ref().map_or(false, |v| value::is_function(*v))
-                || prop_set.as_ref().map_or(false, |v| value::is_function(*v));
+            if let Some(getter) = prop_get {
+                if !value::is_undefined(getter) && !value::is_callable(getter) {
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") =
+                        Some("TypeError: property getter must be callable".to_string());
+                    return;
+                }
+            }
+            if let Some(setter) = prop_set {
+                if !value::is_undefined(setter) && !value::is_callable(setter) {
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") =
+                        Some("TypeError: property setter must be callable".to_string());
+                    return;
+                }
+            }
+
+            let is_accessor = prop_get.is_some() || prop_set.is_some();
 
             // 检查 descriptor 冲突：accessor 和 data 字段不能共存
             // ToPropertyDescriptor: 如果同时有 get/set 和 value/writable，应抛 TypeError
@@ -963,7 +986,6 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-
     // ── Import 19: abstract_eq(i64, i64) → i64 ──────────────────────────────
     let abstract_eq = Func::wrap(
         &mut store,
@@ -978,7 +1000,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 if type_tag(x) == type_tag(y) {
                     return strict_eq(&mut caller, x, y);
                 }
-                
+
                 // 2. null == undefined → true
                 if value::is_null(x) && value::is_undefined(y) {
                     return value::encode_bool(true);
@@ -987,7 +1009,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 if value::is_undefined(x) && value::is_null(y) {
                     return value::encode_bool(true);
                 }
-                
+
                 // 4. Number == String → ToNumber(string) == number
                 if value::is_f64(x) && value::is_string(y) {
                     y = to_number(&mut caller, y);
@@ -998,7 +1020,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     x = to_number(&mut caller, x);
                     continue;
                 }
-                
+
                 // 6. Boolean == any → ToNumber(boolean) == any
                 if value::is_bool(x) {
                     x = to_number(&mut caller, x);
@@ -1009,20 +1031,22 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     y = to_number(&mut caller, y);
                     continue;
                 }
-                
+
                 // 8. Object == String/Number → ToPrimitive(object) == primitive
-                if (value::is_object(x) || value::is_function(x)) &&
-                   (value::is_string(y) || value::is_f64(y)) {
+                if (value::is_object(x) || value::is_callable(x))
+                    && (value::is_string(y) || value::is_f64(y))
+                {
                     x = to_primitive(&mut caller, x);
                     continue;
                 }
                 // 9. String/Number == Object → primitive == ToPrimitive(object)
-                if (value::is_string(x) || value::is_f64(x)) &&
-                   (value::is_object(y) || value::is_function(y)) {
+                if (value::is_string(x) || value::is_f64(x))
+                    && (value::is_object(y) || value::is_callable(y))
+                {
                     y = to_primitive(&mut caller, y);
                     continue;
                 }
-                
+
                 // 10. 其他情况 → false
                 return value::encode_bool(false);
             }
@@ -1037,29 +1061,29 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             // 实现 Abstract Relational Comparison (ECMAScript 7.2.17)
             // 返回值: true (a < b), false (a >= b 或无法比较)
-            
+
             // 1. ToPrimitive(a, hint Number), ToPrimitive(b, hint Number)
             let pa = to_primitive(&mut caller, a);
             let pb = to_primitive(&mut caller, b);
-            
+
             // 2. 若都是 String → 字典序比较
             if value::is_string(pa) && value::is_string(pb) {
                 let a_str = get_string_value(&mut caller, pa);
                 let b_str = get_string_value(&mut caller, pb);
                 return value::encode_bool(a_str < b_str);
             }
-            
+
             // 3. 否则 → ToNumber(px), ToNumber(py)
             let na = to_number(&mut caller, pa);
             let nb = to_number(&mut caller, pb);
-            
+
             // 4. 若任一为 NaN → 返回 false
             let af = f64::from_bits(na as u64);
             let bf = f64::from_bits(nb as u64);
             if af.is_nan() || bf.is_nan() {
                 return value::encode_bool(false);
             }
-            
+
             // 5. 否则 → px < py 的数值比较
             value::encode_bool(af < bf)
         },
@@ -1108,10 +1132,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 };
                 g.get(&mut caller).i32().unwrap_or(0)
             };
-            
+
             // 初始化/清除标记位图（在获取内存之前）
             {
-                let mut mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits mutex");
+                let mut mark_bits = caller
+                    .data()
+                    .gc_mark_bits
+                    .lock()
+                    .expect("gc_mark_bits mutex");
                 let needed_words = ((obj_table_count as usize + 63) / 64).max(mark_bits.len());
                 if mark_bits.len() < needed_words {
                     mark_bits.resize(needed_words, 0);
@@ -1119,7 +1147,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     mark_bits.fill(0);
                 }
             }
-            
+
             // ── 构建根集 ──
             // 从三个来源收集根对象：
             //   1. 影子栈帧（调用栈上的对象/函数引用）
@@ -1131,7 +1159,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     return 0;
                 };
                 let data = memory.data(&caller);
-                
+
                 let add_root = |handle_idx: usize, data: &[u8], roots: &mut Vec<(usize, usize)>| {
                     let slot_addr = obj_table_ptr as usize + handle_idx * 4;
                     if slot_addr + 4 <= data.len() {
@@ -1146,7 +1174,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         }
                     }
                 };
-                
+
                 // 3a. 影子栈：从 shadow_stack_base 扫描到 shadow_sp
                 // shadow_sp 是栈指针，影子栈在 shadow_stack_base 处，每帧 8 字节
                 let shadow_stack_base = object_heap_start as usize - SHADOW_STACK_SIZE as usize;
@@ -1172,24 +1200,31 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             } else if value::is_function(val) {
                                 // Functions are stored in handle table too
                                 let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
-                                // Function attribute objects are at indices 0..num_ir_functions
-                                // The function object itself IS the handle handle
-                                // For function values, the encoded payload is the function idx,
-                                // not a handle table index. Functions are stored in handle table
-                                // as func_props objects at indices matching their IR function index.
                                 if func_idx < num_ir_functions as usize {
                                     add_root(func_idx, data, &mut roots);
+                                }
+                            } else if value::is_closure(val) {
+                                // 闭包值的 env_obj 可能包含对象引用
+                                let closure_idx = value::decode_closure_idx(val) as usize;
+                                let closures =
+                                    caller.data().closures.lock().expect("closures mutex");
+                                if let Some(entry) = closures.get(closure_idx) {
+                                    if value::is_object(entry.env_obj) {
+                                        let handle_idx =
+                                            value::decode_object_handle(entry.env_obj) as usize;
+                                        add_root(handle_idx, data, &mut roots);
+                                    }
                                 }
                             }
                         }
                     }
                 }
-                
+
                 // 3b. 函数属性对象（前 num_ir_functions 个条目）始终标记
                 for handle_idx in 0..num_ir_functions as usize {
                     add_root(handle_idx, data, &mut roots);
                 }
-                
+
                 // 3c. 定时器回调
                 {
                     let timers = caller.data().timers.lock().expect("timers mutex");
@@ -1200,44 +1235,77 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             if func_idx < num_ir_functions as usize {
                                 add_root(func_idx, data, &mut roots);
                             }
+                        } else if value::is_closure(val) {
+                            // 闭包回调：将 env_obj 中的对象标记为根
+                            let closure_idx = value::decode_closure_idx(val) as usize;
+                            let closures = caller.data().closures.lock().expect("closures mutex");
+                            if let Some(entry) = closures.get(closure_idx) {
+                                if value::is_object(entry.env_obj) {
+                                    let handle_idx =
+                                        value::decode_object_handle(entry.env_obj) as usize;
+                                    add_root(handle_idx, data, &mut roots);
+                                }
+                            }
                         }
                     }
                 }
-                
+
+                // 3d. 闭包表中的 env_obj
+                {
+                    let closures = caller.data().closures.lock().expect("closures mutex");
+                    for entry in closures.iter() {
+                        if value::is_object(entry.env_obj) {
+                            let handle_idx = value::decode_object_handle(entry.env_obj) as usize;
+                            add_root(handle_idx, data, &mut roots);
+                        }
+                    }
+                }
+
                 // 去重
                 roots.sort();
                 roots.dedup_by_key(|&mut (handle_idx, _)| handle_idx);
-                
             } // data 借用结束
 
             // Phase 1: Mark - 递归标记所有可达对象
             for (handle_idx, obj_ptr) in roots {
-                mark_object_recursive(&mut caller, handle_idx, obj_ptr, obj_table_ptr as usize, obj_table_count as usize);
+                mark_object_recursive(
+                    &mut caller,
+                    handle_idx,
+                    obj_ptr,
+                    obj_table_ptr as usize,
+                    obj_table_count as usize,
+                );
             }
 
             // Phase 2: Sweep + Compact
             // 将存活对象移动到堆开头，更新 handle table
-            
+
             // 首先获取标记位图的快照
             let mark_snapshot: Vec<u64> = {
-                let mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits mutex");
+                let mark_bits = caller
+                    .data()
+                    .gc_mark_bits
+                    .lock()
+                    .expect("gc_mark_bits mutex");
                 mark_bits.clone()
             };
-            
+
             // 获取内存数据的可变引用
             let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
                 return 0;
             };
             let data = memory.data_mut(&mut caller);
-            
+
             let heap_base = object_heap_start as usize;
-            
+
             // 收集存活对象信息
             let mut live_objects: Vec<(usize, usize, usize)> = Vec::new(); // (handle_idx, old_ptr, size)
             for handle_idx in 0..obj_table_count as usize {
                 let word_idx = handle_idx / 64;
                 let bit_idx = handle_idx % 64;
-                if word_idx < mark_snapshot.len() && (mark_snapshot[word_idx] & (1u64 << bit_idx)) != 0 {
+                if word_idx < mark_snapshot.len()
+                    && (mark_snapshot[word_idx] & (1u64 << bit_idx)) != 0
+                {
                     // 存活对象
                     let slot_addr = obj_table_ptr as usize + handle_idx * 4;
                     if slot_addr + 4 > data.len() {
@@ -1266,10 +1334,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     live_objects.push((handle_idx, old_ptr, size));
                 }
             }
-            
+
             // 按旧指针排序，保持内存布局顺序
             live_objects.sort_by_key(|&(_, old_ptr, _)| old_ptr);
-            
+
             // 计算新的位置
             let mut current_ptr = heap_base;
             for (_, _, size) in &live_objects {
@@ -1277,13 +1345,13 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
             let new_heap_end = current_ptr;
             let freed_space = heap_ptr as usize - new_heap_end;
-            
+
             // 检查是否释放了足够空间
             if freed_space < requested_size as usize {
                 // 空间不足，返回失败
                 return 0;
             }
-            
+
             // 实际移动对象
             let mut current_ptr = heap_base;
             for &(handle_idx, old_ptr, size) in &live_objects {
@@ -1302,7 +1370,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 data[slot_addr..slot_addr + 4].copy_from_slice(&(current_ptr as u32).to_le_bytes());
                 current_ptr += size;
             }
-            
+
             // 更新 heap_ptr 全局变量
             {
                 let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
@@ -1310,17 +1378,20 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 };
                 g.set(&mut caller, Val::I32(new_heap_end as i32)).ok();
             }
-            
+
             // 重置分配计数器
             {
-                let mut counter = caller.data().alloc_counter.lock().expect("alloc_counter mutex");
+                let mut counter = caller
+                    .data()
+                    .alloc_counter
+                    .lock()
+                    .expect("alloc_counter mutex");
                 *counter = 0;
             }
-            
+
             new_heap_end as i32
         },
     );
-
 
     // ── Import 22: console_error(i64) → () ────────────────────────────────
     // Already created above as `console_error`.
@@ -1342,7 +1413,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 delay_f64 as u64
             };
             let id = {
-                let mut next_id = caller.data().next_timer_id.lock().expect("next_timer_id mutex");
+                let mut next_id = caller
+                    .data()
+                    .next_timer_id
+                    .lock()
+                    .expect("next_timer_id mutex");
                 let id = *next_id;
                 *next_id += 1;
                 id
@@ -1366,7 +1441,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         |caller: Caller<'_, RuntimeState>, timer_id: i64| {
             if value::is_f64(timer_id) {
                 let id = f64::from_bits(timer_id as u64) as u32;
-                caller.data().cancelled_timers.lock().expect("cancelled_timers mutex").insert(id);
+                caller
+                    .data()
+                    .cancelled_timers
+                    .lock()
+                    .expect("cancelled_timers mutex")
+                    .insert(id);
             }
             // For simplicity, mark as cancelled rather than removing from the vec
         },
@@ -1389,7 +1469,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 delay_f64 as u64
             };
             let id = {
-                let mut next_id = caller.data().next_timer_id.lock().expect("next_timer_id mutex");
+                let mut next_id = caller
+                    .data()
+                    .next_timer_id
+                    .lock()
+                    .expect("next_timer_id mutex");
                 let id = *next_id;
                 *next_id += 1;
                 id
@@ -1413,7 +1497,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         |caller: Caller<'_, RuntimeState>, timer_id: i64| {
             if value::is_f64(timer_id) {
                 let id = f64::from_bits(timer_id as u64) as u32;
-                caller.data().cancelled_timers.lock().expect("cancelled_timers mutex").insert(id);
+                caller
+                    .data()
+                    .cancelled_timers
+                    .lock()
+                    .expect("cancelled_timers mutex")
+                    .insert(id);
             }
             // simplified no-op
         },
@@ -1426,14 +1515,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let url_str = if value::is_string(url_val) {
                 if value::is_runtime_string_handle(url_val) {
                     let handle = value::decode_runtime_string_handle(url_val) as usize;
-                    caller.data().runtime_strings.lock()
+                    caller
+                        .data()
+                        .runtime_strings
+                        .lock()
                         .expect("runtime strings mutex")
                         .get(handle)
                         .cloned()
                         .unwrap_or_default()
                 } else {
-                    read_string(&mut caller, value::decode_string_ptr(url_val))
-                        .unwrap_or_default()
+                    read_string(&mut caller, value::decode_string_ptr(url_val)).unwrap_or_default()
                 }
             } else {
                 String::new()
@@ -1468,20 +1559,57 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let json_str = if value::is_string(val) {
                 if value::is_runtime_string_handle(val) {
                     let handle = value::decode_runtime_string_handle(val) as usize;
-                    caller.data().runtime_strings.lock()
+                    caller
+                        .data()
+                        .runtime_strings
+                        .lock()
                         .expect("runtime strings mutex")
                         .get(handle)
                         .cloned()
                         .unwrap_or_default()
                 } else {
-                    read_string(&mut caller, value::decode_string_ptr(val))
-                        .unwrap_or_default()
+                    read_string(&mut caller, value::decode_string_ptr(val)).unwrap_or_default()
                 }
             } else {
                 String::new()
             };
             // For now, just return the string as-is (simplified parse)
             store_runtime_string(&caller, json_str)
+        },
+    );
+    // ── Import 34: closure_create(i32, i64) -> i64 ────────────────────────────
+    let closure_create_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, func_idx: i32, env_obj: i64| -> i64 {
+            let mut closures = caller.data().closures.lock().expect("closures mutex");
+            let idx = closures.len() as u32;
+            closures.push(ClosureEntry {
+                func_idx: func_idx as u32,
+                env_obj,
+            });
+            value::encode_closure_idx(idx)
+        },
+    );
+    // ── Import 35: closure_get_func(i32) -> i32 ─────────────────────────────
+    let closure_get_func_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i32 {
+            let closures = caller.data().closures.lock().expect("closures mutex");
+            closures
+                .get(closure_idx as usize)
+                .map(|e| e.func_idx as i32)
+                .unwrap_or(-1)
+        },
+    );
+    // ── Import 36: closure_get_env(i32) -> i64 ─────────────────────────────
+    let closure_get_env_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i64 {
+            let closures = caller.data().closures.lock().expect("closures mutex");
+            closures
+                .get(closure_idx as usize)
+                .map(|e| e.env_obj)
+                .unwrap_or_else(value::encode_undefined)
         },
     );
     let imports = [
@@ -1519,6 +1647,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         fetch_fn.into(),             // 31
         json_stringify_fn.into(),    // 32
         json_parse_fn.into(),        // 33
+        closure_create_fn.into(),    // 34
+        closure_get_func_fn.into(),  // 35
+        closure_get_env_fn.into(),   // 36
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -1535,7 +1666,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
             {
                 let mut timers = store.data().timers.lock().expect("timers mutex");
-                let mut cancelled = store.data().cancelled_timers.lock().expect("cancelled_timers mutex");
+                let mut cancelled = store
+                    .data()
+                    .cancelled_timers
+                    .lock()
+                    .expect("cancelled_timers mutex");
 
                 // Remove cancelled timers
                 timers.retain(|t| !cancelled.contains(&t.id));
@@ -1571,10 +1706,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     if let Some(Ref::Func(Some(func))) = tbl.get(&mut store, raw_idx) {
                         if let Ok(typed) = func.typed::<(i64, i32, i32), i64>(&store) {
                             match typed.call(&mut store, (value::encode_undefined(), 0i32, 0i32)) {
-                                Ok(_) => {},
+                                Ok(_) => {}
                                 Err(e) => {
                                     let msg = format!("timer callback error: {}", e);
-                                    let mut error_lock = store.data().runtime_error.lock().expect("runtime_error mutex");
+                                    let mut error_lock = store
+                                        .data()
+                                        .runtime_error
+                                        .lock()
+                                        .expect("runtime_error mutex");
                                     if error_lock.is_none() {
                                         *error_lock = Some(msg);
                                     }
@@ -1587,13 +1726,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
                 // Re-schedule if repeating
                 if repeating {
-                    store.data().timers.lock().expect("timers mutex").push(TimerEntry {
-                        id: entry_id,
-                        deadline: Instant::now() + interval,
-                        callback,
-                        repeating: true,
-                        interval,
-                    });
+                    store
+                        .data()
+                        .timers
+                        .lock()
+                        .expect("timers mutex")
+                        .push(TimerEntry {
+                            id: entry_id,
+                            deadline: Instant::now() + interval,
+                            callback,
+                            repeating: true,
+                            interval,
+                        });
                 }
             }
         }
@@ -1637,12 +1781,20 @@ struct RuntimeState {
     cancelled_timers: Arc<Mutex<HashSet<u32>>>,
     /// 下一个定时器 ID
     next_timer_id: Arc<Mutex<u32>>,
+    /// 闭包表：每个闭包条目存储函数表索引和环境对象
+    closures: Arc<Mutex<Vec<ClosureEntry>>>,
+}
+
+/// 闭包条目
+struct ClosureEntry {
+    func_idx: u32,
+    env_obj: i64,
 }
 
 struct TimerEntry {
     id: u32,
     deadline: Instant,
-    callback: i64,  // NaN-boxed function handle
+    callback: i64, // NaN-boxed function handle
     repeating: bool,
     interval: Duration,
 }
@@ -1724,14 +1876,15 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
         return Ok(format!("function [ref:{idx}]"));
     }
 
+    if value::is_closure(val) {
+        let idx = value::decode_closure_idx(val);
+        return Ok(format!("function [closure:{idx}]"));
+    }
+
     Ok(f64::from_bits(val as u64).to_string())
 }
 
-fn write_console_value(
-    caller: &mut Caller<'_, RuntimeState>,
-    val: i64,
-    prefix: Option<&str>,
-) {
+fn write_console_value(caller: &mut Caller<'_, RuntimeState>, val: i64, prefix: Option<&str>) {
     let rendered = render_value(caller, val).unwrap_or_else(|_| "unknown".to_string());
     let mut buffer = caller
         .data()
@@ -1784,7 +1937,10 @@ fn runtime_json_stringify(caller: &mut Caller<'_, RuntimeState>, val: i64) -> St
     } else if value::is_string(val) {
         let s = if value::is_runtime_string_handle(val) {
             let handle = value::decode_runtime_string_handle(val) as usize;
-            caller.data().runtime_strings.lock()
+            caller
+                .data()
+                .runtime_strings
+                .lock()
                 .expect("runtime strings mutex")
                 .get(handle)
                 .cloned()
@@ -1797,7 +1953,7 @@ fn runtime_json_stringify(caller: &mut Caller<'_, RuntimeState>, val: i64) -> St
         value::decode_bool(val).to_string()
     } else if value::is_null(val) {
         "null".to_string()
-    } else if value::is_undefined(val) || value::is_function(val) {
+    } else if value::is_undefined(val) || value::is_callable(val) {
         "undefined".to_string()
     } else if value::is_object(val) {
         "[object Object]".to_string()
@@ -1871,9 +2027,13 @@ fn mark_object_recursive(
     // 检查标记位图
     let word_idx = handle_idx / 64;
     let bit_idx = handle_idx % 64;
-    
+
     {
-        let mut mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits mutex");
+        let mut mark_bits = caller
+            .data()
+            .gc_mark_bits
+            .lock()
+            .expect("gc_mark_bits mutex");
         if word_idx >= mark_bits.len() {
             // 扩展位图
             mark_bits.resize(word_idx + 1, 0);
@@ -1885,22 +2045,22 @@ fn mark_object_recursive(
         // 标记
         mark_bits[word_idx] |= 1u64 << bit_idx;
     }
-    
+
     // 收集需要递归标记的对象列表
     let mut children_to_mark: Vec<(usize, usize)> = Vec::new(); // (handle_idx, obj_ptr)
-    
+
     // 获取内存并读取信息
     {
         let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
             return;
         };
         let data = memory.data(&*caller);
-        
+
         // 读取对象头
         if obj_ptr + 12 > data.len() {
             return;
         }
-        
+
         // 读取 proto_handle
         let proto_handle = u32::from_le_bytes([
             data[obj_ptr],
@@ -1922,7 +2082,7 @@ fn mark_object_recursive(
                 }
             }
         }
-        
+
         // 读取属性数量
         let num_props = u32::from_le_bytes([
             data[obj_ptr + 8],
@@ -1930,14 +2090,14 @@ fn mark_object_recursive(
             data[obj_ptr + 10],
             data[obj_ptr + 11],
         ]) as usize;
-        
+
         // 遍历属性，收集所有对象/函数引用
         for i in 0..num_props {
             let slot_offset = obj_ptr + 12 + i * 32;
             if slot_offset + 32 > data.len() {
                 break;
             }
-            
+
             // 读取 value (offset 8), getter (offset 16), setter (offset 24)
             let value = i64::from_le_bytes([
                 data[slot_offset + 8],
@@ -1969,7 +2129,7 @@ fn mark_object_recursive(
                 data[slot_offset + 30],
                 data[slot_offset + 31],
             ]);
-            
+
             // 检查并收集对象/函数引用
             for val in [value, getter, setter] {
                 if value::is_object(val) || value::is_function(val) {
@@ -1992,13 +2152,18 @@ fn mark_object_recursive(
             }
         }
     } // data 借用在这里结束
-    
+
     // 递归标记收集到的对象
     for (child_handle_idx, child_ptr) in children_to_mark {
-        mark_object_recursive(caller, child_handle_idx, child_ptr, obj_table_ptr, obj_table_count);
+        mark_object_recursive(
+            caller,
+            child_handle_idx,
+            child_ptr,
+            obj_table_ptr,
+            obj_table_count,
+        );
     }
 }
-
 
 /// 通过 handle 表解析 boxed value 的真实对象指针。
 /// 支持 TAG_OBJECT 和 TAG_FUNCTION（统一走 handle 表）。
@@ -2357,23 +2522,23 @@ fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
     if value::is_undefined(val) {
         return f64::NAN.to_bits() as i64;
     }
-    
+
     // null → +0
     if value::is_null(val) {
         return 0.0_f64.to_bits() as i64;
     }
-    
+
     // bool: true → 1, false → 0
     if value::is_bool(val) {
         let b = value::decode_bool(val);
         return (if b { 1.0_f64 } else { 0.0_f64 }).to_bits() as i64;
     }
-    
+
     // f64 → itself
     if value::is_f64(val) {
         return val;
     }
-    
+
     // string → parseFloat (可能失败 → NaN)
     if value::is_string(val) {
         let s = if value::is_runtime_string_handle(val) {
@@ -2387,7 +2552,7 @@ fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
         } else {
             read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
         };
-        
+
         // 尝试解析字符串为数字
         // 先尝试 trim，然后解析
         let trimmed = s.trim();
@@ -2397,14 +2562,14 @@ fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
         // 解析失败返回 NaN
         return f64::NAN.to_bits() as i64;
     }
-    
+
     // object/function → ToPrimitive(hint: Number) → ToNumber
     // 简化实现：调用 render_value 返回字符串，然后解析
-    if value::is_object(val) || value::is_function(val) {
+    if value::is_object(val) || value::is_callable(val) {
         let prim = to_primitive(caller, val);
         return to_number(caller, prim);
     }
-    
+
     // 其他类型（iterator, enumerator, exception）→ NaN
     f64::NAN.to_bits() as i64
 }
@@ -2414,13 +2579,17 @@ fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
 /// 简化实现：调用 render_value 返回字符串
 fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
     // 已经是原始类型
-    if value::is_f64(val) || value::is_string(val) || 
-       value::is_bool(val) || value::is_undefined(val) || value::is_null(val) {
+    if value::is_f64(val)
+        || value::is_string(val)
+        || value::is_bool(val)
+        || value::is_undefined(val)
+        || value::is_null(val)
+    {
         return val;
     }
-    
+
     // object/function → 调用 render_value 返回字符串表示
-    if value::is_object(val) || value::is_function(val) {
+    if value::is_object(val) || value::is_callable(val) {
         if let Ok(s) = render_value(caller, val) {
             // 将字符串存入 runtime_strings
             let mut strings = caller
@@ -2433,7 +2602,7 @@ fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
             return value::encode_runtime_string_handle(handle);
         }
     }
-    
+
     // 其他类型直接返回
     val
 }
@@ -2443,11 +2612,11 @@ fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -> i64 {
     // 类型不同 → false
     let a_type = type_tag(a);
     let b_type = type_tag(b);
-    
+
     if a_type != b_type {
         return value::encode_bool(false);
     }
-    
+
     // 同类型比较
     match a_type {
         // f64: 注意 NaN !== NaN
@@ -2479,12 +2648,19 @@ fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -> i64 {
 /// 获取类型标签 (用于 strict_eq)
 /// 返回值: 0=f64, 1=string, 2=undefined, 3=null, 4=bool, 5+=其他
 fn type_tag(val: i64) -> u64 {
-    if value::is_f64(val) { 0 }
-    else if value::is_string(val) { 1 }
-    else if value::is_undefined(val) { 2 }
-    else if value::is_null(val) { 3 }
-    else if value::is_bool(val) { 4 }
-    else { 5 } // object, function, iterator, enumerator, exception
+    if value::is_f64(val) {
+        0
+    } else if value::is_string(val) {
+        1
+    } else if value::is_undefined(val) {
+        2
+    } else if value::is_null(val) {
+        3
+    } else if value::is_bool(val) {
+        4
+    } else {
+        5
+    } // object, function, iterator, enumerator, exception
 }
 
 /// 获取字符串值

@@ -20,6 +20,6 @@ module {
       %5 = const c5
       %6 = mul %4, %5
       %7 = add %3, %6
-      call builtin.console.log(%7)
+      %8 = call builtin.console.log(%7)
       return
 }

@@ -27,11 +27,11 @@ module {
       branch %7, bb2, bb3
     bb2:
       %8 = load var $0.i
-      call builtin.console.log(%8)
-      %9 = load var $0.i
-      %10 = const c6
-      %11 = add %9, %10
-      store var $0.i, %11
+      %9 = call builtin.console.log(%8)
+      %10 = load var $0.i
+      %11 = const c6
+      %12 = add %10, %11
+      store var $0.i, %12
       jump bb1
     bb3:
       return

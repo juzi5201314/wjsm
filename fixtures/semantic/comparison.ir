@@ -25,7 +25,7 @@ module {
       branch %7, bb1, bb2
     bb1:
       %8 = const c5
-      call builtin.console.log(%8)
+      %9 = call builtin.console.log(%8)
       jump bb2
     bb2:
       return

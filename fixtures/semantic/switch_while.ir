@@ -30,8 +30,8 @@ module {
     bb2:
       jump bb4
     bb3:
-      %14 = const c9
-      call builtin.console.log(%14)
+      %15 = const c9
+      %16 = call builtin.console.log(%15)
       jump bb1
     bb4:
       %6 = const c6
@@ -47,6 +47,6 @@ module {
       jump bb4
     bb6:
       %13 = load var $0.i
-      call builtin.console.log(%13)
+      %14 = call builtin.console.log(%13)
       jump bb1
 }

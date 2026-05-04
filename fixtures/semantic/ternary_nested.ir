@@ -32,9 +32,9 @@ module {
       jump bb3
     bb3:
       %9 = phi [(bb6, %7), (bb2, %8)]
-      call builtin.console.log(%9)
-      %10 = const c8
-      branch %10, bb7, bb8
+      %10 = call builtin.console.log(%9)
+      %11 = const c8
+      branch %11, bb7, bb8
     bb4:
       %5 = const c5
       jump bb6
@@ -45,22 +45,22 @@ module {
       %7 = phi [(bb4, %5), (bb5, %6)]
       jump bb3
     bb7:
-      %11 = const c9
+      %12 = const c9
       jump bb9
     bb8:
-      %12 = const c10
-      branch %12, bb10, bb11
+      %13 = const c10
+      branch %13, bb10, bb11
     bb9:
-      %16 = phi [(bb7, %11), (bb12, %15)]
-      call builtin.console.log(%16)
+      %17 = phi [(bb7, %12), (bb12, %16)]
+      %18 = call builtin.console.log(%17)
       return
     bb10:
-      %13 = const c11
+      %14 = const c11
       jump bb12
     bb11:
-      %14 = const c12
+      %15 = const c12
       jump bb12
     bb12:
-      %15 = phi [(bb10, %13), (bb11, %14)]
+      %16 = phi [(bb10, %14), (bb11, %15)]
       jump bb9
 }

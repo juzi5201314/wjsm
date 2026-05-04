@@ -15,6 +15,6 @@ module {
       store var $0.Infinity, %2
       call builtin.debugger()
       %3 = const c3
-      call builtin.console.log(%3)
+      %4 = call builtin.console.log(%3)
       return
 }

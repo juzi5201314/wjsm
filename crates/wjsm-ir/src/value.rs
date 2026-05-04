@@ -17,6 +17,7 @@ pub const TAG_ITERATOR: u64 = 0x6;
 pub const TAG_ENUMERATOR: u64 = 0x7;
 pub const TAG_OBJECT: u64 = 0x8;
 pub const TAG_FUNCTION: u64 = 0x9;
+pub const TAG_CLOSURE: u64 = 0xA;
 
 pub const TAG_MASK: u64 = 0xF;
 
@@ -209,4 +210,26 @@ pub fn is_function(val: i64) -> bool {
 
 pub fn decode_function_idx(val: i64) -> u32 {
     (val as u64 & 0xFFFF_FFFF) as u32
+}
+
+// ── Closure value ──────────────────────────────────────────────────────
+// 闭包：编码为 closure_table 的索引，低 32 位 = index
+
+pub fn encode_closure_idx(idx: u32) -> i64 {
+    let payload = (TAG_CLOSURE << 32) | (idx as u64);
+    (BOX_BASE | payload) as i64
+}
+
+pub fn is_closure(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_CLOSURE
+}
+
+pub fn decode_closure_idx(val: i64) -> u32 {
+    (val as u64 & 0xFFFF_FFFF) as u32
+}
+
+/// 闭包或函数值均可调用，统一判断
+pub fn is_callable(val: i64) -> bool {
+    is_function(val) || is_closure(val)
 }

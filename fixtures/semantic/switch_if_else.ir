@@ -30,16 +30,16 @@ module {
       %7 = stricteq %5, %6
       branch %7, bb4, bb5
     bb3:
-      %10 = const c8
-      call builtin.console.log(%10)
+      %12 = const c8
+      %13 = call builtin.console.log(%12)
       jump bb1
     bb4:
       %8 = const c6
-      call builtin.console.log(%8)
+      %9 = call builtin.console.log(%8)
       jump bb6
     bb5:
-      %9 = const c7
-      call builtin.console.log(%9)
+      %10 = const c7
+      %11 = call builtin.console.log(%10)
       jump bb6
     bb6:
       jump bb1
