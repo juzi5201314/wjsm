@@ -1775,6 +1775,945 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_f64(len as f64)
         },
     );
+    
+    // ── 辅助函数：读取影子栈参数 ────────────────────────────────────
+    fn read_shadow_arg(caller: &mut Caller<'_, RuntimeState>, args_base: i32, index: u32) -> i64 {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return value::encode_undefined(); };
+        let data = memory.data(&*caller);
+        let offset = args_base as usize + (index as usize) * 8;
+        if offset + 8 > data.len() { return value::encode_undefined(); }
+        i64::from_le_bytes(data[offset..offset + 8].try_into().unwrap())
+    }
+    
+    // ── 辅助函数：调用 WASM 回调函数 ────────────────────────────────
+    fn call_wasm_callback(
+        caller: &mut Caller<'_, RuntimeState>,
+        func_val: i64,
+        this_val: i64,
+        args: &[i64],
+    ) -> anyhow::Result<i64> {
+        let shadow_sp_global = caller.get_export("__shadow_sp")
+            .and_then(|e| e.into_global())
+            .ok_or_else(|| anyhow::anyhow!("no __shadow_sp"))?;
+        let shadow_sp = shadow_sp_global.get(&mut *caller).i32().ok_or_else(|| anyhow::anyhow!("shadow_sp not i32"))?;
+        let new_shadow_sp = shadow_sp + (args.len() as i32) * 8;
+        // 将参数写入影子栈
+        {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return Err(anyhow::anyhow!("no memory"));
+            };
+            let data = memory.data_mut(&mut *caller);
+            let mut write_pos = shadow_sp as usize;
+            for &arg in args {
+                if write_pos + 8 > data.len() {
+                    return Err(anyhow::anyhow!("shadow stack overflow"));
+                }
+                data[write_pos..write_pos + 8].copy_from_slice(&arg.to_le_bytes());
+                write_pos += 8;
+            }
+        }
+        // 更新 __shadow_sp
+        shadow_sp_global.set(&mut *caller, Val::I32(new_shadow_sp))?;
+        // 解析函数（闭包或函数引用）
+        let (func_idx, env_obj) = if value::is_closure(func_val) {
+            let idx = value::decode_closure_idx(func_val) as usize;
+            let closures = caller.data().closures.lock().unwrap();
+            if let Some(entry) = closures.get(idx) {
+                (entry.func_idx, entry.env_obj)
+            } else {
+                return Err(anyhow::anyhow!("closure index out of range"));
+            }
+        } else if value::is_function(func_val) {
+            ((func_val as u64 & 0xFFFF_FFFF) as u32, value::encode_undefined())
+        } else {
+            return Err(anyhow::anyhow!("not callable"));
+        };
+        // 通过函数表调用
+        let table = caller.get_export("__table")
+            .and_then(|e| e.into_table())
+            .ok_or_else(|| anyhow::anyhow!("no __table"))?;
+        let func_ref = table.get(&mut *caller, func_idx as u64)
+            .ok_or_else(|| anyhow::anyhow!("table get failed"))?;
+        let func = func_ref.as_func().flatten().ok_or_else(|| anyhow::anyhow!("table entry not a function"))?;
+        let mut results = [Val::I64(0)];
+        let call_result = func.call(
+            &mut *caller,
+            &[Val::I64(env_obj), Val::I64(this_val), Val::I32(shadow_sp), Val::I32(args.len() as i32)],
+            &mut results,
+        );
+        // 恢复 __shadow_sp（无论 call 成功与否）
+        let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+        call_result?;
+        Ok(results[0].unwrap_i64())
+    }
+    
+    // ── 辅助函数：分配新数组 ────────────────────────────────────────
+    fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
+        let heap_ptr = {
+            let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+            g.get(&mut *caller).i32().unwrap_or(0) as u32
+        };
+        let obj_table_count = {
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+            g.get(&mut *caller).i32().unwrap_or(0) as u32
+        };
+        let obj_table_ptr = {
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+            g.get(&mut *caller).i32().unwrap_or(0) as u32
+        };
+        let size = 16 + capacity * 8;
+        let new_heap_ptr = heap_ptr + size;
+        if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+            let _ = g.set(&mut *caller, Val::I32(new_heap_ptr as i32));
+        }
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+        let d = mem.data_mut(&mut *caller);
+        let ptr = heap_ptr as usize;
+        if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+        d[ptr..ptr + 4].copy_from_slice(&(-1i32).to_le_bytes());
+        d[ptr + 4] = 1u8;
+        d[ptr + 5..ptr + 8].fill(0);
+        d[ptr + 8..ptr + 12].copy_from_slice(&0u32.to_le_bytes());
+        d[ptr + 12..ptr + 16].copy_from_slice(&capacity.to_le_bytes());
+        let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+        if slot_addr + 4 <= d.len() {
+            d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+        }
+        let _ = d;
+        if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+            let _ = g.set(&mut *caller, Val::I32((obj_table_count + 1) as i32));
+        }
+        value::encode_handle(value::TAG_ARRAY, obj_table_count)
+    }
+    
+    // ── 辅助函数：复制数组元素 ──────────────────────────────────────
+    fn copy_array_elements(caller: &mut Caller<'_, RuntimeState>, src: i64, dst: i64, src_offset: u32, dst_offset: u32, count: u32) {
+        let Some(src_ptr) = resolve_array_ptr(caller, src) else { return; };
+        let Some(dst_ptr) = resolve_array_ptr(caller, dst) else { return; };
+        for i in 0..count {
+            let elem = read_array_elem(caller, src_ptr, src_offset + i).unwrap_or(value::encode_undefined());
+            write_array_elem(caller, dst_ptr, dst_offset + i, elem);
+        }
+    }
+    
+    // ── arr_proto_push (#49) ──────────────────────────────────────────
+    let arr_proto_push_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
+            let count = args_count as u32;
+            if len + count > cap {
+                // 超出容量，暂不处理扩容
+                return value::encode_undefined();
+            }
+            for i in 0..count {
+                let val = read_shadow_arg(&mut caller, args_base, i);
+                write_array_elem(&mut caller, ptr, len + i, val);
+            }
+            write_array_length(&mut caller, ptr, len + count);
+            value::encode_f64((len + count) as f64)
+        },
+    );
+    
+    // ── arr_proto_pop (#50) ───────────────────────────────────────────
+    let arr_proto_pop_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, _args_base: i32, _args_count: i32| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            if len == 0 { return value::encode_undefined(); }
+            let new_len = len - 1;
+            let val = read_array_elem(&mut caller, ptr, new_len).unwrap_or(value::encode_undefined());
+            write_array_length(&mut caller, ptr, new_len);
+            val
+        },
+    );
+    
+    // ── arr_proto_includes (#51) ──────────────────────────────────────
+    let arr_proto_includes_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+            let val = read_shadow_arg(&mut caller, args_base, 0);
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_bool(false);
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            for i in 0..len {
+                if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
+                    if elem == val { return value::encode_bool(true); }
+                }
+            }
+            value::encode_bool(false)
+        },
+    );
+    
+    // ── arr_proto_index_of (#52) ──────────────────────────────────────
+    let arr_proto_index_of_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+            let val = read_shadow_arg(&mut caller, args_base, 0);
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_f64(-1.0);
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            for i in 0..len {
+                if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
+                    if elem == val { return value::encode_f64(i as f64); }
+                }
+            }
+            value::encode_f64(-1.0)
+        },
+    );
+    
+    // ── arr_proto_join (#53) ─────────────────────────────────────────
+    let arr_proto_join_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let sep_val = if args_count > 0 { read_shadow_arg(&mut caller, args_base, 0) } else { value::encode_undefined() };
+            // 默认分隔符为 ","
+            let sep_str = if value::is_undefined(sep_val) || value::is_null(sep_val) {
+                ",".to_string()
+            } else {
+                get_string_value(&mut caller, sep_val)
+            };
+            let mut parts = Vec::new();
+            for i in 0..len {
+                if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
+                    parts.push(render_value(&mut caller, elem).unwrap_or_else(|_| "".to_string()));
+                } else {
+                    parts.push(String::new());
+                }
+            }
+            store_runtime_string(&caller, parts.join(&sep_str))
+        },
+    );
+    
+    // ── arr_proto_concat (#54) ────────────────────────────────────────
+    let arr_proto_concat_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let Some(this_ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let this_len = read_array_length(&mut caller, this_ptr).unwrap_or(0);
+            // 计算总元素数
+            let mut total_len = this_len as usize;
+            for i in 0..args_count as u32 {
+                let arg = read_shadow_arg(&mut caller, args_base, i);
+                if value::is_array(arg) {
+                    if let Some(arg_ptr) = resolve_array_ptr(&mut caller, arg) {
+                        total_len += read_array_length(&mut caller, arg_ptr).unwrap_or(0) as usize;
+                    }
+                } else {
+                    total_len += 1;
+                }
+            }
+            let new_arr = alloc_array(&mut caller, total_len as u32);
+            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
+                return value::encode_undefined();
+            };
+            let mut write_idx = 0u32;
+            // 复制 this 元素
+            for i in 0..this_len {
+                if let Some(elem) = read_array_elem(&mut caller, this_ptr, i) {
+                    write_array_elem(&mut caller, new_ptr, write_idx, elem);
+                    write_idx += 1;
+                }
+            }
+            // 复制参数元素
+            for i in 0..args_count as u32 {
+                let arg = read_shadow_arg(&mut caller, args_base, i);
+                if value::is_array(arg) {
+                    if let Some(arg_ptr) = resolve_array_ptr(&mut caller, arg) {
+                        let arg_len = read_array_length(&mut caller, arg_ptr).unwrap_or(0);
+                        for j in 0..arg_len {
+                            if let Some(elem) = read_array_elem(&mut caller, arg_ptr, j) {
+                                write_array_elem(&mut caller, new_ptr, write_idx, elem);
+                                write_idx += 1;
+                            }
+                        }
+                    }
+                } else {
+                    write_array_elem(&mut caller, new_ptr, write_idx, arg);
+                    write_idx += 1;
+                }
+            }
+            write_array_length(&mut caller, new_ptr, write_idx);
+            new_arr
+        },
+    );
+    
+    // ── arr_proto_slice (#55) ─────────────────────────────────────────
+    let arr_proto_slice_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
+            let start = if args_count > 0 {
+                let s_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                if s_f64.is_nan() { 0 }
+                else if s_f64 < 0.0 { (len + s_f64 as i32).max(0) }
+                else { (s_f64 as i32).min(len) }
+            } else {
+                0
+            };
+            let end = if args_count > 1 {
+                let e_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
+                if e_f64.is_nan() { len }
+                else if e_f64 < 0.0 { (len + e_f64 as i32).max(0) }
+                else { (e_f64 as i32).min(len) }
+            } else {
+                len
+            };
+            let count = (end - start).max(0) as u32;
+            let new_arr = alloc_array(&mut caller, count);
+            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
+                return value::encode_undefined();
+            };
+            for i in 0..count {
+                let elem = read_array_elem(&mut caller, ptr, start as u32 + i).unwrap_or(value::encode_undefined());
+                write_array_elem(&mut caller, new_ptr, i, elem);
+            }
+            write_array_length(&mut caller, new_ptr, count);
+            new_arr
+        },
+    );
+    
+    // ── arr_proto_fill (#56) ──────────────────────────────────────────
+    let arr_proto_fill_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let val = read_shadow_arg(&mut caller, args_base, 0);
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return this_val;
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
+            let start = if args_count > 1 {
+                let s_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
+                if s_f64.is_nan() { 0 }
+                else if s_f64 < 0.0 { (len + s_f64 as i32).max(0) }
+                else { (s_f64 as i32).min(len) }
+            } else {
+                0
+            };
+            let end = if args_count > 2 {
+                let e_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 2) as u64);
+                if e_f64.is_nan() { len }
+                else if e_f64 < 0.0 { (len + e_f64 as i32).max(0) }
+                else { (e_f64 as i32).min(len) }
+            } else {
+                len
+            };
+            for i in start..end {
+                write_array_elem(&mut caller, ptr, i as u32, val);
+            }
+            this_val
+        },
+    );
+    
+    // ── arr_proto_reverse (#57) ───────────────────────────────────────
+    let arr_proto_reverse_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, _args_base: i32, _args_count: i32| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return this_val;
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            for i in 0..len / 2 {
+                let a = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let b = read_array_elem(&mut caller, ptr, len - 1 - i).unwrap_or(value::encode_undefined());
+                write_array_elem(&mut caller, ptr, i, b);
+                write_array_elem(&mut caller, ptr, len - 1 - i, a);
+            }
+            this_val
+        },
+    );
+    
+    // ── arr_proto_flat (#58) ──────────────────────────────────────────
+    let arr_proto_flat_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            // 读取 depth 参数（默认 1）
+            let depth = if args_count > 0 {
+                let d = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                if d.is_nan() { 0 } else { d as u32 }
+            } else { 1 };
+            // 递归展平
+            fn flatten(caller: &mut Caller<'_, RuntimeState>, arr: i64, depth: u32, result: &mut Vec<i64>) {
+                if depth == 0 {
+                    // 不再展平，直接添加数组引用
+                    result.push(arr);
+                    return;
+                }
+                let Some(ptr) = resolve_array_ptr(caller, arr) else { result.push(arr); return; };
+                let len = read_array_length(caller, ptr).unwrap_or(0);
+                for i in 0..len {
+                    if let Some(elem) = read_array_elem(caller, ptr, i) {
+                        if value::is_array(elem) {
+                            flatten(caller, elem, depth - 1, result);
+                        } else {
+                            result.push(elem);
+                        }
+                    }
+                }
+            }
+            let mut elements = Vec::new();
+            flatten(&mut caller, this_val, depth, &mut elements);
+            let new_arr = alloc_array(&mut caller, elements.len() as u32);
+            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
+                return value::encode_undefined();
+            };
+            for (i, elem) in elements.iter().enumerate() {
+                write_array_elem(&mut caller, new_ptr, i as u32, *elem);
+            }
+            write_array_length(&mut caller, new_ptr, elements.len() as u32);
+            new_arr
+        },
+    );
+    
+    // ── arr_proto_shift (#59) ─────────────────────────────────────────
+    let arr_proto_shift_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, _args_base: i32, _args_count: i32| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            if len == 0 { return value::encode_undefined(); }
+            let val = read_array_elem(&mut caller, ptr, 0).unwrap_or(value::encode_undefined());
+            // 左移元素
+            for i in 1..len {
+                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                write_array_elem(&mut caller, ptr, i - 1, elem);
+            }
+            write_array_length(&mut caller, ptr, len - 1);
+            val
+        },
+    );
+    
+    // ── arr_proto_unshift (#60) ───────────────────────────────────────
+    let arr_proto_unshift_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
+            let new_len = len + args_count as u32;
+            if new_len > cap {
+                // 超出容量，暂不处理扩容
+                return value::encode_undefined();
+            }
+            // 右移现有元素
+            for i in (0..len).rev() {
+                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                write_array_elem(&mut caller, ptr, i + args_count as u32, elem);
+            }
+            // 在前面插入新元素
+            for i in 0..args_count as u32 {
+                let arg = read_shadow_arg(&mut caller, args_base, i);
+                write_array_elem(&mut caller, ptr, i, arg);
+            }
+            write_array_length(&mut caller, ptr, new_len);
+            value::encode_f64(new_len as f64)
+        },
+    );
+    
+    // ── arr_proto_sort (#61) ──────────────────────────────────────────
+    let arr_proto_sort_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return this_val;
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as usize;
+            if len <= 1 { return this_val; }
+            if args_count > 0 && value::is_callable(read_shadow_arg(&mut caller, args_base, 0)) {
+                // 带比较器回调的排序
+                let cmp = read_shadow_arg(&mut caller, args_base, 0);
+                // 冒泡排序，每次比较调用回调
+                for i in 0..len {
+                    for j in 0..len - 1 - i {
+                        let a = read_array_elem(&mut caller, ptr, j as u32).unwrap_or(value::encode_undefined());
+                        let b = read_array_elem(&mut caller, ptr, (j + 1) as u32).unwrap_or(value::encode_undefined());
+                        let result = match call_wasm_callback(&mut caller, cmp, value::encode_undefined(), &[a, b]) {
+                            Ok(r) => r,
+                            Err(_) => value::encode_f64(0.0),
+                        };
+                        let cmp_val = f64::from_bits(result as u64);
+                        if cmp_val > 0.0 {
+                            write_array_elem(&mut caller, ptr, j as u32, b);
+                            write_array_elem(&mut caller, ptr, (j + 1) as u32, a);
+                        }
+                    }
+                }
+            } else {
+                // 默认字符串排序
+                let mut pairs: Vec<(i64, String)> = (0..len)
+                    .filter_map(|i| {
+                        let elem = read_array_elem(&mut caller, ptr, i as u32)?;
+                        let s = render_value(&mut caller, elem).unwrap_or_default();
+                        Some((elem, s))
+                    })
+                    .collect();
+                pairs.sort_by(|a, b| a.1.cmp(&b.1));
+                for (i, (elem, _)) in pairs.iter().enumerate() {
+                    write_array_elem(&mut caller, ptr, i as u32, *elem);
+                }
+                // 填充剩余元素为 undefined
+                for i in pairs.len()..len {
+                    write_array_elem(&mut caller, ptr, i as u32, value::encode_undefined());
+                }
+            }
+            this_val
+        },
+    );
+    
+    // ── arr_proto_at (#62) ────────────────────────────────────────────
+    let arr_proto_at_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
+            let idx = if args_count > 0 {
+                let i_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                if i_f64.is_nan() { return value::encode_undefined(); }
+                if i_f64 < 0.0 { len + i_f64 as i32 } else { i_f64 as i32 }
+            } else {
+                0
+            };
+            if idx < 0 || idx >= len {
+                return value::encode_undefined();
+            }
+            read_array_elem(&mut caller, ptr, idx as u32).unwrap_or(value::encode_undefined())
+        },
+    );
+    
+    // ── arr_proto_copy_within (#63) ──────────────────────────────────
+    let arr_proto_copy_within_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return this_val;
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
+            // target
+            let raw_target = if args_count > 0 {
+                let t = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                if t.is_nan() { 0 } else { t as i32 }
+            } else { 0 };
+            let target = if raw_target < 0 { (len + raw_target).max(0) } else { raw_target.min(len) };
+            // start
+            let raw_start = if args_count > 1 {
+                let s = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
+                if s.is_nan() { 0 } else { s as i32 }
+            } else { 0 };
+            let start = if raw_start < 0 { (len + raw_start).max(0) } else { raw_start.min(len) };
+            // end
+            let raw_end = if args_count > 2 {
+                let e = f64::from_bits(read_shadow_arg(&mut caller, args_base, 2) as u64);
+                if e.is_nan() { len } else { e as i32 }
+            } else { len };
+            let end = if raw_end < 0 { (len + raw_end).max(0) } else { raw_end.min(len) };
+            let count = (end - start).min(len - target).max(0) as u32;
+            // 复制元素（处理重叠：从后往前复制）
+            if target < start {
+                for i in 0..count {
+                    let elem = read_array_elem(&mut caller, ptr, (start as u32) + i).unwrap_or(value::encode_undefined());
+                    write_array_elem(&mut caller, ptr, (target as u32) + i, elem);
+                }
+            } else {
+                for i in (0..count).rev() {
+                    let elem = read_array_elem(&mut caller, ptr, (start as u32) + i).unwrap_or(value::encode_undefined());
+                    write_array_elem(&mut caller, ptr, (target as u32) + i, elem);
+                }
+            }
+            this_val
+        },
+    );
+    
+    // ── arr_proto_for_each (#64) ─────────────────────────────────────
+    let arr_proto_for_each_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let cb = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_callable(cb) { return value::encode_undefined(); }
+            let this_arg = if args_count > 1 { read_shadow_arg(&mut caller, args_base, 1) } else { value::encode_undefined() };
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            for i in 0..len {
+                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let idx_val = value::encode_f64(i as f64);
+                if call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]).is_err() {
+                    return value::encode_undefined();
+                }
+            }
+            value::encode_undefined()
+        },
+    );
+    
+    // ── arr_proto_map (#65) ──────────────────────────────────────────
+    let arr_proto_map_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let cb = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_callable(cb) { return value::encode_undefined(); }
+            let this_arg = if args_count > 1 { read_shadow_arg(&mut caller, args_base, 1) } else { value::encode_undefined() };
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let new_arr = alloc_array(&mut caller, len);
+            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
+                return value::encode_undefined();
+            };
+            for i in 0..len {
+                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let idx_val = value::encode_f64(i as f64);
+                let result = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
+                    Ok(r) => r,
+                    Err(_) => value::encode_undefined(),
+                };
+                write_array_elem(&mut caller, new_ptr, i, result);
+            }
+            write_array_length(&mut caller, new_ptr, len);
+            new_arr
+        },
+    );
+    
+    // ── arr_proto_filter (#66) ───────────────────────────────────────
+    let arr_proto_filter_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let cb = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_callable(cb) { return value::encode_undefined(); }
+            let this_arg = if args_count > 1 { read_shadow_arg(&mut caller, args_base, 1) } else { value::encode_undefined() };
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let mut passed: Vec<i64> = Vec::new();
+            for i in 0..len {
+                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let idx_val = value::encode_f64(i as f64);
+                let ok = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
+                    Ok(r) => value::is_truthy(r),
+                    Err(_) => false,
+                };
+                if ok { passed.push(elem); }
+            }
+            let new_arr = alloc_array(&mut caller, passed.len() as u32);
+            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
+                return value::encode_undefined();
+            };
+            for (i, elem) in passed.iter().enumerate() {
+                write_array_elem(&mut caller, new_ptr, i as u32, *elem);
+            }
+            write_array_length(&mut caller, new_ptr, passed.len() as u32);
+            new_arr
+        },
+    );
+    
+    // ── arr_proto_reduce (#67) ────────────────────────────────────────
+    let arr_proto_reduce_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let cb = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_callable(cb) { return value::encode_undefined(); }
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as usize;
+            if len == 0 {
+                if args_count < 2 {
+                    return value::encode_undefined(); // TypeError
+                }
+                return read_shadow_arg(&mut caller, args_base, 1);
+            }
+            let mut acc: i64;
+            let mut start_idx = 0usize;
+            if args_count >= 2 {
+                acc = read_shadow_arg(&mut caller, args_base, 1);
+            } else {
+                acc = read_array_elem(&mut caller, ptr, 0).unwrap_or(value::encode_undefined());
+                start_idx = 1;
+            }
+            for i in start_idx..len {
+                let elem = read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined());
+                let idx_val = value::encode_f64(i as f64);
+                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[acc, elem, idx_val, this_val]) {
+                    Ok(r) => acc = r,
+                    Err(_) => return value::encode_undefined(),
+                }
+            }
+            acc
+        },
+    );
+    
+    // ── arr_proto_reduce_right (#68) ──────────────────────────────────
+    let arr_proto_reduce_right_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let cb = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_callable(cb) { return value::encode_undefined(); }
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
+            if len == 0 {
+                if args_count < 2 {
+                    return value::encode_undefined(); // TypeError
+                }
+                return read_shadow_arg(&mut caller, args_base, 1);
+            }
+            let mut acc: i64;
+            let mut start_idx = len - 1;
+            if args_count >= 2 {
+                acc = read_shadow_arg(&mut caller, args_base, 1);
+            } else {
+                acc = read_array_elem(&mut caller, ptr, start_idx as u32).unwrap_or(value::encode_undefined());
+                start_idx = len - 2;
+            }
+            for i in (0..=start_idx as usize).rev() {
+                let elem = read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined());
+                let idx_val = value::encode_f64(i as f64);
+                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[acc, elem, idx_val, this_val]) {
+                    Ok(r) => acc = r,
+                    Err(_) => return value::encode_undefined(),
+                }
+            }
+            acc
+        },
+    );
+    
+    // ── arr_proto_find (#69) ──────────────────────────────────────────
+    let arr_proto_find_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+            let cb = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_callable(cb) { return value::encode_undefined(); }
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            for i in 0..len {
+                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let idx_val = value::encode_f64(i as f64);
+                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[elem, idx_val, this_val]) {
+                    Ok(r) => if value::is_truthy(r) { return elem; }
+                    Err(_) => {}
+                }
+            }
+            value::encode_undefined()
+        },
+    );
+    
+    // ── arr_proto_find_index (#70) ────────────────────────────────────
+    let arr_proto_find_index_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+            let cb = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_callable(cb) { return value::encode_f64(-1.0); }
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_f64(-1.0);
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            for i in 0..len {
+                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let idx_val = value::encode_f64(i as f64);
+                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[elem, idx_val, this_val]) {
+                    Ok(r) => if value::is_truthy(r) { return value::encode_f64(i as f64); }
+                    Err(_) => {}
+                }
+            }
+            value::encode_f64(-1.0)
+        },
+    );
+    
+    // ── arr_proto_some (#71) ─────────────────────────────────────────
+    let arr_proto_some_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+            let cb = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_callable(cb) { return value::encode_bool(false); }
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_bool(false);
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            for i in 0..len {
+                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let idx_val = value::encode_f64(i as f64);
+                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[elem, idx_val, this_val]) {
+                    Ok(r) => if value::is_truthy(r) { return value::encode_bool(true); }
+                    Err(_) => {}
+                }
+            }
+            value::encode_bool(false)
+        },
+    );
+    
+    // ── arr_proto_every (#72) ────────────────────────────────────────
+    let arr_proto_every_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+            let cb = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_callable(cb) { return value::encode_bool(false); }
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_bool(false);
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            for i in 0..len {
+                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let idx_val = value::encode_f64(i as f64);
+                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[elem, idx_val, this_val]) {
+                    Ok(r) => if !value::is_truthy(r) { return value::encode_bool(false); }
+                    Err(_) => return value::encode_bool(false),
+                }
+            }
+            value::encode_bool(true)
+        },
+    );
+    
+    // ── arr_proto_flat_map (#73) ─────────────────────────────────────
+    let arr_proto_flat_map_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let cb = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_callable(cb) { return value::encode_undefined(); }
+            let this_arg = if args_count > 1 { read_shadow_arg(&mut caller, args_base, 1) } else { value::encode_undefined() };
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let mut elements: Vec<i64> = Vec::new();
+            for i in 0..len {
+                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let idx_val = value::encode_f64(i as f64);
+                let mapped = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                if value::is_array(mapped) {
+                    // 展平一层
+                    if let Some(mapped_ptr) = resolve_array_ptr(&mut caller, mapped) {
+                        let mapped_len = read_array_length(&mut caller, mapped_ptr).unwrap_or(0);
+                        for j in 0..mapped_len {
+                            if let Some(inner) = read_array_elem(&mut caller, mapped_ptr, j) {
+                                elements.push(inner);
+                            }
+                        }
+                    }
+                } else {
+                    elements.push(mapped);
+                }
+            }
+            let new_arr = alloc_array(&mut caller, elements.len() as u32);
+            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
+                return value::encode_undefined();
+            };
+            for (i, elem) in elements.iter().enumerate() {
+                write_array_elem(&mut caller, new_ptr, i as u32, *elem);
+            }
+            write_array_length(&mut caller, new_ptr, elements.len() as u32);
+            new_arr
+        },
+    );
+    
+    // ── arr_proto_splice (#74) ───────────────────────────────────────
+    let arr_proto_splice_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
+            // 读取 start
+            let raw_start = if args_count > 0 {
+                let s = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                if s.is_nan() { 0 } else { s as i32 }
+            } else { 0 };
+            let start_idx = if raw_start < 0 { (len + raw_start).max(0) } else { raw_start.min(len) };
+            // 读取 deleteCount
+            let delete_count = if args_count > 1 {
+                let d = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
+                if d.is_nan() { 0 } else { (d as i32).max(0) }
+            } else {
+                (len - start_idx).max(0)
+            };
+            let actual_delete = delete_count.min(len - start_idx);
+            let insert_count = (args_count - 2).max(0) as i32;
+            let new_len = len - actual_delete + insert_count;
+            let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0) as i32;
+            if new_len > cap {
+                // 超出容量，暂不处理扩容
+                return value::encode_undefined();
+            }
+            // 收集被删除的元素
+            let deleted_arr = alloc_array(&mut caller, actual_delete as u32);
+            let Some(deleted_ptr) = resolve_array_ptr(&mut caller, deleted_arr) else {
+                return value::encode_undefined();
+            };
+            for i in 0..actual_delete {
+                let elem = read_array_elem(&mut caller, ptr, (start_idx as u32) + i as u32)
+                    .unwrap_or(value::encode_undefined());
+                write_array_elem(&mut caller, deleted_ptr, i as u32, elem);
+            }
+            write_array_length(&mut caller, deleted_ptr, actual_delete as u32);
+            // 移动元素（右移或左移）
+            if insert_count != actual_delete {
+                if insert_count < actual_delete {
+                    // 左移
+                    for i in start_idx..(len - actual_delete + insert_count) {
+                        let src = i + actual_delete - insert_count;
+                        let elem = read_array_elem(&mut caller, ptr, src as u32)
+                            .unwrap_or(value::encode_undefined());
+                        write_array_elem(&mut caller, ptr, i as u32, elem);
+                    }
+                } else {
+                    // 右移（从后往前）
+                    for i in (start_idx..(len - actual_delete + insert_count)).rev() {
+                        let src = i - insert_count + actual_delete;
+                        let elem = read_array_elem(&mut caller, ptr, src as u32)
+                            .unwrap_or(value::encode_undefined());
+                        write_array_elem(&mut caller, ptr, i as u32 + insert_count as u32 - actual_delete as u32, elem);
+                    }
+                }
+            }
+            // 插入新元素
+            for i in 0..insert_count {
+                let item = read_shadow_arg(&mut caller, args_base, 2 + i as u32);
+                write_array_elem(&mut caller, ptr, (start_idx as u32) + i as u32, item);
+            }
+            write_array_length(&mut caller, ptr, new_len as u32);
+            deleted_arr
+        },
+    );
+    
+    // ── arr_proto_is_array (#75) ──────────────────────────────────────
+    let arr_proto_is_array_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, _this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+            let val = read_shadow_arg(&mut caller, args_base, 0);
+            value::encode_bool(value::is_array(val))
+        },
+    );
     let imports = [
         console_log.into(),          // 0
         f64_mod.into(),              // 1
@@ -1825,6 +2764,33 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         arr_flat_fn.into(),          // 46
         arr_init_length_fn.into(),   // 47
         arr_get_length_fn.into(),    // 48
+        arr_proto_push_fn.into(),        // 49
+        arr_proto_pop_fn.into(),         // 50
+        arr_proto_includes_fn.into(),    // 51
+        arr_proto_index_of_fn.into(),    // 52
+        arr_proto_join_fn.into(),        // 53
+        arr_proto_concat_fn.into(),      // 54
+        arr_proto_slice_fn.into(),       // 55
+        arr_proto_fill_fn.into(),        // 56
+        arr_proto_reverse_fn.into(),     // 57
+        arr_proto_flat_fn.into(),        // 58
+        arr_proto_shift_fn.into(),       // 59
+        arr_proto_unshift_fn.into(),     // 60
+        arr_proto_sort_fn.into(),        // 61
+        arr_proto_at_fn.into(),          // 62
+        arr_proto_copy_within_fn.into(), // 63
+        arr_proto_for_each_fn.into(),    // 64
+        arr_proto_map_fn.into(),         // 65
+        arr_proto_filter_fn.into(),      // 66
+        arr_proto_reduce_fn.into(),      // 67
+        arr_proto_reduce_right_fn.into(),// 68
+        arr_proto_find_fn.into(),        // 69
+        arr_proto_find_index_fn.into(),  // 70
+        arr_proto_some_fn.into(),        // 71
+        arr_proto_every_fn.into(),       // 72
+        arr_proto_flat_map_fn.into(),    // 73
+        arr_proto_splice_fn.into(),      // 74
+        arr_proto_is_array_fn.into(),    // 75
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 

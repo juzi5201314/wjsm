@@ -115,6 +115,8 @@ struct Compiler {
     closure_get_env_idx: u32,
     /// WASM global index for array prototype handle.
     array_proto_handle_global_idx: u32,
+    /// Base table index for array prototype methods (Table[N+8])
+    arr_proto_table_base: u32,
 }
 /// 循环元信息（编译前预扫描得到）。
 #[derive(Debug, Clone)]
@@ -376,6 +378,60 @@ impl Compiler {
         imports.import("env", "arr_init_length", EntityType::Function(2));
         // Import index 48: arr_get_length: (i64) -> (i64)
         imports.import("env", "arr_get_length", EntityType::Function(3));
+        // Import index 49: arr_proto_push: (i64, i64, i32, i32) -> (i64)
+        imports.import("env", "arr_proto_push", EntityType::Function(12));
+        // Import index 50: arr_proto_pop
+        imports.import("env", "arr_proto_pop", EntityType::Function(12));
+        // Import index 51: arr_proto_includes
+        imports.import("env", "arr_proto_includes", EntityType::Function(12));
+        // Import index 52: arr_proto_index_of
+        imports.import("env", "arr_proto_index_of", EntityType::Function(12));
+        // Import index 53: arr_proto_join
+        imports.import("env", "arr_proto_join", EntityType::Function(12));
+        // Import index 54: arr_proto_concat
+        imports.import("env", "arr_proto_concat", EntityType::Function(12));
+        // Import index 55: arr_proto_slice
+        imports.import("env", "arr_proto_slice", EntityType::Function(12));
+        // Import index 56: arr_proto_fill
+        imports.import("env", "arr_proto_fill", EntityType::Function(12));
+        // Import index 57: arr_proto_reverse
+        imports.import("env", "arr_proto_reverse", EntityType::Function(12));
+        // Import index 58: arr_proto_flat
+        imports.import("env", "arr_proto_flat", EntityType::Function(12));
+        // Import index 59: arr_proto_shift
+        imports.import("env", "arr_proto_shift", EntityType::Function(12));
+        // Import index 60: arr_proto_unshift
+        imports.import("env", "arr_proto_unshift", EntityType::Function(12));
+        // Import index 61: arr_proto_sort
+        imports.import("env", "arr_proto_sort", EntityType::Function(12));
+        // Import index 62: arr_proto_at
+        imports.import("env", "arr_proto_at", EntityType::Function(12));
+        // Import index 63: arr_proto_copy_within
+        imports.import("env", "arr_proto_copy_within", EntityType::Function(12));
+        // Import index 64: arr_proto_for_each
+        imports.import("env", "arr_proto_for_each", EntityType::Function(12));
+        // Import index 65: arr_proto_map
+        imports.import("env", "arr_proto_map", EntityType::Function(12));
+        // Import index 66: arr_proto_filter
+        imports.import("env", "arr_proto_filter", EntityType::Function(12));
+        // Import index 67: arr_proto_reduce
+        imports.import("env", "arr_proto_reduce", EntityType::Function(12));
+        // Import index 68: arr_proto_reduce_right
+        imports.import("env", "arr_proto_reduce_right", EntityType::Function(12));
+        // Import index 69: arr_proto_find
+        imports.import("env", "arr_proto_find", EntityType::Function(12));
+        // Import index 70: arr_proto_find_index
+        imports.import("env", "arr_proto_find_index", EntityType::Function(12));
+        // Import index 71: arr_proto_some
+        imports.import("env", "arr_proto_some", EntityType::Function(12));
+        // Import index 72: arr_proto_every
+        imports.import("env", "arr_proto_every", EntityType::Function(12));
+        // Import index 73: arr_proto_flat_map
+        imports.import("env", "arr_proto_flat_map", EntityType::Function(12));
+        // Import index 74: arr_proto_splice
+        imports.import("env", "arr_proto_splice", EntityType::Function(12));
+        // Import index 75: arr_proto_is_array
+        imports.import("env", "arr_proto_is_array", EntityType::Function(12));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 22);
@@ -418,9 +474,28 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::ArraySlice, 43);
         builtin_func_indices.insert(Builtin::ArrayFill, 44);
         builtin_func_indices.insert(Builtin::ArrayReverse, 45);
-        builtin_func_indices.insert(Builtin::ArrayFlat, 46);
+        builtin_func_indices.insert(Builtin::ArrayFlat, 58);
         builtin_func_indices.insert(Builtin::ArrayInitLength, 47);
         builtin_func_indices.insert(Builtin::ArrayGetLength, 48);
+        builtin_func_indices.insert(Builtin::ArrayShift, 59);
+        builtin_func_indices.insert(Builtin::ArrayUnshift, 60);
+        builtin_func_indices.insert(Builtin::ArraySort, 61);
+        builtin_func_indices.insert(Builtin::ArrayAt, 62);
+        builtin_func_indices.insert(Builtin::ArrayCopyWithin, 63);
+        builtin_func_indices.insert(Builtin::ArrayForEach, 64);
+        builtin_func_indices.insert(Builtin::ArrayMap, 65);
+        builtin_func_indices.insert(Builtin::ArrayFilter, 66);
+        builtin_func_indices.insert(Builtin::ArrayReduce, 67);
+        builtin_func_indices.insert(Builtin::ArrayReduceRight, 68);
+        builtin_func_indices.insert(Builtin::ArrayFind, 69);
+        builtin_func_indices.insert(Builtin::ArrayFindIndex, 70);
+        builtin_func_indices.insert(Builtin::ArraySome, 71);
+        builtin_func_indices.insert(Builtin::ArrayEvery, 72);
+        builtin_func_indices.insert(Builtin::ArrayFlatMap, 73);
+        builtin_func_indices.insert(Builtin::ArraySpliceVa, 74);
+        builtin_func_indices.insert(Builtin::ArrayIsArray, 75);
+        builtin_func_indices.insert(Builtin::ArrayConcatVa, 54);
+        builtin_func_indices.insert(Builtin::ArrayUnshiftVa, 60);
 
         let functions = FunctionSection::new();
 
@@ -457,7 +532,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 49, // 49 imports (0-48)
+            _next_import_func: 76, // 76 imports (49 existing + 27 array methods)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -489,6 +564,7 @@ impl Compiler {
             closure_get_func_idx: 35,
             closure_get_env_idx: 36,
             array_proto_handle_global_idx: 0,
+            arr_proto_table_base: 0,
         }
     }
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -606,6 +682,13 @@ impl Compiler {
         self.functions.function(9); // Type 9: (i64, i32, i64) -> ()
         self.function_table.push(self._next_import_func);
         self._next_import_func += 1;
+        // Register array prototype method imports in function table (imports 49-75)
+        let arr_proto_base = self.function_table.len() as u32;
+        for import_idx in 49u32..=75u32 {
+            self.function_table.push(import_idx);
+        }
+        self.arr_proto_table_base = arr_proto_base;
+
         // Pre-write typeof type strings to data segment start (nul-terminated)
         // 必须在编译用户函数之前设置，否则 encode_constant 会从 offset 0 开始分配字符串，
         // 随后 typeof 字符串会覆盖用户字符串数据。
@@ -858,6 +941,60 @@ impl Compiler {
                 self.emit(WasmInstruction::Call(self.obj_new_func_idx));
                 self.emit(WasmInstruction::Drop); // 丢弃返回的 handle_idx
             }
+            // ── 初始化 Array.prototype ──
+            // 创建 Array.prototype 对象（容量 64），存储 handle 到 Global 9
+            self.emit(WasmInstruction::I32Const(64));
+            self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+            self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
+            self.emit(WasmInstruction::GlobalSet(self.array_proto_handle_global_idx));
+            // 为每个原型方法在 Array.prototype 上设置属性
+            let method_names: [(u32, &str); 27] = [
+                (0, "push"),
+                (1, "pop"),
+                (2, "includes"),
+                (3, "indexOf"),
+                (4, "join"),
+                (5, "concat"),
+                (6, "slice"),
+                (7, "fill"),
+                (8, "reverse"),
+                (9, "flat"),
+                (10, "shift"),
+                (11, "unshift"),
+                (12, "sort"),
+                (13, "at"),
+                (14, "copyWithin"),
+                (15, "forEach"),
+                (16, "map"),
+                (17, "filter"),
+                (18, "reduce"),
+                (19, "reduceRight"),
+                (20, "find"),
+                (21, "findIndex"),
+                (22, "some"),
+                (23, "every"),
+                (24, "flatMap"),
+                (25, "splice"),
+                (26, "isArray"),
+            ];
+            for (offset, name) in &method_names {
+                let name_id = self.intern_data_string(name);
+                let table_idx = self.arr_proto_table_base + offset;
+                // 推入 boxed proto handle (i64)
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I64ExtendI32U);
+                let box_base = value::BOX_BASE as i64;
+                let tag_object = (value::TAG_OBJECT << 32) as i64;
+                self.emit(WasmInstruction::I64Const(box_base | tag_object));
+                self.emit(WasmInstruction::I64Or);
+                // 推入 name_id (i32)
+                self.emit(WasmInstruction::I32Const(name_id as i32));
+                // 推入编码后的函数表索引 (i64)
+                self.emit(WasmInstruction::I64Const(value::encode_function_idx(table_idx)));
+                // 调用 $obj_set(proto, name_id, func_value)
+                self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+            }
+
         }
 
         let cfg = Cfg::from_function(function);
@@ -3619,6 +3756,82 @@ impl Compiler {
         Ok(())
     }
 
+    /// 编译 Array.prototype 方法调用（Type 12 导入函数）。
+    /// 将 IR 层的 CallBuiltin 转换为对 Type 12 宿主函数的调用。
+    /// 通过影子栈传递参数，参数布局：
+    ///   env_obj=undefined, this_val=args[0], shadow_args=args[1..]
+    /// 特例：ArrayIsArray 的 this_val=undefined, shadow_args=args
+    fn compile_proto_method_call(
+        &mut self,
+        dest: Option<ValueId>,
+        builtin: &Builtin,
+        args: &[ValueId],
+    ) -> Result<()> {
+        let import_idx = self.builtin_func_indices.get(builtin).copied().with_context(|| {
+            format!("no WASM func index for builtin {builtin}")
+        })?;
+        // 确定 this_val 和影子栈参数
+        // ArrayIsArray: this_val=undefined, 所有 args 走影子栈
+        // 其他方法: this_val=args[0], args[1..] 走影子栈
+        let (this_val_idx, shadow_args) = if matches!(builtin, Builtin::ArrayIsArray) {
+            (None, args)
+        } else {
+            let this = args.first().with_context(|| {
+                format!("{builtin} expects at least 1 argument (this_val)")
+            })?;
+            (Some(this.0), &args[1..])
+        };
+        // 保存 shadow_sp 基址
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+        // 影子栈边界检查
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const((shadow_args.len() * 8) as i32));
+        self.emit(WasmInstruction::I32Add);
+        self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
+        self.emit(WasmInstruction::I32GtU);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::Unreachable);
+        self.emit(WasmInstruction::End);
+        // 将 shadow_args 写入影子栈
+        for arg in shadow_args {
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+            self.emit(WasmInstruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::I32Const(8));
+            self.emit(WasmInstruction::I32Add);
+            self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+        }
+        // 推入 Type 12 调用参数: env_obj, this_val, args_base, args_count
+        // env_obj = undefined
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        // this_val
+        if let Some(val_idx) = this_val_idx {
+            self.emit(WasmInstruction::LocalGet(self.local_idx(val_idx)));
+        } else {
+            self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        }
+        // args_base
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        // args_count
+        self.emit(WasmInstruction::I32Const(shadow_args.len() as i32));
+        // 调用 Type 12 宿主函数
+        self.emit(WasmInstruction::Call(import_idx));
+        // 恢复 shadow_sp
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+        // 处理返回值
+        if let Some(d) = dest {
+            self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+        }
+        Ok(())
+    }
+
     fn compile_builtin_call(
         &mut self,
         dest: Option<ValueId>,
@@ -3927,7 +4140,7 @@ impl Compiler {
             Builtin::ArrayPush | Builtin::ArrayPop
             | Builtin::ArrayIncludes | Builtin::ArrayJoin
             | Builtin::ArrayConcat | Builtin::ArrayReverse
-            | Builtin::ArrayFlat | Builtin::ArrayInitLength
+            | Builtin::ArrayInitLength
             | Builtin::ArrayGetLength => {
                 // Single arg: (i64) -> i64 or Two arg: (i64, i64) -> i64
                 // These all take the array as the first arg
@@ -3966,8 +4179,23 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── Array prototype method calls (Type 12 imports) ─────────────
+            Builtin::ArrayShift | Builtin::ArrayUnshift | Builtin::ArraySort
+            | Builtin::ArrayAt | Builtin::ArrayCopyWithin
+            | Builtin::ArrayForEach | Builtin::ArrayMap | Builtin::ArrayFilter
+            | Builtin::ArrayReduce | Builtin::ArrayReduceRight
+            | Builtin::ArrayFind | Builtin::ArrayFindIndex
+            | Builtin::ArraySome | Builtin::ArrayEvery | Builtin::ArrayFlatMap
+            | Builtin::ArrayFlat
+            | Builtin::ArraySpliceVa | Builtin::ArrayConcatVa | Builtin::ArrayUnshiftVa => {
+                self.compile_proto_method_call(dest, builtin, args)
+            }
+            Builtin::ArrayIsArray => {
+                self.compile_proto_method_call(dest, builtin, args)
+            }
         }
     }
+
 
     // ── Constant encoding ────────────────────────────────────────────────────
 
@@ -4000,6 +4228,23 @@ impl Compiler {
             }
         }
     }
+    /// Intern a nul-terminated string in the data section and return its offset.
+    /// 如果字符串已缓存，直接返回已有偏移量。
+    /// 与 encode_constant 中的字符串处理逻辑相同。
+    fn intern_data_string(&mut self, s: &str) -> u32 {
+        if let Some(&ptr) = self.string_ptr_cache.get(s) {
+            return ptr;
+        }
+        let ptr = self.data_offset;
+        let mut bytes = s.as_bytes().to_vec();
+        bytes.push(0);
+        let len = bytes.len() as u32;
+        self.string_data.extend(bytes);
+        self.data_offset += len;
+        self.string_ptr_cache.insert(s.to_string(), ptr);
+        ptr
+    }
+
 
     /// Emit WASM instructions that test whether a NaN-boxed i64 value is null or undefined.
     fn emit_is_nullish_i32(&mut self, val_id: u32) {

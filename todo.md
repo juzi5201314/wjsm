@@ -51,8 +51,9 @@
 依赖：块 B 堆分配器（数组方法 `push` 需动态扩容；字面量可用现有 `$obj_new`）。
 
 - [x] **数组字面量 `[1, 2, 3]`** — 语义层识别 `ArrayLit` AST 节点，生成 `NewArray` + `ArrayPush` builtin；含稀疏数组（`[1, , 3]`）。影响层：语义 + WASM 后端
-- [x] **数组方法（push/pop/includes/indexOf/join/fill/reverse）** — 运行时宿主函数，操作堆上数组对象（新内存布局 offset +4）；`concat`/`slice`/`flat` 替换为 `unimplemented!()`。影响层：运行时
-- [ ] **数组方法（map/filter/reduce 等）** — 剩余 Array.prototype 方法。影响层：运行时
+- [x] **数组方法（push/pop/includes/indexOf/join/fill/reverse/flat/concat/slice）** — 运行时宿主函数，操作堆上数组对象（新内存布局 offset +4）。影响层：运行时
+- [x] **数组方法（map/filter/reduce/reduceRight/find/findIndex/some/every/forEach/flatMap/at/copyWithin/sort/splice/shift/unshift/Array.isArray）** — 全部 Array.prototype 方法和 Array.isArray 的运行时宿主函数实现。影响层：IR + WASM 后端 + 运行时
+- [x] **数组方法调用优化（语义层拦截）** — 在 `lower_call_expr` 中识别 `a.filter(callback)` 模式，发出 `CallBuiltin` 代替 `Call`，跳过运行时属性解析，直接跳转宿主函数。影响层：语义
 
 ### 块 E：模板字符串
 
