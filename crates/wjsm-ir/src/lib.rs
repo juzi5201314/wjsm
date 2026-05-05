@@ -564,7 +564,7 @@ pub enum Builtin {
     ArrayGetLength,
     // ── 新数组方法 ──
     ArrayShift,
-    ArrayUnshift,
+    ArrayUnshiftVa,
     ArraySort,
     ArrayAt,
     ArrayCopyWithin,
@@ -581,7 +581,6 @@ pub enum Builtin {
     ArrayIsArray,
     ArraySpliceVa,
     ArrayConcatVa,
-    ArrayUnshiftVa,
 }
 
 impl fmt::Display for Builtin {
@@ -635,7 +634,7 @@ impl fmt::Display for Builtin {
             Self::ArrayInitLength => "array.init_length",
             Self::ArrayGetLength => "array.get_length",
             Self::ArrayShift => "array.shift",
-            Self::ArrayUnshift => "array.unshift",
+            Self::ArrayUnshiftVa => "array.unshift",
             Self::ArraySort => "array.sort",
             Self::ArrayAt => "array.at",
             Self::ArrayCopyWithin => "array.copy_within",
@@ -652,7 +651,6 @@ impl fmt::Display for Builtin {
             Self::ArrayIsArray => "array.is_array",
             Self::ArraySpliceVa => "array.splice_va",
             Self::ArrayConcatVa => "array.concat_va",
-            Self::ArrayUnshiftVa => "array.unshift_va",
         })
     }
 }

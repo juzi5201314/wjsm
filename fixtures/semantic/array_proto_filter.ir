@@ -1,0 +1,43 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(1)
+    c4 = number(2)
+    c5 = number(3)
+    c6 = number(4)
+    c7 = number(2)
+    c8 = functionref(@0)
+
+  fn @anon_0 [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
+    bb0:
+      %0 = load var $1.x
+      %1 = const c7
+      %2 = call builtin.abstract_compare(%1, %0)
+      return %2
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = new_array(capacity=4)
+      %4 = const c3
+      call builtin.array.push(%3, %4)
+      %5 = const c4
+      call builtin.array.push(%3, %5)
+      %6 = const c5
+      call builtin.array.push(%3, %6)
+      %7 = const c6
+      call builtin.array.push(%3, %7)
+      store var $0.a, %3
+      %8 = load var $0.a
+      %9 = const c8
+      %10 = call builtin.array.filter(%8, %9)
+      store var $0.b, %10
+      return
+}
