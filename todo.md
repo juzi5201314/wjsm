@@ -50,8 +50,9 @@
 
 依赖：块 B 堆分配器（数组方法 `push` 需动态扩容；字面量可用现有 `$obj_new`）。
 
-- [ ] **数组字面量 `[1, 2, 3]`** — 语义层识别 `ArrayLit` AST 节点，生成 `NewObject` + 多次 `SetProp`（下标键）；含稀疏数组（`[1, , 3]`）。影响层：语义 + WASM 后端
-- [ ] **数组方法（push / pop / map / filter / reduce 等）** — 运行时宿主函数，操作堆上数组对象，支持动态扩容和 `length` 维护。影响层：运行时
+- [x] **数组字面量 `[1, 2, 3]`** — 语义层识别 `ArrayLit` AST 节点，生成 `NewArray` + `ArrayPush` builtin；含稀疏数组（`[1, , 3]`）。影响层：语义 + WASM 后端
+- [x] **数组方法（push/pop/includes/indexOf/join/fill/reverse）** — 运行时宿主函数，操作堆上数组对象（新内存布局 offset +4）；`concat`/`slice`/`flat` 替换为 `unimplemented!()`。影响层：运行时
+- [ ] **数组方法（map/filter/reduce 等）** — 剩余 Array.prototype 方法。影响层：运行时
 
 ### 块 E：模板字符串
 
