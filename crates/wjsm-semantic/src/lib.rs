@@ -3482,7 +3482,30 @@ impl Lowerer {
                         }
                     }
 
-                    // obj.method() → obj 是 this，method 是 callee
+                    // Array.prototype 方法调用优化：发出 CallBuiltin 代替 Call，
+                    // 跳过运行时属性解析（原型链查找）。
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
+                        if let Some(array_builtin) = builtin_from_array_proto_method(&prop_ident.sym) {
+                            // obj.method() → obj 是 this
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: array_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+                    }
+
+                    // obj.method() → obj 是 this，method 是 callee（未被拦截时）
                     this_val = self.lower_expr(&member_expr.obj, block)?;
                     callee_val = self.lower_member_expr(member_expr, block)?;
                 } else {
@@ -5261,6 +5284,34 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
             "parse" => Some(Builtin::JsonParse),
             _ => None,
         },
+        _ => None,
+    }
+}
+
+/// 将 Array.prototype 方法名映射到 Builtin 变体，用于语义层优化。
+/// 当 `a.filter(cb)` 被识别时，跳过运行时属性解析，直接发出 CallBuiltin。
+/// 仅包含使用 Type 12 影子栈调用约定的方法（Group 2）。
+fn builtin_from_array_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "shift" => Some(ArrayShift),
+        "unshift" => Some(ArrayUnshiftVa),
+        "sort" => Some(ArraySort),
+        "at" => Some(ArrayAt),
+        "copyWithin" => Some(ArrayCopyWithin),
+        "forEach" => Some(ArrayForEach),
+        "map" => Some(ArrayMap),
+        "filter" => Some(ArrayFilter),
+        "reduce" => Some(ArrayReduce),
+        "reduceRight" => Some(ArrayReduceRight),
+        "find" => Some(ArrayFind),
+        "findIndex" => Some(ArrayFindIndex),
+        "some" => Some(ArraySome),
+        "every" => Some(ArrayEvery),
+        "flatMap" => Some(ArrayFlatMap),
+        "flat" => Some(ArrayFlat),
+        "concat" => Some(ArrayConcatVa),
+        "splice" => Some(ArraySpliceVa),
         _ => None,
     }
 }
