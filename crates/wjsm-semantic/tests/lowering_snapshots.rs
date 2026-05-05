@@ -331,6 +331,16 @@ fn update_fixture_matches_ir_snapshot() {
     assert_snapshot("update");
 }
 
+#[test]
+fn array_proto_call_fixture_matches_ir_snapshot() {
+    assert_snapshot("array_proto_call");
+}
+
+#[test]
+fn array_proto_filter_fixture_matches_ir_snapshot() {
+    assert_snapshot("array_proto_filter");
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let source_path = root.join("fixtures/happy").join(format!("{name}.js"));

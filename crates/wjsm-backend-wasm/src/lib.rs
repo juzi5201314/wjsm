@@ -478,7 +478,7 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::ArrayInitLength, 47);
         builtin_func_indices.insert(Builtin::ArrayGetLength, 48);
         builtin_func_indices.insert(Builtin::ArrayShift, 59);
-        builtin_func_indices.insert(Builtin::ArrayUnshift, 60);
+        builtin_func_indices.insert(Builtin::ArrayUnshiftVa, 60);
         builtin_func_indices.insert(Builtin::ArraySort, 61);
         builtin_func_indices.insert(Builtin::ArrayAt, 62);
         builtin_func_indices.insert(Builtin::ArrayCopyWithin, 63);
@@ -495,7 +495,6 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::ArraySpliceVa, 74);
         builtin_func_indices.insert(Builtin::ArrayIsArray, 75);
         builtin_func_indices.insert(Builtin::ArrayConcatVa, 54);
-        builtin_func_indices.insert(Builtin::ArrayUnshiftVa, 60);
 
         let functions = FunctionSection::new();
 
@@ -942,6 +941,7 @@ impl Compiler {
                 self.emit(WasmInstruction::Drop); // 丢弃返回的 handle_idx
             }
             // ── 初始化 Array.prototype ──
+            // 复用 shadow_sp_scratch_idx 作为 proto handle 的临时存储（proto_init_scratch）。
             // 创建 Array.prototype 对象（容量 64），存储 handle 到 Global 9
             self.emit(WasmInstruction::I32Const(64));
             self.emit(WasmInstruction::Call(self.obj_new_func_idx));
@@ -3785,6 +3785,7 @@ impl Compiler {
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
         self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
         // 影子栈边界检查
+        // TODO: 替换 Unreachable 为 host abort，提供诊断信息
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const((shadow_args.len() * 8) as i32));
         self.emit(WasmInstruction::I32Add);
@@ -4180,7 +4181,7 @@ impl Compiler {
                 Ok(())
             }
             // ── Array prototype method calls (Type 12 imports) ─────────────
-            Builtin::ArrayShift | Builtin::ArrayUnshift | Builtin::ArraySort
+            Builtin::ArrayShift | Builtin::ArraySort
             | Builtin::ArrayAt | Builtin::ArrayCopyWithin
             | Builtin::ArrayForEach | Builtin::ArrayMap | Builtin::ArrayFilter
             | Builtin::ArrayReduce | Builtin::ArrayReduceRight

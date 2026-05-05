@@ -1885,17 +1885,6 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         }
         value::encode_handle(value::TAG_ARRAY, obj_table_count)
     }
-    
-    // ── 辅助函数：复制数组元素 ──────────────────────────────────────
-    fn copy_array_elements(caller: &mut Caller<'_, RuntimeState>, src: i64, dst: i64, src_offset: u32, dst_offset: u32, count: u32) {
-        let Some(src_ptr) = resolve_array_ptr(caller, src) else { return; };
-        let Some(dst_ptr) = resolve_array_ptr(caller, dst) else { return; };
-        for i in 0..count {
-            let elem = read_array_elem(caller, src_ptr, src_offset + i).unwrap_or(value::encode_undefined());
-            write_array_elem(caller, dst_ptr, dst_offset + i, elem);
-        }
-    }
-    
     // ── arr_proto_push (#49) ──────────────────────────────────────────
     let arr_proto_push_fn = Func::wrap(
         &mut store,
@@ -1907,7 +1896,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
             let count = args_count as u32;
             if len + count > cap {
-                // 超出容量，暂不处理扩容
+                // TODO: 动态扩容 — Array.prototype.push 必须支持自动增长
                 return value::encode_undefined();
             }
             for i in 0..count {
@@ -2214,7 +2203,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
             let new_len = len + args_count as u32;
             if new_len > cap {
-                // 超出容量，暂不处理扩容
+                // TODO: 动态扩容 — Array.prototype.unshift 必须支持自动增长
                 return value::encode_undefined();
             }
             // 右移现有元素
@@ -2242,9 +2231,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as usize;
             if len <= 1 { return this_val; }
             if args_count > 0 && value::is_callable(read_shadow_arg(&mut caller, args_base, 0)) {
+                // TODO: 冒泡排序 O(n²)，应替换为 TimSort 或 at least quicksort
                 // 带比较器回调的排序
                 let cmp = read_shadow_arg(&mut caller, args_base, 0);
-                // 冒泡排序，每次比较调用回调
                 for i in 0..len {
                     for j in 0..len - 1 - i {
                         let a = read_array_elem(&mut caller, ptr, j as u32).unwrap_or(value::encode_undefined());
@@ -2261,6 +2250,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     }
                 }
             } else {
+                // TODO: render_value 每次调用都会在 runtime_strings 中分配，大数组会导致内存泄漏
                 // 默认字符串排序
                 let mut pairs: Vec<(i64, String)> = (0..len)
                     .filter_map(|i| {
@@ -2443,7 +2433,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as usize;
             if len == 0 {
                 if args_count < 2 {
-                    return value::encode_undefined(); // TypeError
+                    *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                        Some("TypeError: Reduce of empty array with no initial value".to_string());
+                    return value::encode_undefined();
                 }
                 return read_shadow_arg(&mut caller, args_base, 1);
             }
@@ -2479,7 +2471,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             if len == 0 {
                 if args_count < 2 {
-                    return value::encode_undefined(); // TypeError
+                    *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                        Some("TypeError: Reduce of empty array with no initial value".to_string());
+                    return value::encode_undefined();
                 }
                 return read_shadow_arg(&mut caller, args_base, 1);
             }
@@ -2662,7 +2656,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let new_len = len - actual_delete + insert_count;
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0) as i32;
             if new_len > cap {
-                // 超出容量，暂不处理扩容
+                // TODO: 动态扩容 — Array.prototype.splice 必须支持自动增长
                 return value::encode_undefined();
             }
             // 收集被删除的元素
