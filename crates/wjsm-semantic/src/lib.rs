@@ -2980,6 +2980,7 @@ impl Lowerer {
             swc_ast::Expr::Fn(fn_expr) => self.lower_fn_expr(fn_expr, block),
             swc_ast::Expr::Arrow(arrow) => self.lower_arrow_expr(arrow, block),
             swc_ast::Expr::Object(obj_expr) => self.lower_object_expr(obj_expr, block),
+            swc_ast::Expr::Array(arr) => self.lower_array_expr(arr, block),
             swc_ast::Expr::Member(member) => self.lower_member_expr(member, block),
             swc_ast::Expr::This(_) => self.lower_this(block),
             swc_ast::Expr::New(new_expr) => self.lower_new_expr(new_expr, block),
@@ -3079,6 +3080,55 @@ impl Lowerer {
         Ok(obj_dest)
     }
 
+    fn lower_array_expr(
+        &mut self,
+        arr: &swc_ast::ArrayLit,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let elem_count = arr.elems.len();
+        // 根据元素数量分配容量（最少 4 个元素槽位减少扩容）
+        let capacity = std::cmp::max(4, elem_count as u32);
+        let arr_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewArray {
+                dest: arr_dest,
+                capacity,
+            },
+        );
+
+        // 遍历元素：对每个元素 push 到数组
+        for elem in &arr.elems {
+            let val = match elem {
+                Some(elem) => self.lower_expr(&elem.expr, block)?,
+                None => {
+                    // 稀疏数组的空位 → undefined
+                    let undef_const = self.module.add_constant(Constant::Undefined);
+                    let val_dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: val_dest,
+                            constant: undef_const,
+                        },
+                    );
+                    val_dest
+                }
+            };
+            // 使用 CallBuiltin(ArrayPush) 添加元素（同时自动更新 length）
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ArrayPush,
+                    args: vec![arr_dest, val],
+                },
+            );
+        }
+
+        Ok(arr_dest)
+    }
+
     fn lower_member_expr(
         &mut self,
         member: &swc_ast::MemberExpr,
@@ -3106,14 +3156,31 @@ impl Lowerer {
         };
 
         let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::GetProp {
-                dest,
-                object: obj_val,
-                key,
-            },
-        );
+        match &member.prop {
+            // Ident（命名属性）→ GetProp（走原型链，或读取 length 等内置属性）
+            swc_ast::MemberProp::Ident(_) => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest,
+                        object: obj_val,
+                        key,
+                    },
+                );
+            }
+            // Computed（计算属性）→ GetElem（从数组 elements 读取）
+            swc_ast::MemberProp::Computed(_) => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetElem {
+                        dest,
+                        object: obj_val,
+                        index: key,
+                    },
+                );
+            }
+            _ => unreachable!(),
+        }
         Ok(dest)
     }
 
@@ -3521,17 +3588,32 @@ impl Lowerer {
                     }
                 };
 
+				let is_computed = matches!(&member_expr.prop, swc_ast::MemberProp::Computed(_));
                 if assign.op == swc_ast::AssignOp::Assign {
-                    // 简单赋值: obj.x = value
+                    // 简单赋值: obj.x = value 或 arr[computed] = value
                     let value_val = self.lower_expr(assign.right.as_ref(), block)?;
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::SetProp {
-                            object: obj_val,
-                            key,
-                            value: value_val,
-                        },
-                    );
+                    match &member_expr.prop {
+                        swc_ast::MemberProp::Computed(_) => {
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::SetElem {
+                                    object: obj_val,
+                                    index: key,
+                                    value: value_val,
+                                },
+                            );
+                        }
+                        _ => {
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::SetProp {
+                                    object: obj_val,
+                                    key,
+                                    value: value_val,
+                                },
+                            );
+                        }
+                    }
                     return Ok(value_val);
                 }
 
@@ -3550,16 +3632,24 @@ impl Lowerer {
                     self.error(assign.span, "unsupported compound assignment operator")
                 })?;
 
-                // GetProp 读取当前值
-                let loaded = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::GetProp {
-                        dest: loaded,
-                        object: obj_val,
-                        key,
-                    },
-                );
+				// 用 GetElem/GetProp 读取当前值（取决于是否为 computed 成员）
+				let loaded = self.alloc_value();
+				self.current_function.append_instruction(
+					block,
+					if is_computed {
+						Instruction::GetElem {
+							dest: loaded,
+							object: obj_val,
+							index: key,
+						}
+					} else {
+						Instruction::GetProp {
+							dest: loaded,
+							object: obj_val,
+							key,
+						}
+					},
+				);
 
                 let rhs = self.lower_expr(assign.right.as_ref(), block)?;
                 let dest = self.alloc_value();
@@ -3598,15 +3688,20 @@ impl Lowerer {
                         );
                     }
                 }
-
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::SetProp {
-                        object: obj_val,
-                        key,
-                        value: dest,
-                    },
-                );
+				let instr = if is_computed {
+					Instruction::SetElem {
+						object: obj_val,
+						index: key,
+						value: dest,
+					}
+				} else {
+					Instruction::SetProp {
+						object: obj_val,
+						key,
+						value: dest,
+					}
+				};
+				self.current_function.append_instruction(block, instr);
 
                 return Ok(dest);
             }
