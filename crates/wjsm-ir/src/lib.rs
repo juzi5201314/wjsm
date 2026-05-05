@@ -317,6 +317,23 @@ pub enum Instruction {
         object: ValueId,
         value: ValueId,
     },
+    /// 创建 TAG_ARRAY 数组对象
+    NewArray {
+        dest: ValueId,
+        capacity: u32,
+    },
+    /// 按数字索引读取数组元素
+    GetElem {
+        dest: ValueId,
+        object: ValueId,
+        index: ValueId,
+    },
+    /// 按数字索引写入数组元素
+    SetElem {
+        object: ValueId,
+        index: ValueId,
+        value: ValueId,
+    },
 }
 
 impl fmt::Display for Instruction {
@@ -402,6 +419,15 @@ impl fmt::Display for Instruction {
             }
             Self::SetProto { object, value } => {
                 write!(formatter, "set_proto {object}, {value}")
+            }
+            Self::NewArray { dest, capacity } => {
+                write!(formatter, "{dest} = new_array(capacity={capacity})")
+            }
+            Self::GetElem { dest, object, index } => {
+                write!(formatter, "{dest} = get_elem {object}, {index}")
+            }
+            Self::SetElem { object, index, value } => {
+                write!(formatter, "set_elem {object}, {index}, {value}")
             }
         }
     }
@@ -522,6 +548,20 @@ pub enum Builtin {
     JsonStringify,
     JsonParse,
     CreateClosure,
+    // 数组方法
+    ArrayPush,
+    ArrayPop,
+    ArrayIncludes,
+    ArrayIndexOf,
+    ArrayJoin,
+    ArrayConcat,
+    ArraySlice,
+    ArrayFill,
+    ArrayReverse,
+    ArraySplice,
+    ArrayFlat,
+    ArrayInitLength,
+    ArrayGetLength,
 }
 
 impl fmt::Display for Builtin {
@@ -561,6 +601,19 @@ impl fmt::Display for Builtin {
             Self::JsonStringify => "JSON.stringify",
             Self::JsonParse => "JSON.parse",
             Self::CreateClosure => "create_closure",
+            Self::ArrayPush => "array.push",
+            Self::ArrayPop => "array.pop",
+            Self::ArrayIncludes => "array.includes",
+            Self::ArrayIndexOf => "array.index_of",
+            Self::ArrayJoin => "array.join",
+            Self::ArrayConcat => "array.concat",
+            Self::ArraySlice => "array.slice",
+            Self::ArrayFill => "array.fill",
+            Self::ArrayReverse => "array.reverse",
+            Self::ArraySplice => "array.splice",
+            Self::ArrayFlat => "array.flat",
+            Self::ArrayInitLength => "array.init_length",
+            Self::ArrayGetLength => "array.get_length",
         })
     }
 }
@@ -683,3 +736,9 @@ impl fmt::Display for ValueId {
         write!(formatter, "%{}", self.0)
     }
 }
+
+// ── Heap type tags ──────────────────────────────────────────────────────
+/// 0x00 = object (HEAP_TYPE_OBJECT)
+pub const HEAP_TYPE_OBJECT: u8 = 0x00;
+/// 0x01 = array (HEAP_TYPE_ARRAY)
+pub const HEAP_TYPE_ARRAY: u8 = 0x01;

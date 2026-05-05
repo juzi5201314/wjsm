@@ -457,20 +457,20 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     return value::encode_bool(false);
                 };
                 let data = memory.data(&caller);
-                if ptr + 12 > data.len() {
+                if ptr + 16 > data.len() {
                     return value::encode_bool(false);
                 }
 
                 let num_props = u32::from_le_bytes([
-                    data[ptr + 8],
-                    data[ptr + 9],
-                    data[ptr + 10],
-                    data[ptr + 11],
+                    data[ptr + 12],
+                    data[ptr + 13],
+                    data[ptr + 14],
+                    data[ptr + 15],
                 ]) as usize;
 
                 let name_ids: Vec<u32> = (0..num_props)
                     .filter_map(|i| {
-                        let slot_offset = ptr + 12 + i * 32;
+                        let slot_offset = ptr + 16 + i * 32;
                         if slot_offset + 4 <= data.len() {
                             Some(u32::from_le_bytes([
                                 data[slot_offset],
@@ -546,19 +546,19 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     return value::encode_bool(false);
                 };
                 let data = memory.data(&caller);
-                if ctor_ptr + 12 > data.len() {
+                if ctor_ptr + 16 > data.len() {
                     return value::encode_bool(false);
                 }
                 let num_props = u32::from_le_bytes([
-                    data[ctor_ptr + 8],
-                    data[ctor_ptr + 9],
-                    data[ctor_ptr + 10],
-                    data[ctor_ptr + 11],
+                    data[ctor_ptr + 12],
+                    data[ctor_ptr + 13],
+                    data[ctor_ptr + 14],
+                    data[ctor_ptr + 15],
                 ]) as usize;
 
                 (0..num_props)
                     .filter_map(|i| {
-                        let slot_offset = ctor_ptr + 12 + i * 32;
+                        let slot_offset = ctor_ptr + 16 + i * 32;
                         if slot_offset + 32 <= data.len() {
                             let name_id = u32::from_le_bytes([
                                 data[slot_offset],
@@ -792,20 +792,20 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         return;
                     };
                     let data = memory.data(&caller);
-                    if obj_ptr + 12 > data.len() {
+                    if obj_ptr + 16 > data.len() {
                         return;
                     }
                     let capacity = u32::from_le_bytes([
-                        data[obj_ptr + 4],
-                        data[obj_ptr + 5],
-                        data[obj_ptr + 6],
-                        data[obj_ptr + 7],
-                    ]) as usize;
-                    let num_props = u32::from_le_bytes([
                         data[obj_ptr + 8],
                         data[obj_ptr + 9],
                         data[obj_ptr + 10],
                         data[obj_ptr + 11],
+                    ]) as usize;
+                    let num_props = u32::from_le_bytes([
+                        data[obj_ptr + 12],
+                        data[obj_ptr + 13],
+                        data[obj_ptr + 14],
+                        data[obj_ptr + 15],
                     ]) as usize;
                     (capacity, num_props)
                 };
@@ -832,7 +832,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
                     // 计算新容量和新大小
                     let new_capacity = if capacity == 0 { 1 } else { capacity * 2 };
-                    let new_size = 12 + new_capacity * 32;
+                    let new_size = 16 + new_capacity * 32;
 
                     // 复制旧数据到新位置并更新元数据
                     {
@@ -845,11 +845,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         }
 
                         // 复制旧数据（header + 已有属性）
-                        let old_size = 12 + num_props * 32;
+                        let old_size = 16 + num_props * 32;
                         data.copy_within(actual_obj_ptr..actual_obj_ptr + old_size, heap_ptr);
 
                         // 更新新对象的 capacity
-                        data[heap_ptr + 4..heap_ptr + 8]
+                        data[heap_ptr + 8..heap_ptr + 12]
                             .copy_from_slice(&(new_capacity as u32).to_le_bytes());
 
                         // 更新 handle 表
@@ -876,7 +876,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     return;
                 };
                 let data = memory.data_mut(&mut caller);
-                let slot_offset = actual_obj_ptr + 12 + num_props * 32;
+                let slot_offset = actual_obj_ptr + 16 + num_props * 32;
                 if slot_offset + 32 > data.len() {
                     return;
                 }
@@ -886,7 +886,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
                 data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
                 let new_num_props = num_props + 1;
-                data[actual_obj_ptr + 8..actual_obj_ptr + 12]
+                data[actual_obj_ptr + 12..actual_obj_ptr + 16]
                     .copy_from_slice(&(new_num_props as u32).to_le_bytes());
             }
         },
@@ -1612,6 +1612,169 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 .unwrap_or_else(value::encode_undefined)
         },
     );
+    // ── Array method host functions (imports 37-48) ────────────────────
+    let arr_push_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
+            if len < cap {
+                write_array_elem(&mut caller, ptr, len, val);
+                write_array_length(&mut caller, ptr, len + 1);
+            } else {
+                // 超出容量 — 暂不处理扩容，直接忽略
+                return value::encode_undefined();
+            }
+            value::encode_f64((len + 1) as f64)
+        },
+    );
+    let arr_pop_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            if len == 0 { return value::encode_undefined(); }
+            let new_len = len - 1;
+            let val = read_array_elem(&mut caller, ptr, new_len).unwrap_or(value::encode_undefined());
+            write_array_length(&mut caller, ptr, new_len);
+            val
+        },
+    );
+    let arr_includes_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return value::encode_bool(false);
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            for i in 0..len {
+                if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
+                    if elem == val { return value::encode_bool(true); }
+                }
+            }
+            value::encode_bool(false)
+        },
+    );
+    let arr_index_of_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, from_val: i64| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return value::encode_f64(-1.0);
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
+            let from_idx = if value::is_f64(from_val) {
+                f64::from_bits(from_val as u64) as i32
+            } else { 0 };
+            let start = if from_idx >= 0 {
+                (from_idx as usize).min(len as usize)
+            } else {
+                ((len + from_idx).max(0)) as usize
+            };
+            for i in start..len as usize {
+                if let Some(elem) = read_array_elem(&mut caller, ptr, i as u32) {
+                    if elem == val { return value::encode_f64(i as f64); }
+                }
+            }
+            value::encode_f64(-1.0)
+        },
+    );
+    let arr_join_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64, sep_val: i64| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let sep_str = render_value(&mut caller, sep_val)
+                .unwrap_or_else(|_| ",".to_string());
+            let mut parts = Vec::new();
+            for i in 0..len {
+                if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
+                    parts.push(render_value(&mut caller, elem).unwrap_or_else(|_| "".to_string()));
+                } else {
+                    parts.push(String::new());
+                }
+            }
+            store_runtime_string(&caller, parts.join(&sep_str))
+        },
+    );
+    let arr_concat_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _arr1: i64, _arr2: i64| -> i64 {
+            unimplemented!("Array.prototype.concat is not yet implemented in wjsm")
+        },
+    );
+    let arr_slice_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _arr: i64, _start: i64, _end: i64| -> i64 {
+            unimplemented!("Array.prototype.slice is not yet implemented in wjsm")
+        },
+    );
+    let arr_fill_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, _start: i64, _end: i64| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return arr;
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            for i in 0..len {
+                write_array_elem(&mut caller, ptr, i, val);
+            }
+            arr
+        },
+    );
+    let arr_reverse_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return arr;
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            for i in 0..len / 2 {
+                let a = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let b = read_array_elem(&mut caller, ptr, len - 1 - i).unwrap_or(value::encode_undefined());
+                write_array_elem(&mut caller, ptr, i, b);
+                write_array_elem(&mut caller, ptr, len - 1 - i, a);
+            }
+            arr
+        },
+    );
+    let arr_flat_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _arr: i64, _depth: i64| -> i64 {
+            unimplemented!("Array.prototype.flat is not yet implemented in wjsm")
+        },
+    );
+    let arr_init_length_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64, len_val: i64| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return arr;
+            };
+            let len = if value::is_f64(len_val) {
+                f64::from_bits(len_val as u64) as u32
+            } else {
+                return arr;
+            };
+            write_array_length(&mut caller, ptr, len);
+            arr
+        },
+    );
+    let arr_get_length_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            value::encode_f64(len as f64)
+        },
+    );
     let imports = [
         console_log.into(),          // 0
         f64_mod.into(),              // 1
@@ -1650,6 +1813,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         closure_create_fn.into(),    // 34
         closure_get_func_fn.into(),  // 35
         closure_get_env_fn.into(),   // 36
+        arr_push_fn.into(),          // 37
+        arr_pop_fn.into(),           // 38
+        arr_includes_fn.into(),      // 39
+        arr_index_of_fn.into(),      // 40
+        arr_join_fn.into(),          // 41
+        arr_concat_fn.into(),        // 42
+        arr_slice_fn.into(),         // 43
+        arr_fill_fn.into(),          // 44
+        arr_reverse_fn.into(),       // 45
+        arr_flat_fn.into(),          // 46
+        arr_init_length_fn.into(),   // 47
+        arr_get_length_fn.into(),    // 48
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -1866,6 +2041,23 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
         return Ok(format!("[exception:{handle}]"));
     }
 
+    if value::is_array(val) {
+        let ptr = resolve_array_ptr(caller, val);
+        if let Some(ptr) = ptr {
+            let len = read_array_length(caller, ptr).unwrap_or(0);
+            let mut parts = Vec::with_capacity(len as usize);
+            for i in 0..len {
+                if let Some(elem) = read_array_elem(caller, ptr, i) {
+                    parts.push(render_value(caller, elem).unwrap_or_else(|_| "?".to_string()));
+                } else {
+                    parts.push("?".to_string());
+                }
+            }
+            return Ok(format!("[{}]", parts.join(", ")));
+        }
+        return Ok("[array]".to_string());
+    }
+
     if value::is_object(val) {
         let ptr = value::decode_object_handle(val);
         return Ok(format!("[object Object:{ptr}]"));
@@ -2056,12 +2248,12 @@ fn mark_object_recursive(
         };
         let data = memory.data(&*caller);
 
-        // 读取对象头
-        if obj_ptr + 12 > data.len() {
+        // 读取对象头 — 至少需要 16 字节（proto + type + pad + capacity/length + num_props/capacity）
+        if obj_ptr + 16 > data.len() {
             return;
         }
 
-        // 读取 proto_handle
+        // 读取 proto_handle（offset 0，未改变）
         let proto_handle = u32::from_le_bytes([
             data[obj_ptr],
             data[obj_ptr + 1],
@@ -2083,57 +2275,32 @@ fn mark_object_recursive(
             }
         }
 
-        // 读取属性数量
-        let num_props = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]) as usize;
+        // 读取 type byte 决定是数组还是对象
+        let heap_type = data[obj_ptr + 4];
 
-        // 遍历属性，收集所有对象/函数引用
-        for i in 0..num_props {
-            let slot_offset = obj_ptr + 12 + i * 32;
-            if slot_offset + 32 > data.len() {
-                break;
-            }
+        if heap_type == wjsm_ir::HEAP_TYPE_ARRAY {
+            // ── 数组对象 ──
+            let len = u32::from_le_bytes([
+                data[obj_ptr + 8],
+                data[obj_ptr + 9],
+                data[obj_ptr + 10],
+                data[obj_ptr + 11],
+            ]) as usize;
 
-            // 读取 value (offset 8), getter (offset 16), setter (offset 24)
-            let value = i64::from_le_bytes([
-                data[slot_offset + 8],
-                data[slot_offset + 9],
-                data[slot_offset + 10],
-                data[slot_offset + 11],
-                data[slot_offset + 12],
-                data[slot_offset + 13],
-                data[slot_offset + 14],
-                data[slot_offset + 15],
-            ]);
-            let getter = i64::from_le_bytes([
-                data[slot_offset + 16],
-                data[slot_offset + 17],
-                data[slot_offset + 18],
-                data[slot_offset + 19],
-                data[slot_offset + 20],
-                data[slot_offset + 21],
-                data[slot_offset + 22],
-                data[slot_offset + 23],
-            ]);
-            let setter = i64::from_le_bytes([
-                data[slot_offset + 24],
-                data[slot_offset + 25],
-                data[slot_offset + 26],
-                data[slot_offset + 27],
-                data[slot_offset + 28],
-                data[slot_offset + 29],
-                data[slot_offset + 30],
-                data[slot_offset + 31],
-            ]);
-
-            // 检查并收集对象/函数引用
-            for val in [value, getter, setter] {
-                if value::is_object(val) || value::is_function(val) {
-                    let child_handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+            // 迭代 8 字节元素，收集对象/函数引用
+            for i in 0..len {
+                let elem_offset = obj_ptr + 16 + i * 8;
+                if elem_offset + 8 > data.len() {
+                    break;
+                }
+                let elem = i64::from_le_bytes([
+                    data[elem_offset], data[elem_offset+1],
+                    data[elem_offset+2], data[elem_offset+3],
+                    data[elem_offset+4], data[elem_offset+5],
+                    data[elem_offset+6], data[elem_offset+7],
+                ]);
+                if value::is_object(elem) || value::is_function(elem) {
+                    let child_handle_idx = (elem as u64 & 0xFFFF_FFFF) as usize;
                     if child_handle_idx < obj_table_count {
                         let child_slot_addr = obj_table_ptr + child_handle_idx * 4;
                         if child_slot_addr + 4 <= data.len() {
@@ -2145,6 +2312,76 @@ fn mark_object_recursive(
                             ]) as usize;
                             if child_ptr != 0 {
                                 children_to_mark.push((child_handle_idx, child_ptr));
+                            }
+                        }
+                    }
+                }
+            }
+        } else {
+            // ── 普通对象 ──
+            let num_props = u32::from_le_bytes([
+                data[obj_ptr + 12],
+                data[obj_ptr + 13],
+                data[obj_ptr + 14],
+                data[obj_ptr + 15],
+            ]) as usize;
+
+            // 遍历属性，收集所有对象/函数引用
+            // 属性槽: [name_id(4), flags(4), value(8), getter(8), setter(8)] = 32 字节
+            // 属性槽起始: ptr + 16
+            for i in 0..num_props {
+                let slot_offset = obj_ptr + 16 + i * 32;
+                if slot_offset + 32 > data.len() {
+                    break;
+                }
+
+                // 读取 value (offset 8), getter (offset 16), setter (offset 24)
+                let value = i64::from_le_bytes([
+                    data[slot_offset + 8],
+                    data[slot_offset + 9],
+                    data[slot_offset + 10],
+                    data[slot_offset + 11],
+                    data[slot_offset + 12],
+                    data[slot_offset + 13],
+                    data[slot_offset + 14],
+                    data[slot_offset + 15],
+                ]);
+                let getter = i64::from_le_bytes([
+                    data[slot_offset + 16],
+                    data[slot_offset + 17],
+                    data[slot_offset + 18],
+                    data[slot_offset + 19],
+                    data[slot_offset + 20],
+                    data[slot_offset + 21],
+                    data[slot_offset + 22],
+                    data[slot_offset + 23],
+                ]);
+                let setter = i64::from_le_bytes([
+                    data[slot_offset + 24],
+                    data[slot_offset + 25],
+                    data[slot_offset + 26],
+                    data[slot_offset + 27],
+                    data[slot_offset + 28],
+                    data[slot_offset + 29],
+                    data[slot_offset + 30],
+                    data[slot_offset + 31],
+                ]);
+
+                for val in [value, getter, setter] {
+                    if value::is_object(val) || value::is_function(val) {
+                        let child_handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+                        if child_handle_idx < obj_table_count {
+                            let child_slot_addr = obj_table_ptr + child_handle_idx * 4;
+                            if child_slot_addr + 4 <= data.len() {
+                                let child_ptr = u32::from_le_bytes([
+                                    data[child_slot_addr],
+                                    data[child_slot_addr + 1],
+                                    data[child_slot_addr + 2],
+                                    data[child_slot_addr + 3],
+                                ]) as usize;
+                                if child_ptr != 0 {
+                                    children_to_mark.push((child_handle_idx, child_ptr));
+                                }
                             }
                         }
                     }
@@ -2200,6 +2437,58 @@ fn resolve_handle_idx(caller: &mut Caller<'_, RuntimeState>, handle_idx: usize) 
     Some(ptr)
 }
 
+// ── Array helpers ──────────────────────────────────────────────────────
+
+/// 解析 TAG_ARRAY 值 → 数组对象的内存指针
+fn resolve_array_ptr(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
+    let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    resolve_handle_idx(caller, handle_idx)
+}
+
+/// 读取数组的 length 字段（offset 8）
+fn read_array_length(caller: &mut Caller<'_, RuntimeState>, ptr: usize) -> Option<u32> {
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+    let d = mem.data(&*caller);
+    if ptr + 16 > d.len() { return None; }
+    Some(u32::from_le_bytes([d[ptr+8], d[ptr+9], d[ptr+10], d[ptr+11]]))
+}
+
+fn write_array_length(caller: &mut Caller<'_, RuntimeState>, ptr: usize, len: u32) {
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return; };
+    let d = mem.data_mut(&mut *caller);
+    if ptr + 16 > d.len() { return; }
+    d[ptr+8..ptr+12].copy_from_slice(&len.to_le_bytes());
+}
+
+/// 读取数组的 capacity 字段（offset 12）
+fn read_array_capacity(caller: &mut Caller<'_, RuntimeState>, ptr: usize) -> Option<u32> {
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+    let d = mem.data(&*caller);
+    if ptr + 16 > d.len() { return None; }
+    Some(u32::from_le_bytes([d[ptr+12], d[ptr+13], d[ptr+14], d[ptr+15]]))
+}
+
+/// 读取数组元素 elements[index]（offset 16 + index * 8）
+fn read_array_elem(caller: &mut Caller<'_, RuntimeState>, ptr: usize, index: u32) -> Option<i64> {
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+    let d = mem.data(&*caller);
+    let elem_offset = ptr + 16 + (index as usize) * 8;
+    if elem_offset + 8 > d.len() { return None; }
+    Some(i64::from_le_bytes([
+        d[elem_offset], d[elem_offset+1], d[elem_offset+2], d[elem_offset+3],
+        d[elem_offset+4], d[elem_offset+5], d[elem_offset+6], d[elem_offset+7],
+    ]))
+}
+
+/// 写入数组元素
+fn write_array_elem(caller: &mut Caller<'_, RuntimeState>, ptr: usize, index: u32, val: i64) {
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return; };
+    let d = mem.data_mut(&mut *caller);
+    let elem_offset = ptr + 16 + (index as usize) * 8;
+    if elem_offset + 8 > d.len() { return; }
+    d[elem_offset..elem_offset+8].copy_from_slice(&val.to_le_bytes());
+}
+
 /// 从对象中按名称读取属性值（用于 define_property 等）
 fn read_object_property_by_name(
     caller: &mut Caller<'_, RuntimeState>,
@@ -2211,14 +2500,14 @@ fn read_object_property_by_name(
             return None;
         };
         let data = memory.data(&*caller);
-        if obj_ptr + 12 > data.len() {
+        if obj_ptr + 16 > data.len() {
             return None;
         }
         u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
         ]) as usize
     };
     let mut name_ids = Vec::with_capacity(num_props);
@@ -2228,7 +2517,7 @@ fn read_object_property_by_name(
         };
         let data = memory.data(&*caller);
         for i in 0..num_props {
-            let slot_offset = obj_ptr + 12 + i * 32;
+            let slot_offset = obj_ptr + 16 + i * 32;
             if slot_offset + 4 > data.len() {
                 break;
             }
@@ -2247,7 +2536,7 @@ fn read_object_property_by_name(
                 return None;
             };
             let data = memory.data(&*caller);
-            let slot_offset = obj_ptr + 12 + i * 32;
+            let slot_offset = obj_ptr + 16 + i * 32;
             if slot_offset + 32 > data.len() {
                 return None;
             }
@@ -2277,18 +2566,18 @@ fn find_property_slot_by_name_id(
             return None;
         };
         let data = memory.data(&*caller);
-        if obj_ptr + 12 > data.len() {
+        if obj_ptr + 16 > data.len() {
             return None;
         }
         u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
         ]) as usize
     };
     for i in 0..num_props {
-        let slot_offset = obj_ptr + 12 + i * 32;
+        let slot_offset = obj_ptr + 16 + i * 32;
         let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
             return None;
         };
@@ -2338,16 +2627,16 @@ fn enumerate_object_keys(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec
         return Vec::new();
     };
     let data = memory.data(&*caller);
-    if ptr + 12 > data.len() {
+    if ptr + 16 > data.len() {
         return Vec::new();
     }
 
     let num_props =
-        u32::from_le_bytes([data[ptr + 8], data[ptr + 9], data[ptr + 10], data[ptr + 11]]) as usize;
+        u32::from_le_bytes([data[ptr + 12], data[ptr + 13], data[ptr + 14], data[ptr + 15]]) as usize;
 
     let mut name_ids = Vec::with_capacity(num_props);
     for i in 0..num_props {
-        let slot_offset = ptr + 12 + i * 32;
+        let slot_offset = ptr + 16 + i * 32;
         if slot_offset + 4 > data.len() {
             break;
         }
@@ -2372,7 +2661,7 @@ fn enumerate_object_keys(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec
 }
 
 /// 分配描述符对象，用于 Object.getOwnPropertyDescriptor 返回值
-/// 对象格式：header(12 bytes) + 4 slots * 32 bytes = 140 bytes
+/// 对象格式：header(16 bytes) + 4 slots * 32 bytes = 144 bytes
 fn allocate_descriptor_object(
     caller: &mut Caller<'_, RuntimeState>,
     is_accessor: bool,
@@ -2403,8 +2692,8 @@ fn allocate_descriptor_object(
         g.get(&mut *caller).i32().unwrap_or(0) as usize
     };
 
-    // 对象大小：12 (header) + 4 * 32 (slots) = 140 bytes
-    let obj_size = 12 + 4 * 32;
+    // 对象大小：16 (header) + 4 * 32 (slots) = 144 bytes
+    let obj_size = 16 + 4 * 32;
     let handle_idx = obj_table_count;
 
     // 分配对象
@@ -2417,10 +2706,12 @@ fn allocate_descriptor_object(
             return None;
         }
 
-        // 初始化 header: proto=0, capacity=4, num_props=0
+        // 初始化 header: proto=0, type=OBJECT, pad=0, capacity=4, num_props=0
         data[heap_ptr..heap_ptr + 4].copy_from_slice(&0u32.to_le_bytes()); // proto
-        data[heap_ptr + 4..heap_ptr + 8].copy_from_slice(&4u32.to_le_bytes()); // capacity
-        data[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&0u32.to_le_bytes()); // num_props
+        data[heap_ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT; // type byte
+        data[heap_ptr + 5..heap_ptr + 8].fill(0); // pad bytes
+        data[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&4u32.to_le_bytes()); // capacity
+        data[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&0u32.to_le_bytes()); // num_props
 
         // 注册到 handle 表
         let slot_addr = obj_table_ptr + handle_idx * 4;
@@ -2454,12 +2745,12 @@ fn allocate_descriptor_object(
         let data = memory.data_mut(&mut *caller);
         // 读取当前 num_props
         let num_props = u32::from_le_bytes([
-            data[desc_ptr + 8],
-            data[desc_ptr + 9],
-            data[desc_ptr + 10],
-            data[desc_ptr + 11],
+            data[desc_ptr + 12],
+            data[desc_ptr + 13],
+            data[desc_ptr + 14],
+            data[desc_ptr + 15],
         ]) as usize;
-        let slot_offset = desc_ptr + 12 + num_props * 32;
+        let slot_offset = desc_ptr + 16 + num_props * 32;
         if slot_offset + 32 > data.len() {
             return None;
         }
@@ -2472,7 +2763,7 @@ fn allocate_descriptor_object(
         data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
         // 更新 num_props
         let new_num_props = (num_props + 1) as u32;
-        data[desc_ptr + 8..desc_ptr + 12].copy_from_slice(&new_num_props.to_le_bytes());
+        data[desc_ptr + 12..desc_ptr + 16].copy_from_slice(&new_num_props.to_le_bytes());
         Some(())
     };
 
