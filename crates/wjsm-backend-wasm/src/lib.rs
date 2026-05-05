@@ -279,6 +279,10 @@ impl Compiler {
         types
             .ty()
             .function(vec![ValType::I64, ValType::I64, ValType::I64, ValType::I64], vec![ValType::I64]);
+        // Type 18: (i32, i32, i32) -> () — abort_shadow_stack_overflow
+        types
+            .ty()
+            .function(vec![ValType::I32, ValType::I32, ValType::I32], vec![]);
         let mut imports = ImportSection::new();
         // Import index 0: console_log: (i64) -> ()
         imports.import("env", "console_log", EntityType::Function(0));
@@ -432,6 +436,8 @@ impl Compiler {
         imports.import("env", "arr_proto_splice", EntityType::Function(12));
         // Import index 75: arr_proto_is_array
         imports.import("env", "arr_proto_is_array", EntityType::Function(12));
+        // Import index 76: abort_shadow_stack_overflow: (i32, i32, i32) -> ()
+        imports.import("env", "abort_shadow_stack_overflow", EntityType::Function(18));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 22);
@@ -442,6 +448,7 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::F64Mod, 1);
         builtin_func_indices.insert(Builtin::F64Exp, 2);
         builtin_func_indices.insert(Builtin::Throw, 3);
+        builtin_func_indices.insert(Builtin::AbortShadowStackOverflow, 76);
         builtin_func_indices.insert(Builtin::IteratorFrom, 4);
         builtin_func_indices.insert(Builtin::IteratorNext, 5);
         builtin_func_indices.insert(Builtin::IteratorClose, 6);
@@ -531,7 +538,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 76, // 76 imports (49 existing + 27 array methods)
+            _next_import_func: 77, // 77 imports
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -3452,14 +3459,8 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
 
                 // Step 1b: 影子栈边界检查
-                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
-                self.emit(WasmInstruction::I32Const((args.len() * 8) as i32));
-                self.emit(WasmInstruction::I32Add);
-                self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
-                self.emit(WasmInstruction::I32GtU);
-                self.emit(WasmInstruction::If(BlockType::Empty));
-                self.emit(WasmInstruction::Unreachable);
-                self.emit(WasmInstruction::End);
+                self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
+
                 // Step 2: 将所有参数写入影子栈
                 for arg in args.iter() {
                     self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
@@ -3785,15 +3786,8 @@ impl Compiler {
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
         self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
         // 影子栈边界检查
-        // TODO: 替换 Unreachable 为 host abort，提供诊断信息
-        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
-        self.emit(WasmInstruction::I32Const((shadow_args.len() * 8) as i32));
-        self.emit(WasmInstruction::I32Add);
-        self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
-        self.emit(WasmInstruction::I32GtU);
-        self.emit(WasmInstruction::If(BlockType::Empty));
-        self.emit(WasmInstruction::Unreachable);
-        self.emit(WasmInstruction::End);
+        self.emit_shadow_stack_overflow_check((shadow_args.len() * 8) as i32);
+
         // 将 shadow_args 写入影子栈
         for arg in shadow_args {
             self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
@@ -4171,15 +4165,6 @@ impl Compiler {
                 }
                 Ok(())
             }
-            // ── ArraySplice (stub) ────────────────────────────────────────
-            Builtin::ArraySplice => {
-                // TODO: implement splice
-                if let Some(d) = dest {
-                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
-                }
-                Ok(())
-            }
             // ── Array prototype method calls (Type 12 imports) ─────────────
             Builtin::ArrayShift | Builtin::ArraySort
             | Builtin::ArrayAt | Builtin::ArrayCopyWithin
@@ -4193,6 +4178,9 @@ impl Compiler {
             }
             Builtin::ArrayIsArray => {
                 self.compile_proto_method_call(dest, builtin, args)
+            }
+            Builtin::AbortShadowStackOverflow => {
+                bail!("AbortShadowStackOverflow should not appear in compile_builtin_call");
             }
         }
     }
@@ -4442,6 +4430,26 @@ impl Compiler {
         max_ssa
             .max(self.next_var_local)
             .max(self.phi_locals.values().copied().max().map_or(0, |m| m + 1))
+    }
+
+    fn emit_shadow_stack_overflow_check(&mut self, arg_count_bytes: i32) {
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(arg_count_bytes));
+        self.emit(WasmInstruction::I32Add);
+        self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
+        self.emit(WasmInstruction::I32GtU);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        let func_idx = self
+            .builtin_func_indices
+            .get(&Builtin::AbortShadowStackOverflow)
+            .copied()
+            .unwrap_or(76);
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(arg_count_bytes));
+        self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
+        self.emit(WasmInstruction::Call(func_idx));
+        self.emit(WasmInstruction::Unreachable);
+        self.emit(WasmInstruction::End);
     }
 
     fn emit(&mut self, instruction: WasmInstruction<'_>) {
