@@ -1621,13 +1621,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
-            if len < cap {
-                write_array_elem(&mut caller, ptr, len, val);
-                write_array_length(&mut caller, ptr, len + 1);
-            } else {
-                // 超出容量 — 暂不处理扩容，直接忽略
-                return value::encode_undefined();
+            let mut ptr = ptr;
+            if len >= cap {
+                let new_cap = cap.max(1) * 2;
+                let needed = (len + 1).max(new_cap);
+                if let Some(new_ptr) = grow_array(&mut caller, ptr, arr, needed) {
+                    ptr = new_ptr;
+                } else {
+                    return value::encode_undefined();
+                }
             }
+            write_array_elem(&mut caller, ptr, len, val);
+            write_array_length(&mut caller, ptr, len + 1);
             value::encode_f64((len + 1) as f64)
         },
     );
@@ -1895,9 +1900,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
             let count = args_count as u32;
+            let mut ptr = ptr;
             if len + count > cap {
-                // TODO: 动态扩容 — Array.prototype.push 必须支持自动增长
-                return value::encode_undefined();
+                let new_cap = cap.max(1) * 2;
+                let needed = (len + count).max(new_cap);
+                if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed) {
+                    ptr = new_ptr;
+                } else {
+                    return value::encode_undefined();
+                }
             }
             for i in 0..count {
                 let val = read_shadow_arg(&mut caller, args_base, i);
@@ -2202,9 +2213,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
             let new_len = len + args_count as u32;
+            let mut ptr = ptr;
             if new_len > cap {
-                // TODO: 动态扩容 — Array.prototype.unshift 必须支持自动增长
-                return value::encode_undefined();
+                let new_cap = cap.max(1) * 2;
+                let needed = new_len.max(new_cap);
+                if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed) {
+                    ptr = new_ptr;
+                } else {
+                    return value::encode_undefined();
+                }
             }
             // 右移现有元素
             for i in (0..len).rev() {
@@ -2230,43 +2247,38 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as usize;
             if len <= 1 { return this_val; }
+            // 读全部元素到 Vec
+            let mut elems: Vec<i64> = (0..len)
+                .map(|i| read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined()))
+                .collect();
             if args_count > 0 && value::is_callable(read_shadow_arg(&mut caller, args_base, 0)) {
-                // TODO: 冒泡排序 O(n²)，应替换为 TimSort 或 at least quicksort
-                // 带比较器回调的排序
                 let cmp = read_shadow_arg(&mut caller, args_base, 0);
-                for i in 0..len {
-                    for j in 0..len - 1 - i {
-                        let a = read_array_elem(&mut caller, ptr, j as u32).unwrap_or(value::encode_undefined());
-                        let b = read_array_elem(&mut caller, ptr, (j + 1) as u32).unwrap_or(value::encode_undefined());
-                        let result = match call_wasm_callback(&mut caller, cmp, value::encode_undefined(), &[a, b]) {
-                            Ok(r) => r,
-                            Err(_) => value::encode_f64(0.0),
-                        };
-                        let cmp_val = f64::from_bits(result as u64);
-                        if cmp_val > 0.0 {
-                            write_array_elem(&mut caller, ptr, j as u32, b);
-                            write_array_elem(&mut caller, ptr, (j + 1) as u32, a);
-                        }
-                    }
-                }
+                merge_sort_by(&mut elems, &mut |a, b| -> std::cmp::Ordering {
+                    let result = call_wasm_callback(&mut caller, cmp, value::encode_undefined(), &[*a, *b])
+                        .unwrap_or(value::encode_f64(0.0));
+                    let v = f64::from_bits(result as u64);
+                    if v > 0.0 { std::cmp::Ordering::Greater }
+                    else if v < 0.0 { std::cmp::Ordering::Less }
+                    else { std::cmp::Ordering::Equal }
+                });
             } else {
-                // TODO: render_value 每次调用都会在 runtime_strings 中分配，大数组会导致内存泄漏
-                // 默认字符串排序
-                let mut pairs: Vec<(i64, String)> = (0..len)
-                    .filter_map(|i| {
-                        let elem = read_array_elem(&mut caller, ptr, i as u32)?;
-                        let s = render_value(&mut caller, elem).unwrap_or_default();
-                        Some((elem, s))
-                    })
+                let keys: Vec<String> = elems.iter()
+                    .map(|e| render_value(&mut caller, *e).unwrap_or_default())
                     .collect();
-                pairs.sort_by(|a, b| a.1.cmp(&b.1));
-                for (i, (elem, _)) in pairs.iter().enumerate() {
-                    write_array_elem(&mut caller, ptr, i as u32, *elem);
-                }
-                // 填充剩余元素为 undefined
-                for i in pairs.len()..len {
-                    write_array_elem(&mut caller, ptr, i as u32, value::encode_undefined());
-                }
+                // 带原始 index 的稳定排序
+                let mut indexed: Vec<(usize, &i64)> = (0..len).map(|i| (i, &elems[i])).collect();
+                indexed.sort_by(|(ia, _), (ib, _)| {
+                    let ka = &keys[*ia];
+                    let kb = &keys[*ib];
+                    let cmp = ka.cmp(kb);
+                    if cmp == std::cmp::Ordering::Equal { ia.cmp(ib) } else { cmp }
+                });
+                let sorted: Vec<i64> = indexed.iter().map(|(_, e)| **e).collect();
+                elems = sorted;
+            }
+            // 写回
+            for (i, &elem) in elems.iter().enumerate() {
+                write_array_elem(&mut caller, ptr, i as u32, elem);
             }
             this_val
         },
@@ -2655,9 +2667,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let insert_count = (args_count - 2).max(0) as i32;
             let new_len = len - actual_delete + insert_count;
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0) as i32;
+            let mut ptr = ptr;
             if new_len > cap {
-                // TODO: 动态扩容 — Array.prototype.splice 必须支持自动增长
-                return value::encode_undefined();
+                let new_cap = cap.max(1) * 2;
+                let needed = new_len.max(new_cap);
+                if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed as u32) {
+                    ptr = new_ptr;
+                } else {
+                    return value::encode_undefined();
+                }
             }
             // 收集被删除的元素
             let deleted_arr = alloc_array(&mut caller, actual_delete as u32);
@@ -2708,6 +2726,29 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_bool(value::is_array(val))
         },
     );
+    
+    // ── abort_shadow_stack_overflow (#76) ─────────────────────────────
+    let abort_shadow_stack_overflow_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, shadow_sp: i32, args_bytes: i32, stack_end: i32| {
+            let mut buffer = caller
+                .data()
+                .output
+                .lock()
+                .expect("runtime output buffer mutex should not be poisoned");
+            writeln!(
+                &mut *buffer,
+                "shadow stack overflow: sp=0x{shadow_sp:x} + {args_bytes} bytes > end=0x{stack_end:x}"
+            ).ok();
+            *caller
+                .data()
+                .runtime_error
+                .lock()
+                .expect("runtime error mutex") =
+                Some(format!("shadow stack overflow: sp={shadow_sp} + {args_bytes} > end={stack_end}"));
+        },
+    );
+    
     let imports = [
         console_log.into(),          // 0
         f64_mod.into(),              // 1
@@ -2785,6 +2826,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         arr_proto_flat_map_fn.into(),    // 73
         arr_proto_splice_fn.into(),      // 74
         arr_proto_is_array_fn.into(),    // 75
+        abort_shadow_stack_overflow_fn.into(), // 76
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -3447,6 +3489,75 @@ fn write_array_elem(caller: &mut Caller<'_, RuntimeState>, ptr: usize, index: u3
     let elem_offset = ptr + 16 + (index as usize) * 8;
     if elem_offset + 8 > d.len() { return; }
     d[elem_offset..elem_offset+8].copy_from_slice(&val.to_le_bytes());
+}
+
+/// 数组动态扩容 — 遵循现有对象扩容的 capacity × 2 倍增策略
+fn grow_array(caller: &mut Caller<'_, RuntimeState>, ptr: usize, this_val: i64, new_cap: u32) -> Option<usize> {
+    let heap_ptr = {
+        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return None; };
+        g.get(&mut *caller).i32().unwrap_or(0) as usize
+    };
+    let obj_table_ptr = {
+        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return None; };
+        g.get(&mut *caller).i32().unwrap_or(0) as usize
+    };
+    let new_size = 16 + new_cap as usize * 8;
+    let old_size = {
+        let cap = read_array_capacity(caller, ptr)?;
+        16 + cap as usize * 8
+    };
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+    let d = mem.data_mut(&mut *caller);
+    if heap_ptr + new_size > d.len() { return None; }
+    d.copy_within(ptr..ptr + old_size, heap_ptr);
+    d[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&new_cap.to_le_bytes());
+    let handle_idx = (this_val as u64 & 0xFFFF_FFFF) as usize;
+    let slot_addr = obj_table_ptr + handle_idx * 4;
+    if slot_addr + 4 <= d.len() {
+        d[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
+    }
+    if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+        let _ = g.set(&mut *caller, Val::I32((heap_ptr + new_size) as i32));
+    }
+    Some(heap_ptr)
+}
+
+/// 自顶向下迭代 merge sort，稳定 O(n log n)
+fn merge_sort_by<T: Copy>(slice: &mut [T], cmp: &mut dyn FnMut(&T, &T) -> std::cmp::Ordering) {
+    let n = slice.len();
+    if n <= 1 { return; }
+    let mut buf: Vec<T> = Vec::with_capacity(n);
+    let mut width = 1;
+    while width < n {
+        let mut i = 0;
+        while i < n {
+            let mid = (i + width).min(n);
+            let end = (i + 2 * width).min(n);
+            let mut left = i;
+            let mut right = mid;
+            while left < mid && right < end {
+                if cmp(&slice[left], &slice[right]) != std::cmp::Ordering::Greater {
+                    buf.push(slice[left]);
+                    left += 1;
+                } else {
+                    buf.push(slice[right]);
+                    right += 1;
+                }
+            }
+            while left < mid {
+                buf.push(slice[left]);
+                left += 1;
+            }
+            while right < end {
+                buf.push(slice[right]);
+                right += 1;
+            }
+            slice[i..end].copy_from_slice(&buf[..end - i]);
+            buf.clear();
+            i += 2 * width;
+        }
+        width *= 2;
+    }
 }
 
 /// 从对象中按名称读取属性值（用于 define_property 等）
