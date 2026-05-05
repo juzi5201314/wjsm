@@ -114,6 +114,7 @@ The root `Cargo.toml` defines workspace deps at shared versions; individual crat
 - Unreachable code (e.g., statements after `return`, `throw`, `break`, `continue`) is **valid JavaScript** and must not cause compile errors. The compiler should skip unreachable statements silently or emit warnings, but never reject them.
 - Early errors defined by the specification (e.g., duplicate parameter names in strict mode, `super` outside class) must be detected and reported.
 - Non-standard extensions or deviations from the specification require explicit documentation and justification.
+  - **No PoC compromises.** Every implementation **MUST** be spec-complete for the feature being added. The project is not a prototype — it is a runtime targeting full specification compliance. Partial stubs, deliberately skipped edge cases, "will fix later" TODOs, knowingly incomplete implementations, and speculative shortcuts are strictly prohibited. If a feature cannot be implemented correctly for all cases defined by the spec, it **MUST NOT** be merged.
 
 ### Rust Edition & Style
 - Rust 2024 edition; edition is set once in `[workspace.package]` and inherited by all crates.
@@ -158,6 +159,18 @@ The root `Cargo.toml` defines workspace deps at shared versions; individual crat
   }
   ```
 
+
+### Problem Resolution
+
+When encountering an implementation challenge or semantic ambiguity, follow this escalation ladder. Each step **MUST** be exhausted before proceeding to the next.
+
+1. **Explore the codebase first.** Search for existing patterns, reference implementations, or prior discussions using `lsp references`, `search`, `ast_grep`, and `gitnexus_query`. Understand how related features are implemented before designing a solution.
+
+2. **Consult the ECMAScript specification.** Read the relevant section of the spec. The spec is the single source of truth — do not guess, infer behavior from other engines' bugs, or rely on secondhand knowledge.
+
+3. **Study real-world engines.** If the spec is unclear or the implementation path is uncertain, examine how V8 (via source), Bun, or Deno handle the same feature. Use `opensrc` to fetch and study relevant source code or test suites. Document what each engine does and why.
+
+4. **Ask the user last.** Only escalate when the first three steps have been exhausted and a genuine ambiguity remains. When asking, provide: (a) what you found in the codebase, (b) what the spec says, (c) what V8/Bun/Deno each do and why they differ (if they do), and (d) the specific open question with your analysis and recommended resolution.
 ## Testing & QA
 
 Three-tier test strategy:
