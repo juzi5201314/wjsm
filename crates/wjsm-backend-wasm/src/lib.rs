@@ -283,6 +283,10 @@ impl Compiler {
         types
             .ty()
             .function(vec![ValType::I32, ValType::I32, ValType::I32], vec![]);
+        // Type 19: (i32, i32) -> (i64) — string_concat_va
+        types
+            .ty()
+            .function(vec![ValType::I32, ValType::I32], vec![ValType::I64]);
         let mut imports = ImportSection::new();
         // Import index 0: console_log: (i64) -> ()
         imports.import("env", "console_log", EntityType::Function(0));
@@ -318,137 +322,139 @@ impl Compiler {
         imports.import("env", "op_instanceof", EntityType::Function(2));
         // Import index 16: string_concat: (i64, i64) -> (i64)
         imports.import("env", "string_concat", EntityType::Function(11));
-        // Import index 17: define_property: (i64, i32, i64) -> ()
+        // Import index 17: string_concat_va: (i32, i32) -> (i64)
+        imports.import("env", "string_concat_va", EntityType::Function(19));
+        // Import index 18: define_property: (i64, i32, i64) -> ()
         imports.import("env", "define_property", EntityType::Function(9));
-        // Import index 18: get_own_prop_desc: (i64, i32) -> (i64)
+        // Import index 19: get_own_prop_desc: (i64, i32) -> (i64)
         imports.import("env", "get_own_prop_desc", EntityType::Function(8));
-        // Import index 19: abstract_eq: (i64, i64) -> (i64)
+        // Import index 20: abstract_eq: (i64, i64) -> (i64)
         imports.import("env", "abstract_eq", EntityType::Function(2));
-        // Import index 20: abstract_compare: (i64, i64) -> (i64)
+        // Import index 21: abstract_compare: (i64, i64) -> (i64)
         imports.import("env", "abstract_compare", EntityType::Function(2));
-        // Import index 21: gc_collect: (i32) -> (i32)
+        // Import index 22: gc_collect: (i32) -> (i32)
         imports.import("env", "gc_collect", EntityType::Function(7)); // Type 7 = (i32) -> i32
-        // Import index 22: console_error: (i64) -> ()
+        // Import index 23: console_error: (i64) -> ()
         imports.import("env", "console_error", EntityType::Function(0));
-        // Import index 23: console_warn: (i64) -> ()
+        // Import index 24: console_warn: (i64) -> ()
         imports.import("env", "console_warn", EntityType::Function(0));
-        // Import index 24: console_info: (i64) -> ()
+        // Import index 25: console_info: (i64) -> ()
         imports.import("env", "console_info", EntityType::Function(0));
-        // Import index 25: console_debug: (i64) -> ()
+        // Import index 26: console_debug: (i64) -> ()
         imports.import("env", "console_debug", EntityType::Function(0));
-        // Import index 26: console_trace: (i64) -> ()
+        // Import index 27: console_trace: (i64) -> ()
         imports.import("env", "console_trace", EntityType::Function(0));
-        // Import index 27: set_timeout: (i64, i64) -> (i64)
+        // Import index 28: set_timeout: (i64, i64) -> (i64)
         imports.import("env", "set_timeout", EntityType::Function(2));
-        // Import index 28: clear_timeout: (i64) -> ()
+        // Import index 29: clear_timeout: (i64) -> ()
         imports.import("env", "clear_timeout", EntityType::Function(0));
-        // Import index 29: set_interval: (i64, i64) -> (i64)
+        // Import index 30: set_interval: (i64, i64) -> (i64)
         imports.import("env", "set_interval", EntityType::Function(2));
-        // Import index 30: clear_interval: (i64) -> ()
+        // Import index 31: clear_interval: (i64) -> ()
         imports.import("env", "clear_interval", EntityType::Function(0));
-        // Import index 31: fetch: (i64) -> (i64)
+        // Import index 32: fetch: (i64) -> (i64)
         imports.import("env", "fetch", EntityType::Function(3));
-        // Import index 32: json_stringify: (i64) -> (i64)
+        // Import index 33: json_stringify: (i64) -> (i64)
         imports.import("env", "json_stringify", EntityType::Function(3));
-        // Import index 33: json_parse: (i64) -> (i64)
+        // Import index 34: json_parse: (i64) -> (i64)
         imports.import("env", "json_parse", EntityType::Function(3));
-        // Import index 34: closure_create: (i32, i64) -> (i64)
+        // Import index 35: closure_create: (i32, i64) -> (i64)
         imports.import("env", "closure_create", EntityType::Function(13));
-        // Import index 35: closure_get_func: (i32) -> (i32)
+        // Import index 36: closure_get_func: (i32) -> (i32)
         imports.import("env", "closure_get_func", EntityType::Function(14));
-        // Import index 36: closure_get_env: (i32) -> (i64)
+        // Import index 37: closure_get_env: (i32) -> (i64)
         imports.import("env", "closure_get_env", EntityType::Function(15));
-        // Import index 37: arr_push: (i64, i64) -> (i64)
+        // Import index 38: arr_push: (i64, i64) -> (i64)
         imports.import("env", "arr_push", EntityType::Function(2));
-        // Import index 38: arr_pop: (i64) -> (i64)
+        // Import index 39: arr_pop: (i64) -> (i64)
         imports.import("env", "arr_pop", EntityType::Function(3));
-        // Import index 39: arr_includes: (i64, i64) -> (i64)
+        // Import index 40: arr_includes: (i64, i64) -> (i64)
         imports.import("env", "arr_includes", EntityType::Function(2));
-        // Import index 40: arr_index_of: (i64, i64, i64) -> (i64)
+        // Import index 41: arr_index_of: (i64, i64, i64) -> (i64)
         imports.import("env", "arr_index_of", EntityType::Function(16));
-        // Import index 41: arr_join: (i64, i64) -> (i64)
+        // Import index 42: arr_join: (i64, i64) -> (i64)
         imports.import("env", "arr_join", EntityType::Function(2));
-        // Import index 42: arr_concat: (i64, i64) -> (i64)
+        // Import index 43: arr_concat: (i64, i64) -> (i64)
         imports.import("env", "arr_concat", EntityType::Function(2));
-        // Import index 43: arr_slice: (i64, i64, i64) -> (i64)
+        // Import index 44: arr_slice: (i64, i64, i64) -> (i64)
         imports.import("env", "arr_slice", EntityType::Function(16));
-        // Import index 44: arr_fill: (i64, i64, i64, i64) -> (i64)
+        // Import index 45: arr_fill: (i64, i64, i64, i64) -> (i64)
         imports.import("env", "arr_fill", EntityType::Function(17));
-        // Import index 45: arr_reverse: (i64) -> (i64)
+        // Import index 46: arr_reverse: (i64) -> (i64)
         imports.import("env", "arr_reverse", EntityType::Function(3));
-        // Import index 46: arr_flat: (i64, i64) -> (i64)
+        // Import index 47: arr_flat: (i64, i64) -> (i64)
         imports.import("env", "arr_flat", EntityType::Function(2));
-        // Import index 47: arr_init_length: (i64, i64) -> (i64)
+        // Import index 48: arr_init_length: (i64, i64) -> (i64)
         imports.import("env", "arr_init_length", EntityType::Function(2));
-        // Import index 48: arr_get_length: (i64) -> (i64)
+        // Import index 49: arr_get_length: (i64) -> (i64)
         imports.import("env", "arr_get_length", EntityType::Function(3));
-        // Import index 49: arr_proto_push: (i64, i64, i32, i32) -> (i64)
+        // Import index 50: arr_proto_push: (i64, i64, i32, i32) -> (i64)
         imports.import("env", "arr_proto_push", EntityType::Function(12));
-        // Import index 50: arr_proto_pop
+        // Import index 51: arr_proto_pop
         imports.import("env", "arr_proto_pop", EntityType::Function(12));
-        // Import index 51: arr_proto_includes
+        // Import index 52: arr_proto_includes
         imports.import("env", "arr_proto_includes", EntityType::Function(12));
-        // Import index 52: arr_proto_index_of
+        // Import index 53: arr_proto_index_of
         imports.import("env", "arr_proto_index_of", EntityType::Function(12));
-        // Import index 53: arr_proto_join
+        // Import index 54: arr_proto_join
         imports.import("env", "arr_proto_join", EntityType::Function(12));
-        // Import index 54: arr_proto_concat
+        // Import index 55: arr_proto_concat
         imports.import("env", "arr_proto_concat", EntityType::Function(12));
-        // Import index 55: arr_proto_slice
+        // Import index 56: arr_proto_slice
         imports.import("env", "arr_proto_slice", EntityType::Function(12));
-        // Import index 56: arr_proto_fill
+        // Import index 57: arr_proto_fill
         imports.import("env", "arr_proto_fill", EntityType::Function(12));
-        // Import index 57: arr_proto_reverse
+        // Import index 58: arr_proto_reverse
         imports.import("env", "arr_proto_reverse", EntityType::Function(12));
-        // Import index 58: arr_proto_flat
+        // Import index 59: arr_proto_flat
         imports.import("env", "arr_proto_flat", EntityType::Function(12));
-        // Import index 59: arr_proto_shift
+        // Import index 60: arr_proto_shift
         imports.import("env", "arr_proto_shift", EntityType::Function(12));
-        // Import index 60: arr_proto_unshift
+        // Import index 61: arr_proto_unshift
         imports.import("env", "arr_proto_unshift", EntityType::Function(12));
-        // Import index 61: arr_proto_sort
+        // Import index 62: arr_proto_sort
         imports.import("env", "arr_proto_sort", EntityType::Function(12));
-        // Import index 62: arr_proto_at
+        // Import index 63: arr_proto_at
         imports.import("env", "arr_proto_at", EntityType::Function(12));
-        // Import index 63: arr_proto_copy_within
+        // Import index 64: arr_proto_copy_within
         imports.import("env", "arr_proto_copy_within", EntityType::Function(12));
-        // Import index 64: arr_proto_for_each
+        // Import index 65: arr_proto_for_each
         imports.import("env", "arr_proto_for_each", EntityType::Function(12));
-        // Import index 65: arr_proto_map
+        // Import index 66: arr_proto_map
         imports.import("env", "arr_proto_map", EntityType::Function(12));
-        // Import index 66: arr_proto_filter
+        // Import index 67: arr_proto_filter
         imports.import("env", "arr_proto_filter", EntityType::Function(12));
-        // Import index 67: arr_proto_reduce
+        // Import index 68: arr_proto_reduce
         imports.import("env", "arr_proto_reduce", EntityType::Function(12));
-        // Import index 68: arr_proto_reduce_right
+        // Import index 69: arr_proto_reduce_right
         imports.import("env", "arr_proto_reduce_right", EntityType::Function(12));
-        // Import index 69: arr_proto_find
+        // Import index 70: arr_proto_find
         imports.import("env", "arr_proto_find", EntityType::Function(12));
-        // Import index 70: arr_proto_find_index
+        // Import index 71: arr_proto_find_index
         imports.import("env", "arr_proto_find_index", EntityType::Function(12));
-        // Import index 71: arr_proto_some
+        // Import index 72: arr_proto_some
         imports.import("env", "arr_proto_some", EntityType::Function(12));
-        // Import index 72: arr_proto_every
+        // Import index 73: arr_proto_every
         imports.import("env", "arr_proto_every", EntityType::Function(12));
-        // Import index 73: arr_proto_flat_map
+        // Import index 74: arr_proto_flat_map
         imports.import("env", "arr_proto_flat_map", EntityType::Function(12));
-        // Import index 74: arr_proto_splice
+        // Import index 75: arr_proto_splice
         imports.import("env", "arr_proto_splice", EntityType::Function(12));
-        // Import index 75: arr_proto_is_array
+        // Import index 76: arr_proto_is_array
         imports.import("env", "arr_proto_is_array", EntityType::Function(12));
-        // Import index 76: abort_shadow_stack_overflow: (i32, i32, i32) -> ()
+        // Import index 77: abort_shadow_stack_overflow: (i32, i32, i32) -> ()
         imports.import("env", "abort_shadow_stack_overflow", EntityType::Function(18));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
-        builtin_func_indices.insert(Builtin::ConsoleError, 22);
-        builtin_func_indices.insert(Builtin::ConsoleWarn, 23);
-        builtin_func_indices.insert(Builtin::ConsoleInfo, 24);
-        builtin_func_indices.insert(Builtin::ConsoleDebug, 25);
-        builtin_func_indices.insert(Builtin::ConsoleTrace, 26);
+        builtin_func_indices.insert(Builtin::ConsoleError, 23);
+        builtin_func_indices.insert(Builtin::ConsoleWarn, 24);
+        builtin_func_indices.insert(Builtin::ConsoleInfo, 25);
+        builtin_func_indices.insert(Builtin::ConsoleDebug, 26);
+        builtin_func_indices.insert(Builtin::ConsoleTrace, 27);
         builtin_func_indices.insert(Builtin::F64Mod, 1);
         builtin_func_indices.insert(Builtin::F64Exp, 2);
         builtin_func_indices.insert(Builtin::Throw, 3);
-        builtin_func_indices.insert(Builtin::AbortShadowStackOverflow, 76);
+        builtin_func_indices.insert(Builtin::AbortShadowStackOverflow, 77);
         builtin_func_indices.insert(Builtin::IteratorFrom, 4);
         builtin_func_indices.insert(Builtin::IteratorNext, 5);
         builtin_func_indices.insert(Builtin::IteratorClose, 6);
@@ -461,47 +467,47 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::TypeOf, 13);
         builtin_func_indices.insert(Builtin::In, 14);
         builtin_func_indices.insert(Builtin::InstanceOf, 15);
-        builtin_func_indices.insert(Builtin::DefineProperty, 17);
-        builtin_func_indices.insert(Builtin::GetOwnPropDesc, 18);
-        builtin_func_indices.insert(Builtin::AbstractEq, 19);
-        builtin_func_indices.insert(Builtin::AbstractCompare, 20);
-        builtin_func_indices.insert(Builtin::SetTimeout, 27);
-        builtin_func_indices.insert(Builtin::ClearTimeout, 28);
-        builtin_func_indices.insert(Builtin::SetInterval, 29);
-        builtin_func_indices.insert(Builtin::ClearInterval, 30);
-        builtin_func_indices.insert(Builtin::Fetch, 31);
-        builtin_func_indices.insert(Builtin::JsonStringify, 32);
-        builtin_func_indices.insert(Builtin::JsonParse, 33);
-        builtin_func_indices.insert(Builtin::ArrayPush, 37);
-        builtin_func_indices.insert(Builtin::ArrayPop, 38);
-        builtin_func_indices.insert(Builtin::ArrayIncludes, 39);
-        builtin_func_indices.insert(Builtin::ArrayIndexOf, 40);
-        builtin_func_indices.insert(Builtin::ArrayJoin, 41);
-        builtin_func_indices.insert(Builtin::ArrayConcat, 42);
-        builtin_func_indices.insert(Builtin::ArraySlice, 43);
-        builtin_func_indices.insert(Builtin::ArrayFill, 44);
-        builtin_func_indices.insert(Builtin::ArrayReverse, 45);
-        builtin_func_indices.insert(Builtin::ArrayFlat, 58);
-        builtin_func_indices.insert(Builtin::ArrayInitLength, 47);
-        builtin_func_indices.insert(Builtin::ArrayGetLength, 48);
-        builtin_func_indices.insert(Builtin::ArrayShift, 59);
-        builtin_func_indices.insert(Builtin::ArrayUnshiftVa, 60);
-        builtin_func_indices.insert(Builtin::ArraySort, 61);
-        builtin_func_indices.insert(Builtin::ArrayAt, 62);
-        builtin_func_indices.insert(Builtin::ArrayCopyWithin, 63);
-        builtin_func_indices.insert(Builtin::ArrayForEach, 64);
-        builtin_func_indices.insert(Builtin::ArrayMap, 65);
-        builtin_func_indices.insert(Builtin::ArrayFilter, 66);
-        builtin_func_indices.insert(Builtin::ArrayReduce, 67);
-        builtin_func_indices.insert(Builtin::ArrayReduceRight, 68);
-        builtin_func_indices.insert(Builtin::ArrayFind, 69);
-        builtin_func_indices.insert(Builtin::ArrayFindIndex, 70);
-        builtin_func_indices.insert(Builtin::ArraySome, 71);
-        builtin_func_indices.insert(Builtin::ArrayEvery, 72);
-        builtin_func_indices.insert(Builtin::ArrayFlatMap, 73);
-        builtin_func_indices.insert(Builtin::ArraySpliceVa, 74);
-        builtin_func_indices.insert(Builtin::ArrayIsArray, 75);
-        builtin_func_indices.insert(Builtin::ArrayConcatVa, 54);
+        builtin_func_indices.insert(Builtin::DefineProperty, 18);
+        builtin_func_indices.insert(Builtin::GetOwnPropDesc, 19);
+        builtin_func_indices.insert(Builtin::AbstractEq, 20);
+        builtin_func_indices.insert(Builtin::AbstractCompare, 21);
+        builtin_func_indices.insert(Builtin::SetTimeout, 28);
+        builtin_func_indices.insert(Builtin::ClearTimeout, 29);
+        builtin_func_indices.insert(Builtin::SetInterval, 30);
+        builtin_func_indices.insert(Builtin::ClearInterval, 31);
+        builtin_func_indices.insert(Builtin::Fetch, 32);
+        builtin_func_indices.insert(Builtin::JsonStringify, 33);
+        builtin_func_indices.insert(Builtin::JsonParse, 34);
+        builtin_func_indices.insert(Builtin::ArrayPush, 38);
+        builtin_func_indices.insert(Builtin::ArrayPop, 39);
+        builtin_func_indices.insert(Builtin::ArrayIncludes, 40);
+        builtin_func_indices.insert(Builtin::ArrayIndexOf, 41);
+        builtin_func_indices.insert(Builtin::ArrayJoin, 42);
+        builtin_func_indices.insert(Builtin::ArrayConcat, 43);
+        builtin_func_indices.insert(Builtin::ArraySlice, 44);
+        builtin_func_indices.insert(Builtin::ArrayFill, 45);
+        builtin_func_indices.insert(Builtin::ArrayReverse, 46);
+        builtin_func_indices.insert(Builtin::ArrayFlat, 59);
+        builtin_func_indices.insert(Builtin::ArrayInitLength, 48);
+        builtin_func_indices.insert(Builtin::ArrayGetLength, 49);
+        builtin_func_indices.insert(Builtin::ArrayShift, 60);
+        builtin_func_indices.insert(Builtin::ArrayUnshiftVa, 61);
+        builtin_func_indices.insert(Builtin::ArraySort, 62);
+        builtin_func_indices.insert(Builtin::ArrayAt, 63);
+        builtin_func_indices.insert(Builtin::ArrayCopyWithin, 64);
+        builtin_func_indices.insert(Builtin::ArrayForEach, 65);
+        builtin_func_indices.insert(Builtin::ArrayMap, 66);
+        builtin_func_indices.insert(Builtin::ArrayFilter, 67);
+        builtin_func_indices.insert(Builtin::ArrayReduce, 68);
+        builtin_func_indices.insert(Builtin::ArrayReduceRight, 69);
+        builtin_func_indices.insert(Builtin::ArrayFind, 70);
+        builtin_func_indices.insert(Builtin::ArrayFindIndex, 71);
+        builtin_func_indices.insert(Builtin::ArraySome, 72);
+        builtin_func_indices.insert(Builtin::ArrayEvery, 73);
+        builtin_func_indices.insert(Builtin::ArrayFlatMap, 74);
+        builtin_func_indices.insert(Builtin::ArraySpliceVa, 75);
+        builtin_func_indices.insert(Builtin::ArrayIsArray, 76);
+        builtin_func_indices.insert(Builtin::ArrayConcatVa, 55);
 
         let functions = FunctionSection::new();
 
@@ -538,7 +544,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 77, // 77 imports
+            _next_import_func: 78, // 78 imports
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -561,14 +567,14 @@ impl Compiler {
             string_concat_scratch_idx: 0,
             shadow_sp_global_idx: 0,
             shadow_sp_scratch_idx: 0,
-            gc_collect_func_idx: 21,
+            gc_collect_func_idx: 22,
             alloc_counter_global_idx: 0,
             object_heap_start_global_idx: 6,
             num_ir_functions_global_idx: 7,
             shadow_stack_end_global_idx: 8,
-            closure_create_func_idx: 34,
-            closure_get_func_idx: 35,
-            closure_get_env_idx: 36,
+            closure_create_func_idx: 35,
+            closure_get_func_idx: 36,
+            closure_get_env_idx: 37,
             array_proto_handle_global_idx: 0,
             arr_proto_table_base: 0,
         }
@@ -688,9 +694,9 @@ impl Compiler {
         self.functions.function(9); // Type 9: (i64, i32, i64) -> ()
         self.function_table.push(self._next_import_func);
         self._next_import_func += 1;
-        // Register array prototype method imports in function table (imports 49-75)
+        // Register array prototype method imports in function table (imports 50-76)
         let arr_proto_base = self.function_table.len() as u32;
-        for import_idx in 49u32..=75u32 {
+        for import_idx in 50u32..=76u32 {
             self.function_table.push(import_idx);
         }
         self.arr_proto_table_base = arr_proto_base;
@@ -3678,6 +3684,9 @@ impl Compiler {
 				self.emit(WasmInstruction::Call(self.elem_set_func_idx));
 				Ok(())
 			}
+			Instruction::StringConcatVa { dest, parts } => {
+				self.compile_string_concat_va(dest, parts)
+			}
         }
     }
 
@@ -3824,6 +3833,39 @@ impl Compiler {
         if let Some(d) = dest {
             self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
         }
+        Ok(())
+    }
+
+    fn compile_string_concat_va(&mut self, dest: &ValueId, parts: &[ValueId]) -> Result<()> {
+        // 保存 shadow_sp 基址
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+        // 影子栈边界检查
+        self.emit_shadow_stack_overflow_check((parts.len() * 8) as i32);
+        // 将 parts 写入影子栈
+        for part in parts {
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::LocalGet(self.local_idx(part.0)));
+            self.emit(WasmInstruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::I32Const(8));
+            self.emit(WasmInstruction::I32Add);
+            self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+        }
+        // 推入 string_concat_va 参数: args_base, args_count
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(parts.len() as i32));
+        // 调用 import 17: string_concat_va
+        self.emit(WasmInstruction::Call(17));
+        // 先保存返回值
+        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+        // 恢复 shadow_sp
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
         Ok(())
     }
 
@@ -4576,6 +4618,9 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
         Instruction::NewArray { dest, capacity: _ } => dest.0,
         Instruction::GetElem { dest, object, index } => dest.0.max(object.0).max(index.0),
         Instruction::SetElem { object, index, value } => object.0.max(index.0).max(value.0),
+        Instruction::StringConcatVa { dest, parts } => {
+            parts.iter().map(|v| v.0).max().unwrap_or(0).max(dest.0)
+        }
     }
 }
 

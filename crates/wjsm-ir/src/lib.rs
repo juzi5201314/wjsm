@@ -278,6 +278,10 @@ pub enum Instruction {
         builtin: Builtin,
         args: Vec<ValueId>,
     },
+    StringConcatVa {
+        dest: ValueId,
+        parts: Vec<ValueId>,
+    },
     LoadVar {
         dest: ValueId,
         name: String,
@@ -376,6 +380,16 @@ impl fmt::Display for Instruction {
                     write!(formatter, "{arg}")?;
                 }
                 formatter.write_char(')')
+            }
+            Self::StringConcatVa { dest, parts } => {
+                write!(formatter, "{dest} = string_concat_va [")?;
+                for (index, part) in parts.iter().enumerate() {
+                    if index > 0 {
+                        formatter.write_str(", ")?;
+                    }
+                    write!(formatter, "{part}")?;
+                }
+                formatter.write_char(']')
             }
             Self::LoadVar { dest, name } => {
                 write!(formatter, "{dest} = load var {name}")

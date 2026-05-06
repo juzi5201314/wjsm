@@ -55,11 +55,11 @@
 - [x] **数组方法（map/filter/reduce/reduceRight/find/findIndex/some/every/forEach/flatMap/at/copyWithin/sort/splice/shift/unshift/Array.isArray）** — 全部 Array.prototype 方法和 Array.isArray 的运行时宿主函数实现。影响层：IR + WASM 后端 + 运行时
 - [x] **数组方法调用优化（语义层拦截）** — 在 `lower_call_expr` 中识别 `a.filter(callback)` 模式，发出 `CallBuiltin` 代替 `Call`，跳过运行时属性解析，直接跳转宿主函数。影响层：语义
 
-### 块 E：模板字符串
+### 块 E：模板字符串 ✅
 
 依赖：块 A 字符串拼接（`string_concat` 完善后）。
 
-- [ ] **模板字符串 `` `hello ${world}` ``** — 语义层将模板字符串 lowering 为一系列 `string_concat` 调用（静态段 + 动态表达式）。影响层：语义
+- [x] **模板字符串 `` `hello ${world}` ``** — 语义层通过 `StringConcatVa` 新 IR 指令实现，一次宿主调用完成全部拼接（非多次 `string_concat`）。含 Tagged Template（专用 lowering，构建 cooked+raw quasi 数组，`Object.defineProperty` 设 raw 属性）。影响层：IR + 语义 + WASM 后端 + 运行时
 
 ### 块 F：语法糖与对象增强
 

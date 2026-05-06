@@ -1,0 +1,77 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(0)
+    c4 = number(1)
+    c5 = number(2)
+    c6 = functionref(@0)
+    c7 = string("Hello, ")
+    c8 = string("! Goodbye, ")
+    c9 = string("!")
+    c10 = string("Hello, ")
+    c11 = string("! Goodbye, ")
+    c12 = string("!")
+    c13 = string("raw")
+    c14 = string("value")
+    c15 = undefined
+    c16 = string("World")
+    c17 = string("Moon")
+
+  fn @tag [params: $1.$env, $1.$this, $1.strings, $1.a, $1.b] [entry=bb0]:
+    bb0:
+      %0 = load var $1.strings
+      %1 = const c3
+      %2 = get_elem %0, %1
+      %3 = load var $1.a
+      %4 = add %2, %3
+      %5 = load var $1.strings
+      %6 = const c4
+      %7 = get_elem %5, %6
+      %8 = add %4, %7
+      %9 = load var $1.b
+      %10 = add %8, %9
+      %11 = load var $1.strings
+      %12 = const c5
+      %13 = get_elem %11, %12
+      %14 = add %10, %13
+      return %14
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c6
+      store var $0.tag, %3
+      %4 = new_array(capacity=3)
+      %5 = const c7
+      call builtin.array.push(%4, %5)
+      %6 = const c8
+      call builtin.array.push(%4, %6)
+      %7 = const c9
+      call builtin.array.push(%4, %7)
+      %8 = new_array(capacity=3)
+      %9 = const c10
+      call builtin.array.push(%8, %9)
+      %10 = const c11
+      call builtin.array.push(%8, %10)
+      %11 = const c12
+      call builtin.array.push(%8, %11)
+      %12 = const c13
+      %13 = new_object(capacity=4)
+      %14 = const c14
+      set_prop %13, %14, %8
+      call builtin.define_property(%4, %12, %13)
+      %15 = const c15
+      %16 = load var $0.tag
+      %17 = const c16
+      %18 = const c17
+      %19 = call %16, this=%15, args=[%4, %17, %18]
+      %20 = call builtin.console.log(%19)
+      return
+}
