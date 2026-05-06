@@ -1131,10 +1131,26 @@ impl Compiler {
             .max()
             .map_or(0, |max| max + 1);
 
-        // 总 local 数量：SSA 值需要 ssa_local_base + max_ssa 个位置，
-        // 或者 var/phi locals 的最大索引+1
-        let total_locals = (max_ssa + self.ssa_local_base)
-            .max(self.next_var_local)
+        // 总 local 数量
+        // 为避免 SSA locals 和 var locals 索引重叠（SSA 值可能需要跨 StoreVar 保持活性，如解构），
+        // 将 var locals 偏移到 SSA 最大值之后。
+        let ssa_max = max_ssa + self.ssa_local_base;
+        let var_rebase_start = self.ssa_local_base;
+        // rebase: 所有 >= ssa_local_base 的 var/phi local 索引偏移到 ssa_max 之后
+        let offset = ssa_max.saturating_sub(var_rebase_start);
+        for (name, idx) in self.var_locals.iter_mut() {
+            if *idx >= var_rebase_start {
+                *idx += offset;
+            }
+        }
+        let total_var_locals = self.next_var_local + offset;
+        for idx in self.phi_locals.values_mut() {
+            if *idx >= var_rebase_start {
+                *idx += offset;
+            }
+        }
+        let total_locals = ssa_max
+            .max(total_var_locals)
             .max(self.phi_locals.values().copied().max().map_or(0, |m| m + 1));
 
         // scratch locals: 所有 i64 在前，然后所有 i32（WASM locals 按 type 分组）
