@@ -117,6 +117,8 @@ struct Compiler {
     array_proto_handle_global_idx: u32,
     /// Base table index for array prototype methods (Table[N+8])
     arr_proto_table_base: u32,
+    /// WASM function index for $obj_spread helper.
+    obj_spread_func_idx: u32,
 }
 /// 循环元信息（编译前预扫描得到）。
 #[derive(Debug, Clone)]
@@ -444,6 +446,24 @@ impl Compiler {
         imports.import("env", "arr_proto_is_array", EntityType::Function(12));
         // Import index 77: abort_shadow_stack_overflow: (i32, i32, i32) -> ()
         imports.import("env", "abort_shadow_stack_overflow", EntityType::Function(18));
+        // Type 20: (i64, i64, i64, i32, i32) -> (i64) — JS 函数签名（含 home_object）
+        //   param 0 = env_obj, param 1 = home_obj, param 2 = this_val, param 3 = args_base, param 4 = args_count
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I64, ValType::I32, ValType::I32],
+            vec![ValType::I64],
+        );
+        // Import index 78: func_call — Type 12 (uses shadow stack for args)
+        imports.import("env", "func_call", EntityType::Function(12));
+        // Import index 79: func_apply — Type 16 (i64 func, i64 this, i64 argsArray) -> i64
+        imports.import("env", "func_apply", EntityType::Function(16));
+        // Import index 80: func_bind — Type 12 (uses shadow stack for bound args)
+        imports.import("env", "func_bind", EntityType::Function(12));
+        // Import index 81: object_rest: (i64, i64) -> (i64)
+        imports.import("env", "object_rest", EntityType::Function(2));
+        // Import index 82: get_prototype_from_constructor: (i64) -> (i64)
+        imports.import("env", "get_prototype_from_constructor", EntityType::Function(3));
+        // Import index 83: obj_spread: (i64, i64) -> ()
+        imports.import("env", "obj_spread", EntityType::Function(5));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -508,6 +528,11 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::ArraySpliceVa, 75);
         builtin_func_indices.insert(Builtin::ArrayIsArray, 76);
         builtin_func_indices.insert(Builtin::ArrayConcatVa, 55);
+        builtin_func_indices.insert(Builtin::FuncCall, 78);
+        builtin_func_indices.insert(Builtin::FuncApply, 79);
+        builtin_func_indices.insert(Builtin::FuncBind, 80);
+        builtin_func_indices.insert(Builtin::ObjectRest, 81);
+        builtin_func_indices.insert(Builtin::GetPrototypeFromConstructor, 82);
 
         let functions = FunctionSection::new();
 
@@ -544,7 +569,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 78, // 78 imports
+            _next_import_func: 84, // 84 imports (0-83)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -577,6 +602,7 @@ impl Compiler {
             closure_get_env_idx: 37,
             array_proto_handle_global_idx: 0,
             arr_proto_table_base: 0,
+            obj_spread_func_idx: 0,
         }
     }
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -641,7 +667,6 @@ impl Compiler {
                 self.functions.function(1);
                 main_wasm_idx = Some(wasm_idx);
             } else {
-                // JS functions: Type 6 = (i64×8) -> i64
                 // JS functions: Type 12 = (i64, i64, i32, i32) -> i64 (含 env_obj)
                 self.functions.function(12);
             }
@@ -770,8 +795,6 @@ impl Compiler {
         self.compile_object_helpers();
         // 编译数组辅助函数
         self.compile_array_helpers();
-
-        // Pass 4: Build function table and emit data sections.
         self.table.table(TableType {
             element_type: RefType::FUNCREF,
             minimum: self.function_table.len() as u64,
@@ -3687,6 +3710,26 @@ impl Compiler {
 			Instruction::StringConcatVa { dest, parts } => {
 				self.compile_string_concat_va(dest, parts)
 			}
+			Instruction::OptionalGetProp { dest, object, key } => {
+				self.compile_optional_get(dest, object, true, Some(key), false)
+			}
+			Instruction::OptionalGetElem { dest, object, key } => {
+				self.compile_optional_get(dest, object, false, Some(key), false)
+			}
+			Instruction::OptionalCall {
+				dest,
+				callee,
+				this_val,
+				args,
+			} => {
+				self.compile_optional_call(dest, callee, this_val, args)
+			}
+			Instruction::ObjectSpread { dest, source } => {
+				self.compile_object_spread(dest, source)
+			}
+			Instruction::GetSuperBase { dest } => {
+				self.compile_get_super_base(dest)
+			}
         }
     }
 
@@ -3867,6 +3910,202 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
         Ok(())
+    }
+
+    /// 编译可选链属性/索引访问：检查 object 是否为 null/undefined，是则返回 undefined
+    fn compile_optional_get(
+        &mut self,
+        dest: &ValueId,
+        object: &ValueId,
+        is_prop: bool,
+        key: Option<&ValueId>,
+        _is_call: bool,
+    ) -> Result<()> {
+        // 提取 tag: (object >> 32) & 0xF
+        self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64And);
+
+        // 检查是否为 TAG_NULL (0x3) 或 TAG_UNDEFINED (0x2)
+        // 先保存 tag 值
+        self.emit(WasmInstruction::LocalTee(self.string_concat_scratch_idx));
+        self.emit(WasmInstruction::I64Const(value::TAG_NULL as i64));
+        self.emit(WasmInstruction::I64Eq);
+
+        self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
+        self.emit(WasmInstruction::I64Const(value::TAG_UNDEFINED as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::I64Or);
+
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        // null/undefined → 返回 encode_undefined()
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::Else);
+        // 正常路径
+        let Some(k) = key else {
+            bail!("OptionalGet requires a key");
+        };
+        if is_prop {
+            self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
+            self.emit(WasmInstruction::LocalGet(self.local_idx(k.0)));
+            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::Call(self.obj_get_func_idx));
+        } else {
+            // OptionalGetElem: object, to_int32(key)
+            self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
+            self.emit(WasmInstruction::LocalGet(self.local_idx(k.0)));
+            self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+            self.emit(WasmInstruction::Call(self.elem_get_func_idx));
+        }
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+        Ok(())
+    }
+
+    /// 编译可选链调用：callee 为 null/undefined 时返回 undefined，否则正常 call_indirect
+    fn compile_optional_call(
+        &mut self,
+        dest: &ValueId,
+        callee: &ValueId,
+        this_val: &ValueId,
+        args: &[ValueId],
+    ) -> Result<()> {
+        // 检查 callee 是否为 null/undefined
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64And);
+
+        self.emit(WasmInstruction::LocalTee(self.string_concat_scratch_idx));
+        self.emit(WasmInstruction::I64Const(value::TAG_NULL as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
+        self.emit(WasmInstruction::I64Const(value::TAG_UNDEFINED as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::I64Or);
+
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::Else);
+
+        // 正常 Call 路径（内联 compile_call 逻辑）
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+
+        self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
+
+        for arg in args.iter() {
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+            self.emit(WasmInstruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::I32Const(8));
+            self.emit(WasmInstruction::I32Add);
+            self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+        }
+
+        let call_func_idx_scratch = self.call_func_idx_scratch();
+        let call_env_obj_scratch = self.call_env_obj_scratch();
+
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(0xA));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::Call(self.closure_get_func_idx));
+        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::Call(self.closure_get_env_idx));
+        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+        self.emit(WasmInstruction::End);
+
+        self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
+        self.emit(WasmInstruction::CallIndirect {
+            type_index: 12,
+            table_index: 0,
+        });
+
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+        Ok(())
+    }
+
+    /// 编译对象 spread：调用 host import obj_spread(dest, source)
+    fn compile_object_spread(&mut self, dest: &ValueId, source: &ValueId) -> Result<()> {
+        self.emit(WasmInstruction::LocalGet(self.local_idx(dest.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(source.0)));
+        self.emit(WasmInstruction::Call(83));
+        Ok(())
+    }
+
+    /// 编译 GetSuperBase：从 env 对象读取 "home" 属性获取 __proto__
+    /// 当前简化实现：返回 undefined（完整实现需要 closure + env 传递 home_object）
+    fn compile_get_super_base(&mut self, dest: &ValueId) -> Result<()> {
+        // 简化：通过 env 的 "home" 属性获取基类原型
+        // env_obj 在 WASM local 0
+        // 读取 home_obj = $obj_get(env, "home")
+        // 然后 home_obj.__proto__ 
+        // 如果 env 不是对象或没有 home 属性，返回 undefined
+        self.emit(WasmInstruction::LocalGet(0)); // env_obj
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64And);
+        // 检查 env 是否为 TAG_OBJECT (0x8)
+        self.emit(WasmInstruction::I64Const(value::TAG_OBJECT as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        // env 是对象：$obj_get(env, "home")
+        self.emit(WasmInstruction::LocalGet(0));
+        let home_str = "home".to_string();
+        let key_ptr = self.ensure_string_ptr_const(&home_str);
+        self.emit(WasmInstruction::I32Const(key_ptr as i32));
+        self.emit(WasmInstruction::Call(self.obj_get_func_idx));
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+        Ok(())
+    }
+
+    fn ensure_string_ptr_const(&mut self, s: &str) -> u32 {
+        if let Some(&ptr) = self.string_ptr_cache.get(s) {
+            return ptr;
+        }
+        let ptr = self.data_offset;
+        let mut bytes = s.as_bytes().to_vec();
+        bytes.push(0);
+        let len = bytes.len() as u32;
+        self.string_data.extend(bytes);
+        self.data_offset += len;
+        self.string_ptr_cache.insert(s.to_string(), ptr);
+        ptr
     }
 
     fn compile_builtin_call(
@@ -4223,6 +4462,24 @@ impl Compiler {
             }
             Builtin::AbortShadowStackOverflow => {
                 bail!("AbortShadowStackOverflow should not appear in compile_builtin_call");
+            }
+            Builtin::FuncCall
+            | Builtin::FuncBind => {
+                // These use shadow stack: compile like array proto methods
+                self.compile_proto_method_call(dest, builtin, args)
+            }
+            Builtin::ObjectRest
+            | Builtin::GetPrototypeFromConstructor
+            | Builtin::FuncApply => {
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
+                for arg in args.iter() {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
             }
         }
     }
@@ -4621,6 +4878,20 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
         Instruction::StringConcatVa { dest, parts } => {
             parts.iter().map(|v| v.0).max().unwrap_or(0).max(dest.0)
         }
+        Instruction::OptionalGetProp { dest, object, key } => dest.0.max(object.0).max(key.0),
+        Instruction::OptionalGetElem { dest, object, key } => dest.0.max(object.0).max(key.0),
+        Instruction::OptionalCall {
+            dest,
+            callee,
+            this_val,
+            args,
+        } => {
+            let args_max = args.iter().map(|v| v.0).max().unwrap_or(0);
+            let max_val = callee.0.max(this_val.0).max(args_max);
+            dest.0.max(max_val)
+        }
+        Instruction::ObjectSpread { dest, source } => dest.0.max(source.0),
+        Instruction::GetSuperBase { dest } => dest.0,
     }
 }
 

@@ -93,6 +93,10 @@ pub struct Function {
     /// 该函数捕获的外层变量名列表（闭包用）。
     /// 语义层逃逸分析后填入，后端用于 env 对象的属性名。
     captured_names: Vec<String>,
+    /// 类方法绑定的构造函数 FunctionId，用于 super 属性访问。
+    /// 非类方法（普通函数、箭头函数等）为 None。
+    /// 对于静态方法，home_object 设置为 None（静态方法无 super）。
+    pub home_object: Option<FunctionId>,
 }
 
 impl Function {
@@ -103,6 +107,7 @@ impl Function {
             entry,
             blocks: Vec::new(),
             captured_names: Vec::new(),
+            home_object: None,
         }
     }
 
@@ -162,6 +167,9 @@ impl Function {
 
     fn dump_into(&self, out: &mut String) {
         let _ = write!(out, "  fn @{}", self.name);
+        if let Some(home) = self.home_object {
+            let _ = write!(out, " [home_object=@{}]", home.0);
+        }
         if !self.captured_names.is_empty() {
             let _ = write!(out, " [captures: ");
             for (i, name) in self.captured_names.iter().enumerate() {
@@ -338,6 +346,34 @@ pub enum Instruction {
         index: ValueId,
         value: ValueId,
     },
+    /// 可选链属性访问：object?.key，object 为 null/undefined 时返回 undefined
+    OptionalGetProp {
+        dest: ValueId,
+        object: ValueId,
+        key: ValueId,
+    },
+    /// 可选链索引访问：object?.[expr]
+    OptionalGetElem {
+        dest: ValueId,
+        object: ValueId,
+        key: ValueId,
+    },
+    /// 可选链调用：callee?.(...args)，callee 为 null/undefined 时返回 undefined
+    OptionalCall {
+        dest: ValueId,
+        callee: ValueId,
+        this_val: ValueId,
+        args: Vec<ValueId>,
+    },
+    /// 对象 spread：将 source 的 own enumerable 属性复制到 dest
+    ObjectSpread {
+        dest: ValueId,
+        source: ValueId,
+    },
+    /// 获取 super 基类：从 home_object 的 proto header offset 0 读取原型对象
+    GetSuperBase {
+        dest: ValueId,
+    },
 }
 
 impl fmt::Display for Instruction {
@@ -442,6 +478,40 @@ impl fmt::Display for Instruction {
             }
             Self::SetElem { object, index, value } => {
                 write!(formatter, "set_elem {object}, {index}, {value}")
+            }
+            Self::OptionalGetProp { dest, object, key } => {
+                write!(formatter, "{dest} = optional_get_prop {object}, {key}")
+            }
+            Self::OptionalGetElem { dest, object, key } => {
+                write!(formatter, "{dest} = optional_get_elem {object}, {key}")
+            }
+            Self::OptionalCall {
+                dest,
+                callee,
+                this_val,
+                args,
+            } => {
+                write!(
+                    formatter,
+                    "{dest} = optional_call {callee}, this={this_val}"
+                )?;
+                if !args.is_empty() {
+                    formatter.write_str(", args=[")?;
+                    for (index, arg) in args.iter().enumerate() {
+                        if index > 0 {
+                            formatter.write_str(", ")?;
+                        }
+                        write!(formatter, "{arg}")?;
+                    }
+                    formatter.write_char(']')?;
+                }
+                Ok(())
+            }
+            Self::ObjectSpread { dest, source } => {
+                write!(formatter, "{dest} = object_spread {source}")
+            }
+            Self::GetSuperBase { dest } => {
+                write!(formatter, "{dest} = get_super_base")
             }
         }
     }
@@ -595,6 +665,14 @@ pub enum Builtin {
     ArrayIsArray,
     ArraySpliceVa,
     ArrayConcatVa,
+    // ── 函数原型方法 ──
+    FuncCall,
+    FuncApply,
+    FuncBind,
+    // ── 对象解构 rest ──
+    ObjectRest,
+    // ── new.prototype 修复 ──
+    GetPrototypeFromConstructor,
 }
 
 impl fmt::Display for Builtin {
@@ -665,6 +743,11 @@ impl fmt::Display for Builtin {
             Self::ArrayIsArray => "array.is_array",
             Self::ArraySpliceVa => "array.splice_va",
             Self::ArrayConcatVa => "array.concat_va",
+            Self::FuncCall => "func_call",
+            Self::FuncApply => "func_apply",
+            Self::FuncBind => "func_bind",
+            Self::ObjectRest => "object_rest",
+            Self::GetPrototypeFromConstructor => "get_prototype_from_constructor",
         })
     }
 }

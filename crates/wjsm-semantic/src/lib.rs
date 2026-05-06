@@ -1808,7 +1808,12 @@ impl Lowerer {
                                 },
                             );
                         }
-                        _ => {}
+                        _ => {
+                            return Err(self.error(
+                                param.span(),
+                                "catch parameter must be a simple identifier",
+                            ));
+                        }
                     }
                 }
 
@@ -2545,122 +2550,310 @@ impl Lowerer {
             },
         );
 
-        // For each Method member (non-constructor), create a function and set on prototype.
+        // For each member, process according to its kind.
+        let mut static_init_idx = 0u32;
         for member in &class_decl.class.body {
-            if let swc_ast::ClassMember::Method(method) = member {
-                if !matches!(method.kind, swc_ast::MethodKind::Method) {
-                    continue;
-                }
+            match member {
+                swc_ast::ClassMember::Method(method) => {
+                    match method.kind {
+                        swc_ast::MethodKind::Method => {
+                            let is_static = method.is_static;
+                            let target = if is_static { ctor_dest } else { proto_dest };
 
-                let method_name = match &method.key {
-                    swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                    swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
-                    _ => continue,
-                };
+                            let method_name = match &method.key {
+                                swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+                                swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                                _ => continue,
+                            };
 
-                // Create method function.
-                let fn_name = format!("{}.{}", class_name, method_name);
-                self.push_function_context(&fn_name, BasicBlockId(0));
+                            let fn_name = format!("{}.{}", class_name, method_name);
+                            self.push_function_context(&fn_name, BasicBlockId(0));
 
-                // 声明 $env（闭包环境对象）
-                let env_scope_id = self
-                    .scopes
-                    .declare("$env", VarKind::Let, true)
-                    .map_err(|msg| self.error(method.span, msg))?;
-                // Register $this as the first param.
-                let this_scope_id = self
-                    .scopes
-                    .declare("$this", VarKind::Let, true)
-                    .map_err(|msg| self.error(method.span, msg))?;
+                            let env_scope_id = self
+                                .scopes
+                                .declare("$env", VarKind::Let, true)
+                                .map_err(|msg| self.error(method.span, msg))?;
+                            let this_scope_id = self
+                                .scopes
+                                .declare("$this", VarKind::Let, true)
+                                .map_err(|msg| self.error(method.span, msg))?;
 
-                let mut method_param_ir_names = vec![
-                    format!("${env_scope_id}.$env"),
-                    format!("${this_scope_id}.$this"),
-                ];
-                for param in &method.function.params {
-                    if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
-                        let name = binding_ident.id.sym.to_string();
-                        let scope_id = self
-                            .scopes
-                            .declare(&name, VarKind::Let, true)
-                            .map_err(|msg| self.error(method.span, msg))?;
-                        method_param_ir_names.push(format!("${scope_id}.{name}"));
+                            let mut method_param_ir_names = vec![
+                                format!("${env_scope_id}.$env"),
+                                format!("${this_scope_id}.$this"),
+                            ];
+                            for param in &method.function.params {
+                                if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
+                                    let name = binding_ident.id.sym.to_string();
+                                    let scope_id = self
+                                        .scopes
+                                        .declare(&name, VarKind::Let, true)
+                                        .map_err(|msg| self.error(method.span, msg))?;
+                                    method_param_ir_names.push(format!("${scope_id}.{name}"));
+                                }
+                            }
+
+                            if let Some(body) = &method.function.body {
+                                self.predeclare_block_stmts(&body.stmts)?;
+                            }
+
+                            let m_entry = BasicBlockId(0);
+                            self.emit_hoisted_var_initializers(m_entry);
+
+                            let mut m_flow = StmtFlow::Open(m_entry);
+                            if let Some(body) = &method.function.body {
+                                for stmt in &body.stmts {
+                                    if matches!(m_flow, StmtFlow::Terminated) { continue; }
+                                    m_flow = self.lower_stmt(stmt, m_flow)?;
+                                }
+                            }
+
+                            if let StmtFlow::Open(b) = m_flow {
+                                self.current_function
+                                    .set_terminator(b, Terminator::Return { value: None });
+                            }
+
+                            let m_old_fn = std::mem::replace(
+                                &mut self.current_function,
+                                FunctionBuilder::new("", BasicBlockId(0)),
+                            );
+                            let m_blocks = m_old_fn.into_blocks();
+                            let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                            m_ir_function.set_params(method_param_ir_names);
+                            let m_captured = self.captured_names_stack.last().unwrap().clone();
+                            m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                            // 设置 home_object（实例方法才有 super 访问）
+                            if !is_static {
+                                m_ir_function.home_object = Some(ctor_function_id);
+                            }
+                            for b in m_blocks {
+                                m_ir_function.push_block(b);
+                            }
+                            let m_function_id = self.module.push_function(m_ir_function);
+
+                            self.pop_function_context();
+
+                            let m_dest = self.alloc_value();
+                            let m_ref_const = self
+                                .module
+                                .add_constant(Constant::FunctionRef(m_function_id));
+                            self.current_function.append_instruction(
+                                outer_block,
+                                Instruction::Const {
+                                    dest: m_dest,
+                                    constant: m_ref_const,
+                                },
+                            );
+
+                            let m_key_const = self.module.add_constant(Constant::String(method_name));
+                            let m_key_dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                outer_block,
+                                Instruction::Const {
+                                    dest: m_key_dest,
+                                    constant: m_key_const,
+                                },
+                            );
+                            self.current_function.append_instruction(
+                                outer_block,
+                                Instruction::SetProp {
+                                    object: target,
+                                    key: m_key_dest,
+                                    value: m_dest,
+                                },
+                            );
+                        }
+                        swc_ast::MethodKind::Getter | swc_ast::MethodKind::Setter => {
+                            let accessor = if matches!(method.kind, swc_ast::MethodKind::Getter) {
+                                "get"
+                            } else {
+                                "set"
+                            };
+                            let is_static = method.is_static;
+                            let target = if is_static { ctor_dest } else { proto_dest };
+
+                            let method_name = match &method.key {
+                                swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+                                swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                                _ => continue,
+                            };
+
+                            let fn_name = format!("{}.{}_{}", class_name, accessor, method_name);
+                            self.push_function_context(&fn_name, BasicBlockId(0));
+
+                            let env_scope_id = self
+                                .scopes
+                                .declare("$env", VarKind::Let, true)
+                                .map_err(|msg| self.error(method.span, msg))?;
+                            let this_scope_id = self
+                                .scopes
+                                .declare("$this", VarKind::Let, true)
+                                .map_err(|msg| self.error(method.span, msg))?;
+
+                            let mut param_ir_names = vec![
+                                format!("${env_scope_id}.$env"),
+                                format!("${this_scope_id}.$this"),
+                            ];
+                            for param in &method.function.params {
+                                if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
+                                    let name = binding_ident.id.sym.to_string();
+                                    let scope_id = self
+                                        .scopes
+                                        .declare(&name, VarKind::Let, true)
+                                        .map_err(|msg| self.error(method.span, msg))?;
+                                    param_ir_names.push(format!("${scope_id}.{name}"));
+                                }
+                            }
+
+                            if let Some(body) = &method.function.body {
+                                self.predeclare_block_stmts(&body.stmts)?;
+                            }
+
+                            let m_entry = BasicBlockId(0);
+                            self.emit_hoisted_var_initializers(m_entry);
+
+                            let mut m_flow = StmtFlow::Open(m_entry);
+                            if let Some(body) = &method.function.body {
+                                for stmt in &body.stmts {
+                                    if matches!(m_flow, StmtFlow::Terminated) { continue; }
+                                    m_flow = self.lower_stmt(stmt, m_flow)?;
+                                }
+                            }
+
+                            if let StmtFlow::Open(b) = m_flow {
+                                self.current_function
+                                    .set_terminator(b, Terminator::Return { value: None });
+                            }
+
+                            let m_old_fn = std::mem::replace(
+                                &mut self.current_function,
+                                FunctionBuilder::new("", BasicBlockId(0)),
+                            );
+                            let m_blocks = m_old_fn.into_blocks();
+                            let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                            m_ir_function.set_params(param_ir_names);
+                            let m_captured = self.captured_names_stack.last().unwrap().clone();
+                            m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                            if !is_static {
+                                m_ir_function.home_object = Some(ctor_function_id);
+                            }
+                            for b in m_blocks {
+                                m_ir_function.push_block(b);
+                            }
+                            let m_function_id = self.module.push_function(m_ir_function);
+                            self.pop_function_context();
+
+                            let fn_dest = self.alloc_value();
+                            let fn_ref_const = self
+                                .module
+                                .add_constant(Constant::FunctionRef(m_function_id));
+                            self.current_function.append_instruction(
+                                outer_block,
+                                Instruction::Const {
+                                    dest: fn_dest,
+                                    constant: fn_ref_const,
+                                },
+                            );
+
+                            // Build descriptor and call DefineProperty
+                            let desc = self.build_descriptor(accessor, fn_dest, false, true, outer_block)?;
+                            let m_key_const = self.module.add_constant(Constant::String(method_name));
+                            let m_key_dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                outer_block,
+                                Instruction::Const {
+                                    dest: m_key_dest,
+                                    constant: m_key_const,
+                                },
+                            );
+                            self.current_function.append_instruction(
+                                outer_block,
+                                Instruction::CallBuiltin {
+                                    dest: None,
+                                    builtin: Builtin::DefineProperty,
+                                    args: vec![target, m_key_dest, desc],
+                                },
+                            );
+                        }
                     }
                 }
+                swc_ast::ClassMember::StaticBlock(static_block) => {
+                    let fn_name = format!("{}.static_init_{}", class_name, static_init_idx);
+                    static_init_idx += 1;
 
-                // Predeclare hoisted vars in method body.
-                if let Some(body) = &method.function.body {
-                    self.predeclare_block_stmts(&body.stmts)?;
-                }
+                    self.push_function_context(&fn_name, BasicBlockId(0));
 
-                let m_entry = BasicBlockId(0);
-                self.emit_hoisted_var_initializers(m_entry);
+                    let env_scope_id = self
+                        .scopes
+                        .declare("$env", VarKind::Let, true)
+                        .map_err(|msg| self.error(static_block.span, msg))?;
+                    let this_scope_id = self
+                        .scopes
+                        .declare("$this", VarKind::Let, true)
+                        .map_err(|msg| self.error(static_block.span, msg))?;
 
-                // Lower method body.
-                let mut m_flow = StmtFlow::Open(m_entry);
-                if let Some(body) = &method.function.body {
-                    for stmt in &body.stmts {
-                        // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
-                        if matches!(m_flow, StmtFlow::Terminated) {
-                            continue;
-                        }
+                    let param_ir_names = vec![
+                        format!("${env_scope_id}.$env"),
+                        format!("${this_scope_id}.$this"),
+                    ];
+
+                    self.predeclare_block_stmts(&static_block.body.stmts)?;
+
+                    let m_entry = BasicBlockId(0);
+                    self.emit_hoisted_var_initializers(m_entry);
+
+                    let mut m_flow = StmtFlow::Open(m_entry);
+                    for stmt in &static_block.body.stmts {
+                        if matches!(m_flow, StmtFlow::Terminated) { continue; }
                         m_flow = self.lower_stmt(stmt, m_flow)?;
                     }
+
+                    if let StmtFlow::Open(b) = m_flow {
+                        self.current_function
+                            .set_terminator(b, Terminator::Return { value: None });
+                    }
+
+                    let m_old_fn = std::mem::replace(
+                        &mut self.current_function,
+                        FunctionBuilder::new("", BasicBlockId(0)),
+                    );
+                    let m_blocks = m_old_fn.into_blocks();
+                    let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                    m_ir_function.set_params(param_ir_names);
+                    let m_captured = self.captured_names_stack.last().unwrap().clone();
+                    m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                    for b in m_blocks {
+                        m_ir_function.push_block(b);
+                    }
+                    let m_function_id = self.module.push_function(m_ir_function);
+
+                    self.pop_function_context();
+
+                    // 创建 FunctionRef 并立即调用 Call(ctor, this=ctor)
+                    let fn_dest = self.alloc_value();
+                    let fn_ref_const = self
+                        .module
+                        .add_constant(Constant::FunctionRef(m_function_id));
+                    self.current_function.append_instruction(
+                        outer_block,
+                        Instruction::Const {
+                            dest: fn_dest,
+                            constant: fn_ref_const,
+                        },
+                    );
+
+                    // Call(fn, this=ctor, args=[])
+                    self.current_function.append_instruction(
+                        outer_block,
+                        Instruction::Call {
+                            dest: None,
+                            callee: fn_dest,
+                            this_val: ctor_dest,
+                            args: vec![],
+                        },
+                    );
                 }
-
-                if let StmtFlow::Open(b) = m_flow {
-                    self.current_function
-                        .set_terminator(b, Terminator::Return { value: None });
-                }
-
-                // Finalize method function.
-                let m_old_fn = std::mem::replace(
-                    &mut self.current_function,
-                    FunctionBuilder::new("", BasicBlockId(0)),
-                );
-                let m_blocks = m_old_fn.into_blocks();
-                let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
-                m_ir_function.set_params(method_param_ir_names);
-                let m_captured = self.captured_names_stack.last().unwrap().clone();
-                m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
-                for b in m_blocks {
-                    m_ir_function.push_block(b);
-                }
-                let m_function_id = self.module.push_function(m_ir_function);
-
-                self.pop_function_context();
-
-                // Create FunctionRef for method.
-                let m_dest = self.alloc_value();
-                let m_ref_const = self
-                    .module
-                    .add_constant(Constant::FunctionRef(m_function_id));
-                self.current_function.append_instruction(
-                    outer_block,
-                    Instruction::Const {
-                        dest: m_dest,
-                        constant: m_ref_const,
-                    },
-                );
-
-                // Set method on prototype.
-                let m_key_const = self.module.add_constant(Constant::String(method_name));
-                let m_key_dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    outer_block,
-                    Instruction::Const {
-                        dest: m_key_dest,
-                        constant: m_key_const,
-                    },
-                );
-                self.current_function.append_instruction(
-                    outer_block,
-                    Instruction::SetProp {
-                        object: proto_dest,
-                        key: m_key_dest,
-                        value: m_dest,
-                    },
-                );
+                _ => {}
             }
         }
 
@@ -2829,110 +3022,303 @@ impl Lowerer {
             },
         );
 
-        // Methods
+        // Methods (full support for all method kinds, static, and static blocks)
+        let mut static_init_idx = 0u32;
         for member in &class_expr.class.body {
-            if let swc_ast::ClassMember::Method(method) = member {
-                if !matches!(method.kind, swc_ast::MethodKind::Method) {
-                    continue;
-                }
+            match member {
+                swc_ast::ClassMember::Method(method) => {
+                    match method.kind {
+                        swc_ast::MethodKind::Method => {
+                            let is_static = method.is_static;
+                            let target = if is_static { ctor_dest } else { proto_dest };
 
-                let method_name = match &method.key {
-                    swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                    swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
-                    _ => continue,
-                };
+                            let method_name = match &method.key {
+                                swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+                                swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                                _ => continue,
+                            };
 
-                let fn_name = format!("{}.{}", class_name, method_name);
-                self.push_function_context(&fn_name, BasicBlockId(0));
+                            let fn_name = format!("{}.{}", class_name, method_name);
+                            self.push_function_context(&fn_name, BasicBlockId(0));
 
-                let env_scope_id = self
-                    .scopes
-                    .declare("$env", VarKind::Let, true)
-                    .map_err(|msg| self.error(method.span, msg))?;
-                let this_scope_id = self
-                    .scopes
-                    .declare("$this", VarKind::Let, true)
-                    .map_err(|msg| self.error(method.span, msg))?;
+                            let env_scope_id = self
+                                .scopes
+                                .declare("$env", VarKind::Let, true)
+                                .map_err(|msg| self.error(method.span, msg))?;
+                            let this_scope_id = self
+                                .scopes
+                                .declare("$this", VarKind::Let, true)
+                                .map_err(|msg| self.error(method.span, msg))?;
 
-                let mut method_param_ir_names = vec![
-                    format!("${env_scope_id}.$env"),
-                    format!("${this_scope_id}.$this"),
-                ];
-                for param in &method.function.params {
-                    if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
-                        let name = binding_ident.id.sym.to_string();
-                        let scope_id = self
-                            .scopes
-                            .declare(&name, VarKind::Let, true)
-                            .map_err(|msg| self.error(method.span, msg))?;
-                        method_param_ir_names.push(format!("${scope_id}.{name}"));
+                            let mut method_param_ir_names = vec![
+                                format!("${env_scope_id}.$env"),
+                                format!("${this_scope_id}.$this"),
+                            ];
+                            for param in &method.function.params {
+                                if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
+                                    let name = binding_ident.id.sym.to_string();
+                                    let scope_id = self
+                                        .scopes
+                                        .declare(&name, VarKind::Let, true)
+                                        .map_err(|msg| self.error(method.span, msg))?;
+                                    method_param_ir_names.push(format!("${scope_id}.{name}"));
+                                }
+                            }
+
+                            if let Some(body) = &method.function.body {
+                                self.predeclare_block_stmts(&body.stmts)?;
+                            }
+
+                            let m_entry = BasicBlockId(0);
+                            self.emit_hoisted_var_initializers(m_entry);
+
+                            let mut m_flow = StmtFlow::Open(m_entry);
+                            if let Some(body) = &method.function.body {
+                                for stmt in &body.stmts {
+                                    m_flow = self.lower_stmt(stmt, m_flow)?;
+                                }
+                            }
+
+                            if let StmtFlow::Open(b) = m_flow {
+                                self.current_function
+                                    .set_terminator(b, Terminator::Return { value: None });
+                            }
+
+                            let m_old_fn = std::mem::replace(
+                                &mut self.current_function,
+                                FunctionBuilder::new("", BasicBlockId(0)),
+                            );
+                            let m_blocks = m_old_fn.into_blocks();
+                            let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                            m_ir_function.set_params(method_param_ir_names);
+                            let m_captured = self.captured_names_stack.last().unwrap().clone();
+                            m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                            if !is_static {
+                                m_ir_function.home_object = Some(ctor_function_id);
+                            }
+                            for b in m_blocks {
+                                m_ir_function.push_block(b);
+                            }
+                            let m_function_id = self.module.push_function(m_ir_function);
+
+                            self.pop_function_context();
+
+                            let m_dest = self.alloc_value();
+                            let m_ref_const = self
+                                .module
+                                .add_constant(Constant::FunctionRef(m_function_id));
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::Const {
+                                    dest: m_dest,
+                                    constant: m_ref_const,
+                                },
+                            );
+
+                            let m_key_const = self.module.add_constant(Constant::String(method_name));
+                            let m_key_dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::Const {
+                                    dest: m_key_dest,
+                                    constant: m_key_const,
+                                },
+                            );
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::SetProp {
+                                    object: target,
+                                    key: m_key_dest,
+                                    value: m_dest,
+                                },
+                            );
+                        }
+                        swc_ast::MethodKind::Getter | swc_ast::MethodKind::Setter => {
+                            let accessor = if matches!(method.kind, swc_ast::MethodKind::Getter) {
+                                "get"
+                            } else {
+                                "set"
+                            };
+                            let is_static = method.is_static;
+                            let target = if is_static { ctor_dest } else { proto_dest };
+
+                            let method_name = match &method.key {
+                                swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+                                swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                                _ => continue,
+                            };
+
+                            let fn_name = format!("{}.{}_{}", class_name, accessor, method_name);
+                            self.push_function_context(&fn_name, BasicBlockId(0));
+
+                            let env_scope_id = self
+                                .scopes
+                                .declare("$env", VarKind::Let, true)
+                                .map_err(|msg| self.error(method.span, msg))?;
+                            let this_scope_id = self
+                                .scopes
+                                .declare("$this", VarKind::Let, true)
+                                .map_err(|msg| self.error(method.span, msg))?;
+
+                            let mut param_ir_names = vec![
+                                format!("${env_scope_id}.$env"),
+                                format!("${this_scope_id}.$this"),
+                            ];
+                            for param in &method.function.params {
+                                if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
+                                    let name = binding_ident.id.sym.to_string();
+                                    let scope_id = self
+                                        .scopes
+                                        .declare(&name, VarKind::Let, true)
+                                        .map_err(|msg| self.error(method.span, msg))?;
+                                    param_ir_names.push(format!("${scope_id}.{name}"));
+                                }
+                            }
+
+                            if let Some(body) = &method.function.body {
+                                self.predeclare_block_stmts(&body.stmts)?;
+                            }
+
+                            let m_entry = BasicBlockId(0);
+                            self.emit_hoisted_var_initializers(m_entry);
+
+                            let mut m_flow = StmtFlow::Open(m_entry);
+                            if let Some(body) = &method.function.body {
+                                for stmt in &body.stmts {
+                                    m_flow = self.lower_stmt(stmt, m_flow)?;
+                                }
+                            }
+
+                            if let StmtFlow::Open(b) = m_flow {
+                                self.current_function
+                                    .set_terminator(b, Terminator::Return { value: None });
+                            }
+
+                            let m_old_fn = std::mem::replace(
+                                &mut self.current_function,
+                                FunctionBuilder::new("", BasicBlockId(0)),
+                            );
+                            let m_blocks = m_old_fn.into_blocks();
+                            let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                            m_ir_function.set_params(param_ir_names);
+                            let m_captured = self.captured_names_stack.last().unwrap().clone();
+                            m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                            if !is_static {
+                                m_ir_function.home_object = Some(ctor_function_id);
+                            }
+                            for b in m_blocks {
+                                m_ir_function.push_block(b);
+                            }
+                            let m_function_id = self.module.push_function(m_ir_function);
+                            self.pop_function_context();
+
+                            let fn_dest = self.alloc_value();
+                            let fn_ref_const = self
+                                .module
+                                .add_constant(Constant::FunctionRef(m_function_id));
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::Const {
+                                    dest: fn_dest,
+                                    constant: fn_ref_const,
+                                },
+                            );
+
+                            let desc = self.build_descriptor(accessor, fn_dest, false, true, block)?;
+                            let m_key_const = self.module.add_constant(Constant::String(method_name));
+                            let m_key_dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::Const {
+                                    dest: m_key_dest,
+                                    constant: m_key_const,
+                                },
+                            );
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: None,
+                                    builtin: Builtin::DefineProperty,
+                                    args: vec![target, m_key_dest, desc],
+                                },
+                            );
+                        }
                     }
                 }
+                swc_ast::ClassMember::StaticBlock(static_block) => {
+                    let fn_name = format!("{}.static_init_{}", class_name, static_init_idx);
+                    static_init_idx += 1;
 
-                if let Some(body) = &method.function.body {
-                    self.predeclare_block_stmts(&body.stmts)?;
-                }
+                    self.push_function_context(&fn_name, BasicBlockId(0));
 
-                let m_entry = BasicBlockId(0);
-                self.emit_hoisted_var_initializers(m_entry);
+                    let env_scope_id = self
+                        .scopes
+                        .declare("$env", VarKind::Let, true)
+                        .map_err(|msg| self.error(static_block.span, msg))?;
+                    let this_scope_id = self
+                        .scopes
+                        .declare("$this", VarKind::Let, true)
+                        .map_err(|msg| self.error(static_block.span, msg))?;
 
-                let mut m_flow = StmtFlow::Open(m_entry);
-                if let Some(body) = &method.function.body {
-                    for stmt in &body.stmts {
+                    let param_ir_names = vec![
+                        format!("${env_scope_id}.$env"),
+                        format!("${this_scope_id}.$this"),
+                    ];
+
+                    self.predeclare_block_stmts(&static_block.body.stmts)?;
+
+                    let m_entry = BasicBlockId(0);
+                    self.emit_hoisted_var_initializers(m_entry);
+
+                    let mut m_flow = StmtFlow::Open(m_entry);
+                    for stmt in &static_block.body.stmts {
                         m_flow = self.lower_stmt(stmt, m_flow)?;
                     }
+
+                    if let StmtFlow::Open(b) = m_flow {
+                        self.current_function
+                            .set_terminator(b, Terminator::Return { value: None });
+                    }
+
+                    let m_old_fn = std::mem::replace(
+                        &mut self.current_function,
+                        FunctionBuilder::new("", BasicBlockId(0)),
+                    );
+                    let m_blocks = m_old_fn.into_blocks();
+                    let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                    m_ir_function.set_params(param_ir_names);
+                    let m_captured = self.captured_names_stack.last().unwrap().clone();
+                    m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                    for b in m_blocks {
+                        m_ir_function.push_block(b);
+                    }
+                    let m_function_id = self.module.push_function(m_ir_function);
+
+                    self.pop_function_context();
+
+                    let fn_dest = self.alloc_value();
+                    let fn_ref_const = self
+                        .module
+                        .add_constant(Constant::FunctionRef(m_function_id));
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: fn_dest,
+                            constant: fn_ref_const,
+                        },
+                    );
+
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Call {
+                            dest: None,
+                            callee: fn_dest,
+                            this_val: ctor_dest,
+                            args: vec![],
+                        },
+                    );
                 }
-
-                if let StmtFlow::Open(b) = m_flow {
-                    self.current_function
-                        .set_terminator(b, Terminator::Return { value: None });
-                }
-
-                let m_old_fn = std::mem::replace(
-                    &mut self.current_function,
-                    FunctionBuilder::new("", BasicBlockId(0)),
-                );
-                let m_blocks = m_old_fn.into_blocks();
-                let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
-                m_ir_function.set_params(method_param_ir_names);
-                let m_captured = self.captured_names_stack.last().unwrap().clone();
-                m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
-                for b in m_blocks {
-                    m_ir_function.push_block(b);
-                }
-                let m_function_id = self.module.push_function(m_ir_function);
-
-                self.pop_function_context();
-
-                let m_dest = self.alloc_value();
-                let m_ref_const = self
-                    .module
-                    .add_constant(Constant::FunctionRef(m_function_id));
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Const {
-                        dest: m_dest,
-                        constant: m_ref_const,
-                    },
-                );
-
-                let m_key_const = self.module.add_constant(Constant::String(method_name));
-                let m_key_dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Const {
-                        dest: m_key_dest,
-                        constant: m_key_const,
-                    },
-                );
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::SetProp {
-                        object: proto_dest,
-                        key: m_key_dest,
-                        value: m_dest,
-                    },
-                );
+                _ => {}
             }
         }
 
@@ -2988,6 +3374,7 @@ impl Lowerer {
             swc_ast::Expr::Update(update) => self.lower_update(update, block),
             swc_ast::Expr::Tpl(tpl) => self.lower_tpl(tpl, block),
             swc_ast::Expr::TaggedTpl(tagged_tpl) => self.lower_tagged_tpl(tagged_tpl, block),
+            swc_ast::Expr::SuperProp(super_prop) => self.lower_super_prop(super_prop, block),
             _ => Err(self.error(
                 expr.span(),
                 format!("unsupported expression kind `{}`", expr_kind(expr)),
@@ -3207,35 +3594,11 @@ impl Lowerer {
             match prop {
                 swc_ast::PropOrSpread::Prop(prop) => match prop.as_ref() {
                     swc_ast::Prop::KeyValue(kv) => {
-                        let key_str = match &kv.key {
-                            swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                            swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
-                            _ => {
-                                return Err(
-                                    self.error(kv.key.span(), "unsupported property key kind")
-                                );
-                            }
-                        };
-                        let key_const = self.module.add_constant(Constant::String(key_str));
-                        let key_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::Const {
-                                dest: key_dest,
-                                constant: key_const,
-                            },
-                        );
                         let val_dest = self.lower_expr(&kv.value, block)?;
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::SetProp {
-                                object: obj_dest,
-                                key: key_dest,
-                                value: val_dest,
-                            },
-                        );
+                        self.lower_object_prop(obj_dest, &kv.key, val_dest, block)?;
                     }
                     swc_ast::Prop::Shorthand(ident) => {
+                        let val_dest = self.lower_ident(ident, block)?;
                         let key_str = ident.sym.to_string();
                         let key_const = self.module.add_constant(Constant::String(key_str));
                         let key_dest = self.alloc_value();
@@ -3246,7 +3609,6 @@ impl Lowerer {
                                 constant: key_const,
                             },
                         );
-                        let val_dest = self.lower_ident(ident, block)?;
                         self.current_function.append_instruction(
                             block,
                             Instruction::SetProp {
@@ -3256,22 +3618,300 @@ impl Lowerer {
                             },
                         );
                     }
+                    swc_ast::Prop::Getter(getter) => {
+                        let key_dest = self.lower_prop_name(&getter.key, block)?;
+                        let body = getter.body.as_ref().ok_or_else(|| {
+                            self.error(getter.span, "getter must have a body")
+                        })?;
+                        let fn_value =
+                            self.lower_method_to_fn(&getter.key, body, None, block)?;
+                        let desc = self.build_descriptor("get", fn_value, true, true, block)?;
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: None,
+                                builtin: Builtin::DefineProperty,
+                                args: vec![obj_dest, key_dest, desc],
+                            },
+                        );
+                    }
+                    swc_ast::Prop::Setter(setter) => {
+                        let key_dest = self.lower_prop_name(&setter.key, block)?;
+                        let body = setter.body.as_ref().ok_or_else(|| {
+                            self.error(setter.span, "setter must have a body")
+                        })?;
+                        let fn_value =
+                            self.lower_method_to_fn(&setter.key, body, Some(true), block)?;
+                        let desc = self.build_descriptor("set", fn_value, true, true, block)?;
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: None,
+                                builtin: Builtin::DefineProperty,
+                                args: vec![obj_dest, key_dest, desc],
+                            },
+                        );
+                    }
                     _ => {
                         return Err(
                             self.error(prop.span(), "unsupported property kind in object literal")
                         );
                     }
                 },
-                swc_ast::PropOrSpread::Spread(_) => {
-                    return Err(self.error(
-                        prop.span(),
-                        "spread in object literals is not yet supported",
-                    ));
+                swc_ast::PropOrSpread::Spread(spread) => {
+                    let source = self.lower_expr(&spread.expr, block)?;
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::ObjectSpread {
+                            dest: obj_dest,
+                            source,
+                        },
+                    );
                 }
             }
         }
 
         Ok(obj_dest)
+    }
+
+    /// 将 PropName 转换为运行时的 key value：静态名生成 String 常量，Computed 则 lower 表达式
+    fn lower_prop_name(
+        &mut self,
+        key: &swc_ast::PropName,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        match key {
+            swc_ast::PropName::Ident(ident) => {
+                let key_str = ident.sym.to_string();
+                let key_const = self.module.add_constant(Constant::String(key_str));
+                let key_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: key_dest,
+                        constant: key_const,
+                    },
+                );
+                Ok(key_dest)
+            }
+            swc_ast::PropName::Str(s) => {
+                let key_str = s.value.to_string_lossy().into_owned();
+                let key_const = self.module.add_constant(Constant::String(key_str));
+                let key_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: key_dest,
+                        constant: key_const,
+                    },
+                );
+                Ok(key_dest)
+            }
+            swc_ast::PropName::Computed(computed) => {
+                self.lower_expr(&computed.expr, block)
+            }
+            _ => Err(self.error(key.span(), "unsupported property key kind")),
+        }
+    }
+
+    /// 对对象字面量中的 KeyValue prop 设置属性，支持计算属性名
+    fn lower_object_prop(
+        &mut self,
+        obj_dest: ValueId,
+        key: &swc_ast::PropName,
+        val_dest: ValueId,
+        block: BasicBlockId,
+    ) -> Result<(), LoweringError> {
+        let key_dest = self.lower_prop_name(key, block)?;
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object: obj_dest,
+                key: key_dest,
+                value: val_dest,
+            },
+        );
+        Ok(())
+    }
+
+    /// 将 getter/setter 方法体编译为内联函数，返回 FunctionRef 的 ValueId
+    fn lower_method_to_fn(
+        &mut self,
+        key: &swc_ast::PropName,
+        body: &swc_ast::BlockStmt,
+        _is_setter: Option<bool>,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let method_name = match key {
+            swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+            swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+            _ => "anonymous".to_string(),
+        };
+        let fn_name = format!("$0.{method_name}");
+
+        // 推入新的函数上下文（使用 push_function_context 管理作用域栈）
+        self.push_function_context(&fn_name, BasicBlockId(0));
+
+        // 声明 $env 和 $this
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(key.span(), msg))?;
+        let this_scope_id = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| self.error(key.span(), msg))?;
+
+        let method_param_ir_names = vec![
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+        ];
+
+        // 预声明提升变量
+        self.predeclare_block_stmts(&body.stmts)?;
+
+        let m_entry = BasicBlockId(0);
+        self.emit_hoisted_var_initializers(m_entry);
+
+        // 降低方法体
+        let mut m_flow = StmtFlow::Open(m_entry);
+        for stmt in &body.stmts {
+            if matches!(m_flow, StmtFlow::Terminated) {
+                continue;
+            }
+            m_flow = self.lower_stmt(stmt, m_flow)?;
+        }
+
+        if let StmtFlow::Open(b) = m_flow {
+            self.current_function
+                .set_terminator(b, Terminator::Return { value: None });
+        }
+
+        // Finalize method function
+        let m_old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let m_blocks = m_old_fn.into_blocks();
+        let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+        m_ir_function.set_params(method_param_ir_names);
+        let m_captured = self.captured_names_stack.last().unwrap().clone();
+        m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+        for b in m_blocks {
+            m_ir_function.push_block(b);
+        }
+        let m_function_id = self.module.push_function(m_ir_function);
+
+        self.pop_function_context();
+
+        // Create FunctionRef
+        let m_dest = self.alloc_value();
+        let m_ref_const = self.module.add_constant(Constant::FunctionRef(m_function_id));
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: m_dest,
+                constant: m_ref_const,
+            },
+        );
+
+        Ok(m_dest)
+    }
+
+    /// 构建 getter/setter descriptor 对象 { get/set: fn, enumerable, configurable }
+    fn build_descriptor(
+        &mut self,
+        accessor_kind: &str,
+        fn_value: ValueId,
+        enumerable: bool,
+        configurable: bool,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let desc_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: desc_dest,
+                capacity: 4,
+            },
+        );
+
+        // descriptor[accessor_kind] = fn
+        let key_const = self.module.add_constant(Constant::String(accessor_kind.to_string()));
+        let key_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: key_dest,
+                constant: key_const,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object: desc_dest,
+                key: key_dest,
+                value: fn_value,
+            },
+        );
+
+        // descriptor.enumerable
+        let enum_key = self.module.add_constant(Constant::String("enumerable".to_string()));
+        let enum_key_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: enum_key_dest,
+                constant: enum_key,
+            },
+        );
+        let enum_val_dest = self.alloc_value();
+        let enum_const = self.module.add_constant(Constant::Bool(enumerable));
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: enum_val_dest,
+                constant: enum_const,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object: desc_dest,
+                key: enum_key_dest,
+                value: enum_val_dest,
+            },
+        );
+
+        // descriptor.configurable
+        let conf_key = self.module.add_constant(Constant::String("configurable".to_string()));
+        let conf_key_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: conf_key_dest,
+                constant: conf_key,
+            },
+        );
+        let conf_val_dest = self.alloc_value();
+        let conf_const = self.module.add_constant(Constant::Bool(configurable));
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: conf_val_dest,
+                constant: conf_const,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object: desc_dest,
+                key: conf_key_dest,
+                value: conf_val_dest,
+            },
+        );
+
+        Ok(desc_dest)
     }
 
     fn lower_array_expr(
@@ -3503,6 +4143,60 @@ impl Lowerer {
         Ok(env_val)
     }
 
+    fn lower_super_prop(
+        &mut self,
+        super_prop: &swc_ast::SuperPropExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        // 1. GetSuperBase: 从 home_object 的 proto 读取基类原型
+        let base_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::GetSuperBase {
+                dest: base_val,
+            },
+        );
+
+        // 2. 根据 prop 类型进行属性访问
+        match &super_prop.prop {
+            swc_ast::SuperProp::Ident(ident_name) => {
+                let key_str = ident_name.sym.to_string();
+                let key_const = self.module.add_constant(Constant::String(key_str));
+                let key_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: key_dest,
+                        constant: key_const,
+                    },
+                );
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest,
+                        object: base_val,
+                        key: key_dest,
+                    },
+                );
+                Ok(dest)
+            }
+            swc_ast::SuperProp::Computed(computed) => {
+                let key_val = self.lower_expr(&computed.expr, block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetElem {
+                        dest,
+                        object: base_val,
+                        index: key_val,
+                    },
+                );
+                Ok(dest)
+            }
+        }
+    }
+
     fn lower_this(&mut self, block: BasicBlockId) -> Result<ValueId, LoweringError> {
         // 箭头函数的 this 是词法捕获的，通过 env 对象读取
         let is_arrow = self.is_arrow_fn_stack.last().copied().unwrap_or(false);
@@ -3692,6 +4386,55 @@ impl Lowerer {
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin: array_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+
+                        // Function.prototype.call/apply/bind: func.call(thisArg, ...args)
+                        if let Some(func_builtin) = builtin_from_function_proto_method(&prop_ident.sym) {
+                            let func_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![func_val];
+
+                            if matches!(func_builtin, Builtin::FuncApply) {
+                                // func.apply(thisArg, argsArray)
+                                if let Some(first_arg) = call.args.first() {
+                                    builtin_args.push(self.lower_expr(&first_arg.expr, block)?);
+                                } else {
+                                    let undef_const = self.module.add_constant(Constant::Undefined);
+                                    let undef_val = self.alloc_value();
+                                    self.current_function.append_instruction(block, Instruction::Const { dest: undef_val, constant: undef_const });
+                                    builtin_args.push(undef_val);
+                                }
+                                if call.args.len() > 1 {
+                                    builtin_args.push(self.lower_expr(&call.args[1].expr, block)?);
+                                } else {
+                                    let undef_const = self.module.add_constant(Constant::Undefined);
+                                    let undef_val = self.alloc_value();
+                                    self.current_function.append_instruction(block, Instruction::Const { dest: undef_val, constant: undef_const });
+                                    builtin_args.push(undef_val);
+                                }
+                            } else {
+                                // func.call(thisArg, ...restArgs) / func.bind(thisArg, ...boundArgs)
+                                for arg in &call.args {
+                                    builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                                }
+                                // Ensure at least thisArg (first arg after func) exists
+                                if call.args.is_empty() {
+                                    let undef_const = self.module.add_constant(Constant::Undefined);
+                                    let undef_val = self.alloc_value();
+                                    self.current_function.append_instruction(block, Instruction::Const { dest: undef_val, constant: undef_const });
+                                    builtin_args.push(undef_val);
+                                }
+                            }
+
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: func_builtin,
                                     args: builtin_args,
                                 },
                             );
@@ -5506,6 +6249,15 @@ fn builtin_from_array_proto_method(name: &str) -> Option<Builtin> {
         "flat" => Some(ArrayFlat),
         "concat" => Some(ArrayConcatVa),
         "splice" => Some(ArraySpliceVa),
+        _ => None,
+    }
+}
+
+fn builtin_from_function_proto_method(name: &str) -> Option<Builtin> {
+    match name {
+        "call" => Some(Builtin::FuncCall),
+        "apply" => Some(Builtin::FuncApply),
+        "bind" => Some(Builtin::FuncBind),
         _ => None,
     }
 }

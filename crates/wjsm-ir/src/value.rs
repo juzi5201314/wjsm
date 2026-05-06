@@ -22,6 +22,7 @@ pub const TAG_CLOSURE: u64 = 0xA;
 // ── Array value ──────────────────────────────────────────────────────
 
 pub const TAG_ARRAY: u64 = 0xB;
+pub const TAG_BOUND: u64 = 0xC;
 
 
 pub fn is_array(val: i64) -> bool {
@@ -245,5 +246,21 @@ pub fn decode_closure_idx(val: i64) -> u32 {
 
 /// 闭包或函数值均可调用，统一判断
 pub fn is_callable(val: i64) -> bool {
-    is_function(val) || is_closure(val)
+    is_function(val) || is_closure(val) || is_bound(val)
+}
+
+// ── Bound function ────────────────────────────────────────────────────
+
+pub fn encode_bound_idx(idx: u32) -> i64 {
+    let payload = (TAG_BOUND << 32) | (idx as u64);
+    (BOX_BASE | payload) as i64
+}
+
+pub fn is_bound(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_BOUND
+}
+
+pub fn decode_bound_idx(val: i64) -> u32 {
+    (val as u64 & 0xFFFF_FFFF) as u32
 }
