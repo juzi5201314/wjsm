@@ -677,13 +677,28 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 17: define_property(i64, i32, i64) → () ────────────────────
+    // ── Import 17: string_concat_va(i32, i32) → i64 ────────────────────────
+    let string_concat_va = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
+            let mut result = Vec::new();
+            for i in 0..args_count as u32 {
+                let arg = read_shadow_arg(&mut caller, args_base, i);
+                let s = render_value(&mut caller, arg).unwrap_or_default();
+                result.extend(s.into_bytes());
+            }
+            let s = String::from_utf8(result).unwrap_or_default();
+            store_runtime_string(&caller, s)
+        },
+    );
+
+    // ── Import 18: define_property(i64, i32, i64) → () ────────────────────
     let define_property_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32, desc: i64| {
             // 检查 obj 和 desc 是否是对象或函数
-            if (!value::is_object(obj) && !value::is_function(obj))
-                || (!value::is_object(desc) && !value::is_function(desc))
+            if (!value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj))
+                || (!value::is_object(desc) && !value::is_function(desc) && !value::is_array(desc))
             {
                 *caller
                     .data()
@@ -2767,66 +2782,67 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         op_in.into(),                // 14
         op_instanceof.into(),        // 15
         string_concat.into(),        // 16
-        define_property_fn.into(),   // 17
-        get_own_prop_desc_fn.into(), // 18
-        abstract_eq.into(),          // 19
-        abstract_compare.into(),     // 20
-        gc_collect.into(),           // 21
-        console_error.into(),        // 22
-        console_warn.into(),         // 23
-        console_info.into(),         // 24
-        console_debug.into(),        // 25
-        console_trace.into(),        // 26
-        set_timeout_fn.into(),       // 27
-        clear_timeout_fn.into(),     // 28
-        set_interval_fn.into(),      // 29
-        clear_interval_fn.into(),    // 30
-        fetch_fn.into(),             // 31
-        json_stringify_fn.into(),    // 32
-        json_parse_fn.into(),        // 33
-        closure_create_fn.into(),    // 34
-        closure_get_func_fn.into(),  // 35
-        closure_get_env_fn.into(),   // 36
-        arr_push_fn.into(),          // 37
-        arr_pop_fn.into(),           // 38
-        arr_includes_fn.into(),      // 39
-        arr_index_of_fn.into(),      // 40
-        arr_join_fn.into(),          // 41
-        arr_concat_fn.into(),        // 42
-        arr_slice_fn.into(),         // 43
-        arr_fill_fn.into(),          // 44
-        arr_reverse_fn.into(),       // 45
-        arr_flat_fn.into(),          // 46
-        arr_init_length_fn.into(),   // 47
-        arr_get_length_fn.into(),    // 48
-        arr_proto_push_fn.into(),        // 49
-        arr_proto_pop_fn.into(),         // 50
-        arr_proto_includes_fn.into(),    // 51
-        arr_proto_index_of_fn.into(),    // 52
-        arr_proto_join_fn.into(),        // 53
-        arr_proto_concat_fn.into(),      // 54
-        arr_proto_slice_fn.into(),       // 55
-        arr_proto_fill_fn.into(),        // 56
-        arr_proto_reverse_fn.into(),     // 57
-        arr_proto_flat_fn.into(),        // 58
-        arr_proto_shift_fn.into(),       // 59
-        arr_proto_unshift_fn.into(),     // 60
-        arr_proto_sort_fn.into(),        // 61
-        arr_proto_at_fn.into(),          // 62
-        arr_proto_copy_within_fn.into(), // 63
-        arr_proto_for_each_fn.into(),    // 64
-        arr_proto_map_fn.into(),         // 65
-        arr_proto_filter_fn.into(),      // 66
-        arr_proto_reduce_fn.into(),      // 67
-        arr_proto_reduce_right_fn.into(),// 68
-        arr_proto_find_fn.into(),        // 69
-        arr_proto_find_index_fn.into(),  // 70
-        arr_proto_some_fn.into(),        // 71
-        arr_proto_every_fn.into(),       // 72
-        arr_proto_flat_map_fn.into(),    // 73
-        arr_proto_splice_fn.into(),      // 74
-        arr_proto_is_array_fn.into(),    // 75
-        abort_shadow_stack_overflow_fn.into(), // 76
+        string_concat_va.into(),     // 17
+        define_property_fn.into(),   // 18
+        get_own_prop_desc_fn.into(), // 19
+        abstract_eq.into(),          // 20
+        abstract_compare.into(),     // 21
+        gc_collect.into(),           // 22
+        console_error.into(),        // 23
+        console_warn.into(),         // 24
+        console_info.into(),         // 25
+        console_debug.into(),        // 26
+        console_trace.into(),        // 27
+        set_timeout_fn.into(),       // 28
+        clear_timeout_fn.into(),     // 29
+        set_interval_fn.into(),      // 30
+        clear_interval_fn.into(),    // 31
+        fetch_fn.into(),             // 32
+        json_stringify_fn.into(),    // 33
+        json_parse_fn.into(),        // 34
+        closure_create_fn.into(),    // 35
+        closure_get_func_fn.into(),  // 36
+        closure_get_env_fn.into(),   // 37
+        arr_push_fn.into(),          // 38
+        arr_pop_fn.into(),           // 39
+        arr_includes_fn.into(),      // 40
+        arr_index_of_fn.into(),      // 41
+        arr_join_fn.into(),          // 42
+        arr_concat_fn.into(),        // 43
+        arr_slice_fn.into(),         // 44
+        arr_fill_fn.into(),          // 45
+        arr_reverse_fn.into(),       // 46
+        arr_flat_fn.into(),          // 47
+        arr_init_length_fn.into(),   // 48
+        arr_get_length_fn.into(),    // 49
+        arr_proto_push_fn.into(),        // 50
+        arr_proto_pop_fn.into(),         // 51
+        arr_proto_includes_fn.into(),    // 52
+        arr_proto_index_of_fn.into(),    // 53
+        arr_proto_join_fn.into(),        // 54
+        arr_proto_concat_fn.into(),      // 55
+        arr_proto_slice_fn.into(),       // 56
+        arr_proto_fill_fn.into(),        // 57
+        arr_proto_reverse_fn.into(),     // 58
+        arr_proto_flat_fn.into(),        // 59
+        arr_proto_shift_fn.into(),       // 60
+        arr_proto_unshift_fn.into(),     // 61
+        arr_proto_sort_fn.into(),        // 62
+        arr_proto_at_fn.into(),          // 63
+        arr_proto_copy_within_fn.into(), // 64
+        arr_proto_for_each_fn.into(),    // 65
+        arr_proto_map_fn.into(),         // 66
+        arr_proto_filter_fn.into(),      // 67
+        arr_proto_reduce_fn.into(),      // 68
+        arr_proto_reduce_right_fn.into(),// 69
+        arr_proto_find_fn.into(),        // 70
+        arr_proto_find_index_fn.into(),  // 71
+        arr_proto_some_fn.into(),        // 72
+        arr_proto_every_fn.into(),       // 73
+        arr_proto_flat_map_fn.into(),    // 74
+        arr_proto_splice_fn.into(),      // 75
+        arr_proto_is_array_fn.into(),    // 76
+        abort_shadow_stack_overflow_fn.into(), // 77
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 

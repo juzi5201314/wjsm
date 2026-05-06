@@ -341,6 +341,16 @@ fn array_proto_filter_fixture_matches_ir_snapshot() {
     assert_snapshot("array_proto_filter");
 }
 
+#[test]
+fn template_string_fixture_matches_ir_snapshot() {
+    assert_snapshot("template_string");
+}
+
+#[test]
+fn tagged_template_fixture_matches_ir_snapshot() {
+    assert_snapshot("tagged_template");
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let source_path = root.join("fixtures/happy").join(format!("{name}.js"));

@@ -1,0 +1,47 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = string("Hello, World!")
+    c4 = string("Hello, ")
+    c5 = number(1)
+    c6 = number(1)
+    c7 = string("!")
+    c8 = string("A: ")
+    c9 = number(1)
+    c10 = string(", B: ")
+    c11 = number(2)
+    c12 = string(", C: ")
+    c13 = number(3)
+    c14 = string("")
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      %4 = string_concat_va [%3]
+      %5 = call builtin.console.log(%4)
+      %6 = const c4
+      %7 = const c5
+      %8 = const c6
+      %9 = add %7, %8
+      %10 = const c7
+      %11 = string_concat_va [%6, %9, %10]
+      %12 = call builtin.console.log(%11)
+      %13 = const c8
+      %14 = const c9
+      %15 = const c10
+      %16 = const c11
+      %17 = const c12
+      %18 = const c13
+      %19 = const c14
+      %20 = string_concat_va [%13, %14, %15, %16, %17, %18, %19]
+      %21 = call builtin.console.log(%20)
+      return
+}
