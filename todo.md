@@ -65,14 +65,14 @@
 
 无互依赖，可并行执行。
 
-- [ ] **可选链 `a?.b`** — 语法糖 lowering，生成短路检查（`a === null || a === undefined ? undefined : a.b`）。影响层：语义
-- [ ] **`super` 关键字** — 支持 `super.method()` 和 `super.prop`，在语义层解析为父类原型上的属性/方法调用。影响层：语义 + WASM 后端
+- [x] **可选链 `a?.b`** — 语法糖 lowering，生成 OptionalGetProp/OptionalGetElem/OptionalCall IR 指令，WASM 后端内联 null/undefined 短路检查。影响层：IR + 语义 + WASM 后端
+- [x] **`super` 关键字** — 支持 `super.method()` 和 `super.prop`（含计算属性），语义层生成 GetSuperBase + GetProp/GetElem，通过 Function.home_object 传递基类引用。影响层：IR + 语义 + WASM 后端
 - [ ] **解构（声明 + 函数参数 + 默认值）** — `let {a, b} = obj`、`let [x, y] = arr`、函数参数解构 `function f({a, b})`、参数默认值 `function f(x = 1)`。语义层将解构模式 lowering 为一系列属性访问 + 变量赋值。影响层：语义
-- [ ] **对象字面量计算属性名 + spread** — `{ [expr]: val }` 和 `{ ...obj }`（`SpreadElement`）。影响层：语义
-- [ ] **类 getter/setter 方法** — `lower_class_decl` 当前只处理 `MethodKind::Method`，需新增 getter/setter 支持，利用现有属性描述符 flags。影响层：语义 + WASM 后端
-- [ ] **类静态方法 / 静态块** — 静态方法挂在构造函数自身属性上而非 prototype；`static {}` 静态初始化块在类定义时立即执行。影响层：语义 + WASM 后端
-- [ ] **`new` 表达式 prototype 查找修复** — 当前仅在函数自身属性对象上搜索 `prototype`，不走完整 `[[Get]]`（不遍历函数原型链）。影响层：语义
-- [ ] **`this` 绑定：call / apply / bind** — `Function.prototype.call`/`apply`/`bind` 运行时实现。影响层：运行时
+- [x] **对象字面量计算属性名 + spread** — `{ [expr]: val }` 通过 lower_prop_name 处理 Computed 键名；`{ ...obj }` 通过 ObjectSpread IR 指令 + 运行时 obj_spread 实现。影响层：IR + 语义 + WASM 后端 + 运行时
+- [x] **类 getter/setter 方法** — lower_class_decl/expr 处理 MethodKind::Getter/Setter，构建属性描述符 {get/set, enumerable: false, configurable: true}，通过 DefineProperty 挂载到 prototype 或构造函数。对象字面量 getter/setter 同理（enumerable/configurable 默认 true）。影响层：语义
+- [x] **类静态方法 / 静态块** — 静态方法通过 method.is_static 判断，SetProp 到 ctor_dest 而非 proto_dest；`static {}` 静态初始化块创建独立函数并立即 Call(this=ctor)。影响层：语义
+- [ ] **`new` 表达式 prototype 查找修复** — 当前仅在函数自身属性对象上搜索 `prototype`，不走完整 `[[Get]]`（不遍历函数原型链）。需 GetPrototypeFromConstructor Builtin（已注册，运行时 stub）。影响层：语义 + 运行时
+- [x] **`this` 绑定：call / apply / bind** — 语义层拦截 func.call/apply/bind 转为 CallBuiltin，运行时实现 func_call/func_apply/func_bind + BoundRecord 表 + TAG_BOUND 递归解包。影响层：IR + 语义 + WASM 后端 + 运行时
 
 ### 块 G：Object 标准方法
 
