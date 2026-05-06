@@ -67,7 +67,7 @@
 
 - [x] **可选链 `a?.b`** — 语法糖 lowering，生成 OptionalGetProp/OptionalGetElem/OptionalCall IR 指令，WASM 后端内联 null/undefined 短路检查。影响层：IR + 语义 + WASM 后端
 - [x] **`super` 关键字** — 支持 `super.method()` 和 `super.prop`（含计算属性），语义层生成 GetSuperBase + GetProp/GetElem，通过 Function.home_object 传递基类引用。影响层：IR + 语义 + WASM 后端
-- [ ] **解构（声明 + 函数参数 + 默认值）** — `let {a, b} = obj`、`let [x, y] = arr`、函数参数解构 `function f({a, b})`、参数默认值 `function f(x = 1)`。语义层将解构模式 lowering 为一系列属性访问 + 变量赋值。影响层：语义
+- [x] **解构（声明 + 函数参数 + 默认值）** — `let {a, b} = obj`、`let [x, y] = arr`、函数参数解构 `function f({a, b})`、参数默认值 `function f(x = 1)`。语义层将解构模式 lowering 为一系列属性访问 + 变量赋值。影响层：语义
 - [x] **对象字面量计算属性名 + spread** — `{ [expr]: val }` 通过 lower_prop_name 处理 Computed 键名；`{ ...obj }` 通过 ObjectSpread IR 指令 + 运行时 obj_spread 实现。影响层：IR + 语义 + WASM 后端 + 运行时
 - [x] **类 getter/setter 方法** — lower_class_decl/expr 处理 MethodKind::Getter/Setter，构建属性描述符 {get/set, enumerable: false, configurable: true}，通过 DefineProperty 挂载到 prototype 或构造函数。对象字面量 getter/setter 同理（enumerable/configurable 默认 true）。影响层：语义
 - [x] **类静态方法 / 静态块** — 静态方法通过 method.is_static 判断，SetProp 到 ctor_dest 而非 proto_dest；`static {}` 静态初始化块创建独立函数并立即 Call(this=ctor)。影响层：语义
