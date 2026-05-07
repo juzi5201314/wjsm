@@ -1908,6 +1908,104 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         value::encode_handle(value::TAG_ARRAY, obj_table_count)
     }
     // ── arr_proto_push (#49) ──────────────────────────────────────────
+    // ── 辅助函数：分配新对象 ────────────────────────────────────────────
+    fn alloc_object(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
+        let heap_ptr = {
+            let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+            g.get(&mut *caller).i32().unwrap_or(0) as u32
+        };
+        let obj_table_count = {
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+            g.get(&mut *caller).i32().unwrap_or(0) as u32
+        };
+        let obj_table_ptr = {
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+            g.get(&mut *caller).i32().unwrap_or(0) as u32
+        };
+        let size = 16 + capacity * 32;
+        let new_heap_ptr = heap_ptr + size;
+        if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+            let _ = g.set(&mut *caller, Val::I32(new_heap_ptr as i32));
+        }
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+        let d = mem.data_mut(&mut *caller);
+        let ptr = heap_ptr as usize;
+        if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+        d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes()); // proto = 0 (null)
+        d[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
+        d[ptr + 5..ptr + 8].fill(0);
+        d[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes()); // capacity
+        d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes()); // num_props = 0
+        let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+        if slot_addr + 4 <= d.len() {
+            d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+        }
+        let _ = d;
+        if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+            let _ = g.set(&mut *caller, Val::I32((obj_table_count + 1) as i32));
+        }
+        value::encode_object_handle(obj_table_count)
+    }
+    // ── 辅助函数：收集属性名/值 ──────────────────────────────────────────
+    fn collect_own_property_names(caller: &mut Caller<'_, RuntimeState>, obj_ptr: usize, enumerable_only: bool) -> Vec<String> {
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return vec![]; };
+        let data = mem.data(&*caller);
+        if obj_ptr + 16 > data.len() { return vec![]; }
+        let num_props = u32::from_le_bytes([
+            data[obj_ptr + 12], data[obj_ptr + 13],
+            data[obj_ptr + 14], data[obj_ptr + 15],
+        ]) as usize;
+        let mut name_ids = Vec::new();
+        for i in 0..num_props {
+            let slot_offset = obj_ptr + 16 + i * 32;
+            if slot_offset + 32 > data.len() { break; }
+            let flags = i32::from_le_bytes([
+                data[slot_offset + 4], data[slot_offset + 5],
+                data[slot_offset + 6], data[slot_offset + 7],
+            ]);
+            if enumerable_only && (flags & 2) == 0 { continue; }
+            let name_id = u32::from_le_bytes([
+                data[slot_offset], data[slot_offset + 1],
+                data[slot_offset + 2], data[slot_offset + 3],
+            ]);
+            name_ids.push(name_id);
+        }
+        drop(data);
+        drop(mem);
+        let mut names = Vec::new();
+        for name_id in name_ids {
+            let name_bytes = read_string_bytes(caller, name_id);
+            names.push(String::from_utf8_lossy(&name_bytes).to_string());
+        }
+        names
+    }
+    fn collect_own_property_values(caller: &mut Caller<'_, RuntimeState>, obj_ptr: usize, enumerable_only: bool) -> Vec<i64> {
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return vec![]; };
+        let data = mem.data(&*caller);
+        if obj_ptr + 16 > data.len() { return vec![]; }
+        let num_props = u32::from_le_bytes([
+            data[obj_ptr + 12], data[obj_ptr + 13],
+            data[obj_ptr + 14], data[obj_ptr + 15],
+        ]) as usize;
+        let mut values = Vec::new();
+        for i in 0..num_props {
+            let slot_offset = obj_ptr + 16 + i * 32;
+            if slot_offset + 32 > data.len() { break; }
+            let flags = i32::from_le_bytes([
+                data[slot_offset + 4], data[slot_offset + 5],
+                data[slot_offset + 6], data[slot_offset + 7],
+            ]);
+            if enumerable_only && (flags & 2) == 0 { continue; }
+            let val = i64::from_le_bytes([
+                data[slot_offset + 8], data[slot_offset + 9],
+                data[slot_offset + 10], data[slot_offset + 11],
+                data[slot_offset + 12], data[slot_offset + 13],
+                data[slot_offset + 14], data[slot_offset + 15],
+            ]);
+            values.push(val);
+        }
+        values
+    }
     let arr_proto_push_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
@@ -2822,6 +2920,260 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     
+    // ── Import 83: has_own_property(i64, i32) -> i64 ──────────────────────────
+    let has_own_property_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, key_ptr: i32| -> i64 {
+            if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: hasOwnProperty called on non-object".to_string());
+                return value::encode_undefined();
+            }
+            let Some(ptr) = resolve_handle(&mut caller, obj) else { return value::encode_bool(false); };
+            let found = find_property_slot_by_name_id(&mut caller, ptr, key_ptr as u32);
+            value::encode_bool(found.is_some())
+        },
+    );
+    // ── Import 84: obj_keys(i64) -> i64 ───────────────────────────────────────
+    let obj_keys_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            let Some(ptr) = resolve_handle(&mut caller, obj) else { return value::encode_undefined(); };
+            let names = collect_own_property_names(&mut caller, ptr, true);
+            let arr = alloc_array(&mut caller, names.len() as u32);
+            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else { return value::encode_undefined(); };
+            for (i, name) in names.iter().enumerate() {
+                let key_val = store_runtime_string(&caller, name.clone());
+                write_array_elem(&mut caller, arr_ptr, i as u32, key_val);
+            }
+            write_array_length(&mut caller, arr_ptr, names.len() as u32);
+            arr
+        },
+    );
+    // ── Import 85: obj_values(i64) -> i64 ─────────────────────────────────────
+    let obj_values_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            let Some(ptr) = resolve_handle(&mut caller, obj) else { return value::encode_undefined(); };
+            let values = collect_own_property_values(&mut caller, ptr, true);
+            let arr = alloc_array(&mut caller, values.len() as u32);
+            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else { return value::encode_undefined(); };
+            for (i, val) in values.iter().enumerate() {
+                write_array_elem(&mut caller, arr_ptr, i as u32, *val);
+            }
+            write_array_length(&mut caller, arr_ptr, values.len() as u32);
+            arr
+        },
+    );
+    // ── Import 86: obj_entries(i64) -> i64 ────────────────────────────────────
+    let obj_entries_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            let Some(ptr) = resolve_handle(&mut caller, obj) else { return value::encode_undefined(); };
+            let names = collect_own_property_names(&mut caller, ptr, true);
+            let values = collect_own_property_values(&mut caller, ptr, true);
+            let len = names.len().min(values.len());
+            let arr = alloc_array(&mut caller, len as u32);
+            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else { return value::encode_undefined(); };
+            for i in 0..len {
+                // 每个元素是一个 [key, value] 子数组
+                let sub_arr = alloc_array(&mut caller, 2);
+                let Some(sub_ptr) = resolve_array_ptr(&mut caller, sub_arr) else { continue; };
+                let key_val = store_runtime_string(&caller, names[i].clone());
+                write_array_elem(&mut caller, sub_ptr, 0, key_val);
+                write_array_elem(&mut caller, sub_ptr, 1, values[i]);
+                write_array_length(&mut caller, sub_ptr, 2);
+                write_array_elem(&mut caller, arr_ptr, i as u32, sub_arr);
+            }
+            write_array_length(&mut caller, arr_ptr, len as u32);
+            arr
+        },
+    );
+    // ── Import 87: obj_assign(i64, i64, i32, i32) -> i64 ──────────────────────
+    let obj_assign_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env: i64, target: i64, args_base: i32, args_count: i32| -> i64 {
+            if !value::is_object(target) && !value::is_function(target) && !value::is_array(target) {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: target is not an object".to_string());
+                return value::encode_undefined();
+            }
+            let Some(target_ptr) = resolve_handle(&mut caller, target) else { return target; };
+            for i in 0..args_count {
+                let source_val = read_shadow_arg(&mut caller, args_base, i as u32);
+                if !value::is_object(source_val) && !value::is_function(source_val) && !value::is_array(source_val) {
+                    continue;
+                }
+                let Some(source_ptr) = resolve_handle(&mut caller, source_val) else { continue; };
+                // 收集源对象的可枚举属性
+                let source_props: Vec<(u32, i32, i64)> = {
+                    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { continue; };
+                    let d = mem.data(&caller);
+                    if source_ptr + 16 > d.len() { continue; }
+                    let num_props = u32::from_le_bytes([d[source_ptr+12], d[source_ptr+13], d[source_ptr+14], d[source_ptr+15]]) as usize;
+                    let mut props = Vec::new();
+                    for j in 0..num_props {
+                        let slot_offset = source_ptr + 16 + j * 32;
+                        if slot_offset + 32 > d.len() { break; }
+                        let flags = i32::from_le_bytes([d[slot_offset+4], d[slot_offset+5], d[slot_offset+6], d[slot_offset+7]]);
+                        if (flags & 2) == 0 { continue; }
+                        let nid = u32::from_le_bytes([d[slot_offset], d[slot_offset+1], d[slot_offset+2], d[slot_offset+3]]);
+                        let vl = i64::from_le_bytes([
+                            d[slot_offset+8], d[slot_offset+9], d[slot_offset+10], d[slot_offset+11],
+                            d[slot_offset+12], d[slot_offset+13], d[slot_offset+14], d[slot_offset+15],
+                        ]);
+                        props.push((nid, flags, vl));
+                    }
+                    props
+                };
+                // 写入目标对象
+                for (name_id, flags, val) in &source_props {
+                    let existing = find_property_slot_by_name_id(&mut caller, target_ptr, *name_id);
+                    if let Some((existing_offset, _, _)) = existing {
+                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { continue; };
+                        let d = mem.data_mut(&mut caller);
+                        d[existing_offset + 8..existing_offset + 16].copy_from_slice(&val.to_le_bytes());
+                    } else {
+                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { continue; };
+                        let d = mem.data_mut(&mut caller);
+                        let target_num_props = u32::from_le_bytes([d[target_ptr+12], d[target_ptr+13], d[target_ptr+14], d[target_ptr+15]]) as usize;
+                        let target_capacity = u32::from_le_bytes([d[target_ptr+8], d[target_ptr+9], d[target_ptr+10], d[target_ptr+11]]) as usize;
+                        if target_num_props < target_capacity {
+                            let new_slot_offset = target_ptr + 16 + target_num_props * 32;
+                            d[new_slot_offset..new_slot_offset+4].copy_from_slice(&name_id.to_le_bytes());
+                            d[new_slot_offset+4..new_slot_offset+8].copy_from_slice(&flags.to_le_bytes());
+                            d[new_slot_offset+8..new_slot_offset+16].copy_from_slice(&val.to_le_bytes());
+                            let zero: u64 = 0;
+                            d[new_slot_offset+16..new_slot_offset+24].copy_from_slice(&zero.to_le_bytes());
+                            d[new_slot_offset+24..new_slot_offset+32].copy_from_slice(&zero.to_le_bytes());
+                            d[target_ptr+12..target_ptr+16].copy_from_slice(&((target_num_props+1) as u32).to_le_bytes());
+                        }
+                    }
+                }
+            }
+            target
+        },
+    );
+    // ── Import 88: obj_create(i64, i64) -> i64 ────────────────────────────────
+    let obj_create_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, proto: i64, _properties: i64| -> i64 {
+            let obj_handle = alloc_object(&mut caller, 0);
+            if !value::is_null(proto) && !value::is_undefined(proto) {
+                // 设置 __proto__：通过内存写 proto 槽位
+                let Some(ptr) = resolve_handle(&mut caller, obj_handle) else { return obj_handle; };
+                let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return obj_handle; };
+                let d = mem.data_mut(&mut caller);
+                if value::is_object(proto) || value::is_function(proto) {
+                    let proto_handle = (proto as u64 & 0xFFFF_FFFF) as u32;
+                    d[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
+                }
+            }
+            obj_handle
+        },
+    );
+    // ── Import 89: obj_get_proto_of(i64) -> i64 ───────────────────────────────
+    let obj_get_proto_of_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_undefined();
+            };
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            let d = mem.data(&caller);
+            if ptr + 4 > d.len() { return value::encode_undefined(); }
+            let proto_handle = u32::from_le_bytes([
+                d[ptr], d[ptr + 1], d[ptr + 2], d[ptr + 3],
+            ]);
+            if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
+                return value::encode_null();
+            }
+            let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
+                return value::encode_null();
+            };
+            value::encode_object_handle(proto_handle)
+        },
+    );
+    // ── Import 90: obj_set_proto_of(i64, i64) -> i64 ──────────────────────────
+    let obj_set_proto_of_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, proto: i64| -> i64 {
+            if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
+                return obj; // primitive → no-op per spec
+            }
+            let Some(ptr) = resolve_handle(&mut caller, obj) else { return obj; };
+            if value::is_null(proto) || value::is_undefined(proto) {
+                // 设置为 null
+                let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return obj; };
+                let d = mem.data_mut(&mut caller);
+                let null_handle: u32 = 0xFFFF_FFFF;
+                d[ptr..ptr + 4].copy_from_slice(&null_handle.to_le_bytes());
+                return obj;
+            }
+            if value::is_object(proto) || value::is_function(proto) {
+                let proto_handle = (proto as u64 & 0xFFFF_FFFF) as u32;
+                let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return obj; };
+                let d = mem.data_mut(&mut caller);
+                d[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
+            }
+            obj
+        },
+    );
+    // ── Import 91: obj_get_own_prop_names(i64) -> i64 ─────────────────────────
+    let obj_get_own_prop_names_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            let Some(ptr) = resolve_handle(&mut caller, obj) else { return value::encode_undefined(); };
+            let names = collect_own_property_names(&mut caller, ptr, false);
+            let arr = alloc_array(&mut caller, names.len() as u32);
+            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else { return value::encode_undefined(); };
+            for (i, name) in names.iter().enumerate() {
+                let key_val = store_runtime_string(&caller, name.clone());
+                write_array_elem(&mut caller, arr_ptr, i as u32, key_val);
+            }
+            write_array_length(&mut caller, arr_ptr, names.len() as u32);
+            arr
+        },
+    );
+    // ── Import 92: obj_is(i64, i64) -> i64 ────────────────────────────────────
+    let obj_is_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, val1: i64, val2: i64| -> i64 {
+            // SameValue (ECMAScript 7.2.11)
+            let bits1 = val1 as u64;
+            let bits2 = val2 as u64;
+            // +0 != -0
+            if bits1 == 0 && bits2 == 0x8000_0000_0000_0000 { return value::encode_bool(false); }
+            if bits1 == 0x8000_0000_0000_0000 && bits2 == 0 { return value::encode_bool(false); }
+            // NaN == NaN
+            let f1 = f64::from_bits(bits1);
+            let f2 = f64::from_bits(bits2);
+            if f1.is_nan() && f2.is_nan() { return value::encode_bool(true); }
+            // Otherwise, bitwise equality
+            value::encode_bool(bits1 == bits2)
+        },
+    );
+    // ── Import 93: obj_proto_to_string(i64) -> i64 ────────────────────────────
+    let obj_proto_to_string_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            if value::is_undefined(obj) {
+                store_runtime_string(&_caller, "[object Undefined]".to_string())
+            } else if value::is_null(obj) {
+                store_runtime_string(&_caller, "[object Null]".to_string())
+            } else {
+                store_runtime_string(&_caller, "[object Object]".to_string())
+            }
+        },
+    );
+    // ── Import 94: obj_proto_value_of(i64) -> i64 ─────────────────────────────
+    let obj_proto_value_of_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            obj
+        },
+    );
+    
     let imports = [
         console_log.into(),          // 0
         f64_mod.into(),              // 1
@@ -2906,6 +3258,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         func_bind_fn.into(),                   // 80
         object_rest_fn.into(),                 // 81
         obj_spread_fn.into(),                  // 82
+        has_own_property_fn.into(),          // 83
+        obj_keys_fn.into(),                  // 84
+        obj_values_fn.into(),                // 85
+        obj_entries_fn.into(),               // 86
+        obj_assign_fn.into(),                // 87
+        obj_create_fn.into(),                // 88
+        obj_get_proto_of_fn.into(),          // 89
+        obj_set_proto_of_fn.into(),          // 90
+        obj_get_own_prop_names_fn.into(),    // 91
+        obj_is_fn.into(),                    // 92
+        obj_proto_to_string_fn.into(),       // 93
+        obj_proto_value_of_fn.into(),        // 94
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 

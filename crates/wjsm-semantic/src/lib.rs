@@ -5004,6 +5004,26 @@ impl Lowerer {
                             );
                             return Ok(dest);
                         }
+
+                        // Object.prototype 方法调用优化：hasOwnProperty, toString, valueOf
+                        if let Some(obj_proto_builtin) = builtin_from_object_proto_method(&prop_ident.sym) {
+                            // obj.method() → obj 是 this
+                            let this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: obj_proto_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
                     }
 
                     // obj.method() → obj 是 this，method 是 callee（未被拦截时）
@@ -6820,6 +6840,15 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
         "Object" => match property {
             "defineProperty" => Some(Builtin::DefineProperty),
             "getOwnPropertyDescriptor" => Some(Builtin::GetOwnPropDesc),
+            "keys" => Some(Builtin::ObjectKeys),
+            "values" => Some(Builtin::ObjectValues),
+            "entries" => Some(Builtin::ObjectEntries),
+            "assign" => Some(Builtin::ObjectAssign),
+            "create" => Some(Builtin::ObjectCreate),
+            "getPrototypeOf" => Some(Builtin::ObjectGetPrototypeOf),
+            "setPrototypeOf" => Some(Builtin::ObjectSetPrototypeOf),
+            "getOwnPropertyNames" => Some(Builtin::ObjectGetOwnPropertyNames),
+            "is" => Some(Builtin::ObjectIs),
             _ => None,
         },
         "JSON" => match property {
@@ -6867,6 +6896,17 @@ fn builtin_from_function_proto_method(name: &str) -> Option<Builtin> {
         _ => None,
     }
 }
+/// 将 Object.prototype 方法名映射到 Builtin 变体，用于语义层优化。
+/// 当 `obj.hasOwnProperty(key)` 被识别时，跳过运行时属性解析，直接发出 CallBuiltin。
+fn builtin_from_object_proto_method(name: &str) -> Option<Builtin> {
+    match name {
+        "hasOwnProperty" => Some(Builtin::HasOwnProperty),
+        "toString" => Some(Builtin::ObjectProtoToString),
+        "valueOf" => Some(Builtin::ObjectProtoValueOf),
+        _ => None,
+    }
+}
+
 
 fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
     match builtin {
@@ -6887,6 +6927,18 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::JsonParse => ("JSON.parse", 1),
         Builtin::AbstractEq => ("abstract-eq", 2),
         Builtin::AbstractCompare => ("abstract-compare", 2),
+        Builtin::HasOwnProperty => ("Object.prototype.hasOwnProperty", 2),
+        Builtin::ObjectProtoToString => ("Object.prototype.toString", 1),
+        Builtin::ObjectProtoValueOf => ("Object.prototype.valueOf", 1),
+        Builtin::ObjectKeys => ("Object.keys", 1),
+        Builtin::ObjectValues => ("Object.values", 1),
+        Builtin::ObjectEntries => ("Object.entries", 1),
+        Builtin::ObjectAssign => ("Object.assign", 2),
+        Builtin::ObjectCreate => ("Object.create", 1),
+        Builtin::ObjectGetPrototypeOf => ("Object.getPrototypeOf", 1),
+        Builtin::ObjectSetPrototypeOf => ("Object.setPrototypeOf", 2),
+        Builtin::ObjectGetOwnPropertyNames => ("Object.getOwnPropertyNames", 1),
+        Builtin::ObjectIs => ("Object.is", 2),
         _ => ("builtin", 0),
     }
 }
