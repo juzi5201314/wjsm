@@ -71,7 +71,7 @@
 - [x] **对象字面量计算属性名 + spread** — `{ [expr]: val }` 通过 lower_prop_name 处理 Computed 键名；`{ ...obj }` 通过 ObjectSpread IR 指令 + 运行时 obj_spread 实现。影响层：IR + 语义 + WASM 后端 + 运行时
 - [x] **类 getter/setter 方法** — lower_class_decl/expr 处理 MethodKind::Getter/Setter，构建属性描述符 {get/set, enumerable: false, configurable: true}，通过 DefineProperty 挂载到 prototype 或构造函数。对象字面量 getter/setter 同理（enumerable/configurable 默认 true）。影响层：语义
 - [x] **类静态方法 / 静态块** — 静态方法通过 method.is_static 判断，SetProp 到 ctor_dest 而非 proto_dest；`static {}` 静态初始化块创建独立函数并立即 Call(this=ctor)。影响层：语义
-- [ ] **`new` 表达式 prototype 查找修复** — 当前仅在函数自身属性对象上搜索 `prototype`，不走完整 `[[Get]]`（不遍历函数原型链）。需 GetPrototypeFromConstructor Builtin（已注册，运行时 stub）。影响层：语义 + 运行时
+- [x] **`new` 表达式 prototype 查找修复** — 当前仅在函数自身属性对象上搜索 `prototype`，不走完整 `[[Get]]`（不遍历函数原型链）。需 GetPrototypeFromConstructor Builtin（已注册，运行时 stub）。影响层：语义 + 运行时
 - [x] **`this` 绑定：call / apply / bind** — 语义层拦截 func.call/apply/bind 转为 CallBuiltin，运行时实现 func_call/func_apply/func_bind + BoundRecord 表 + TAG_BOUND 递归解包。影响层：IR + 语义 + WASM 后端 + 运行时
 
 ### 块 G：Object 标准方法 ✅
