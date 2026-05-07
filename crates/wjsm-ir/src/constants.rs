@@ -9,6 +9,10 @@ pub const TYPEOF_STRING_OFFSET: u32 = 25; // "string\0" (7 bytes)
 pub const TYPEOF_FUNCTION_OFFSET: u32 = 32; // "function\0" (9 bytes)
 pub const TYPEOF_NUMBER_OFFSET: u32 = 41; // "number\0" (7 bytes)
 // offset 48-66 预留给 "symbol\0" (7) 和 "bigint\0" (7)
+/// offset 48: "symbol\0" (7 bytes) — 对应 encode_typeof_symbol()
+pub const TYPEOF_SYMBOL_OFFSET: u32 = 48;
+/// offset 55: "bigint\0" (7 bytes) — 对应 encode_typeof_bigint()
+pub const TYPEOF_BIGINT_OFFSET: u32 = 55;
 pub const TYPEOF_RESERVED_END: u32 = 66;
 
 // ── 属性描述符字符串区域 ────────────────────────────────────────────────────

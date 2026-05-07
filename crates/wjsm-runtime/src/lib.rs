@@ -4,6 +4,7 @@ use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use wasmtime::*;
+use num_traits::cast::ToPrimitive;
 /// 影子栈大小（必须与后端保持一致）
 const SHADOW_STACK_SIZE: u32 = 65536;
 
@@ -31,6 +32,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let closures: Arc<Mutex<Vec<ClosureEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let bound_objects: Arc<Mutex<Vec<BoundRecord>>> = Arc::new(Mutex::new(Vec::new()));
 
+    let bigint_table: Arc<Mutex<Vec<num_bigint::BigInt>>> = Arc::new(Mutex::new(Vec::new()));
+    let symbol_table: Arc<Mutex<Vec<SymbolEntry>>> = Arc::new(Mutex::new(Vec::new()));
+
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     let alloc_counter: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
@@ -51,6 +55,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             gc_threshold: GC_THRESHOLD,
             closures: Arc::clone(&closures),
             bound_objects: Arc::clone(&bound_objects),
+            bigint_table: Arc::clone(&bigint_table),
+            symbol_table: Arc::clone(&symbol_table),
         },
     );
 
@@ -390,6 +396,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 value::encode_typeof_object()
             } else if value::is_iterator(val) || value::is_enumerator(val) {
                 value::encode_typeof_object()
+            } else if value::is_bigint(val) {
+                value::encode_typeof_bigint()
+            } else if value::is_symbol(val) {
+                value::encode_typeof_symbol()
             } else {
                 value::encode_typeof_number()
             }
@@ -1064,7 +1074,70 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     continue;
                 }
 
-                // 10. 其他情况 → false
+
+                // 10. BigInt == Number: 数学值比较 (ES §7.2.15)
+                if value::is_bigint(x) && value::is_f64(y) {
+                    let a_handle = value::decode_bigint_handle(x) as usize;
+                    let b_f64 = f64::from_bits(y as u64);
+                    // NaN 或 ±∞ → false
+                    if !b_f64.is_finite() {
+                        return value::encode_bool(false);
+                    }
+                    // 非整数 → false (BigInt 总是整数)
+                    if b_f64.fract() != 0.0 {
+                        return value::encode_bool(false);
+                    }
+                    // 通过 f64 → BigInt 转换比较数学值
+                    if let Some(bi_y) = num_traits::cast::FromPrimitive::from_f64(b_f64) {
+                        let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                        return value::encode_bool(table.get(a_handle).map(|bi| *bi == bi_y).unwrap_or(false));
+                    }
+                    return value::encode_bool(false);
+                }
+                // 11. Number == BigInt
+                if value::is_f64(x) && value::is_bigint(y) {
+                    let a_f64 = f64::from_bits(x as u64);
+                    let b_handle = value::decode_bigint_handle(y) as usize;
+                    if !a_f64.is_finite() {
+                        return value::encode_bool(false);
+                    }
+                    if a_f64.fract() != 0.0 {
+                        return value::encode_bool(false);
+                    }
+                    if let Some(bi_x) = num_traits::cast::FromPrimitive::from_f64(a_f64) {
+                        let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                        return value::encode_bool(table.get(b_handle).map(|bi| *bi == bi_x).unwrap_or(false));
+                    }
+                    return value::encode_bool(false);
+                }
+                // 12. BigInt == String / String == BigInt: StringToBigInt → 比较 (ES §7.2.15)
+                if value::is_bigint(x) && value::is_string(y) {
+                    if let Some(bytes) = read_value_string_bytes(&mut caller, y) {
+                        let s = String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_string();
+                        if let Ok(bi_y) = s.parse::<num_bigint::BigInt>() {
+                            let a_handle = value::decode_bigint_handle(x) as usize;
+                            let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                            return value::encode_bool(table.get(a_handle).map(|bi| *bi == bi_y).unwrap_or(false));
+                        }
+                    }
+                    return value::encode_bool(false);
+                }
+                if value::is_string(x) && value::is_bigint(y) {
+                    if let Some(bytes) = read_value_string_bytes(&mut caller, x) {
+                        let s = String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_string();
+                        if let Ok(bi_x) = s.parse::<num_bigint::BigInt>() {
+                            let b_handle = value::decode_bigint_handle(y) as usize;
+                            let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                            return value::encode_bool(table.get(b_handle).map(|bi| *bi == bi_x).unwrap_or(false));
+                        }
+                    }
+                    return value::encode_bool(false);
+                }
+                // 13. Symbol 与其他类型比较 → false
+                if value::is_symbol(x) || value::is_symbol(y) {
+                    return value::encode_bool(false);
+                }
+                // 14. 其他情况 → false
                 return value::encode_bool(false);
             }
             // 迭代次数超限 → false
@@ -3238,6 +3311,293 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             obj
         },
     );
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ── BigInt host functions ──────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+
+    // ── Import 95: bigint_from_literal(i32, i32) → i64 ─────────────────
+    let bigint_from_literal_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, ptr: i32, _len: i32| -> i64 {
+            let s = read_string(&mut caller, ptr as u32).unwrap_or_default();
+            // 去掉末尾可能存在的 nul 字符
+            let trimmed = s.trim_end_matches('\0');
+            if let Ok(bigint) = trimmed.parse::<num_bigint::BigInt>() {
+                let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                let handle = table.len() as u32;
+                table.push(bigint);
+                value::encode_bigint_handle(handle)
+            } else {
+                value::encode_undefined()
+            }
+        },
+    );
+
+    // ── BigInt arithmetic helpers ─────────────────────────────────────
+    fn bigint_binary_op(
+        caller: &mut Caller<'_, RuntimeState>,
+        a: i64,
+        b: i64,
+        op: impl Fn(&num_bigint::BigInt, &num_bigint::BigInt) -> num_bigint::BigInt,
+    ) -> i64 {
+        let a_handle = value::decode_bigint_handle(a) as usize;
+        let b_handle = value::decode_bigint_handle(b) as usize;
+        let (a_val, b_val) = {
+            let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+            (table.get(a_handle).cloned(), table.get(b_handle).cloned())
+        };
+        match (a_val, b_val) {
+            (Some(av), Some(bv)) => {
+                let result = op(&av, &bv);
+                let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                let handle = table.len() as u32;
+                table.push(result);
+                value::encode_bigint_handle(handle)
+            }
+            _ => value::encode_undefined(),
+        }
+    }
+
+    let bigint_add_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            bigint_binary_op(&mut caller, a, b, |x, y| x + y)
+        },
+    );
+    let bigint_sub_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            bigint_binary_op(&mut caller, a, b, |x, y| x - y)
+        },
+    );
+    let bigint_mul_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            bigint_binary_op(&mut caller, a, b, |x, y| x * y)
+        },
+    );
+    let bigint_div_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let a_handle = value::decode_bigint_handle(a) as usize;
+            let b_handle = value::decode_bigint_handle(b) as usize;
+            let (av, bv) = {
+                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                (table.get(a_handle).cloned(), table.get(b_handle).cloned())
+            };
+            match (av, bv) {
+                (Some(x), Some(y)) => {
+                    if y == 0u32.into() {
+                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                            Some("RangeError: BigInt division by zero".to_string());
+                        return value::encode_undefined();
+                    }
+                    let result = x / y;
+                    let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                    let handle = table.len() as u32;
+                    table.push(result);
+                    value::encode_bigint_handle(handle)
+                }
+                _ => value::encode_undefined(),
+            }
+        },
+    );
+    let bigint_mod_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let a_handle = value::decode_bigint_handle(a) as usize;
+            let b_handle = value::decode_bigint_handle(b) as usize;
+            let (av, bv) = {
+                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                (table.get(a_handle).cloned(), table.get(b_handle).cloned())
+            };
+            match (av, bv) {
+                (Some(x), Some(y)) => {
+                    if y == 0u32.into() {
+                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                            Some("RangeError: BigInt division by zero".to_string());
+                        return value::encode_undefined();
+                    }
+                    let result = x % y;
+                    let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                    let handle = table.len() as u32;
+                    table.push(result);
+                    value::encode_bigint_handle(handle)
+                }
+                _ => value::encode_undefined(),
+            }
+        },
+    );
+    let bigint_pow_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let a_handle = value::decode_bigint_handle(a) as usize;
+            let b_handle = value::decode_bigint_handle(b) as usize;
+            let (av, bv) = {
+                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                (table.get(a_handle).cloned(), table.get(b_handle).cloned())
+            };
+            match (av, bv) {
+                (Some(x), Some(y)) => {
+                    // Per spec §6.1.6.1.9: negative exponent throws RangeError
+                    if y.sign() == num_bigint::Sign::Minus {
+                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                            Some("RangeError: BigInt exponent must be non-negative".to_string());
+                        return value::encode_undefined();
+                    }
+                    let exp = match y.to_u32() {
+                        Some(e) => e,
+                        None => {
+                            *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                                Some("RangeError: BigInt exponent too large".to_string());
+                            return value::encode_undefined();
+                        }
+                    };
+                    let result = x.pow(exp);
+                    let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                    let handle = table.len() as u32;
+                    table.push(result);
+                    value::encode_bigint_handle(handle)
+                }
+                _ => value::encode_undefined(),
+            }
+        },
+    );
+    let bigint_neg_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, a: i64| -> i64 {
+            let a_handle = value::decode_bigint_handle(a) as usize;
+            let a_val = {
+                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                table.get(a_handle).cloned()
+            };
+            if let Some(av) = a_val {
+                let result = -av;
+                let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                let handle = table.len() as u32;
+                table.push(result);
+                value::encode_bigint_handle(handle)
+            } else {
+                value::encode_undefined()
+            }
+        },
+    );
+    let bigint_eq_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let a_handle = value::decode_bigint_handle(a) as usize;
+            let b_handle = value::decode_bigint_handle(b) as usize;
+            let eq = {
+                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                table.get(a_handle).zip(table.get(b_handle)).map(|(x, y)| x == y).unwrap_or(false)
+            };
+            value::encode_bool(eq)
+        },
+    );
+    let bigint_cmp_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let a_handle = value::decode_bigint_handle(a) as usize;
+            let b_handle = value::decode_bigint_handle(b) as usize;
+            let cmp = {
+                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                match (table.get(a_handle), table.get(b_handle)) {
+                    (Some(x), Some(y)) => {
+                        use std::cmp::Ordering;
+                        match x.cmp(y) {
+                            Ordering::Less => -1.0f64,
+                            Ordering::Equal => 0.0f64,
+                            Ordering::Greater => 1.0f64,
+                        }
+                    }
+                    _ => f64::NAN,
+                }
+            };
+            cmp.to_bits() as i64
+        },
+    );
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ── Symbol host functions ──────────────────────────────────────────
+    // ═══════════════════════════════════════════════════════════════════
+
+    // ── Import 105: symbol_create(i64) → i64 ──────────────────────────
+    let symbol_create_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, desc: i64| -> i64 {
+            let description = if value::is_undefined(desc) {
+                None
+            } else {
+                let s = render_value(&mut caller, desc).unwrap_or_default();
+                // 去掉符号描述可能有的额外引号
+                Some(s.trim_matches('"').to_string())
+            };
+            let mut table = caller.data().symbol_table.lock().expect("symbol_table mutex");
+            let handle = table.len() as u32;
+            table.push(SymbolEntry {
+                description,
+                global_key: None,
+            });
+            value::encode_symbol_handle(handle)
+        },
+    );
+
+    // ── Import 106: symbol_for(i64) → i64 ─────────────────────────────
+    // 全局 symbol 注册表（static 变量，与 RuntimeState 生命周期相同）
+    // Symbol.for(key) 返回全局注册表中的 symbol
+    let symbol_for_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, key: i64| -> i64 {
+            let key_str = if value::is_string(key) {
+                read_value_string_bytes(&mut caller, key).map(|b| String::from_utf8_lossy(&b).to_string())
+            } else {
+                render_value(&mut caller, key).ok()
+            }.unwrap_or_default();
+            let key_str = key_str.trim_end_matches('\0').to_string();
+            let mut table = caller.data().symbol_table.lock().expect("symbol_table mutex");
+            // 查找是否已有同 key 的 symbol
+            for (idx, entry) in table.iter().enumerate() {
+                if entry.global_key.as_deref() == Some(&key_str) {
+                    return value::encode_symbol_handle(idx as u32);
+                }
+            }
+            // 创建新 symbol
+            let handle = table.len() as u32;
+            table.push(SymbolEntry {
+                description: Some(key_str.clone()),
+                global_key: Some(key_str),
+            });
+            value::encode_symbol_handle(handle)
+        },
+    );
+
+    // ── Import 107: symbol_key_for(i64) → i64 ─────────────────────────
+    let symbol_key_for_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, sym: i64| -> i64 {
+            if !value::is_symbol(sym) {
+                return value::encode_undefined();
+            }
+            let handle = value::decode_symbol_handle(sym) as usize;
+            let table = caller.data().symbol_table.lock().expect("symbol_table mutex");
+            let key_to_return = table.get(handle).and_then(|entry| entry.global_key.clone());
+            drop(table);
+            if let Some(key) = key_to_return {
+                return store_runtime_string(&caller, key);
+            }
+            value::encode_undefined()
+        },
+    );
+
+    // ── Import 108: symbol_well_known(i32) → i64 ──────────────────────
+    let symbol_well_known_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _id: i32| -> i64 {
+            // 暂时返回 undefined，well-known symbols 后续实现
+            value::encode_undefined()
+        },
+    );
     
     let imports = [
         console_log.into(),          // 0
@@ -3335,6 +3695,22 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         obj_is_fn.into(),                    // 92
         obj_proto_to_string_fn.into(),       // 93
         obj_proto_value_of_fn.into(),        // 94
+        // ── BigInt imports ──
+        bigint_from_literal_fn.into(),       // 95
+        bigint_add_fn.into(),                // 96
+        bigint_sub_fn.into(),                // 97
+        bigint_mul_fn.into(),                // 98
+        bigint_div_fn.into(),                // 99
+        bigint_mod_fn.into(),                // 100
+        bigint_pow_fn.into(),                // 101
+        bigint_neg_fn.into(),                // 102
+        bigint_eq_fn.into(),                 // 103
+        bigint_cmp_fn.into(),                // 104
+        // ── Symbol imports ──
+        symbol_create_fn.into(),             // 105
+        symbol_for_fn.into(),                // 106
+        symbol_key_for_fn.into(),            // 107
+        symbol_well_known_fn.into(),         // 108
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -3470,6 +3846,10 @@ struct RuntimeState {
     closures: Arc<Mutex<Vec<ClosureEntry>>>,
     /// 绑定函数表：存储 func.bind(this, args) 创建的绑定函数
     bound_objects: Arc<Mutex<Vec<BoundRecord>>>,
+    /// BigInt 侧表：存储任意精度 BigInt 值
+    bigint_table: Arc<Mutex<Vec<num_bigint::BigInt>>>,
+    /// Symbol 侧表：存储 symbol 条目（description + global_key）
+    symbol_table: Arc<Mutex<Vec<SymbolEntry>>>,
 }
 
 /// 绑定函数记录
@@ -3477,6 +3857,12 @@ struct BoundRecord {
     target_func: i64,     // TAG_FUNCTION / TAG_CLOSURE / TAG_BOUND
     bound_this: i64,      // NaN-boxed
     bound_args: Vec<i64>, // NaN-boxed values
+}
+
+/// Symbol 条目
+struct SymbolEntry {
+    description: Option<String>,
+    global_key: Option<String>,
 }
 
 /// 闭包条目
@@ -3592,6 +3978,28 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
         return Ok(format!("function [closure:{idx}]"));
     }
 
+    if value::is_bigint(val) {
+        let handle = value::decode_bigint_handle(val) as usize;
+        let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+        if let Some(bigint) = table.get(handle) {
+            return Ok(format!("{bigint}n"));
+        }
+        return Ok("0n".to_string());
+    }
+
+    if value::is_symbol(val) {
+        let handle = value::decode_symbol_handle(val) as usize;
+        let table = caller.data().symbol_table.lock().expect("symbol_table mutex");
+        if let Some(entry) = table.get(handle) {
+            if let Some(ref desc) = entry.description {
+                // Escape the description for display
+                return Ok(format!("Symbol({})", desc));
+            }
+            return Ok("Symbol()".to_string());
+        }
+        return Ok("Symbol()".to_string());
+    }
+
     Ok(f64::from_bits(val as u64).to_string())
 }
 
@@ -3665,6 +4073,14 @@ fn runtime_json_stringify(caller: &mut Caller<'_, RuntimeState>, val: i64) -> St
     } else if value::is_null(val) {
         "null".to_string()
     } else if value::is_undefined(val) || value::is_callable(val) {
+        "undefined".to_string()
+    } else if value::is_bigint(val) {
+        // JSON.stringify on BigInt throws TypeError
+        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+            Some("TypeError: Do not know how to serialize a BigInt".to_string());
+        "null".to_string()
+    } else if value::is_symbol(val) {
+        // JSON.stringify 返回 undefined for Symbol values
         "undefined".to_string()
     } else if value::is_object(val) {
         "[object Object]".to_string()
@@ -4476,6 +4892,25 @@ fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
         return f64::NAN.to_bits() as i64;
     }
 
+    // BigInt → ToNumber: 转为 f64（可能丢失精度）
+    if value::is_bigint(val) {
+        let handle = value::decode_bigint_handle(val) as usize;
+        let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+        if let Some(bi) = table.get(handle) {
+            if let Some(f) = bi.to_f64() {
+                return f.to_bits() as i64;
+            }
+        }
+        return f64::NAN.to_bits() as i64;
+    }
+
+    // Symbol → ToNumber: 抛出 TypeError
+    if value::is_symbol(val) {
+        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+            Some("TypeError: Cannot convert a Symbol value to a number".to_string());
+        return f64::NAN.to_bits() as i64;
+    }
+
     // object/function → ToPrimitive(hint: Number) → ToNumber
     // 简化实现：调用 render_value 返回字符串，然后解析
     if value::is_object(val) || value::is_callable(val) {
@@ -4497,6 +4932,8 @@ fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
         || value::is_bool(val)
         || value::is_undefined(val)
         || value::is_null(val)
+        || value::is_bigint(val)
+        || value::is_symbol(val)
     {
         return val;
     }
@@ -4553,13 +4990,23 @@ fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -> i64 {
         3 => value::encode_bool(true),
         // bool
         4 => value::encode_bool(value::decode_bool(a) == value::decode_bool(b)),
+        // BigInt: 值比较
+        6 => {
+            let a_handle = value::decode_bigint_handle(a) as usize;
+            let b_handle = value::decode_bigint_handle(b) as usize;
+            let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+            let eq = table.get(a_handle).zip(table.get(b_handle)).map(|(x, y)| x == y).unwrap_or(false);
+            value::encode_bool(eq)
+        }
+        // Symbol: 引用比较（同一 handle）
+        7 => value::encode_bool(a == b),
         // object/function/iterator/enumerator/exception: 引用比较
         _ => value::encode_bool(a == b),
-    }
+}
 }
 
 /// 获取类型标签 (用于 strict_eq)
-/// 返回值: 0=f64, 1=string, 2=undefined, 3=null, 4=bool, 5+=其他
+/// 返回值: 0=f64, 1=string, 2=undefined, 3=null, 4=bool, 5=object/function/其他, 6=bigint, 7=symbol
 fn type_tag(val: i64) -> u64 {
     if value::is_f64(val) {
         0
@@ -4571,9 +5018,13 @@ fn type_tag(val: i64) -> u64 {
         3
     } else if value::is_bool(val) {
         4
+    } else if value::is_bigint(val) {
+        6
+    } else if value::is_symbol(val) {
+        7
     } else {
         5
-    } // object, function, iterator, enumerator, exception
+    } // object, function, iterator, enumerator, exception, bound
 }
 
 /// 获取字符串值

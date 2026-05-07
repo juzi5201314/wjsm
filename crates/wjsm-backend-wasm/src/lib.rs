@@ -490,6 +490,34 @@ impl Compiler {
         imports.import("env", "obj_proto_to_string", EntityType::Function(3));
         // Import index 94: obj_proto_value_of: (i64) -> (i64)
         imports.import("env", "obj_proto_value_of", EntityType::Function(3));
+        // Import index 95: bigint_from_literal: (i32, i32) -> i64
+        imports.import("env", "bigint_from_literal", EntityType::Function(19));
+        // Import index 96: bigint_add: (i64, i64) -> i64
+        imports.import("env", "bigint_add", EntityType::Function(2));
+        // Import index 97: bigint_sub: (i64, i64) -> i64
+        imports.import("env", "bigint_sub", EntityType::Function(2));
+        // Import index 98: bigint_mul: (i64, i64) -> i64
+        imports.import("env", "bigint_mul", EntityType::Function(2));
+        // Import index 99: bigint_div: (i64, i64) -> i64
+        imports.import("env", "bigint_div", EntityType::Function(2));
+        // Import index 100: bigint_mod: (i64, i64) -> i64
+        imports.import("env", "bigint_mod", EntityType::Function(2));
+        // Import index 101: bigint_pow: (i64, i64) -> i64
+        imports.import("env", "bigint_pow", EntityType::Function(2));
+        // Import index 102: bigint_neg: (i64) -> i64
+        imports.import("env", "bigint_neg", EntityType::Function(3));
+        // Import index 103: bigint_eq: (i64, i64) -> i64
+        imports.import("env", "bigint_eq", EntityType::Function(2));
+        // Import index 104: bigint_cmp: (i64, i64) -> i64
+        imports.import("env", "bigint_cmp", EntityType::Function(2));
+        // Import index 105: symbol_create: (i64) -> i64
+        imports.import("env", "symbol_create", EntityType::Function(3));
+        // Import index 106: symbol_for: (i64) -> i64
+        imports.import("env", "symbol_for", EntityType::Function(3));
+        // Import index 107: symbol_key_for: (i64) -> i64
+        imports.import("env", "symbol_key_for", EntityType::Function(3));
+        // Import index 108: symbol_well_known: (i32) -> i64
+        imports.import("env", "symbol_well_known", EntityType::Function(15));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -570,6 +598,22 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::ObjectIs, 92);
         builtin_func_indices.insert(Builtin::ObjectProtoToString, 93);
         builtin_func_indices.insert(Builtin::ObjectProtoValueOf, 94);
+        // ── BigInt builtins ──
+        builtin_func_indices.insert(Builtin::BigIntFromLiteral, 95);
+        builtin_func_indices.insert(Builtin::BigIntAdd, 96);
+        builtin_func_indices.insert(Builtin::BigIntSub, 97);
+        builtin_func_indices.insert(Builtin::BigIntMul, 98);
+        builtin_func_indices.insert(Builtin::BigIntDiv, 99);
+        builtin_func_indices.insert(Builtin::BigIntMod, 100);
+        builtin_func_indices.insert(Builtin::BigIntPow, 101);
+        builtin_func_indices.insert(Builtin::BigIntNeg, 102);
+        builtin_func_indices.insert(Builtin::BigIntEq, 103);
+        builtin_func_indices.insert(Builtin::BigIntCmp, 104);
+        // ── Symbol builtins ──
+        builtin_func_indices.insert(Builtin::SymbolCreate, 105);
+        builtin_func_indices.insert(Builtin::SymbolFor, 106);
+        builtin_func_indices.insert(Builtin::SymbolKeyFor, 107);
+        builtin_func_indices.insert(Builtin::SymbolWellKnown, 108);
 
         let functions = FunctionSection::new();
 
@@ -606,7 +650,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 95, // 95 imports (0-94)
+            _next_import_func: 109, // 109 imports (0-108)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -782,6 +826,8 @@ impl Compiler {
             (constants::TYPEOF_STRING_OFFSET, "string"),
             (constants::TYPEOF_FUNCTION_OFFSET, "function"),
             (constants::TYPEOF_NUMBER_OFFSET, "number"),
+            (constants::TYPEOF_SYMBOL_OFFSET, "symbol"),
+            (constants::TYPEOF_BIGINT_OFFSET, "bigint"),
         ];
         for &(offset, s) in typeof_strings {
             let end = offset as usize + s.len() + 1;
@@ -3385,9 +3431,24 @@ impl Compiler {
                     .constants()
                     .get(constant.0 as usize)
                     .with_context(|| format!("missing constant {constant}"))?;
-                let encoded = self.encode_constant(constant, module)?;
-                self.emit(WasmInstruction::I64Const(encoded));
-                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                // BigInt 常量：嵌入字符串到 data segment，运行时调用 bigint_from_literal
+                if let Constant::BigInt(s) = constant {
+                    let ptr = self.intern_data_string(s);
+                    let len = (s.len() + 1) as i32; // 包含 nul terminator
+                    self.emit(WasmInstruction::I32Const(ptr as i32));
+                    self.emit(WasmInstruction::I32Const(len));
+                    let func_idx = self
+                        .builtin_func_indices
+                        .get(&Builtin::BigIntFromLiteral)
+                        .copied()
+                        .unwrap_or(95);
+                    self.emit(WasmInstruction::Call(func_idx));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                } else {
+                    let encoded = self.encode_constant(constant, module)?;
+                    self.emit(WasmInstruction::I64Const(encoded));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                }
                 Ok(())
             }
             Instruction::Binary { dest, op, lhs, rhs } => {
@@ -4762,6 +4823,77 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── BigInt builtins ──
+            Builtin::BigIntFromLiteral => {
+                // Handled in compile_instruction (Const)
+                bail!("BigIntFromLiteral should not reach compile_builtin_call");
+            }
+            Builtin::BigIntAdd | Builtin::BigIntSub | Builtin::BigIntMul
+            | Builtin::BigIntDiv | Builtin::BigIntMod | Builtin::BigIntPow
+            | Builtin::BigIntEq | Builtin::BigIntCmp => {
+                let a = args.first().context("BigInt binary op expects 2 args")?;
+                let b = args.get(1).context("BigInt binary op expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::BigIntNeg => {
+                let a = args.first().context("BigIntNeg expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Symbol builtins ──
+            Builtin::SymbolCreate => {
+                // Symbol(desc?) — desc 可选，缺省为 undefined
+                if let Some(desc) = args.first() {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(desc.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::SymbolFor | Builtin::SymbolKeyFor => {
+                let arg = args.first().context("Symbol for/keyFor expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::SymbolWellKnown => {
+                let arg = args.first().context("SymbolWellKnown expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                self.emit(WasmInstruction::F64ReinterpretI64);
+                self.emit(WasmInstruction::I32TruncF64S);
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
         }
     }
 
@@ -4790,10 +4922,11 @@ impl Compiler {
             Constant::Null => Ok(value::encode_null()),
             Constant::Undefined => Ok(value::encode_undefined()),
             Constant::FunctionRef(function_id) => {
-                // Table index = IR function index (functions are registered in order).
-                // The element section maps table[i] → wasm_func_index.
                 let table_idx = function_id.0;
                 Ok(value::encode_function_idx(table_idx))
+            }
+            Constant::BigInt(_) => {
+                bail!("BigInt constants should be handled in compile_instruction::Const")
             }
         }
     }

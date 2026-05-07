@@ -1,6 +1,6 @@
 use crate::constants::{
-    TYPEOF_BOOLEAN_OFFSET, TYPEOF_FUNCTION_OFFSET, TYPEOF_NUMBER_OFFSET, TYPEOF_OBJECT_OFFSET,
-    TYPEOF_STRING_OFFSET, TYPEOF_UNDEFINED_OFFSET,
+    TYPEOF_BIGINT_OFFSET, TYPEOF_BOOLEAN_OFFSET, TYPEOF_FUNCTION_OFFSET, TYPEOF_NUMBER_OFFSET,
+    TYPEOF_OBJECT_OFFSET, TYPEOF_STRING_OFFSET, TYPEOF_SYMBOL_OFFSET, TYPEOF_UNDEFINED_OFFSET,
 };
 
 pub const MASK_SIGN: u64 = 0x8000_0000_0000_0000;
@@ -23,6 +23,40 @@ pub const TAG_CLOSURE: u64 = 0xA;
 
 pub const TAG_ARRAY: u64 = 0xB;
 pub const TAG_BOUND: u64 = 0xC;
+
+// ── BigInt value ─────────────────────────────────────────────────────
+
+pub const TAG_BIGINT: u64 = 0xD;
+
+pub fn encode_bigint_handle(handle: u32) -> i64 {
+    encode_handle(TAG_BIGINT, handle)
+}
+
+pub fn is_bigint(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_BIGINT
+}
+
+pub fn decode_bigint_handle(val: i64) -> u32 {
+    (val as u64 & 0xFFFF_FFFF) as u32
+}
+
+// ── Symbol value ─────────────────────────────────────────────────────
+
+pub const TAG_SYMBOL: u64 = 0xE;
+
+pub fn encode_symbol_handle(handle: u32) -> i64 {
+    encode_handle(TAG_SYMBOL, handle)
+}
+
+pub fn is_symbol(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_SYMBOL
+}
+
+pub fn decode_symbol_handle(val: i64) -> u32 {
+    (val as u64 & 0xFFFF_FFFF) as u32
+}
 
 
 pub fn is_array(val: i64) -> bool {
@@ -71,6 +105,16 @@ pub fn encode_typeof_function() -> i64 {
 /// typeof "number" → NaN-boxed string ptr (data segment offset 41)
 pub fn encode_typeof_number() -> i64 {
     encode_string_ptr(TYPEOF_NUMBER_OFFSET)
+}
+
+/// typeof "bigint" → NaN-boxed string ptr (data segment offset 55)
+pub fn encode_typeof_bigint() -> i64 {
+    encode_string_ptr(TYPEOF_BIGINT_OFFSET)
+}
+
+/// typeof "symbol" → NaN-boxed string ptr (data segment offset 48)
+pub fn encode_typeof_symbol() -> i64 {
+    encode_string_ptr(TYPEOF_SYMBOL_OFFSET)
 }
 
 pub fn encode_runtime_string_handle(handle: u32) -> i64 {
