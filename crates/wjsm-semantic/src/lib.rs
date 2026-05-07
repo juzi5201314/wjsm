@@ -4818,25 +4818,17 @@ impl Lowerer {
             },
         );
 
-        // Get prototype from constructor.
-        let proto_key_const = self
-            .module
-            .add_constant(Constant::String("prototype".to_string()));
-        let proto_key = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: proto_key,
-                constant: proto_key_const,
-            },
-        );
+        // Get prototype from constructor via GetPrototypeFromConstructor builtin.
+        // 语义等价于 ECMAScript GetPrototypeFromConstructor(F)：
+        // 1. 读取 ctor.prototype（含原型链遍历）
+        // 2. 若非 Object 类型（包含 Array、Function、Closure 等），回退到 Object.prototype
         let proto_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
-            Instruction::GetProp {
-                dest: proto_val,
-                object: callee_val,
-                key: proto_key,
+            Instruction::CallBuiltin {
+                dest: Some(proto_val),
+                builtin: Builtin::GetPrototypeFromConstructor,
+                args: vec![callee_val],
             },
         );
 
