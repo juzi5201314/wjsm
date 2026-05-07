@@ -466,6 +466,30 @@ impl Compiler {
         imports.import("env", "object_rest", EntityType::Function(2));
         // Import index 82: obj_spread: (i64, i64) -> ()
         imports.import("env", "obj_spread", EntityType::Function(5));
+        // Import index 83: has_own_property: (i64, i32) -> (i64)
+        imports.import("env", "has_own_property", EntityType::Function(8));
+        // Import index 84: obj_keys: (i64) -> (i64)
+        imports.import("env", "obj_keys", EntityType::Function(3));
+        // Import index 85: obj_values: (i64) -> (i64)
+        imports.import("env", "obj_values", EntityType::Function(3));
+        // Import index 86: obj_entries: (i64) -> (i64)
+        imports.import("env", "obj_entries", EntityType::Function(3));
+        // Import index 87: obj_assign: (i64, i64, i32, i32) -> (i64)
+        imports.import("env", "obj_assign", EntityType::Function(12));
+        // Import index 88: obj_create: (i64, i64) -> (i64)
+        imports.import("env", "obj_create", EntityType::Function(2));
+        // Import index 89: obj_get_proto_of: (i64) -> (i64)
+        imports.import("env", "obj_get_proto_of", EntityType::Function(3));
+        // Import index 90: obj_set_proto_of: (i64, i64) -> (i64)
+        imports.import("env", "obj_set_proto_of", EntityType::Function(2));
+        // Import index 91: obj_get_own_prop_names: (i64) -> (i64)
+        imports.import("env", "obj_get_own_prop_names", EntityType::Function(3));
+        // Import index 92: obj_is: (i64, i64) -> (i64)
+        imports.import("env", "obj_is", EntityType::Function(2));
+        // Import index 93: obj_proto_to_string: (i64) -> (i64)
+        imports.import("env", "obj_proto_to_string", EntityType::Function(3));
+        // Import index 94: obj_proto_value_of: (i64) -> (i64)
+        imports.import("env", "obj_proto_value_of", EntityType::Function(3));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -534,6 +558,18 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::FuncApply, 79);
         builtin_func_indices.insert(Builtin::FuncBind, 80);
         builtin_func_indices.insert(Builtin::ObjectRest, 81);
+        builtin_func_indices.insert(Builtin::HasOwnProperty, 83);
+        builtin_func_indices.insert(Builtin::ObjectKeys, 84);
+        builtin_func_indices.insert(Builtin::ObjectValues, 85);
+        builtin_func_indices.insert(Builtin::ObjectEntries, 86);
+        builtin_func_indices.insert(Builtin::ObjectAssign, 87);
+        builtin_func_indices.insert(Builtin::ObjectCreate, 88);
+        builtin_func_indices.insert(Builtin::ObjectGetPrototypeOf, 89);
+        builtin_func_indices.insert(Builtin::ObjectSetPrototypeOf, 90);
+        builtin_func_indices.insert(Builtin::ObjectGetOwnPropertyNames, 91);
+        builtin_func_indices.insert(Builtin::ObjectIs, 92);
+        builtin_func_indices.insert(Builtin::ObjectProtoToString, 93);
+        builtin_func_indices.insert(Builtin::ObjectProtoValueOf, 94);
 
         let functions = FunctionSection::new();
 
@@ -570,7 +606,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 83, // 83 imports (0-82)
+            _next_import_func: 95, // 95 imports (0-94)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -4617,6 +4653,110 @@ impl Compiler {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 }
                 self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Object builtin methods ─────────────────────────────────
+            Builtin::HasOwnProperty => {
+                let obj_arg = args.first().context("HasOwnProperty expects 2 args (obj, key)")?;
+                let key_arg = args.get(1).context("HasOwnProperty expects 2 args (obj, key)")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(83);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::ObjectKeys
+            | Builtin::ObjectValues
+            | Builtin::ObjectEntries
+            | Builtin::ObjectGetPrototypeOf
+            | Builtin::ObjectGetOwnPropertyNames
+            | Builtin::ObjectProtoToString
+            | Builtin::ObjectProtoValueOf => {
+                let val = args.first().context("Object method expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().with_context(|| {
+                    format!("no WASM func index for builtin {builtin}")
+                })?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::ObjectSetPrototypeOf
+            | Builtin::ObjectIs => {
+                let a = args.first().context("Object method expects 2 args")?;
+                let b = args.get(1).context("Object method expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().with_context(|| {
+                    format!("no WASM func index for builtin {builtin}")
+                })?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::ObjectCreate => {
+                // Object.create(proto, properties?) → 第2个参数可省略
+                let a = args.first().context("Object.create expects proto arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                if args.len() >= 2 {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(args[1].0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self.builtin_func_indices.get(builtin).copied().with_context(|| {
+                    format!("no WASM func index for builtin {builtin}")
+                })?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::ObjectAssign => {
+                // Type 12 shadow stack: (env, target, args_base, args_count) -> i64
+                let target = args.first().context("Object.assign expects target")?;
+                // shadow_args = sources (args[1..])
+                let shadow_args = &args[1..];
+                // 保存 shadow_sp 基址
+                self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+                // 影子栈边界检查
+                self.emit_shadow_stack_overflow_check((shadow_args.len() * 8) as i32);
+                // 将 shadow_args 写入影子栈
+                for arg in shadow_args {
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                    self.emit(WasmInstruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::I32Const(8));
+                    self.emit(WasmInstruction::I32Add);
+                    self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                }
+                // Type 12 call: env_obj=undefined, this_val=target, args_base, args_count
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(target.0)));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(shadow_args.len() as i32));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(87);
+                self.emit(WasmInstruction::Call(func_idx));
+                // 恢复 shadow_sp
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }

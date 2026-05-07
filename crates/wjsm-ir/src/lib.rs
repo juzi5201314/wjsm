@@ -673,6 +673,20 @@ pub enum Builtin {
     ObjectRest,
     // ── new.prototype 修复 ──
     GetPrototypeFromConstructor,
+    // ── Object 原型方法 ──
+    HasOwnProperty,
+    ObjectProtoToString,
+    ObjectProtoValueOf,
+    // ── Object 静态方法 ──
+    ObjectKeys,
+    ObjectValues,
+    ObjectEntries,
+    ObjectAssign,
+    ObjectCreate,
+    ObjectGetPrototypeOf,
+    ObjectSetPrototypeOf,
+    ObjectGetOwnPropertyNames,
+    ObjectIs,
 }
 
 impl fmt::Display for Builtin {
@@ -748,6 +762,18 @@ impl fmt::Display for Builtin {
             Self::FuncBind => "func_bind",
             Self::ObjectRest => "object_rest",
             Self::GetPrototypeFromConstructor => "get_prototype_from_constructor",
+            Self::HasOwnProperty => "has_own_property",
+            Self::ObjectProtoToString => "object_proto_to_string",
+            Self::ObjectProtoValueOf => "object_proto_value_of",
+            Self::ObjectKeys => "object.keys",
+            Self::ObjectValues => "object.values",
+            Self::ObjectEntries => "object.entries",
+            Self::ObjectAssign => "object.assign",
+            Self::ObjectCreate => "object.create",
+            Self::ObjectGetPrototypeOf => "object.get_prototype_of",
+            Self::ObjectSetPrototypeOf => "object.set_prototype_of",
+            Self::ObjectGetOwnPropertyNames => "object.get_own_property_names",
+            Self::ObjectIs => "object.is",
         })
     }
 }
