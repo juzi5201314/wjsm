@@ -74,16 +74,16 @@
 - [ ] **`new` 表达式 prototype 查找修复** — 当前仅在函数自身属性对象上搜索 `prototype`，不走完整 `[[Get]]`（不遍历函数原型链）。需 GetPrototypeFromConstructor Builtin（已注册，运行时 stub）。影响层：语义 + 运行时
 - [x] **`this` 绑定：call / apply / bind** — 语义层拦截 func.call/apply/bind 转为 CallBuiltin，运行时实现 func_call/func_apply/func_bind + BoundRecord 表 + TAG_BOUND 递归解包。影响层：IR + 语义 + WASM 后端 + 运行时
 
-### 块 G：Object 标准方法
+### 块 G：Object 标准方法 ✅
 
-无外部依赖（10.3 已全部完成）。可并行执行。
+无外部依赖。已于 commit 1cc8081 实现，8e83b03 修复审查问题。
 
-- [ ] `Object.prototype.hasOwnProperty()` — Builtin 指令或运行时宿主函数
-- [ ] `Object.keys()` / `Object.values()` / `Object.entries()` — 遍历自身可枚举属性
-- [ ] `Object.assign()` / `Object.create()` — 属性复制 / 原型指定创建
-- [ ] `Object.getPrototypeOf()` / `Object.setPrototypeOf()` — 原型链读取 / 设置
-- [ ] 其他常用 Object 静态/原型方法
-
+- [x] `Object.prototype.hasOwnProperty()` — Builtin 指令 + 运行时宿主函数
+- [x] `Object.keys()` / `Object.values()` / `Object.entries()` — 遍历自身可枚举属性
+- [x] `Object.assign()` / `Object.create()` — 属性复制 / 原型指定创建
+- [x] `Object.getPrototypeOf()` / `Object.setPrototypeOf()` — 原型链读取 / 设置
+- [x] `Object.prototype.toString()` / `Object.prototype.valueOf()` — 运行时实现就绪（编译时拦截待原型链就绪后恢复）
+- [x] `Object.getOwnPropertyNames()` / `Object.is()` — 完整实现
 ### 块 H：新值类型
 
 无互依赖，可并行执行。
