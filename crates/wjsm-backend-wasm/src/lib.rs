@@ -119,6 +119,10 @@ struct Compiler {
     arr_proto_table_base: u32,
     /// WASM function index for $obj_spread helper.
     obj_spread_func_idx: u32,
+    /// WASM function index for $get_prototype_from_constructor helper.
+    get_proto_from_ctor_func_idx: u32,
+    /// WASM global index for Object.prototype handle.
+    object_proto_handle_global_idx: u32,
 }
 /// 循环元信息（编译前预扫描得到）。
 #[derive(Debug, Clone)]
@@ -460,9 +464,7 @@ impl Compiler {
         imports.import("env", "func_bind", EntityType::Function(12));
         // Import index 81: object_rest: (i64, i64) -> (i64)
         imports.import("env", "object_rest", EntityType::Function(2));
-        // Import index 82: get_prototype_from_constructor: (i64) -> (i64)
-        imports.import("env", "get_prototype_from_constructor", EntityType::Function(3));
-        // Import index 83: obj_spread: (i64, i64) -> ()
+        // Import index 82: obj_spread: (i64, i64) -> ()
         imports.import("env", "obj_spread", EntityType::Function(5));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
@@ -532,7 +534,6 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::FuncApply, 79);
         builtin_func_indices.insert(Builtin::FuncBind, 80);
         builtin_func_indices.insert(Builtin::ObjectRest, 81);
-        builtin_func_indices.insert(Builtin::GetPrototypeFromConstructor, 82);
 
         let functions = FunctionSection::new();
 
@@ -569,7 +570,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 84, // 84 imports (0-83)
+            _next_import_func: 83, // 83 imports (0-82)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -603,6 +604,8 @@ impl Compiler {
             array_proto_handle_global_idx: 0,
             arr_proto_table_base: 0,
             obj_spread_func_idx: 0,
+            get_proto_from_ctor_func_idx: 0,
+            object_proto_handle_global_idx: 0,
         }
     }
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -719,6 +722,13 @@ impl Compiler {
         self.functions.function(9); // Type 9: (i64, i32, i64) -> ()
         self.function_table.push(self._next_import_func);
         self._next_import_func += 1;
+        // 设置 obj_spread_func_idx 为 import index 82
+        self.obj_spread_func_idx = 82;
+
+        self.get_proto_from_ctor_func_idx = self._next_import_func;
+        self.functions.function(3); // Type 3: (i64) -> (i64)
+        self.function_table.push(self._next_import_func);
+        self._next_import_func += 1;
         // Register array prototype method imports in function table (imports 50-76)
         let arr_proto_base = self.function_table.len() as u32;
         for import_idx in 50u32..=76u32 {
@@ -782,6 +792,7 @@ impl Compiler {
         self.shadow_sp_global_idx = 4;
         self.alloc_counter_global_idx = 5;
         self.array_proto_handle_global_idx = 9;
+        self.object_proto_handle_global_idx = 10;
 
         for function in module.functions() {
             if function.name() == "main" {
@@ -935,6 +946,17 @@ impl Compiler {
             },
             &ConstExpr::i32_const(-1),
         );
+        // Global 10: object_proto_handle (mutable, starts at -1 for uninitialized)
+        self.globals.global(
+            GlobalType {
+                val_type: ValType::I32,
+                mutable: true,
+                shared: false,
+            },
+            &ConstExpr::i32_const(-1),
+        );
+        self.exports
+            .export("__object_proto_handle", ExportKind::Global, 10);
         if !self.string_data.is_empty() {
             self.data
                 .active(0, &ConstExpr::i32_const(0), self.string_data.clone());
@@ -1030,6 +1052,12 @@ impl Compiler {
                 // 调用 $obj_set(proto, name_id, func_value)
                 self.emit(WasmInstruction::Call(self.obj_set_func_idx));
             }
+
+            // ── 初始化 Object.prototype ──
+            // 创建空对象（容量 64），存储 handle 到 Global 10
+            self.emit(WasmInstruction::I32Const(64));
+            self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+            self.emit(WasmInstruction::GlobalSet(self.object_proto_handle_global_idx));
 
         }
 
@@ -2445,6 +2473,95 @@ impl Compiler {
 			self.codes.function(&func);
 	}
 	
+
+        // ── $get_prototype_from_constructor (param $ctor i64) (result i64) — Type 3 ──
+        // GetPrototypeFromConstructor(F): 读取 F.prototype，若非 Object 类型则回退到 Object.prototype
+        {
+            // local 0 = $ctor (i64), local 1 = $proto (i64)
+            let mut func = Function::new(vec![(1, ValType::I64)]);
+
+            // 获取 "prototype" 的 name_id
+            let proto_name_id = self.intern_data_string("prototype");
+
+            // 调用 $obj_get(ctor, "prototype") — 遍历原型链
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32Const(proto_name_id as i32));
+            func.instruction(&WasmInstruction::Call(self.obj_get_func_idx));
+            func.instruction(&WasmInstruction::LocalSet(1)); // $proto
+
+            // 检查结果是否为 TAG_OBJECT (0x8)
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_OBJECT as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
+            // 检查结果是否为 TAG_FUNCTION (0x9)
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            // 检查是否为 TAG_CLOSURE (0xA)
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            // 检查是否为 TAG_ARRAY (0xB)
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            // 检查是否为 TAG_BOUND (0xC)
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_BOUND as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
+            // 回退：返回 Object.prototype (Global 10)
+            func.instruction(&WasmInstruction::GlobalGet(self.object_proto_handle_global_idx));
+            func.instruction(&WasmInstruction::I64ExtendI32U);
+            let box_base = value::BOX_BASE as i64;
+            let tag_object = (value::TAG_OBJECT << 32) as i64;
+            func.instruction(&WasmInstruction::I64Const(box_base | tag_object));
+            func.instruction(&WasmInstruction::I64Or);
+
+            func.instruction(&WasmInstruction::End);
+            self.codes.function(&func);
+        }
 	}
 
     fn compile_region_tree(
@@ -4076,7 +4193,7 @@ impl Compiler {
     fn compile_object_spread(&mut self, dest: &ValueId, source: &ValueId) -> Result<()> {
         self.emit(WasmInstruction::LocalGet(self.local_idx(dest.0)));
         self.emit(WasmInstruction::LocalGet(self.local_idx(source.0)));
-        self.emit(WasmInstruction::Call(83));
+        self.emit(WasmInstruction::Call(self.obj_spread_func_idx));
         Ok(())
     }
 
@@ -4484,8 +4601,16 @@ impl Compiler {
                 // These use shadow stack: compile like array proto methods
                 self.compile_proto_method_call(dest, builtin, args)
             }
+            Builtin::GetPrototypeFromConstructor => {
+                let func_idx = self.get_proto_from_ctor_func_idx;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(args[0].0)));
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
             Builtin::ObjectRest
-            | Builtin::GetPrototypeFromConstructor
             | Builtin::FuncApply => {
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 for arg in args.iter() {

@@ -2813,15 +2813,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── get_prototype_from_constructor (#82): Safe prototype access ─────────
-    let get_prototype_from_constructor_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, ctor: i64| -> i64 {
-            get_prototype_from_constructor_impl(&mut caller, ctor)
-        },
-    );
 
-    // ── obj_spread (#83): Copy own enumerable properties ────────────────────
+    // ── obj_spread (#82): Copy own enumerable properties ────────────────────
     let obj_spread_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, dest: i64, source: i64| {
@@ -2912,8 +2905,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         func_apply_fn.into(),                  // 79
         func_bind_fn.into(),                   // 80
         object_rest_fn.into(),                 // 81
-        get_prototype_from_constructor_fn.into(), // 82
-        obj_spread_fn.into(),                  // 83
+        obj_spread_fn.into(),                  // 82
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -4257,26 +4249,6 @@ fn object_rest_impl(
     value::encode_undefined()
 }
 
-fn get_prototype_from_constructor_impl(
-    caller: &mut Caller<'_, RuntimeState>,
-    ctor: i64,
-) -> i64 {
-    // Get ctor.prototype property, return it if it's an Object, else return undefined
-    // For now, just return ctor.prototype
-    let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
-    // Read the "prototype" string pointer from data segment
-    // We need to look up the string ptr. Let's just call a simpler path:
-    // Fallback: return undefined for now means prototype chain works by reading ctor.prototype directly
-    // Actually, the simplest fix: call $obj_get(ctor, "prototype")
-    // But we're in Rust, not WASM. We need to do the equivalent.
-    // Let's use the existing pattern from op_instanceof
-    
-    // Simple stub: just try to get the "prototype" property from ctor
-    // This requires obj_get which is a WASM function, not accessible from host
-    // So let's return undefined — this means new.prototype won't work
-    // but we need the old behavior back for class methods to work
-    value::encode_undefined()
-}
 
 fn obj_spread_impl(
     _caller: &mut Caller<'_, RuntimeState>,
