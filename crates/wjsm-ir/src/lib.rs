@@ -71,6 +71,8 @@ pub enum Constant {
     FunctionRef(FunctionId),
     /// BigInt 字面量（十进制字符串）
     BigInt(String),
+    /// RegExp 字面量（pattern 和 flags）
+    RegExp { pattern: String, flags: String },
 }
 
 impl fmt::Display for Constant {
@@ -83,6 +85,9 @@ impl fmt::Display for Constant {
             Self::Undefined => formatter.write_str("undefined"),
             Self::FunctionRef(id) => write!(formatter, "functionref(@{id})"),
             Self::BigInt(value) => write!(formatter, "bigint({value})"),
+            Self::RegExp { pattern, flags } => {
+                write!(formatter, "regex(/{pattern}/{flags})")
+            }
         }
     }
 }
@@ -707,6 +712,15 @@ pub enum Builtin {
     SymbolKeyFor,
     // ── Well-known symbols ─────────────────────────────────────────────
     SymbolWellKnown,
+    // ── RegExp operations ──────────────────────────────────────────────
+    RegExpCreate,
+    RegExpTest,
+    RegExpExec,
+    // ── String prototype methods ───────────────────────────────────────
+    StringMatch,
+    StringReplace,
+    StringSearch,
+    StringSplit,
 }
 
 impl fmt::Display for Builtin {
@@ -808,6 +822,13 @@ impl fmt::Display for Builtin {
             Self::SymbolFor => "symbol.for",
             Self::SymbolKeyFor => "symbol.key_for",
             Self::SymbolWellKnown => "symbol.well_known",
+            Self::RegExpCreate => "regexp.create",
+            Self::RegExpTest => "regexp.test",
+            Self::RegExpExec => "regexp.exec",
+            Self::StringMatch => "string.match",
+            Self::StringReplace => "string.replace",
+            Self::StringSearch => "string.search",
+            Self::StringSplit => "string.split",
         })
     }
 }

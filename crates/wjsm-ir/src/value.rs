@@ -28,6 +28,24 @@ pub const TAG_BOUND: u64 = 0xC;
 
 pub const TAG_BIGINT: u64 = 0xD;
 
+// ── RegExp value ─────────────────────────────────────────────────────
+
+pub const TAG_REGEXP: u64 = 0xF;
+
+pub fn encode_regexp_handle(handle: u32) -> i64 {
+    encode_handle(TAG_REGEXP, handle)
+}
+
+pub fn is_regexp(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_REGEXP
+}
+
+pub fn decode_regexp_handle(val: i64) -> u32 {
+    (val as u64 & 0xFFFF_FFFF) as u32
+}
+
+// ── BigInt value ─────────────────────────────────────────────────────
 pub fn encode_bigint_handle(handle: u32) -> i64 {
     encode_handle(TAG_BIGINT, handle)
 }

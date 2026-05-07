@@ -95,7 +95,7 @@
 
 无互依赖，可并行执行。
 
-- [ ] **正则表达式 `/.../`** — 解析器识别 `RegExpLiteral`，运行时集成正则引擎（如 `regex` crate），`String.prototype.match`/`replace`/`search`/`split`。影响层：解析器 + 运行时
+- [x] **正则表达式 `/.../`** — 解析器识别 `RegExpLiteral`，运行时集成正则引擎（使用 `regress` crate 实现完整 JS 正则语义），`String.prototype.match`/`replace`/`search`/`split`、`RegExp.prototype.test`/`exec`。影响层：IR + 语义 + WASM 后端 + 运行时
 - [ ] **模块系统 — ES `import` / `export`** — 解析器识别 `ImportDecl`/`ExportDecl`，语义层构建模块依赖图，运行时实现模块加载和绑定。影响层：解析器 + 语义 + 运行时
 - [ ] **模块系统 — CommonJS `require` / `module.exports`** — 运行时 `require` 函数 + `module` 对象。影响层：运行时
 - [ ] **模块系统 — 动态 `import()`** — 异步模块加载，返回 Promise。影响层：语义 + 运行时

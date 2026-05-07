@@ -293,6 +293,11 @@ impl Compiler {
         types
             .ty()
             .function(vec![ValType::I32, ValType::I32], vec![ValType::I64]);
+        // Type 20: (i32, i32, i32, i32) -> (i64) — regex_create(pat_ptr, pat_len, flags_ptr, flags_len)
+        types.ty().function(
+            vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
+            vec![ValType::I64],
+        );
         let mut imports = ImportSection::new();
         // Import index 0: console_log: (i64) -> ()
         imports.import("env", "console_log", EntityType::Function(0));
@@ -518,6 +523,22 @@ impl Compiler {
         imports.import("env", "symbol_key_for", EntityType::Function(3));
         // Import index 108: symbol_well_known: (i32) -> i64
         imports.import("env", "symbol_well_known", EntityType::Function(15));
+        // ── RegExp builtins ──
+        // Import index 109: regex_create: (i32, i32, i32, i32) -> i64
+        imports.import("env", "regex_create", EntityType::Function(20));
+        // Import index 110: regex_test: (i64, i64) -> i64
+        imports.import("env", "regex_test", EntityType::Function(2));
+        // Import index 111: regex_exec: (i64, i64) -> i64
+        imports.import("env", "regex_exec", EntityType::Function(2));
+        // ── String prototype builtins ──
+        // Import index 112: string_match: (i64, i64) -> i64
+        imports.import("env", "string_match", EntityType::Function(2));
+        // Import index 113: string_replace: (i64, i64, i64) -> i64
+        imports.import("env", "string_replace", EntityType::Function(16));
+        // Import index 114: string_search: (i64, i64) -> i64
+        imports.import("env", "string_search", EntityType::Function(2));
+        // Import index 115: string_split: (i64, i64, i64) -> i64
+        imports.import("env", "string_split", EntityType::Function(16));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -614,6 +635,15 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::SymbolFor, 106);
         builtin_func_indices.insert(Builtin::SymbolKeyFor, 107);
         builtin_func_indices.insert(Builtin::SymbolWellKnown, 108);
+        // ── RegExp builtins ──
+        builtin_func_indices.insert(Builtin::RegExpCreate, 109);
+        builtin_func_indices.insert(Builtin::RegExpTest, 110);
+        builtin_func_indices.insert(Builtin::RegExpExec, 111);
+        // ── String prototype builtins ──
+        builtin_func_indices.insert(Builtin::StringMatch, 112);
+        builtin_func_indices.insert(Builtin::StringReplace, 113);
+        builtin_func_indices.insert(Builtin::StringSearch, 114);
+        builtin_func_indices.insert(Builtin::StringSplit, 115);
 
         let functions = FunctionSection::new();
 
@@ -650,7 +680,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 109, // 109 imports (0-108)
+            _next_import_func: 116, // 116 imports (0-115)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -3444,6 +3474,23 @@ impl Compiler {
                         .unwrap_or(95);
                     self.emit(WasmInstruction::Call(func_idx));
                     self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                } else if let Constant::RegExp { pattern, flags } = constant {
+                    // RegExp 常量：嵌入 pattern 和 flags 到 data segment，运行时调用 regex_create
+                    let pat_ptr = self.intern_data_string(pattern);
+                    let pat_len = (pattern.len() + 1) as i32; // 包含 nul terminator
+                    let flags_ptr = self.intern_data_string(flags);
+                    let flags_len = (flags.len() + 1) as i32;
+                    self.emit(WasmInstruction::I32Const(pat_ptr as i32));
+                    self.emit(WasmInstruction::I32Const(pat_len));
+                    self.emit(WasmInstruction::I32Const(flags_ptr as i32));
+                    self.emit(WasmInstruction::I32Const(flags_len));
+                    let func_idx = self
+                        .builtin_func_indices
+                        .get(&Builtin::RegExpCreate)
+                        .copied()
+                        .unwrap_or(109);
+                    self.emit(WasmInstruction::Call(func_idx));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 } else {
                     let encoded = self.encode_constant(constant, module)?;
                     self.emit(WasmInstruction::I64Const(encoded));
@@ -4894,6 +4941,74 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── RegExp builtins ──
+            Builtin::RegExpTest | Builtin::RegExpExec => {
+                // regex.test(str) / regex.exec(str) - str 参数可选（默认 undefined）
+                let regex = args.first().context("RegExp test/exec expects receiver")?;
+                let str_arg = args.get(1);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(regex.0)));
+                if let Some(s) = str_arg {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(s.0)));
+                } else {
+                    // 缺失参数默认为 undefined
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── RegExp internal builtin (not called directly from user code) ──
+            Builtin::RegExpCreate => {
+                bail!("RegExpCreate should only be called internally for RegExp literals")
+            }
+            // ── String prototype builtins (2-arg) ──
+            Builtin::StringMatch | Builtin::StringSearch => {
+                // str.match(regexp) / str.search(regexp) - regexp 参数可选（默认 undefined）
+                let str_arg = args.first().context("String match/search expects receiver")?;
+                let regexp = args.get(1);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(str_arg.0)));
+                if let Some(re) = regexp {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(re.0)));
+                } else {
+                    // 缺失参数默认为 undefined
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── String prototype builtins (3-arg) ──
+            Builtin::StringReplace | Builtin::StringSplit => {
+                // str.replace(search, replace) / str.split(sep, limit) - 3 args
+                let str_arg = args.first().context("String replace/split expects at least 2 arguments")?;
+                let second = args.get(1).context("String replace/split expects at least 2 arguments")?;
+                // For StringSplit, limit is optional; for StringReplace, both are required
+                let third = args.get(2);
+                
+                self.emit(WasmInstruction::LocalGet(self.local_idx(str_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(second.0)));
+                if let Some(third_arg) = third {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(third_arg.0)));
+                } else {
+                    // Push undefined as default for missing optional argument
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
         }
     }
 
@@ -4927,6 +5042,9 @@ impl Compiler {
             }
             Constant::BigInt(_) => {
                 bail!("BigInt constants should be handled in compile_instruction::Const")
+            }
+            Constant::RegExp { .. } => {
+                bail!("RegExp constants should be handled in compile_instruction::Const")
             }
         }
     }
