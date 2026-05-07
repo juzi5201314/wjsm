@@ -2998,7 +2998,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     Some("TypeError: target is not an object".to_string());
                 return value::encode_undefined();
             }
-            let Some(target_ptr) = resolve_handle(&mut caller, target) else { return target; };
+            let mut target_ptr = match resolve_handle(&mut caller, target) {
+                Some(p) => p,
+                None => return target,
+            };
             for i in 0..args_count {
                 let source_val = read_shadow_arg(&mut caller, args_base, i as u32);
                 if !value::is_object(source_val) && !value::is_function(source_val) && !value::is_array(source_val) {
@@ -3026,7 +3029,38 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     }
                     props
                 };
-                // 写入目标对象
+                // 写入目标对象 — 先检查容量再写入，避免静默丢弃属性
+                // 1) 统计需新增的属性数（源有而目标无）
+                let mut new_count: usize = 0;
+                for (name_id, _, _) in &source_props {
+                    if find_property_slot_by_name_id(&mut caller, target_ptr, *name_id).is_none() {
+                        new_count += 1;
+                    }
+                }
+                // 2) 容量不足则扩容（capacity × 2 倍增）
+                if new_count > 0 {
+                    let need_grow = {
+                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { continue; };
+                        let d = mem.data(&caller);
+                        let num = u32::from_le_bytes([d[target_ptr+12], d[target_ptr+13], d[target_ptr+14], d[target_ptr+15]]) as usize;
+                        let cap = u32::from_le_bytes([d[target_ptr+8], d[target_ptr+9], d[target_ptr+10], d[target_ptr+11]]) as usize;
+                        num + new_count > cap
+                    };
+                    if need_grow {
+                        let (num, cap) = {
+                            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { continue; };
+                            let d = mem.data(&caller);
+                            let n = u32::from_le_bytes([d[target_ptr+12], d[target_ptr+13], d[target_ptr+14], d[target_ptr+15]]) as usize;
+                            let c = u32::from_le_bytes([d[target_ptr+8], d[target_ptr+9], d[target_ptr+10], d[target_ptr+11]]) as usize;
+                            (n, c)
+                        };
+                        let new_cap = (cap * 2).max(num + new_count) as u32;
+                        if let Some(new_ptr) = grow_object(&mut caller, target_ptr, target, new_cap) {
+                            target_ptr = new_ptr;
+                        }
+                    }
+                }
+                // 3) 写入属性（存在则覆盖值，不存在则追加）
                 for (name_id, flags, val) in &source_props {
                     let existing = find_property_slot_by_name_id(&mut caller, target_ptr, *name_id);
                     if let Some((existing_offset, _, _)) = existing {
@@ -3037,17 +3071,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         let Some(Extern::Memory(mem)) = caller.get_export("memory") else { continue; };
                         let d = mem.data_mut(&mut caller);
                         let target_num_props = u32::from_le_bytes([d[target_ptr+12], d[target_ptr+13], d[target_ptr+14], d[target_ptr+15]]) as usize;
-                        let target_capacity = u32::from_le_bytes([d[target_ptr+8], d[target_ptr+9], d[target_ptr+10], d[target_ptr+11]]) as usize;
-                        if target_num_props < target_capacity {
-                            let new_slot_offset = target_ptr + 16 + target_num_props * 32;
-                            d[new_slot_offset..new_slot_offset+4].copy_from_slice(&name_id.to_le_bytes());
-                            d[new_slot_offset+4..new_slot_offset+8].copy_from_slice(&flags.to_le_bytes());
-                            d[new_slot_offset+8..new_slot_offset+16].copy_from_slice(&val.to_le_bytes());
-                            let zero: u64 = 0;
-                            d[new_slot_offset+16..new_slot_offset+24].copy_from_slice(&zero.to_le_bytes());
-                            d[new_slot_offset+24..new_slot_offset+32].copy_from_slice(&zero.to_le_bytes());
-                            d[target_ptr+12..target_ptr+16].copy_from_slice(&((target_num_props+1) as u32).to_le_bytes());
-                        }
+                        let new_slot_offset = target_ptr + 16 + target_num_props * 32;
+                        d[new_slot_offset..new_slot_offset+4].copy_from_slice(&name_id.to_le_bytes());
+                        d[new_slot_offset+4..new_slot_offset+8].copy_from_slice(&flags.to_le_bytes());
+                        d[new_slot_offset+8..new_slot_offset+16].copy_from_slice(&val.to_le_bytes());
+                        let zero: u64 = 0;
+                        d[new_slot_offset+16..new_slot_offset+24].copy_from_slice(&zero.to_le_bytes());
+                        d[new_slot_offset+24..new_slot_offset+32].copy_from_slice(&zero.to_le_bytes());
+                        d[target_ptr+12..target_ptr+16].copy_from_slice(&((target_num_props+1) as u32).to_le_bytes());
                     }
                 }
             }
@@ -3064,7 +3095,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 let Some(ptr) = resolve_handle(&mut caller, obj_handle) else { return obj_handle; };
                 let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return obj_handle; };
                 let d = mem.data_mut(&mut caller);
-                if value::is_object(proto) || value::is_function(proto) {
+                if value::is_object(proto) || value::is_function(proto) || value::is_array(proto) {
                     let proto_handle = (proto as u64 & 0xFFFF_FFFF) as u32;
                     d[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
                 }
@@ -3110,7 +3141,27 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 d[ptr..ptr + 4].copy_from_slice(&null_handle.to_le_bytes());
                 return obj;
             }
-            if value::is_object(proto) || value::is_function(proto) {
+            if value::is_object(proto) || value::is_function(proto) || value::is_array(proto) {
+                // 循环检测：遍历 proto 的原型链，若 obj 出现在其中则抛出 TypeError
+                {
+                    let mut current_handle = (proto as u64 & 0xFFFF_FFFF) as u32;
+                    let mut depth = 0;
+                    const MAX_PROTO_DEPTH: u32 = 1000;
+                    let obj_handle = (obj as u64 & 0xFFFF_FFFF) as u32;
+                    while current_handle != 0xFFFF_FFFF && current_handle != 0 && depth < MAX_PROTO_DEPTH {
+                        if current_handle == obj_handle {
+                            *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                                Some("TypeError: Cyclic __proto__ value".to_string());
+                            return obj;
+                        }
+                        let Some(current_ptr) = resolve_handle_idx(&mut caller, current_handle as usize) else { break; };
+                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { break; };
+                        let d = mem.data(&caller);
+                        if current_ptr + 4 > d.len() { break; }
+                        current_handle = u32::from_le_bytes([d[current_ptr], d[current_ptr+1], d[current_ptr+2], d[current_ptr+3]]);
+                        depth += 1;
+                    }
+                }
                 let proto_handle = (proto as u64 & 0xFFFF_FFFF) as u32;
                 let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return obj; };
                 let d = mem.data_mut(&mut caller);
@@ -3140,17 +3191,27 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |_caller: Caller<'_, RuntimeState>, val1: i64, val2: i64| -> i64 {
             // SameValue (ECMAScript 7.2.11)
+            // 注意: wjsm 使用 NaN-boxing 编码，NaN-boxed 值的高位与 IEEE NaN 重叠，
+            // 必须先区分数值类型再应用 IEEE 754 语义，否则 Object.is(null, undefined) 会错误返回 true
             let bits1 = val1 as u64;
             let bits2 = val2 as u64;
-            // +0 != -0
-            if bits1 == 0 && bits2 == 0x8000_0000_0000_0000 { return value::encode_bool(false); }
-            if bits1 == 0x8000_0000_0000_0000 && bits2 == 0 { return value::encode_bool(false); }
-            // NaN == NaN
-            let f1 = f64::from_bits(bits1);
-            let f2 = f64::from_bits(bits2);
-            if f1.is_nan() && f2.is_nan() { return value::encode_bool(true); }
-            // Otherwise, bitwise equality
-            value::encode_bool(bits1 == bits2)
+            let is_f64_1 = value::is_f64(val1);
+            let is_f64_2 = value::is_f64(val2);
+            if is_f64_1 && is_f64_2 {
+                // 两者都是 IEEE 754 数值（含 signaling NaN）
+                // +0 != -0
+                if bits1 == 0 && bits2 == 0x8000_0000_0000_0000 { return value::encode_bool(false); }
+                if bits1 == 0x8000_0000_0000_0000 && bits2 == 0 { return value::encode_bool(false); }
+                // NaN == NaN (signaling NaN 区域)
+                let f1 = f64::from_bits(bits1);
+                let f2 = f64::from_bits(bits2);
+                if f1.is_nan() && f2.is_nan() { return value::encode_bool(true); }
+                value::encode_bool(bits1 == bits2)
+            } else {
+                // 至少一个是 NaN-boxed JS 值（或 canonical quiet NaN）
+                // NaN-boxed 值用 bitwise 比较：不同 handle/index 表示不同对象
+                value::encode_bool(bits1 == bits2)
+            }
         },
     );
     // ── Import 93: obj_proto_to_string(i64) -> i64 ────────────────────────────
@@ -3161,6 +3222,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 store_runtime_string(&_caller, "[object Undefined]".to_string())
             } else if value::is_null(obj) {
                 store_runtime_string(&_caller, "[object Null]".to_string())
+            } else if value::is_array(obj) {
+                store_runtime_string(&_caller, "[object Array]".to_string())
+            } else if value::is_function(obj) || value::is_callable(obj) {
+                store_runtime_string(&_caller, "[object Function]".to_string())
             } else {
                 store_runtime_string(&_caller, "[object Object]".to_string())
             }
@@ -3964,6 +4029,40 @@ fn grow_array(caller: &mut Caller<'_, RuntimeState>, ptr: usize, this_val: i64, 
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&new_cap.to_le_bytes());
     let handle_idx = (this_val as u64 & 0xFFFF_FFFF) as usize;
+    let slot_addr = obj_table_ptr + handle_idx * 4;
+    if slot_addr + 4 <= d.len() {
+        d[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
+    }
+    if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+        let _ = g.set(&mut *caller, Val::I32((heap_ptr + new_size) as i32));
+    }
+    Some(heap_ptr)
+}
+/// 对象动态扩容 — 遵循 capacity × 2 倍增策略，与 grow_array 同构
+/// 对象槽位大小为 32 bytes（name_id:4 + flags:4 + value:8 + reserved:16）
+fn grow_object(caller: &mut Caller<'_, RuntimeState>, ptr: usize, handle_val: i64, new_cap: u32) -> Option<usize> {
+    let heap_ptr = {
+        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return None; };
+        g.get(&mut *caller).i32().unwrap_or(0) as usize
+    };
+    let obj_table_ptr = {
+        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return None; };
+        g.get(&mut *caller).i32().unwrap_or(0) as usize
+    };
+    let new_size = 16 + new_cap as usize * 32;
+    let old_cap = {
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+        let d = mem.data(&*caller);
+        if ptr + 12 > d.len() { return None; }
+        u32::from_le_bytes([d[ptr + 8], d[ptr + 9], d[ptr + 10], d[ptr + 11]]) as usize
+    };
+    let old_size = 16 + old_cap * 32;
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+    let d = mem.data_mut(&mut *caller);
+    if heap_ptr + new_size > d.len() { return None; }
+    d.copy_within(ptr..ptr + old_size, heap_ptr);
+    d[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&new_cap.to_le_bytes());
+    let handle_idx = (handle_val as u64 & 0xFFFF_FFFF) as usize;
     let slot_addr = obj_table_ptr + handle_idx * 4;
     if slot_addr + 4 <= d.len() {
         d[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
