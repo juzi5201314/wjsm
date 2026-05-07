@@ -69,6 +69,8 @@ pub enum Constant {
     Null,
     Undefined,
     FunctionRef(FunctionId),
+    /// BigInt 字面量（十进制字符串）
+    BigInt(String),
 }
 
 impl fmt::Display for Constant {
@@ -80,6 +82,7 @@ impl fmt::Display for Constant {
             Self::Null => formatter.write_str("null"),
             Self::Undefined => formatter.write_str("undefined"),
             Self::FunctionRef(id) => write!(formatter, "functionref(@{id})"),
+            Self::BigInt(value) => write!(formatter, "bigint({value})"),
         }
     }
 }
@@ -687,6 +690,23 @@ pub enum Builtin {
     ObjectSetPrototypeOf,
     ObjectGetOwnPropertyNames,
     ObjectIs,
+    // ── BigInt operations ──────────────────────────────────────────────
+    BigIntFromLiteral,
+    BigIntAdd,
+    BigIntSub,
+    BigIntMul,
+    BigIntDiv,
+    BigIntMod,
+    BigIntPow,
+    BigIntNeg,
+    BigIntEq,
+    BigIntCmp,
+    // ── Symbol operations ──────────────────────────────────────────────
+    SymbolCreate,
+    SymbolFor,
+    SymbolKeyFor,
+    // ── Well-known symbols ─────────────────────────────────────────────
+    SymbolWellKnown,
 }
 
 impl fmt::Display for Builtin {
@@ -774,6 +794,20 @@ impl fmt::Display for Builtin {
             Self::ObjectSetPrototypeOf => "object.set_prototype_of",
             Self::ObjectGetOwnPropertyNames => "object.get_own_property_names",
             Self::ObjectIs => "object.is",
+            Self::BigIntFromLiteral => "bigint.from_literal",
+            Self::BigIntAdd => "bigint.add",
+            Self::BigIntSub => "bigint.sub",
+            Self::BigIntMul => "bigint.mul",
+            Self::BigIntDiv => "bigint.div",
+            Self::BigIntMod => "bigint.mod",
+            Self::BigIntPow => "bigint.pow",
+            Self::BigIntNeg => "bigint.neg",
+            Self::BigIntEq => "bigint.eq",
+            Self::BigIntCmp => "bigint.cmp",
+            Self::SymbolCreate => "symbol.create",
+            Self::SymbolFor => "symbol.for",
+            Self::SymbolKeyFor => "symbol.key_for",
+            Self::SymbolWellKnown => "symbol.well_known",
         })
     }
 }

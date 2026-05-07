@@ -3127,6 +3127,8 @@ name = "wjsm-runtime"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "num-bigint",
+ "num-traits",
  "wasmtime",
  "wjsm-backend-wasm",
  "wjsm-ir",

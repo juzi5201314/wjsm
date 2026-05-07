@@ -6419,6 +6419,9 @@ impl Lowerer {
                 Constant::String(string.value.to_string_lossy().into_owned())
             }
             swc_ast::Lit::Bool(b) => Constant::Bool(b.value),
+            swc_ast::Lit::BigInt(b) => {
+                Constant::BigInt(b.value.to_str_radix(10))
+            }
             swc_ast::Lit::Null(_) => Constant::Null,
             _ => {
                 return Err(self.error(
@@ -6822,6 +6825,7 @@ fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "setInterval" => Some(Builtin::SetInterval),
         "clearInterval" => Some(Builtin::ClearInterval),
         "fetch" => Some(Builtin::Fetch),
+        "Symbol" => Some(Builtin::SymbolCreate),
         _ => None,
     }
 }
@@ -6854,6 +6858,11 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
         "JSON" => match property {
             "stringify" => Some(Builtin::JsonStringify),
             "parse" => Some(Builtin::JsonParse),
+            _ => None,
+        },
+        "Symbol" => match property {
+            "for" => Some(Builtin::SymbolFor),
+            "keyFor" => Some(Builtin::SymbolKeyFor),
             _ => None,
         },
         _ => None,
@@ -6941,6 +6950,22 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::ObjectSetPrototypeOf => ("Object.setPrototypeOf", 2),
         Builtin::ObjectGetOwnPropertyNames => ("Object.getOwnPropertyNames", 1),
         Builtin::ObjectIs => ("Object.is", 2),
+        // ── BigInt builtins ──
+        Builtin::BigIntFromLiteral => ("BigInt.fromLiteral", 1),
+        Builtin::BigIntAdd => ("BigInt.add", 2),
+        Builtin::BigIntSub => ("BigInt.sub", 2),
+        Builtin::BigIntMul => ("BigInt.mul", 2),
+        Builtin::BigIntDiv => ("BigInt.div", 2),
+        Builtin::BigIntMod => ("BigInt.mod", 2),
+        Builtin::BigIntPow => ("BigInt.pow", 2),
+        Builtin::BigIntNeg => ("BigInt.neg", 1),
+        Builtin::BigIntEq => ("BigInt.eq", 2),
+        Builtin::BigIntCmp => ("BigInt.cmp", 2),
+        // ── Symbol builtins ──
+        Builtin::SymbolCreate => ("Symbol", 0),
+        Builtin::SymbolFor => ("Symbol.for", 1),
+        Builtin::SymbolKeyFor => ("Symbol.keyFor", 1),
+        Builtin::SymbolWellKnown => ("Symbol.wellKnown", 1),
         _ => ("builtin", 0),
     }
 }
