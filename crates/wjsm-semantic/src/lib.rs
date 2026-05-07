@@ -5024,6 +5024,54 @@ impl Lowerer {
                             );
                             return Ok(dest);
                         }
+
+                        // String.prototype 方法调用优化：match/replace/search/split
+                        if let Some(string_builtin) = builtin_from_string_proto_method(&prop_ident.sym) {
+                            // JavaScript 允许这些方法无参数调用（缺失参数默认为 undefined）
+                            // 因此不在此处做参数数量限制，由运行时处理
+                            let _ = builtin_call_signature(string_builtin); // 验证 builtin 有效
+                            
+                            // str.method() → str 是 this
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: string_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+
+                        // RegExp.prototype 方法调用优化：test/exec
+                        if let Some(regexp_builtin) = builtin_from_regexp_proto_method(&prop_ident.sym) {
+                            // JavaScript 允许这些方法无参数调用（缺失参数默认为 undefined）
+                            // 因此不在此处做参数数量限制，由运行时处理
+                            let _ = builtin_call_signature(regexp_builtin); // 验证 builtin 有效
+                            
+                            // regex.method() → regex 是 this
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: regexp_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
                     }
 
                     // obj.method() → obj 是 this，method 是 callee（未被拦截时）
@@ -6422,6 +6470,12 @@ impl Lowerer {
             swc_ast::Lit::BigInt(b) => {
                 Constant::BigInt(b.value.to_str_radix(10))
             }
+            swc_ast::Lit::Regex(regex) => {
+                Constant::RegExp {
+                    pattern: regex.exp.to_string(),
+                    flags: regex.flags.to_string(),
+                }
+            }
             swc_ast::Lit::Null(_) => Constant::Null,
             _ => {
                 return Err(self.error(
@@ -6918,7 +6972,29 @@ fn builtin_from_object_proto_method(name: &str) -> Option<Builtin> {
     }
 }
 
+/// 将 String.prototype 方法名映射到 Builtin 变体，用于语义层优化。
+/// 当 `str.match(/.../)` 被识别时，跳过运行时属性解析，直接发出 CallBuiltin。
+fn builtin_from_string_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "match" => Some(StringMatch),
+        "replace" => Some(StringReplace),
+        "search" => Some(StringSearch),
+        "split" => Some(StringSplit),
+        _ => None,
+    }
+}
 
+/// 将 RegExp.prototype 方法名映射到 Builtin 变体，用于语义层优化。
+/// 当 `regex.test(str)` 被识别时，跳过运行时属性解析，直接发出 CallBuiltin。
+fn builtin_from_regexp_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "test" => Some(RegExpTest),
+        "exec" => Some(RegExpExec),
+        _ => None,
+    }
+}
 fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
     match builtin {
         Builtin::ConsoleLog => ("console.log", 1),
@@ -6966,6 +7042,15 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::SymbolFor => ("Symbol.for", 1),
         Builtin::SymbolKeyFor => ("Symbol.keyFor", 1),
         Builtin::SymbolWellKnown => ("Symbol.wellKnown", 1),
+        // ── RegExp builtins ──
+        Builtin::RegExpCreate => ("RegExp.create", 2),
+        Builtin::RegExpTest => ("RegExp.test", 2),
+        Builtin::RegExpExec => ("RegExp.exec", 2),
+        // ── String prototype builtins ──
+        Builtin::StringMatch => ("String.prototype.match", 2),
+        Builtin::StringReplace => ("String.prototype.replace", 3),
+        Builtin::StringSearch => ("String.prototype.search", 2),
+        Builtin::StringSplit => ("String.prototype.split", 3),
         _ => ("builtin", 0),
     }
 }

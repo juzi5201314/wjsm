@@ -9,6 +9,7 @@ wasmtime = { workspace = true }
 wjsm-ir = { path = "../wjsm-ir" }
 num-bigint = { version = "0.4", features = ["std"] }
 num-traits = { version = "0.2" }
+regress = { workspace = true }
 
 [dev-dependencies]
 wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }

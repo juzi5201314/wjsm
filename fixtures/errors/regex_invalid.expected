@@ -1,0 +1,5 @@
+exit_code: 1
+--- stdout ---
+undefined
+--- stderr ---
+Error: SyntaxError: Invalid regular expression: Unbalanced parenthesis
