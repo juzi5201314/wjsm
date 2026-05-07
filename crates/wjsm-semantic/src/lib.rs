@@ -5005,7 +5005,7 @@ impl Lowerer {
                             return Ok(dest);
                         }
 
-                        // Object.prototype 方法调用优化：hasOwnProperty, toString, valueOf
+                        // Object.prototype 方法调用优化：hasOwnProperty
                         if let Some(obj_proto_builtin) = builtin_from_object_proto_method(&prop_ident.sym) {
                             // obj.method() → obj 是 this
                             let this_val = self.lower_expr(&member_expr.obj, block)?;
@@ -6898,11 +6898,13 @@ fn builtin_from_function_proto_method(name: &str) -> Option<Builtin> {
 }
 /// 将 Object.prototype 方法名映射到 Builtin 变体，用于语义层优化。
 /// 当 `obj.hasOwnProperty(key)` 被识别时，跳过运行时属性解析，直接发出 CallBuiltin。
+/// 
+/// 注意: toString / valueOf 未在此处拦截，因为它们在不同原型上有不同实现
+/// (Array.prototype.toString、Date.prototype.valueOf 等)，编译时无法确定接收者类型。
+/// 这些方法将在原型链实现后通过运行时属性查找调用。
 fn builtin_from_object_proto_method(name: &str) -> Option<Builtin> {
     match name {
         "hasOwnProperty" => Some(Builtin::HasOwnProperty),
-        "toString" => Some(Builtin::ObjectProtoToString),
-        "valueOf" => Some(Builtin::ObjectProtoValueOf),
         _ => None,
     }
 }
@@ -6933,7 +6935,7 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::ObjectKeys => ("Object.keys", 1),
         Builtin::ObjectValues => ("Object.values", 1),
         Builtin::ObjectEntries => ("Object.entries", 1),
-        Builtin::ObjectAssign => ("Object.assign", 2),
+        Builtin::ObjectAssign => ("Object.assign", 1),
         Builtin::ObjectCreate => ("Object.create", 1),
         Builtin::ObjectGetPrototypeOf => ("Object.getPrototypeOf", 1),
         Builtin::ObjectSetPrototypeOf => ("Object.setPrototypeOf", 2),

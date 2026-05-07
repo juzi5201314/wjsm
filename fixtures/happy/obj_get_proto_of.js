@@ -1,3 +1,3 @@
 var obj = {};
-var proto = Object.getPrototypeOf(obj);
-console.log(proto === null);
+var nullProtoObj = Object.create(null);
+console.log(Object.getPrototypeOf(nullProtoObj) === null);
