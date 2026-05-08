@@ -27,6 +27,20 @@ pub fn parse_module(source: &str) -> Result<swc_ast::Module> {
 #[cfg(test)]
 mod tests {
     use super::parse_module;
+    use swc_core::ecma::ast as swc_ast;
+
+    fn first_module_decl(source: &str) -> swc_ast::ModuleDecl {
+        let module = parse_module(source).expect("parser should accept fixture");
+        match module
+            .body
+            .into_iter()
+            .next()
+            .expect("fixture should produce one module item")
+        {
+            swc_ast::ModuleItem::ModuleDecl(decl) => decl,
+            swc_ast::ModuleItem::Stmt(_) => panic!("expected module declaration"),
+        }
+    }
 
     #[test]
     fn parses_console_log_module() {
@@ -43,5 +57,38 @@ mod tests {
         let message = error.to_string();
         assert!(message.starts_with("Parse error: "));
         assert!(message.contains("Expected"));
+    }
+
+    #[test]
+    fn parses_import_named_decl() {
+        let decl = first_module_decl(r#"import { foo } from "./lib.js";"#);
+        assert!(matches!(decl, swc_ast::ModuleDecl::Import(_)));
+    }
+
+    #[test]
+    fn parses_import_default_decl() {
+        let decl = first_module_decl(r#"import foo from "./lib.js";"#);
+        assert!(matches!(decl, swc_ast::ModuleDecl::Import(_)));
+    }
+
+    #[test]
+    fn parses_export_decl() {
+        let decl = first_module_decl(r#"export const answer = 42;"#);
+        assert!(matches!(decl, swc_ast::ModuleDecl::ExportDecl(_)));
+    }
+
+    #[test]
+    fn parses_export_named_decl() {
+        let decl = first_module_decl(r#"export { foo };"#);
+        assert!(matches!(decl, swc_ast::ModuleDecl::ExportNamed(_)));
+    }
+
+    #[test]
+    fn parses_export_default_decl() {
+        let decl = first_module_decl(r#"export default 42;"#);
+        assert!(matches!(
+            decl,
+            swc_ast::ModuleDecl::ExportDefaultExpr(_) | swc_ast::ModuleDecl::ExportDefaultDecl(_)
+        ));
     }
 }

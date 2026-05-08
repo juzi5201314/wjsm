@@ -1,0 +1,15 @@
+[package]
+name = "wjsm-module"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+swc_core = { workspace = true }
+thiserror = { workspace = true }
+wjsm-parser = { path = "../wjsm-parser" }
+wjsm-semantic = { path = "../wjsm-semantic" }
+wjsm-ir = { path = "../wjsm-ir" }
+wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
+
+[dev-dependencies]
