@@ -110,7 +110,7 @@ fn build_compile_plan(input: &Path, root: Option<&str>) -> Result<CompilePlan> {
     }
 
     let source = fs::read_to_string(input)?;
-    if !contains_es_module_syntax(&source)? {
+    if !contains_es_module_syntax(&source)? && !contains_commonjs_syntax(&source)? {
         return Ok(CompilePlan::SingleSource(source));
     }
 
@@ -150,4 +150,9 @@ fn contains_es_module_syntax(source: &str) -> Result<bool> {
             )
         )
     }))
+}
+
+fn contains_commonjs_syntax(source: &str) -> Result<bool> {
+    let module = parser::parse_module(source)?;
+    Ok(wjsm_module::cjs_transform::is_commonjs_module(&module))
 }
