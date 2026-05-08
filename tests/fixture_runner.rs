@@ -218,7 +218,73 @@ fn snapshot_updates_enabled() -> bool {
 
 fn normalize_output(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes).replace("\r\n", "\n");
-    normalize_object_handles(&text)
+    let text = normalize_object_handles(&text);
+    normalize_paths(&text)
+}
+
+/// 归一化绝对路径为相对路径（去除 /fixtures/ 前缀）
+fn normalize_paths(text: &str) -> String {
+    // 将包含 /fixtures/ 或 \fixtures\ 的绝对路径转换为相对路径
+    // 例如: /workspace/fixtures/modules/foo.js -> modules/foo.js
+    let mut normalized = String::with_capacity(text.len());
+    let mut last_end = 0;
+    let mut i = 0;
+    
+    while i < text.len() {
+        let remaining = &text[i..];
+        let unix_match = remaining.find("/fixtures/");
+        let windows_match = remaining.find("\\fixtures\\");
+        
+        let match_offset = match (unix_match, windows_match) {
+            (Some(u), Some(w)) => Some(u.min(w)),
+            (Some(u), None) => Some(u),
+            (None, Some(w)) => Some(w),
+            (None, None) => None,
+        };
+        
+        if let Some(offset) = match_offset {
+            let fixtures_pos = i + offset;
+            
+            // 向前查找到路径起始（空格、引号、括号或行首）
+            let mut path_start = fixtures_pos;
+            for j in (0..fixtures_pos).rev() {
+                let c = text.as_bytes()[j];
+                if c == b' ' || c == b'\'' || c == b'"' || c == b'`' 
+                    || c == b'(' || c == b'\n' {
+                    path_start = j + 1;
+                    break;
+                }
+                if j == 0 {
+                    path_start = 0;
+                }
+            }
+            
+            // 向后查找到路径结束（空格、引号、括号或行尾）
+            let after_fixtures = fixtures_pos + 10; // "/fixtures/" 或 "\fixtures\" 长度为 10
+            let mut path_end = text.len();
+            for j in after_fixtures..text.len() {
+                let c = text.as_bytes()[j];
+                if c == b' ' || c == b'\'' || c == b'"' || c == b'`' 
+                    || c == b')' || c == b'\n' {
+                    path_end = j;
+                    break;
+                }
+            }
+            
+            // 输出路径之前的内容
+            normalized.push_str(&text[last_end..path_start]);
+            // 输出相对路径（去掉 /fixtures/ 前缀）
+            normalized.push_str(&text[after_fixtures..path_end]);
+            
+            last_end = path_end;
+            i = path_end;
+        } else {
+            break;
+        }
+    }
+    
+    normalized.push_str(&text[last_end..]);
+    normalized
 }
 
 /// 归一化对象句柄数字（如 [object Object:208] → [object Object:<id>]）

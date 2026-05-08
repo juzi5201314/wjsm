@@ -3,7 +3,6 @@ use clap::{Parser, Subcommand};
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use swc_core::ecma::ast as swc_ast;
 use wjsm_backend_wasm as backend_wasm;
 use wjsm_parser as parser;
 use wjsm_runtime as runtime;
@@ -106,11 +105,16 @@ fn compile_from_file_input(input: &str, root: Option<&str>) -> Result<Vec<u8>> {
 
 fn build_compile_plan(input: &Path, root: Option<&str>) -> Result<CompilePlan> {
     if let Some(root_path) = root {
-        return Ok(bundle_plan_from_root(input.to_path_buf(), PathBuf::from(root_path)));
+        return bundle_plan_from_root(input.to_path_buf(), PathBuf::from(root_path));
     }
 
     let source = fs::read_to_string(input)?;
-    if !contains_es_module_syntax(&source)? && !contains_commonjs_syntax(&source)? {
+    // 解析一次，同时用于 ESM 和 CJS 检测
+    let module = parser::parse_module(&source)?;
+    let is_esm = wjsm_module::is_es_module(&module);
+    let is_cjs = wjsm_module::is_commonjs_module(&module);
+
+    if !is_esm && !is_cjs {
         return Ok(CompilePlan::SingleSource(source));
     }
 
@@ -129,30 +133,16 @@ fn build_compile_plan(input: &Path, root: Option<&str>) -> Result<CompilePlan> {
     })
 }
 
-fn bundle_plan_from_root(input: PathBuf, root: PathBuf) -> CompilePlan {
-    let rel = input.strip_prefix(&root).unwrap_or(&input);
+fn bundle_plan_from_root(input: PathBuf, root: PathBuf) -> Result<CompilePlan> {
+    let canonical_root = std::fs::canonicalize(&root)
+        .map_err(|e| anyhow::anyhow!("cannot canonicalize root path {:?}: {}", root, e))?;
+    let canonical_input = std::fs::canonicalize(&input)
+        .map_err(|e| anyhow::anyhow!("cannot canonicalize input path {:?}: {}", input, e))?;
+    let rel = canonical_input.strip_prefix(&canonical_root)
+        .map_err(|_| anyhow::anyhow!("input file {:?} is not under root {:?}", input, root))?;
     let entry = format!("./{}", rel.to_string_lossy());
-    CompilePlan::Bundle { entry, root }
-}
-
-fn contains_es_module_syntax(source: &str) -> Result<bool> {
-    let module = parser::parse_module(source)?;
-    Ok(module.body.iter().any(|item| {
-        matches!(
-            item,
-            swc_ast::ModuleItem::ModuleDecl(
-                swc_ast::ModuleDecl::Import(_)
-                    | swc_ast::ModuleDecl::ExportDecl(_)
-                    | swc_ast::ModuleDecl::ExportNamed(_)
-                    | swc_ast::ModuleDecl::ExportDefaultDecl(_)
-                    | swc_ast::ModuleDecl::ExportDefaultExpr(_)
-                    | swc_ast::ModuleDecl::ExportAll(_)
-            )
-        )
-    }))
-}
-
-fn contains_commonjs_syntax(source: &str) -> Result<bool> {
-    let module = parser::parse_module(source)?;
-    Ok(wjsm_module::cjs_transform::is_commonjs_module(&module))
+    Ok(CompilePlan::Bundle {
+        entry,
+        root: canonical_root,
+    })
 }

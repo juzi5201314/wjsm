@@ -19,15 +19,19 @@ impl ModuleBundler {
     }
     
     /// Bundle 入口模块及其所有依赖
-    pub fn bundle(&mut self, entry: &str) -> Result<Vec<u8>> {
+    pub fn bundle(&self, entry: &str) -> Result<Vec<u8>> {
         // 1. 构建依赖图
         let graph = ModuleGraph::build(entry, &self.root_path)
             .with_context(|| "Failed to build module graph")?;
         
         // 2. 获取拓扑排序顺序
-        let order = graph.topological_order()
+        let (order, cycles) = graph.topological_order()
             .with_context(|| "Failed to compute topological order")?;
         
+        // 循环依赖已在 topological_order 中记录，这里不输出到 stderr
+        // 避免影响 fixture 测试的 stderr 快照比较
+        let _ = cycles;
+
         // 3. 模块语义链接：收集导出并校验 import 绑定
         let link_result = analyze_module_links(&graph)
             .with_context(|| "Failed to analyze module links")?;
@@ -73,11 +77,9 @@ mod tests {
             .unwrap()
             .join("fixtures/modules/simple");
 
-        if !fixtures_dir.exists() {
-            return;
-        }
+        assert!(fixtures_dir.exists(), "Test fixtures not found at {:?}. Run from workspace root.", fixtures_dir);
 
-        let mut bundler = ModuleBundler::new(&fixtures_dir).expect("bundler should be created");
+        let bundler = ModuleBundler::new(&fixtures_dir).expect("bundler should be created");
         let result = bundler.bundle("./main.js");
         assert!(result.is_ok(), "bundle should succeed: {:?}", result.err());
         let wasm_bytes = result.unwrap();

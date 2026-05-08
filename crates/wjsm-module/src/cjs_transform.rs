@@ -42,14 +42,46 @@ pub fn transform_with_prefix(module: &ast::Module, export_prefix: &str) -> ast::
     };
     let mut new_module = transformer.transform_module(module);
 
-    if !transformer.export_names.is_empty() && !transformer.has_default_export {
-        let default_export_expr = create_synthetic_default_export(&transformer.export_names);
-        new_module.body.push(ast::ModuleItem::ModuleDecl(
-            ast::ModuleDecl::ExportDefaultExpr(ast::ExportDefaultExpr {
-                span: DUMMY_SP,
-                expr: Box::new(default_export_expr),
-            }),
-        ));
+    // 处理命名导出
+    if !transformer.export_names.is_empty() {
+        if transformer.has_default_export {
+            // 两者并存：除了已有的 export default，也为属性生成命名导出
+            // 这样 `import { VERSION } from './mod'` 也能工作
+            for (prop_name, var_name) in &transformer.export_names {
+                let export_spec = ast::ExportNamedSpecifier {
+                    span: DUMMY_SP,
+                    orig: ast::ModuleExportName::Ident(ast::Ident::new(
+                        var_name.clone().into(),
+                        DUMMY_SP,
+                        SyntaxContext::default(),
+                    )),
+                    exported: Some(ast::ModuleExportName::Ident(ast::Ident::new(
+                        prop_name.clone().into(),
+                        DUMMY_SP,
+                        SyntaxContext::default(),
+                    ))),
+                    is_type_only: false,
+                };
+                new_module.body.push(ast::ModuleItem::ModuleDecl(
+                    ast::ModuleDecl::ExportNamed(ast::NamedExport {
+                        span: DUMMY_SP,
+                        specifiers: vec![ast::ExportSpecifier::Named(export_spec)],
+                        src: None,
+                        type_only: false,
+                        with: None,
+                    }),
+                ));
+            }
+        } else {
+            // 只有命名导出：生成合成默认导出
+            let default_export_expr = create_synthetic_default_export(&transformer.export_names);
+            new_module.body.push(ast::ModuleItem::ModuleDecl(
+                ast::ModuleDecl::ExportDefaultExpr(ast::ExportDefaultExpr {
+                    span: DUMMY_SP,
+                    expr: Box::new(default_export_expr),
+                }),
+            ));
+        }
     }
 
     new_module
@@ -344,6 +376,49 @@ impl CjsTransformer {
         }
     }
 
+    /// 转换函数体：递归处理函数体中的 require() 调用
+    fn transform_function(&mut self, func: &ast::Function) -> ast::Function {
+        let mut new_func = func.clone();
+        if let Some(body) = new_func.body.take() {
+            new_func.body = Some(self.transform_block(&body));
+        }
+        new_func
+    }
+
+    /// 转换类体：递归处理类方法体中的 require() 调用
+    fn transform_class_body(&mut self, body: &mut Vec<ast::ClassMember>) {
+        for member in body {
+            match member {
+                ast::ClassMember::Method(method) => {
+                    if let Some(block) = method.function.body.take() {
+                        method.function.body = Some(self.transform_block(&block));
+                    }
+                }
+                ast::ClassMember::PrivateMethod(method) => {
+                    if let Some(block) = method.function.body.take() {
+                        method.function.body = Some(self.transform_block(&block));
+                    }
+                }
+                ast::ClassMember::Constructor(ctor) => {
+                    if let Some(block) = ctor.body.take() {
+                        ctor.body = Some(self.transform_block(&block));
+                    }
+                }
+                ast::ClassMember::ClassProp(prop) => {
+                    if let Some(value) = prop.value.take() {
+                        prop.value = Some(Box::new(self.transform_expr(&value)));
+                    }
+                }
+                ast::ClassMember::PrivateProp(prop) => {
+                    if let Some(value) = prop.value.take() {
+                        prop.value = Some(Box::new(self.transform_expr(&value)));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn transform_decl(&mut self, decl: &ast::Decl) -> ast::Stmt {
         match decl {
             ast::Decl::Var(var_decl) => {
@@ -354,9 +429,26 @@ impl CjsTransformer {
                     ast::Stmt::Decl(ast::Decl::Var(Box::new(transformed)))
                 }
             }
+            ast::Decl::Fn(fn_decl) => {
+                // 递归转换函数体中的 require() 调用
+                let mut new_fn_decl = fn_decl.clone();
+                new_fn_decl.function = Box::new(self.transform_function(&fn_decl.function));
+                ast::Stmt::Decl(ast::Decl::Fn(new_fn_decl))
+            }
+            ast::Decl::Class(class_decl) => {
+                // 递归转换类方法体中的 require() 调用
+                let mut class = (*class_decl.class).clone();
+                self.transform_class_body(&mut class.body);
+                ast::Stmt::Decl(ast::Decl::Class(ast::ClassDecl {
+                    ident: class_decl.ident.clone(),
+                    declare: class_decl.declare,
+                    class: Box::new(class),
+                }))
+            }
             other => ast::Stmt::Decl(other.clone()),
         }
     }
+
 
     fn try_transform_expr_stmt(&mut self, expr: &ast::Expr) -> Option<Vec<ast::ModuleItem>> {
         let ast::Expr::Assign(assign) = expr else { return None };
@@ -630,12 +722,17 @@ impl CjsTransformer {
             }),
             ast::Expr::Fn(f) => ast::Expr::Fn(ast::FnExpr {
                 ident: f.ident.clone(),
-                function: f.function.clone(),
+                function: Box::new(self.transform_function(&f.function)),
             }),
-            ast::Expr::Class(c) => ast::Expr::Class(ast::ClassExpr {
-                ident: c.ident.clone(),
-                class: c.class.clone(),
-            }),
+            ast::Expr::Class(c) => {
+                // 递归转换类方法体中的 require() 调用
+                let mut class = (*c.class).clone();
+                self.transform_class_body(&mut class.body);
+                ast::Expr::Class(ast::ClassExpr {
+                    ident: c.ident.clone(),
+                    class: Box::new(class),
+                })
+            }
             ast::Expr::TaggedTpl(t) => ast::Expr::TaggedTpl(ast::TaggedTpl {
                 span: t.span,
                 ctxt: SyntaxContext::default(),
@@ -1438,5 +1535,209 @@ mod tests {
             matches!(item, ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(_))))
         });
         assert!(has_class);
+    }
+
+    // ========== 修复验证测试 ==========
+
+    /// 测试 require() 在函数表达式体内被正确处理
+    /// 预期行为：const x = require('./foo') 被移除，x 引用导入的标识符
+    #[test]
+    fn require_in_fn_expr_body_is_transformed() {
+        let module = parse(r#"
+            const fn = function() {
+                const x = require('./foo');
+                return x;
+            };
+        "#);
+        let transformed = transform(&module);
+        
+        // 应该有 import 声明
+        assert!(has_import_decl(&transformed), "should have import declaration");
+        
+        // 验证函数体内没有 require() 调用（var decl 被移除或转换）
+        let fn_body_ok = transformed.body.iter().any(|item| {
+            if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
+                for decl in &var.decls {
+                    if let ast::Pat::Ident(binding) = &decl.name {
+                        if binding.id.sym == "fn" {
+                            if let Some(ast::Expr::Fn(f)) = decl.init.as_deref() {
+                                if let Some(body) = &f.function.body {
+                                    // 检查函数体内是否有 var decl
+                                    for stmt in &body.stmts {
+                                        if let ast::Stmt::Decl(ast::Decl::Var(v)) = stmt {
+                                            for d in &v.decls {
+                                                if let ast::Pat::Ident(b) = &d.name {
+                                                    if b.id.sym == "x" {
+                                                        // 如果有 const x = ...，检查初始化器不是 require()
+                                                        if let Some(init) = &d.init {
+                                                            if let ast::Expr::Call(call) = init.as_ref() {
+                                                                if let ast::Callee::Expr(callee) = &call.callee {
+                                                                    if let ast::Expr::Ident(id) = callee.as_ref() {
+                                                                        if id.sym == "require" {
+                                                                            return false; // require() 未被转换
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    return true; // 没有 require() 调用
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        });
+        assert!(fn_body_ok, "require() in function expression body should be transformed");
+    }
+
+    /// 测试 require() 在函数声明体内被正确处理
+    /// 预期行为：const x = require('./foo') 被移除，x 引用导入的标识符
+    #[test]
+    fn require_in_fn_decl_body_is_transformed() {
+        let module = parse(r#"
+            function fn() {
+                const x = require('./foo');
+                return x;
+            }
+        "#);
+        let transformed = transform(&module);
+        assert!(has_import_decl(&transformed), "should have import declaration");
+        
+        // 验证函数声明体内没有 require() 调用
+        let fn_body_ok = transformed.body.iter().any(|item| {
+            if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(fn_decl))) = item {
+                if fn_decl.ident.sym == "fn" {
+                    if let Some(body) = &fn_decl.function.body {
+                        for stmt in &body.stmts {
+                            if let ast::Stmt::Decl(ast::Decl::Var(v)) = stmt {
+                                for d in &v.decls {
+                                    if let ast::Pat::Ident(b) = &d.name {
+                                        if b.id.sym == "x" {
+                                            if let Some(init) = &d.init {
+                                                if let ast::Expr::Call(call) = init.as_ref() {
+                                                    if let ast::Callee::Expr(callee) = &call.callee {
+                                                        if let ast::Expr::Ident(id) = callee.as_ref() {
+                                                            if id.sym == "require" {
+                                                                return false;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        return true;
+                    }
+                }
+            }
+            false
+        });
+        assert!(fn_body_ok, "require() in function declaration body should be transformed");
+    }
+
+    /// 测试 require() 在类方法体内被正确处理
+    /// 预期行为：const x = require('./foo') 被移除，x 引用导入的标识符
+    #[test]
+    fn require_in_class_method_body_is_transformed() {
+        let module = parse(r#"
+            class MyClass {
+                method() {
+                    const x = require('./foo');
+                    return x;
+                }
+            }
+        "#);
+        let transformed = transform(&module);
+        assert!(has_import_decl(&transformed), "should have import declaration");
+        
+        // 验证类方法体内没有 require() 调用
+        let method_body_ok = transformed.body.iter().any(|item| {
+            if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(class_decl))) = item {
+                if class_decl.ident.sym == "MyClass" {
+                    for member in &class_decl.class.body {
+                        if let ast::ClassMember::Method(method) = member {
+                            if let Some(body) = &method.function.body {
+                                for stmt in &body.stmts {
+                                    if let ast::Stmt::Decl(ast::Decl::Var(v)) = stmt {
+                                        for d in &v.decls {
+                                            if let ast::Pat::Ident(b) = &d.name {
+                                                if b.id.sym == "x" {
+                                                    if let Some(init) = &d.init {
+                                                        if let ast::Expr::Call(call) = init.as_ref() {
+                                                            if let ast::Callee::Expr(callee) = &call.callee {
+                                                                if let ast::Expr::Ident(id) = callee.as_ref() {
+                                                                    if id.sym == "require" {
+                                                                        return false;
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
+            false
+        });
+        assert!(method_body_ok, "require() in class method body should be transformed");
+    }
+
+    /// 测试 module.exports = X 后 module.exports.y = Z 同时导出两者
+    #[test]
+    fn module_exports_default_and_named_both_exported() {
+        let module = parse(r#"
+            module.exports = function() { return 42; };
+            module.exports.VERSION = '1.0';
+        "#);
+        let transformed = transform(&module);
+        
+        // 应该有默认导出
+        let has_default = transformed.body.iter().any(|item| {
+            matches!(item, ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(_)))
+        });
+        assert!(has_default, "should have default export");
+        
+        // 应该有命名导出（VERSION）
+        let has_named = transformed.body.iter().any(|item| {
+            if let ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportNamed(named)) = item {
+                named.specifiers.iter().any(|s| {
+                    if let ast::ExportSpecifier::Named(n) = s {
+                        n.exported.as_ref().map(|e| {
+                            if let ast::ModuleExportName::Ident(id) = e { id.sym == "VERSION" } else { false }
+                        }).unwrap_or(false)
+                    } else { false }
+                })
+            } else { false }
+        });
+        assert!(has_named, "should have named export for VERSION");
+        
+        // VERSION 变量应该存在
+        let has_version_var = transformed.body.iter().any(|item| {
+            if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
+                var.decls.iter().any(|d| {
+                    if let ast::Pat::Ident(b) = &d.name {
+                        b.id.sym.contains("VERSION")
+                    } else { false }
+                })
+            } else { false }
+        });
+        assert!(has_version_var, "VERSION variable should exist");
     }
 }
