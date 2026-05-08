@@ -1,7 +1,4 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: Failed to analyze module links
-
-Caused by:
-    Missing export 'missing' in module 'modules/missing_export/dep.js' (imported by 'modules/missing_export/main.js')
+Error: Failed to analyze module links: Missing export 'missing' in module 'modules/missing_export/dep.js' (imported by 'modules/missing_export/main.js')

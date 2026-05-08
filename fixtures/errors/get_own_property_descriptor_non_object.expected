@@ -1,4 +1,4 @@
-exit_code: 1
+exit_code: 2
 --- stdout ---
 --- stderr ---
-Error: TypeError: Object.getOwnPropertyDescriptor called on non-object
+Runtime error: TypeError: Object.getOwnPropertyDescriptor called on non-object

@@ -1,7 +1,4 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: Failed to lower modules
-
-Caused by:
-    semantic lowering error [84..85]: cannot access `b` before initialisation
+Error: Failed to lower modules: semantic lowering error [84..85]: cannot access `b` before initialisation

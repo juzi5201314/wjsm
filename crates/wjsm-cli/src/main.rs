@@ -1,3 +1,5 @@
-fn main() -> anyhow::Result<()> {
+use std::process::ExitCode;
+
+fn main() -> ExitCode {
     wjsm_cli::main_entry()
 }
