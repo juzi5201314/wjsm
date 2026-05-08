@@ -57,7 +57,29 @@ impl ModuleGraph {
                     queue.push_back(dep_id);
                 }
             }
+        }
 
+        // 为被 CJS 模块默认导入的 ESM 模块添加合成默认导出
+        let mut needs_default_export: HashSet<ModuleId> = HashSet::new();
+        for module in resolver.all_modules() {
+            if module.is_cjs {
+                for import in &module.imports {
+                    let has_default_import = import.names.iter().any(|(_, imported_name)| imported_name == "default");
+                    if has_default_import {
+                        if let Ok(dep_path) = ModuleResolver::resolve_path(&import.specifier, &module.path) {
+                            if let Some(dep_id) = resolver.get_id_by_path(&dep_path) {
+                                let dep_module = resolver.get_module(dep_id).unwrap();
+                                if !dep_module.is_cjs {
+                                    needs_default_export.insert(dep_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for dep_id in needs_default_export {
+            resolver.ensure_default_export_for(dep_id);
         }
         
         // 构建图结构
