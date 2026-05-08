@@ -1,7 +1,4 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: Failed to lower modules
-
-Caused by:
-    semantic lowering error [42..43]: undeclared identifier `x`
+Error: Failed to lower modules: semantic lowering error [42..43]: undeclared identifier `x`

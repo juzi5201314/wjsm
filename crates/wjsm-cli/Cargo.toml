@@ -13,3 +13,11 @@ wjsm-parser = { path = "../wjsm-parser" }
 wjsm-runtime = { path = "../wjsm-runtime" }
 wjsm-semantic = { path = "../wjsm-semantic" }
 wjsm-module = { path = "../wjsm-module" }
+colored = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+wasmprinter = { workspace = true }
+wasmparser = { workspace = true }
+notify = { workspace = true }
+swc_core = { workspace = true }
+regex = "1"

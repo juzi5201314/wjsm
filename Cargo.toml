@@ -23,7 +23,7 @@ edition = "2024"
 [workspace.dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.0", features = ["derive"] }
-swc_core = { version = "62.0.0", features = ["ecma_parser", "ecma_ast", "common", "ecma_visit"] }
+swc_core = { version = "62.0.0", features = ["ecma_parser", "ecma_ast", "common", "ecma_visit", "ecma_ast_serde", "ecma_codegen"] }
 thiserror = "2.0.18"
 wasm-encoder = "0.246.2"
 wasmtime = "43.0.0"
@@ -33,7 +33,11 @@ rayon = "1.10"
 walkdir = "2"
 comfy-table = "7"
 colored = "2"
+notify = "8.0"
+wasmprinter = "0.245"
+wasmparser = "0.246"
 regress = "0.11"
+regex = "1"
 
 [dependencies]
 anyhow = { workspace = true }

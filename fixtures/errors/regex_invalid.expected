@@ -1,5 +1,5 @@
-exit_code: 1
+exit_code: 2
 --- stdout ---
 undefined
 --- stderr ---
-Error: SyntaxError: Invalid regular expression: Unbalanced parenthesis
+Runtime error: SyntaxError: Invalid regular expression: Unbalanced parenthesis

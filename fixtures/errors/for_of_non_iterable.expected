@@ -1,4 +1,4 @@
-exit_code: 1
+exit_code: 2
 --- stdout ---
 --- stderr ---
-Error: TypeError: value is not iterable
+Runtime error: TypeError: value is not iterable

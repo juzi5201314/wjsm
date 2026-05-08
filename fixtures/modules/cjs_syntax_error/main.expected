@@ -1,8 +1,4 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: Failed to build module graph
-
-Caused by:
-    0: Failed to parse module: modules/cjs_syntax_error/bad.js
-    1: Parse error: Error { error: (38..39, ExpectedIdent) }
+Error: Failed to build module graph: Failed to parse module: modules/cjs_syntax_error/bad.js: Parse error: Error { error: (38..39, ExpectedIdent) }

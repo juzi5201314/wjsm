@@ -1,5 +1,5 @@
-exit_code: 1
+exit_code: 2
 --- stdout ---
 Uncaught exception: 42
 --- stderr ---
-Error: Uncaught exception: 42
+Runtime error: Uncaught exception: 42
