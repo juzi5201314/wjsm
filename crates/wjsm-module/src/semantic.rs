@@ -251,4 +251,83 @@ mod tests {
         }
         std::fs::write(path, content).expect("fixture file should be writable");
     }
+
+    #[test]
+    fn wildcard_reexport_allows_any_import() {
+        let root = create_temp_project("wildcard_reexport");
+        write_file(
+            &root,
+            "main.js",
+            "import { anything } from './reexport.js';\nconsole.log(anything);\n",
+        );
+        write_file(&root, "base.js", "export const anything = 1;\n");
+        write_file(&root, "reexport.js", "export * from './base.js';\n");
+
+        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let result = analyze_module_links(&graph);
+        assert!(result.is_ok(), "wildcard re-export should allow any import name");
+    }
+
+    #[test]
+    fn namespace_import_skips_missing_check() {
+        let root = create_temp_project("namespace_import");
+        write_file(
+            &root,
+            "main.js",
+            "import * as ns from './dep.js';\nconsole.log(ns);\n",
+        );
+        write_file(&root, "dep.js", "export const x = 1;\n");
+
+        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let result = analyze_module_links(&graph);
+        assert!(result.is_ok(), "namespace import should skip missing export check");
+    }
+
+    #[test]
+    fn duplicate_default_export_detected() {
+        let root = create_temp_project("dup_default");
+        write_file(
+            &root,
+            "main.js",
+            "import d from './dep.js';\nconsole.log(d);\n",
+        );
+        write_file(&root, "dep.js", "export default 1;\nexport default 2;\n");
+
+        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let error = analyze_module_links(&graph).expect_err("should report duplicate default export");
+        let message = error.to_string();
+        assert!(message.contains("Duplicate export 'default'"));
+    }
+
+    #[test]
+    fn link_result_contains_correct_export_names() {
+        let root = create_temp_project("export_names");
+        write_file(
+            &root,
+            "main.js",
+            "import { x, y } from './dep.js';\nconsole.log(x, y);\n",
+        );
+        write_file(&root, "dep.js", "export const x = 1;\nexport const y = 2;\n");
+
+        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let link = analyze_module_links(&graph).expect("linking should succeed");
+
+        let dep_id = graph
+            .all_module_ids()
+            .find(|id| *id != graph.entry_id())
+            .expect("dep module id should exist");
+        let exports = link.export_names.get(&dep_id).expect("dep exports should exist");
+        assert!(exports.contains("x"));
+        assert!(exports.contains("y"));
+    }
+
+    #[test]
+    fn empty_module_links_successfully() {
+        let root = create_temp_project("empty_module");
+        write_file(&root, "main.js", "const x = 1;\nconsole.log(x);\n");
+
+        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let result = analyze_module_links(&graph);
+        assert!(result.is_ok(), "module with no imports/exports should link successfully");
+    }
 }

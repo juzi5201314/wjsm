@@ -20,3 +20,29 @@ pub fn bundle(entry: &str, root_path: &Path) -> Result<Vec<u8>> {
     let mut bundler = ModuleBundler::new(root_path)?;
     bundler.bundle(entry)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn public_bundle_function_works() {
+        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("fixtures/modules/simple");
+
+        if !fixtures_dir.exists() {
+            return;
+        }
+
+        let result = bundle("./main.js", &fixtures_dir);
+        assert!(result.is_ok(), "public bundle should succeed: {:?}", result.err());
+        let wasm_bytes = result.unwrap();
+        assert!(!wasm_bytes.is_empty(), "should produce non-empty WASM output");
+        assert!(wasm_bytes.starts_with(b"\x00asm"), "output should be valid WASM binary");
+    }
+}
