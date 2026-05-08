@@ -4,10 +4,12 @@
 mod resolver;
 mod graph;
 mod bundler;
+mod semantic;
 
 pub use resolver::{ModuleResolver, ResolvedModule, ImportEntry, ExportEntry};
 pub use graph::{ModuleGraph, ModuleId};
 pub use bundler::ModuleBundler;
+pub use semantic::{ModuleLinkResult, analyze_module_links};
 
 use anyhow::Result;
 use std::path::Path;

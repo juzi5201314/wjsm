@@ -1,12 +1,10 @@
 // 模块 Bundler：将多个模块编译为单一 WASM 二进制
 
 use anyhow::{Context, Result};
-use std::collections::HashMap;
 use std::path::Path;
 
-use super::graph::{ModuleGraph, ModuleId, GraphNode};
-use super::resolver::ImportEntry;
-use wjsm_ir::Program;
+use super::graph::ModuleGraph;
+use super::semantic::analyze_module_links;
 
 /// 模块 Bundler
 pub struct ModuleBundler {
@@ -30,30 +28,23 @@ impl ModuleBundler {
         let order = graph.topological_order()
             .with_context(|| "Failed to compute topological order")?;
         
-        // 3. 收集所有模块的 AST 和 import 映射
+        // 3. 模块语义链接：收集导出并校验 import 绑定
+        let link_result = analyze_module_links(&graph)
+            .with_context(|| "Failed to analyze module links")?;
+
+        // 4. 收集所有模块的 AST
         let mut modules = Vec::new();
-        let mut import_map = HashMap::new();
         
         for &id in &order {
             let node = graph.get_module(id).unwrap();
             modules.push((id, node.ast.clone()));
-            
-            // 构建此模块的 import 绑定列表
-            let mut bindings = Vec::new();
-            for (dep_id, import) in &node.imports {
-                bindings.push(wjsm_ir::ImportBinding {
-                    source_module: *dep_id,
-                    names: import.names.clone(),
-                });
-            }
-            import_map.insert(id, bindings);
         }
         
-        // 4. 调用语义层的多模块 lowering
-        let program = wjsm_semantic::lower_modules(modules, &import_map)
+        // 5. 调用语义层的多模块 lowering
+        let program = wjsm_semantic::lower_modules(modules, &link_result.import_map)
             .with_context(|| "Failed to lower modules")?;
         
-        // 5. 编译为 WASM
+        // 6. 编译为 WASM
         let wasm_bytes = wjsm_backend_wasm::compile(&program)
             .with_context(|| "Failed to compile to WASM")?;
         
