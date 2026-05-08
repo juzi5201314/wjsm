@@ -361,12 +361,18 @@ impl CjsDetector {
 
 /// 将 CJS 模块转换为 ESM 风格 AST
 pub fn transform(module: &ast::Module) -> ast::Module {
+    transform_with_prefix(module, "")
+}
+
+/// 将 CJS 模块转换为 ESM 风格 AST，使用指定前缀避免变量名冲突
+pub fn transform_with_prefix(module: &ast::Module, export_prefix: &str) -> ast::Module {
     let mut ctx = TransformCtx {
         require_map: HashMap::new(),
         next_req_id: 0,
         exports: Vec::new(),
         export_names: Vec::new(),
         has_default_export: false,
+        export_prefix: export_prefix.to_string(),
     };
 
     // 第一遍：收集所有 require() 调用
@@ -449,10 +455,12 @@ struct TransformCtx {
     next_req_id: u32,
     /// 收集到的 exports（用于生成 export 声明）
     exports: Vec<(String, ast::Expr)>,
-    /// 命名导出的名称列表（用于生成合成默认导出）
-    export_names: Vec<String>,
+    /// 命名导出的名称列表：(prop_name, var_name)（用于生成合成默认导出）
+    export_names: Vec<(String, String)>,
     /// 是否有显式的默认导出（module.exports = obj）
     has_default_export: bool,
+    /// 导出变量的前缀，用于避免多个 CJS 模块的变量名冲突
+    export_prefix: String,
 }
 
 impl TransformCtx {
@@ -616,6 +624,18 @@ impl TransformCtx {
     fn collect_requires_var_decl(&mut self, var_decl: &ast::VarDecl) {
         for decl in &var_decl.decls {
             if let Some(init) = &decl.init {
+                // 检测 const x = require('./y') 模式
+                if let ast::Expr::Call(call) = init.as_ref() {
+                    if let Some(specifier) = extract_require_specifier(call) {
+                        if let ast::Pat::Ident(binding) = &decl.name {
+                            let local_name = binding.id.sym.to_string();
+                            if !self.require_map.contains_key(&specifier) {
+                                self.require_map.insert(specifier, local_name);
+                            }
+                            continue;
+                        }
+                    }
+                }
                 self.collect_requires_expr(init);
             }
         }
@@ -1012,7 +1032,7 @@ impl TransformCtx {
                 if let ast::AssignTarget::Simple(simple) = &assign.left {
                     if let ast::SimpleAssignTarget::Member(member) = simple {
                         if is_module_exports_member(&member.obj) {
-                            // module.exports.x = value → export let x = value
+                            // module.exports.x = value → let __cjs_x = value（普通声明，不导出）
                             let prop_name = match &member.prop {
                                 ast::MemberProp::Ident(ident) => ident.sym.to_string(),
                                 ast::MemberProp::Computed(computed) => {
@@ -1026,12 +1046,13 @@ impl TransformCtx {
                                 _ => return None,
                             };
                             let value = self.transform_expr(&assign.right);
-                            self.export_names.push(prop_name.clone());
-                            let decl = create_let_decl(&prop_name, value);
-                            return Some(TransformedStmt::ExportDecl(decl));
+                            let var_name = format!("{}__cjs_{}", self.export_prefix, prop_name);
+                            self.export_names.push((prop_name, var_name.clone()));
+                            let decl = create_let_decl(&var_name, value);
+                            return Some(TransformedStmt::Stmt(ast::Stmt::Decl(decl)));
                         }
                         if is_exports_ident(&member.obj) {
-                            // exports.x = value → export let x = value
+                            // exports.x = value → let __cjs_x = value（普通声明，不导出）
                             let prop_name = match &member.prop {
                                 ast::MemberProp::Ident(ident) => ident.sym.to_string(),
                                 ast::MemberProp::Computed(computed) => {
@@ -1045,9 +1066,10 @@ impl TransformCtx {
                                 _ => return None,
                             };
                             let value = self.transform_expr(&assign.right);
-                            self.export_names.push(prop_name.clone());
-                            let decl = create_let_decl(&prop_name, value);
-                            return Some(TransformedStmt::ExportDecl(decl));
+                            let var_name = format!("{}__cjs_{}", self.export_prefix, prop_name);
+                            self.export_names.push((prop_name, var_name.clone()));
+                            let decl = create_let_decl(&var_name, value);
+                            return Some(TransformedStmt::Stmt(ast::Stmt::Decl(decl)));
                         }
                     }
                 }
@@ -1100,6 +1122,19 @@ impl TransformCtx {
     fn transform_var_decl(&mut self, var_decl: &ast::VarDecl) -> ast::VarDecl {
         let mut new_decls = Vec::new();
         for decl in &var_decl.decls {
+            // 检测 const x = require('./y') 模式，跳过（因为 import 声明已创建变量）
+            if let Some(init) = &decl.init {
+                if let ast::Expr::Call(call) = init.as_ref() {
+                    if let Some(specifier) = extract_require_specifier(call) {
+                        if let ast::Pat::Ident(binding) = &decl.name {
+                            let local_name = binding.id.sym.to_string();
+                            if self.require_map.get(&specifier) == Some(&local_name) {
+                                continue;
+                            }
+                        }
+                    }
+                }
+            }
             let init = decl.init.as_ref().map(|e| Box::new(self.transform_expr(e)));
             new_decls.push(ast::VarDeclarator {
                 span: decl.span,
@@ -1581,16 +1616,22 @@ fn create_import_default_decl(specifier: &str, local_name: &str) -> ast::ImportD
     }
 }
 
-/// 创建合成默认导出对象：{ name1, name2, ... }
-fn create_synthetic_default_export(export_names: &[String]) -> ast::Expr {
+/// 创建合成默认导出对象：{ prop1: var1, prop2: var2, ... }
+fn create_synthetic_default_export(export_names: &[(String, String)]) -> ast::Expr {
     let props: Vec<ast::PropOrSpread> = export_names
         .iter()
-        .map(|name| {
-            ast::PropOrSpread::Prop(Box::new(ast::Prop::Shorthand(ast::Ident::new(
-                name.clone().into(),
-                DUMMY_SP,
-                SyntaxContext::default(),
-            ))))
+        .map(|(prop_name, var_name)| {
+            ast::PropOrSpread::Prop(Box::new(ast::Prop::KeyValue(ast::KeyValueProp {
+                key: ast::PropName::Ident(ast::IdentName::new(
+                    prop_name.clone().into(),
+                    DUMMY_SP,
+                )),
+                value: Box::new(ast::Expr::Ident(ast::Ident::new(
+                    var_name.clone().into(),
+                    DUMMY_SP,
+                    SyntaxContext::default(),
+                ))),
+            })))
         })
         .collect();
     ast::Expr::Object(ast::ObjectLit {
@@ -1669,13 +1710,15 @@ mod tests {
     fn transforms_module_exports() {
         let module = parse(r#"module.exports.foo = 42;"#);
         let transformed = transform(&module);
-        let has_export = transformed.body.iter().any(|item| {
-            matches!(
-                item,
-                ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(_))
-            )
+        // 应该有 let 声明
+        let has_let_decl = transformed.body.iter().any(|item| {
+            if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
+                var.kind == ast::VarDeclKind::Let
+            } else {
+                false
+            }
         });
-        assert!(has_export, "transformed module should have export decl");
+        assert!(has_let_decl, "transformed module should have let decl");
         // 应该有合成默认导出
         let has_default_export = transformed.body.iter().any(|item| {
             matches!(
@@ -1690,13 +1733,23 @@ mod tests {
     fn transforms_exports_alias() {
         let module = parse(r#"exports.bar = 42;"#);
         let transformed = transform(&module);
-        let has_export = transformed.body.iter().any(|item| {
+        // 应该有 let 声明
+        let has_let_decl = transformed.body.iter().any(|item| {
+            if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
+                var.kind == ast::VarDeclKind::Let
+            } else {
+                false
+            }
+        });
+        assert!(has_let_decl, "transformed module should have let decl");
+        // 应该有合成默认导出
+        let has_default_export = transformed.body.iter().any(|item| {
             matches!(
                 item,
-                ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(_))
+                ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(_))
             )
         });
-        assert!(has_export, "transformed module should have export decl");
+        assert!(has_default_export, "transformed module should have synthetic default export");
     }
 
     #[test]

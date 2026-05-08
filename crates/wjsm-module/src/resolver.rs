@@ -129,15 +129,27 @@ impl ModuleResolver {
             .with_context(|| format!("Failed to parse module: {}", path.display()))?;
 
         // 检测并转换 CommonJS 模块
-        let ast = if crate::cjs_transform::is_commonjs_module(&ast) {
-            crate::cjs_transform::transform(&ast)
+        let mut ast = if crate::cjs_transform::is_commonjs_module(&ast) {
+            // 使用模块路径的哈希作为前缀，避免多个 CJS 模块的变量名冲突
+            let prefix = format!("_{}_", self.next_id);
+            crate::cjs_transform::transform_with_prefix(&ast, &prefix)
         } else {
             ast
         };
 
         // 提取 import/export
         let imports = Self::extract_imports(&ast);
-        let exports = Self::extract_exports(&ast);
+        let mut exports = Self::extract_exports(&ast);
+
+        // 如果模块没有默认导出但有其他导出，添加合成默认导出
+        // 这样 CJS 模块通过 require() 导入时可以使用默认导入
+        let has_default_export = exports.iter().any(|e| matches!(e, ExportEntry::Default { .. }));
+        if !has_default_export && !exports.is_empty() {
+            // 为模块添加合成默认导出
+            Self::add_synthetic_default_export(&mut ast, &exports);
+            // 重新提取 exports
+            exports = Self::extract_exports(&ast);
+        }
 
         // 分配 ID
         let id = ModuleId(self.next_id);
@@ -172,6 +184,57 @@ impl ModuleResolver {
     /// 根据路径查找已解析的模块 ID
     pub fn get_id_by_path(&self, path: &Path) -> Option<ModuleId> {
         self.visited.get(path).copied()
+    }
+
+    /// 为没有默认导出的模块添加合成默认导出
+    fn add_synthetic_default_export(ast: &mut ast::Module, exports: &[ExportEntry]) {
+        use swc_core::common::{DUMMY_SP, SyntaxContext};
+
+        // 收集所有命名导出的名称
+        let mut export_names: Vec<String> = Vec::new();
+        for entry in exports {
+            match entry {
+                ExportEntry::Named { exported, .. } => {
+                    if exported != "default" && !export_names.contains(exported) {
+                        export_names.push(exported.clone());
+                    }
+                }
+                ExportEntry::Declaration { name } => {
+                    if !export_names.contains(name) {
+                        export_names.push(name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if export_names.is_empty() {
+            return;
+        }
+
+        // 创建合成默认导出表达式：export default { name1, name2, ... }
+        let props: Vec<ast::PropOrSpread> = export_names
+            .iter()
+            .map(|name| {
+                ast::PropOrSpread::Prop(Box::new(ast::Prop::Shorthand(ast::Ident::new(
+                    name.clone().into(),
+                    DUMMY_SP,
+                    SyntaxContext::default(),
+                ))))
+            })
+            .collect();
+
+        let default_export = ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(
+            ast::ExportDefaultExpr {
+                span: DUMMY_SP,
+                expr: Box::new(ast::Expr::Object(ast::ObjectLit {
+                    span: DUMMY_SP,
+                    props,
+                })),
+            },
+        ));
+
+        ast.body.push(default_export);
     }
 
     /// 从 AST 中提取 import 声明

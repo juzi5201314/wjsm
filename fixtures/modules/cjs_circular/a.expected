@@ -1,7 +1,3 @@
-exit_code: 1
+exit_code: 0
 --- stdout ---
 --- stderr ---
-Error: Failed to lower modules
-
-Caused by:
-    semantic lowering error [0..1]: cannot redeclare identifier `value` in the same scope
