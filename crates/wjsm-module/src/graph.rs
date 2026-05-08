@@ -329,4 +329,68 @@ mod tests {
         }
         std::fs::write(path, content).expect("fixture file should be writable");
     }
+
+    #[test]
+    fn build_creates_correct_dependency_edges() {
+        let root = create_temp_project("dep_edges");
+        write_file(
+            &root,
+            "main.js",
+            "import { a } from './a.js';\nconsole.log(a);\n",
+        );
+        write_file(&root, "a.js", "export const a = 1;\n");
+
+        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let entry = graph.get_module(graph.entry_id()).expect("entry should exist");
+        assert_eq!(entry.imports.len(), 1);
+        let (dep_id, import_entry) = &entry.imports[0];
+        assert_eq!(import_entry.specifier, "./a.js");
+        let dep = graph.get_module(*dep_id).expect("dep should exist");
+        assert!(dep.path.to_string_lossy().ends_with("a.js"));
+    }
+
+    #[test]
+    fn build_handles_cjs_importing_esm_default() {
+        let root = create_temp_project("cjs_import_esm");
+        write_file(&root, "main.js", "const lib = require('./lib.js');\nconsole.log(lib);\n");
+        write_file(&root, "lib.js", "export const value = 42;\n");
+
+        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let lib_id = graph
+            .all_module_ids()
+            .find(|id| *id != graph.entry_id())
+            .expect("lib module should exist");
+        let lib_module = graph.get_module(lib_id).expect("lib should exist");
+        let has_default = lib_module.exports.iter().any(|e| {
+            matches!(e, crate::resolver::ExportEntry::Default { .. })
+        });
+        assert!(has_default, "ESM module should have synthetic default export added");
+    }
+
+    #[test]
+    fn get_module_returns_none_for_invalid_id() {
+        let root = create_temp_project("invalid_id");
+        write_file(&root, "main.js", "const x = 1;\nconsole.log(x);\n");
+        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        assert!(graph.get_module(ModuleId(999)).is_none());
+    }
+
+    #[test]
+    fn entry_id_returns_entry_module() {
+        let root = create_temp_project("entry_id");
+        write_file(&root, "main.js", "const x = 1;\nconsole.log(x);\n");
+        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let entry = graph.get_module(graph.entry_id()).expect("entry should exist");
+        assert!(entry.path.to_string_lossy().ends_with("main.js"));
+    }
+
+    #[test]
+    fn single_module_graph_topological_order() {
+        let root = create_temp_project("single_mod");
+        write_file(&root, "main.js", "const x = 1;\nconsole.log(x);\n");
+        let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
+        let order = graph.topological_order().expect("order should be computable");
+        assert_eq!(order.len(), 1);
+        assert_eq!(order[0], graph.entry_id());
+    }
 }
