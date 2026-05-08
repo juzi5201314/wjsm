@@ -50,6 +50,12 @@ pub enum ExportEntry {
     All {
         source: String,
     },
+    /// export { x, y } from './foo' — 命名重导出
+    NamedReExport {
+        local: String,
+        exported: String,
+        source: String,
+    },
     /// export const/let/var/function/class
     Declaration {
         name: String,
@@ -179,13 +185,15 @@ impl ModuleResolver {
     }
 
     /// 为指定模块添加合成默认导出（如果它没有默认导出但有其他导出）
-    pub fn ensure_default_export_for(&mut self, module_id: ModuleId) {
-        let module = self.modules.get_mut(&module_id).unwrap();
+    pub fn ensure_default_export_for(&mut self, module_id: ModuleId) -> Result<()> {
+        let module = self.modules.get_mut(&module_id)
+            .ok_or_else(|| anyhow::anyhow!("invalid ModuleId: {:?}", module_id))?;
         let has_default = module.exports.iter().any(|e| matches!(e, ExportEntry::Default { .. }));
         if !has_default && !module.exports.is_empty() {
             Self::add_synthetic_default_export(&mut module.ast, &module.exports);
             module.exports = Self::extract_exports(&module.ast);
         }
+        Ok(())
     }
 
     /// 为没有默认导出的模块添加合成默认导出
@@ -294,10 +302,64 @@ impl ModuleResolver {
                 ast::ModuleItem::ModuleDecl(decl) => match decl {
                     ast::ModuleDecl::ExportNamed(named_export) => {
                         if let Some(src) = &named_export.src {
-                            // export { ... } from './foo'
-                            exports.push(ExportEntry::All {
-                                source: src.value.to_string_lossy().into_owned(),
-                            });
+                            // export { ... } from './foo' — 命名重导出
+                            let source = src.value.to_string_lossy().into_owned();
+                            for spec in &named_export.specifiers {
+                                match spec {
+                                    ast::ExportSpecifier::Named(named) => {
+                                        let local = match &named.orig {
+                                            ast::ModuleExportName::Ident(ident) => {
+                                                ident.sym.to_string()
+                                            }
+                                            ast::ModuleExportName::Str(s) => {
+                                                s.value.to_string_lossy().into_owned()
+                                            }
+                                        };
+                                        let exported = named
+                                            .exported
+                                            .as_ref()
+                                            .map(|id| match id {
+                                                ast::ModuleExportName::Ident(ident) => {
+                                                    ident.sym.to_string()
+                                                }
+                                                ast::ModuleExportName::Str(s) => {
+                                                    s.value.to_string_lossy().into_owned()
+                                                }
+                                            })
+                                            .unwrap_or_else(|| local.clone());
+                                        exports.push(ExportEntry::NamedReExport {
+                                            local,
+                                            exported,
+                                            source: source.clone(),
+                                        });
+                                    }
+                                    ast::ExportSpecifier::Namespace(ns) => {
+                                        // export * as ns from './foo'
+                                        let name = match &ns.name {
+                                            ast::ModuleExportName::Ident(ident) => {
+                                                ident.sym.to_string()
+                                            }
+                                            ast::ModuleExportName::Str(s) => {
+                                                s.value.to_string_lossy().into_owned()
+                                            }
+                                        };
+                                        exports.push(ExportEntry::NamedReExport {
+                                            local: "*".to_string(),
+                                            exported: name,
+                                            source: source.clone(),
+                                        });
+                                    }
+                                    ast::ExportSpecifier::Default(default) => {
+                                        // export { default } from './foo'
+                                        let local = default.exported.sym.to_string();
+                                        exports.push(ExportEntry::NamedReExport {
+                                            local: local.clone(),
+                                            exported: "default".to_string(),
+                                            source: source.clone(),
+                                        });
+                                    }
+                                }
+                            }
                         } else {
                             // export { x } / export { x as y }
                             for spec in &named_export.specifiers {
@@ -734,7 +796,12 @@ mod tests {
         let mut resolver = ModuleResolver::new(&root);
         let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
-        assert!(module.exports.iter().any(|e| matches!(e, ExportEntry::All { .. })));
+        // export { x } from './base.js' 应该产生 NamedReExport，而不是 All
+        assert!(module.exports.iter().any(|e| matches!(
+            e,
+            ExportEntry::NamedReExport { local, exported, source }
+                if local == "x" && exported == "x" && source == "./base.js"
+        )));
     }
 
     #[test]

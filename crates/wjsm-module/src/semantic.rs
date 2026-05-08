@@ -50,6 +50,16 @@ pub fn analyze_module_links(graph: &ModuleGraph) -> Result<ModuleLinkResult> {
                         );
                     }
                 }
+                ExportEntry::NamedReExport { exported, .. } => {
+                    // export { x } from './foo' — 重导出特定名称
+                    if !collected.names.insert(exported.clone()) {
+                        bail!(
+                            "Duplicate export '{}' in module '{}'",
+                            exported,
+                            node.path.display()
+                        );
+                    }
+                }
                 ExportEntry::Declaration { name } => {
                     if !collected.names.insert(name.clone()) {
                         bail!(

@@ -14,8 +14,6 @@ pub struct ModuleGraph {
     modules: HashMap<ModuleId, GraphNode>,
     /// 入口模块 ID
     entry_id: ModuleId,
-    /// 依赖关系：module_id → 它依赖的模块 ID 列表
-    dependencies: HashMap<ModuleId, Vec<(ModuleId, ImportEntry)>>,
 }
 
 /// 图节点
@@ -79,12 +77,11 @@ impl ModuleGraph {
             }
         }
         for dep_id in needs_default_export {
-            resolver.ensure_default_export_for(dep_id);
+            resolver.ensure_default_export_for(dep_id)?;
         }
         
         // 构建图结构
         let mut modules = HashMap::new();
-        let mut dependencies = HashMap::new();
         
         for module in resolver.all_modules() {
             let id = module.id;
@@ -102,8 +99,6 @@ impl ModuleGraph {
                 }
             }
             
-            dependencies.insert(id, imports_with_ids.clone());
-            
             let node = GraphNode {
                 id,
                 path,
@@ -119,20 +114,22 @@ impl ModuleGraph {
         let graph = Self {
             modules,
             entry_id,
-            dependencies,
         };
 
         Ok(graph)
     }
     /// 获取拓扑排序后的模块顺序
-    pub fn topological_order(&self) -> Result<Vec<ModuleId>> {
-        // 使用 DFS 后序遍历生成“依赖优先”的执行顺序。
-        // 遇到正在访问中的节点（回边）时直接忽略，允许基础循环依赖场景继续执行。
+    /// 
+    /// 返回 (order, cycles)：order 是拓扑排序后的模块顺序，cycles 是检测到的循环依赖参与者列表
+    pub fn topological_order(&self) -> Result<(Vec<ModuleId>, Vec<ModuleId>)> {
+        // 使用 DFS 后序遍历生成"依赖优先"的执行顺序。
+        // 遇到正在访问中的节点（回边）时记录循环参与者，允许基础循环依赖场景继续执行。
         let mut visit_state = HashMap::new();
         let mut result = Vec::with_capacity(self.modules.len());
+        let mut cycles = Vec::new();
 
         // 先从入口开始，保证入口可达子图优先。
-        self.visit_module(self.entry_id, &mut visit_state, &mut result)?;
+        self.visit_module(self.entry_id, &mut visit_state, &mut result, &mut cycles)?;
 
         // 处理与入口不连通的模块（理论上 build 后一般不会出现），按路径排序保证稳定性。
         let mut remaining: Vec<ModuleId> = self.modules.keys().copied().collect();
@@ -143,10 +140,10 @@ impl ModuleGraph {
                 .unwrap_or_default()
         });
         for id in remaining {
-            self.visit_module(id, &mut visit_state, &mut result)?;
+            self.visit_module(id, &mut visit_state, &mut result, &mut cycles)?;
         }
 
-        Ok(result)
+        Ok((result, cycles))
     }
 
     fn visit_module(
@@ -154,18 +151,24 @@ impl ModuleGraph {
         id: ModuleId,
         visit_state: &mut HashMap<ModuleId, VisitState>,
         result: &mut Vec<ModuleId>,
+        cycles: &mut Vec<ModuleId>,
     ) -> Result<()> {
         match visit_state.get(&id) {
             Some(VisitState::Visited) => return Ok(()),
-            Some(VisitState::Visiting) => return Ok(()),
+            Some(VisitState::Visiting) => {
+                // 回边：检测到循环依赖，记录参与者但不中断遍历
+                cycles.push(id);
+                return Ok(());
+            }
             None => {}
         }
 
         visit_state.insert(id, VisitState::Visiting);
 
-        if let Some(deps) = self.dependencies.get(&id) {
-            for (dep_id, _) in deps {
-                self.visit_module(*dep_id, visit_state, result)?;
+        // 使用 modules 中的 imports 字段，避免数据冗余
+        if let Some(node) = self.modules.get(&id) {
+            for (dep_id, _) in &node.imports {
+                self.visit_module(*dep_id, visit_state, result, cycles)?;
             }
         }
 
@@ -215,7 +218,7 @@ mod tests {
         write_file(&root, "c.js", "export const c = 1;\n");
 
         let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
-        let order = graph.topological_order().expect("order should be computable");
+        let (order, _cycles) = graph.topological_order().expect("order should be computable");
 
         let c_path = root.join("c.js").canonicalize().expect("path should exist");
         let a_path = root.join("a.js").canonicalize().expect("path should exist");
@@ -267,7 +270,7 @@ mod tests {
             .count();
         assert_eq!(shared_count, 1, "shared.js should only be loaded once");
 
-        let order = graph.topological_order().expect("order should be computable");
+        let (order, _cycles) = graph.topological_order().expect("order should be computable");
         let unique_count = order.iter().copied().collect::<HashSet<_>>().len();
         assert_eq!(order.len(), unique_count, "execution order should not duplicate modules");
     }
@@ -284,7 +287,10 @@ mod tests {
         write_file(&root, "b.js", "import { a } from './a.js';\nexport const b = 1;\n");
 
         let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
-        let order = graph.topological_order().expect("cycle should still be orderable");
+        let (order, cycles) = graph.topological_order().expect("cycle should still be orderable");
+
+        // 循环依赖应该被检测到
+        assert!(!cycles.is_empty(), "cycle should be detected");
 
         let names: Vec<String> = order
             .iter()
@@ -389,7 +395,7 @@ mod tests {
         let root = create_temp_project("single_mod");
         write_file(&root, "main.js", "const x = 1;\nconsole.log(x);\n");
         let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
-        let order = graph.topological_order().expect("order should be computable");
+        let (order, _cycles) = graph.topological_order().expect("order should be computable");
         assert_eq!(order.len(), 1);
         assert_eq!(order[0], graph.entry_id());
     }

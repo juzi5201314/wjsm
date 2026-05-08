@@ -1,4 +1,5 @@
 exit_code: 0
 --- stdout ---
-110
+side effect
+undefined
 --- stderr ---

@@ -1,0 +1,7 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: Failed to build module graph
+
+Caused by:
+    Cannot find module './nonexistent.js' from 'modules/cjs_require_error/main.js'. Tried: ["modules/cjs_require_error/./nonexistent.js"]

@@ -4,4 +4,4 @@ exit_code: 1
 Error: Failed to analyze module links
 
 Caused by:
-    Missing export 'missing' in module '/workspace/fixtures/modules/missing_export/dep.js' (imported by '/workspace/fixtures/modules/missing_export/main.js')
+    Missing export 'missing' in module 'modules/missing_export/dep.js' (imported by 'modules/missing_export/main.js')
