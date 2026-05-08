@@ -5,6 +5,7 @@ mod resolver;
 mod graph;
 mod bundler;
 mod semantic;
+pub mod cjs_transform;
 
 pub use resolver::{ModuleResolver, ResolvedModule, ImportEntry, ExportEntry};
 pub use graph::{ModuleGraph, ModuleId};

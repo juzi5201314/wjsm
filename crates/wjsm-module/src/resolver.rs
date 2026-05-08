@@ -1,7 +1,7 @@
 // 模块解析器：文件系统模块解析、import/export 提取
 
 use anyhow::{bail, Context, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use swc_core::common::Span;
 use swc_core::ecma::ast;
@@ -17,6 +17,7 @@ pub struct ResolvedModule {
     pub ast: ast::Module,
     pub imports: Vec<ImportEntry>,
     pub exports: Vec<ExportEntry>,
+    pub is_cjs: bool,
 }
 
 /// Import 声明条目
@@ -128,6 +129,15 @@ impl ModuleResolver {
         let ast = wjsm_parser::parse_module(&source)
             .with_context(|| format!("Failed to parse module: {}", path.display()))?;
 
+        // 检测并转换 CommonJS 模块
+        let is_cjs = crate::cjs_transform::is_commonjs_module(&ast);
+        let ast = if is_cjs {
+            let prefix = format!("_{}_", self.next_id);
+            crate::cjs_transform::transform_with_prefix(&ast, &prefix)
+        } else {
+            ast
+        };
+
         // 提取 import/export
         let imports = Self::extract_imports(&ast);
         let exports = Self::extract_exports(&ast);
@@ -144,6 +154,7 @@ impl ModuleResolver {
             ast,
             imports,
             exports,
+            is_cjs,
         };
 
         self.visited.insert(path, id);
@@ -165,6 +176,67 @@ impl ModuleResolver {
     /// 根据路径查找已解析的模块 ID
     pub fn get_id_by_path(&self, path: &Path) -> Option<ModuleId> {
         self.visited.get(path).copied()
+    }
+
+    /// 为指定模块添加合成默认导出（如果它没有默认导出但有其他导出）
+    pub fn ensure_default_export_for(&mut self, module_id: ModuleId) {
+        let module = self.modules.get_mut(&module_id).unwrap();
+        let has_default = module.exports.iter().any(|e| matches!(e, ExportEntry::Default { .. }));
+        if !has_default && !module.exports.is_empty() {
+            Self::add_synthetic_default_export(&mut module.ast, &module.exports);
+            module.exports = Self::extract_exports(&module.ast);
+        }
+    }
+
+    /// 为没有默认导出的模块添加合成默认导出
+    fn add_synthetic_default_export(ast: &mut ast::Module, exports: &[ExportEntry]) {
+        use swc_core::common::{DUMMY_SP, SyntaxContext};
+
+        let mut export_names: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        for entry in exports {
+            match entry {
+                ExportEntry::Named { exported, .. } => {
+                    if exported != "default" && seen.insert(exported.clone()) {
+                        export_names.push(exported.clone());
+                    }
+                }
+                ExportEntry::Declaration { name } => {
+                    if seen.insert(name.clone()) {
+                        export_names.push(name.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if export_names.is_empty() {
+            return;
+        }
+
+        // 创建合成默认导出表达式：export default { name1, name2, ... }
+        let props: Vec<ast::PropOrSpread> = export_names
+            .iter()
+            .map(|name| {
+                ast::PropOrSpread::Prop(Box::new(ast::Prop::Shorthand(ast::Ident::new(
+                    name.clone().into(),
+                    DUMMY_SP,
+                    SyntaxContext::default(),
+                ))))
+            })
+            .collect();
+
+        let default_export = ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(
+            ast::ExportDefaultExpr {
+                span: DUMMY_SP,
+                expr: Box::new(ast::Expr::Object(ast::ObjectLit {
+                    span: DUMMY_SP,
+                    props,
+                })),
+            },
+        ));
+
+        ast.body.push(default_export);
     }
 
     /// 从 AST 中提取 import 声明
@@ -264,7 +336,7 @@ impl ModuleResolver {
                             }
                         }
                     }
-                    ast::ModuleDecl::ExportDefaultExpr(default_expr) => {
+                    ast::ModuleDecl::ExportDefaultExpr(_default_expr) => {
                         // export default expr
                         // 需要生成一个内部变量名
                         exports.push(ExportEntry::Default {
