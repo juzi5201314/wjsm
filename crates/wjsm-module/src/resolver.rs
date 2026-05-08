@@ -128,6 +128,13 @@ impl ModuleResolver {
         let ast = wjsm_parser::parse_module(&source)
             .with_context(|| format!("Failed to parse module: {}", path.display()))?;
 
+        // 检测并转换 CommonJS 模块
+        let ast = if crate::cjs_transform::is_commonjs_module(&ast) {
+            crate::cjs_transform::transform(&ast)
+        } else {
+            ast
+        };
+
         // 提取 import/export
         let imports = Self::extract_imports(&ast);
         let exports = Self::extract_exports(&ast);
