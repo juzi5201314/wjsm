@@ -13,3 +13,4 @@ wjsm-parser = { path = "../wjsm-parser" }
 wjsm-runtime = { path = "../wjsm-runtime" }
 wjsm-semantic = { path = "../wjsm-semantic" }
 wjsm-module = { path = "../wjsm-module" }
+swc_core = { workspace = true }
