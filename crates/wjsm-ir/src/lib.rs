@@ -952,6 +952,28 @@ impl fmt::Display for ValueId {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ModuleId(pub u32);
+
+impl fmt::Display for ModuleId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "mod{}", self.0)
+    }
+}
+
+/// Import 绑定信息（用于模块系统）
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportBinding {
+    /// 源模块 ID
+    pub source_module: ModuleId,
+    /// 导入的名称列表：(local_name, imported_name)
+    /// - `import { x } from './foo'` → ("x", "x")
+    /// - `import { y as z } from './foo'` → ("z", "y")
+    /// - `import * as ns from './foo'` → ("ns", "*")
+    /// - `import defaultExport from './foo'` → ("defaultExport", "default")
+    pub names: Vec<(String, String)>,
+}
+
 // ── Heap type tags ──────────────────────────────────────────────────────
 /// 0x00 = object (HEAP_TYPE_OBJECT)
 pub const HEAP_TYPE_OBJECT: u8 = 0x00;
