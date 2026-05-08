@@ -1,7 +1,7 @@
 // 模块解析器：文件系统模块解析、import/export 提取
 
 use anyhow::{bail, Context, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use swc_core::common::Span;
 use swc_core::ecma::ast;
@@ -17,6 +17,7 @@ pub struct ResolvedModule {
     pub ast: ast::Module,
     pub imports: Vec<ImportEntry>,
     pub exports: Vec<ExportEntry>,
+    pub is_cjs: bool,
 }
 
 /// Import 声明条目
@@ -129,8 +130,8 @@ impl ModuleResolver {
             .with_context(|| format!("Failed to parse module: {}", path.display()))?;
 
         // 检测并转换 CommonJS 模块
-        let mut ast = if crate::cjs_transform::is_commonjs_module(&ast) {
-            // 使用模块路径的哈希作为前缀，避免多个 CJS 模块的变量名冲突
+        let is_cjs = crate::cjs_transform::is_commonjs_module(&ast);
+        let ast = if is_cjs {
             let prefix = format!("_{}_", self.next_id);
             crate::cjs_transform::transform_with_prefix(&ast, &prefix)
         } else {
@@ -139,17 +140,7 @@ impl ModuleResolver {
 
         // 提取 import/export
         let imports = Self::extract_imports(&ast);
-        let mut exports = Self::extract_exports(&ast);
-
-        // 如果模块没有默认导出但有其他导出，添加合成默认导出
-        // 这样 CJS 模块通过 require() 导入时可以使用默认导入
-        let has_default_export = exports.iter().any(|e| matches!(e, ExportEntry::Default { .. }));
-        if !has_default_export && !exports.is_empty() {
-            // 为模块添加合成默认导出
-            Self::add_synthetic_default_export(&mut ast, &exports);
-            // 重新提取 exports
-            exports = Self::extract_exports(&ast);
-        }
+        let exports = Self::extract_exports(&ast);
 
         // 分配 ID
         let id = ModuleId(self.next_id);
@@ -163,6 +154,7 @@ impl ModuleResolver {
             ast,
             imports,
             exports,
+            is_cjs,
         };
 
         self.visited.insert(path, id);
@@ -186,21 +178,31 @@ impl ModuleResolver {
         self.visited.get(path).copied()
     }
 
+    /// 为指定模块添加合成默认导出（如果它没有默认导出但有其他导出）
+    pub fn ensure_default_export_for(&mut self, module_id: ModuleId) {
+        let module = self.modules.get_mut(&module_id).unwrap();
+        let has_default = module.exports.iter().any(|e| matches!(e, ExportEntry::Default { .. }));
+        if !has_default && !module.exports.is_empty() {
+            Self::add_synthetic_default_export(&mut module.ast, &module.exports);
+            module.exports = Self::extract_exports(&module.ast);
+        }
+    }
+
     /// 为没有默认导出的模块添加合成默认导出
     fn add_synthetic_default_export(ast: &mut ast::Module, exports: &[ExportEntry]) {
         use swc_core::common::{DUMMY_SP, SyntaxContext};
 
-        // 收集所有命名导出的名称
         let mut export_names: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
         for entry in exports {
             match entry {
                 ExportEntry::Named { exported, .. } => {
-                    if exported != "default" && !export_names.contains(exported) {
+                    if exported != "default" && seen.insert(exported.clone()) {
                         export_names.push(exported.clone());
                     }
                 }
                 ExportEntry::Declaration { name } => {
-                    if !export_names.contains(name) {
+                    if seen.insert(name.clone()) {
                         export_names.push(name.clone());
                     }
                 }
@@ -334,7 +336,7 @@ impl ModuleResolver {
                             }
                         }
                     }
-                    ast::ModuleDecl::ExportDefaultExpr(default_expr) => {
+                    ast::ModuleDecl::ExportDefaultExpr(_default_expr) => {
                         // export default expr
                         // 需要生成一个内部变量名
                         exports.push(ExportEntry::Default {
