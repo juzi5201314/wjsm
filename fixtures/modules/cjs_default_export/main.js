@@ -1,3 +1,3 @@
 // CJS main module with default export
 const lib = require('./lib.js');
-console.log(lib.default);
+console.log(lib.answer);
