@@ -380,6 +380,160 @@ pub fn lower_module(module: swc_ast::Module) -> Result<Program, LoweringError> {
     Lowerer::new().lower_module(&module)
 }
 
+/// 将多个模块编译为单一的 IR Program（模块 bundling）
+/// 
+/// # 参数
+/// - `modules`: 模块列表，每个元素是 (ModuleId, AST)
+/// - `import_map`: 导入映射，module_id → ImportBinding 列表
+pub fn lower_modules(
+    modules: Vec<(wjsm_ir::ModuleId, swc_ast::Module)>,
+    import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
+) -> Result<Program, LoweringError> {
+    // 如果只有一个模块且没有 import，使用单模块编译路径
+    if modules.len() == 1 && import_map.is_empty() {
+        let (_, module) = modules.into_iter().next().unwrap();
+        return lower_module(module);
+    }
+    
+    // 多模块编译路径
+    let mut lowerer = Lowerer::new();
+    lowerer.import_bindings = import_map.clone();
+    
+    // 预扫描：为所有模块的变量声明创建作用域条目
+    // 这样可以确保跨模块的 import 绑定能够找到目标变量
+    for (module_id, module_ast) in &modules {
+        lowerer.current_module_id = Some(*module_id);
+        lowerer.predeclare_stmts(&module_ast.body)?;
+        // 额外处理 ExportDecl 中的声明
+        for item in &module_ast.body {
+            if let swc_ast::ModuleItem::ModuleDecl(swc_ast::ModuleDecl::ExportDecl(export_decl)) = item {
+                lowerer.predeclare_stmt_with_mode(
+                    &swc_ast::Stmt::Decl(export_decl.decl.clone()),
+                    LexicalMode::Include,
+                )?;
+            }
+        }
+    }
+    
+    // 初始化全局内置变量（undefined, NaN, Infinity）
+    // 这些变量在顶层作用域中，不需要模块前缀
+    let entry = BasicBlockId(0);
+    
+    // undefined
+    let undef_const = lowerer.module.add_constant(Constant::Undefined);
+    let undef_val = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        entry,
+        Instruction::Const {
+            dest: undef_val,
+            constant: undef_const,
+        },
+    );
+    lowerer.current_function.append_instruction(
+        entry,
+        Instruction::StoreVar {
+            name: "$0.undefined".to_string(),
+            value: undef_val,
+        },
+    );
+    // NaN
+    let nan_const = lowerer.module.add_constant(Constant::Number(f64::NAN));
+    let nan_val = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        entry,
+        Instruction::Const {
+            dest: nan_val,
+            constant: nan_const,
+        },
+    );
+    lowerer.current_function.append_instruction(
+        entry,
+        Instruction::StoreVar {
+            name: "$0.NaN".to_string(),
+            value: nan_val,
+        },
+    );
+    // Infinity
+    let inf_const = lowerer.module.add_constant(Constant::Number(f64::INFINITY));
+    let inf_val = lowerer.alloc_value();
+    lowerer.current_function.append_instruction(
+        entry,
+        Instruction::Const {
+            dest: inf_val,
+            constant: inf_const,
+        },
+    );
+    lowerer.current_function.append_instruction(
+        entry,
+        Instruction::StoreVar {
+            name: "$0.Infinity".to_string(),
+            value: inf_val,
+        },
+    );
+    
+    // 处理每个模块的 body
+    let mut flow = StmtFlow::Open(entry);
+    for (module_id, module_ast) in &modules {
+        lowerer.current_module_id = Some(*module_id);
+        for item in &module_ast.body {
+            // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+            if matches!(flow, StmtFlow::Terminated) {
+                continue;
+            }
+            match item {
+                swc_ast::ModuleItem::Stmt(stmt) => {
+                    flow = lowerer.lower_stmt(stmt, flow)?;
+                }
+                swc_ast::ModuleItem::ModuleDecl(decl) => {
+                    match decl {
+                        // export const/let/var/function/class → 将内层声明作为普通语句处理
+                        swc_ast::ModuleDecl::ExportDecl(export_decl) => {
+                            flow = lowerer.lower_stmt(&swc_ast::Stmt::Decl(export_decl.decl.clone()), flow)?;
+                        }
+                        // export default expr → 将表达式作为普通语句处理
+                        swc_ast::ModuleDecl::ExportDefaultExpr(default_expr) => {
+                            let expr_stmt = swc_ast::ExprStmt {
+                                span: default_expr.span,
+                                expr: default_expr.expr.clone(),
+                            };
+                            flow = lowerer.lower_expr_stmt(&expr_stmt, flow)?;
+                        }
+                        // export default function/class → 暂时跳过
+                        swc_ast::ModuleDecl::ExportDefaultDecl(_) => {
+                            // TODO: 处理 export default function/class
+                        }
+                        // import 声明 → 单模块模式下跳过
+                        swc_ast::ModuleDecl::Import(_) => {
+                            // 暂时跳过 import（依赖已由 bundler 预处理）
+                        }
+                        // export * from / export { ... } → 暂时跳过
+                        _ => {
+                            // 暂不处理 re-exports
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // 完成：构建 main 函数
+    match flow {
+        StmtFlow::Open(block) => {
+            lowerer.current_function.set_terminator(block, Terminator::Return { value: None });
+        }
+        StmtFlow::Terminated => {}
+    }
+    
+    let blocks = lowerer.current_function.into_blocks();
+    let mut function = Function::new("main", BasicBlockId(0));
+    for block in blocks {
+        function.push_block(block);
+    }
+    lowerer.module.push_function(function);
+    
+    Ok(lowerer.module)
+}
+
 // ── Lowerer ─────────────────────────────────────────────────────────────
 
 struct Lowerer {
@@ -413,6 +567,13 @@ struct Lowerer {
     /// 每层函数的共享 env 对象 (ValueId) + 已注册的捕获绑定集合。
     /// 同一外层函数中的多个闭包共享同一个 env 对象，确保可变捕获变量的修改对所有闭包可见。
     shared_env_stack: Vec<Option<(ValueId, std::collections::HashSet<CapturedBinding>)>>,
+    // ── 模块系统相关 ────────────────────────────────────────────────────────
+    /// 当前正在编译的模块 ID（用于多模块编译）
+    current_module_id: Option<wjsm_ir::ModuleId>,
+    /// 导入映射：module_id → ImportBinding 列表
+    import_bindings: std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
+    /// 导出映射：.0 = 模块 ID, .1 = 导出名 → 变量名
+    export_map: std::collections::HashMap<(wjsm_ir::ModuleId, String), String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct HoistedVar {
@@ -490,6 +651,9 @@ impl Lowerer {
             function_scope_id_stack: Vec::new(),
             is_arrow_fn_stack: Vec::new(),
             shared_env_stack: Vec::new(),
+            current_module_id: None,
+            import_bindings: std::collections::HashMap::new(),
+            export_map: std::collections::HashMap::new(),
         }
     }
 
@@ -699,13 +863,32 @@ impl Lowerer {
                     flow = self.lower_stmt(stmt, flow)?;
                 }
                 swc_ast::ModuleItem::ModuleDecl(decl) => {
-                    return Err(self.error(
-                        decl.span(),
-                        format!(
-                            "unsupported module declaration kind `{}`",
-                            module_decl_kind(decl)
-                        ),
-                    ));
+                    match decl {
+                        // export const/let/var/function/class → 将内层声明作为普通语句处理
+                        swc_ast::ModuleDecl::ExportDecl(export_decl) => {
+                            flow = self.lower_stmt(&swc_ast::Stmt::Decl(export_decl.decl.clone()), flow)?;
+                        }
+                        // export default expr → 将表达式作为普通语句处理
+                        swc_ast::ModuleDecl::ExportDefaultExpr(default_expr) => {
+                            let expr_stmt = swc_ast::ExprStmt {
+                                span: default_expr.span,
+                                expr: default_expr.expr.clone(),
+                            };
+                            flow = self.lower_expr_stmt(&expr_stmt, flow)?;
+                        }
+                        // export default function/class → 暂时跳过
+                        swc_ast::ModuleDecl::ExportDefaultDecl(_) => {
+                            // TODO: 处理 export default function/class
+                        }
+                        // import 声明 → 单模块模式下跳过
+                        swc_ast::ModuleDecl::Import(_) => {
+                            // 单模块模式，跳过 import
+                        }
+                        // export * from / export { ... } → 暂时跳过
+                        _ => {
+                            // 暂不处理 re-exports
+                        }
+                    }
                 }
             }
         }

@@ -27,11 +27,21 @@ enum Commands {
             help = "The output .wasm file"
         )]
         output: String,
+        #[arg(
+            long,
+            help = "The root directory for module resolution (for ES modules)"
+        )]
+        root: Option<String>,
     },
     #[command(about = "Run a JS/TS file directly")]
     Run {
         #[arg(help = "The input file to run, or - for stdin")]
         input: String,
+        #[arg(
+            long,
+            help = "The root directory for module resolution (for ES modules)"
+        )]
+        root: Option<String>,
     },
     #[command(about = "Dump IR for a JS/TS file")]
     DumpIr {
@@ -46,21 +56,41 @@ pub fn main_entry() -> Result<()> {
 
 pub fn execute(cli: Cli) -> Result<()> {
     match cli.command {
-        Commands::Build { input, output } => {
-            let source = fs::read_to_string(&input)?;
-            let wasm_bytes = compile_source(&source)?;
+        Commands::Build { input, output, root } => {
+            let wasm_bytes = if let Some(root_path) = root {
+                // 模块模式：使用 bundler
+                let root = std::path::PathBuf::from(&root_path);
+                let input_path = std::path::PathBuf::from(&input);
+                let rel = input_path.strip_prefix(&root).unwrap_or(&input_path);
+                let entry = format!("./{}", rel.to_string_lossy());
+                wjsm_module::bundle(&entry, &root)?
+            } else {
+                // 单文件模式
+                let source = fs::read_to_string(&input)?;
+                compile_source(&source)?
+            };
             fs::write(&output, wasm_bytes)?;
             println!("Successfully compiled {} to {}", input, output);
         }
-        Commands::Run { input } => {
-            let source = if input == "-" {
-                let mut buf = String::new();
-                io::stdin().read_to_string(&mut buf)?;
-                buf
+        Commands::Run { input, root } => {
+            let wasm_bytes = if let Some(root_path) = root {
+                // 模块模式：使用 bundler
+                let root = std::path::PathBuf::from(&root_path);
+                let input_path = std::path::PathBuf::from(&input);
+                let rel = input_path.strip_prefix(&root).unwrap_or(&input_path);
+                let entry = format!("./{}", rel.to_string_lossy());
+                wjsm_module::bundle(&entry, &root)?
             } else {
-                fs::read_to_string(&input)?
+                // 单文件模式
+                let source = if input == "-" {
+                    let mut buf = String::new();
+                    io::stdin().read_to_string(&mut buf)?;
+                    buf
+                } else {
+                    fs::read_to_string(&input)?
+                };
+                compile_source(&source)?
             };
-            let wasm_bytes = compile_source(&source)?;
             runtime::execute(&wasm_bytes)?;
         }
         Commands::DumpIr { input } => {

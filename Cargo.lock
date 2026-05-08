@@ -3117,6 +3117,7 @@ dependencies = [
  "wjsm-backend-jit",
  "wjsm-backend-wasm",
  "wjsm-ir",
+ "wjsm-module",
  "wjsm-parser",
  "wjsm-runtime",
  "wjsm-semantic",
@@ -3125,6 +3126,19 @@ dependencies = [
 [[package]]
 name = "wjsm-ir"
 version = "0.1.0"
+
+[[package]]
+name = "wjsm-module"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "swc_core",
+ "thiserror 2.0.18",
+ "wjsm-backend-wasm",
+ "wjsm-ir",
+ "wjsm-parser",
+ "wjsm-semantic",
+]
 
 [[package]]
 name = "wjsm-parser"
