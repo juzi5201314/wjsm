@@ -58,7 +58,30 @@ mod tests {
     use std::path::PathBuf;
     
     #[test]
-    fn test_bundle_simple() {
-        // TODO: Add test after implementing lower_modules
+    fn bundler_new_creates_instance() {
+        let root = PathBuf::from("/tmp");
+        let bundler = ModuleBundler::new(&root);
+        assert!(bundler.is_ok());
+    }
+
+    #[test]
+    fn bundle_simple_modules_produces_wasm() {
+        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("fixtures/modules/simple");
+
+        if !fixtures_dir.exists() {
+            return;
+        }
+
+        let mut bundler = ModuleBundler::new(&fixtures_dir).expect("bundler should be created");
+        let result = bundler.bundle("./main.js");
+        assert!(result.is_ok(), "bundle should succeed: {:?}", result.err());
+        let wasm_bytes = result.unwrap();
+        assert!(!wasm_bytes.is_empty(), "should produce non-empty WASM output");
+        assert!(wasm_bytes.starts_with(b"\x00asm"), "output should be valid WASM binary");
     }
 }
