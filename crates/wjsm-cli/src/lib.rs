@@ -6,7 +6,7 @@
 //! - 2: runtime error (WASM execution failure)
 //! - 3: usage error (invalid arguments)
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use std::fs;
@@ -306,10 +306,7 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
 
         Commands::Eval { ref code } => cmd_eval(&cli, code),
 
-        Commands::DumpIr {
-            ref input,
-            format,
-        } => cmd_dump_ir(&cli, input, format),
+        Commands::DumpIr { ref input, format } => cmd_dump_ir(&cli, input, format),
 
         Commands::DumpAst { ref input } => cmd_dump_ast(&cli, input),
 
@@ -318,10 +315,7 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             ref root,
         } => cmd_dump_wat(&cli, input, root.as_deref()),
 
-        Commands::Fmt {
-            ref input,
-            write,
-        } => cmd_fmt(input, write),
+        Commands::Fmt { ref input, write } => cmd_fmt(input, write),
 
         Commands::Validate { ref input } => cmd_validate(input),
 
@@ -443,7 +437,9 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode>
     }
 
     // Determine watch target: root directory if provided, otherwise just the input file
-    let watch_target = root.map(PathBuf::from).unwrap_or_else(|| input_path.clone());
+    let watch_target = root
+        .map(PathBuf::from)
+        .unwrap_or_else(|| input_path.clone());
     let watch_mode = if root.is_some() {
         RecursiveMode::Recursive
     } else {
@@ -852,9 +848,7 @@ fn colorize_ir_line(line: &str) -> String {
     if result.contains('%') {
         let re = VALUE_RE.get_or_init(|| regex::Regex::new(r"%\d+").unwrap());
         result = re
-            .replace_all(&result, |caps: &regex::Captures| {
-                caps[0].cyan().to_string()
-            })
+            .replace_all(&result, |caps: &regex::Captures| caps[0].cyan().to_string())
             .to_string();
     }
 
@@ -862,9 +856,7 @@ fn colorize_ir_line(line: &str) -> String {
     if result.contains('$') {
         let re = SCOPE_RE.get_or_init(|| regex::Regex::new(r"\$\d+\.\w+").unwrap());
         result = re
-            .replace_all(&result, |caps: &regex::Captures| {
-                caps[0].cyan().to_string()
-            })
+            .replace_all(&result, |caps: &regex::Captures| caps[0].cyan().to_string())
             .to_string();
     }
 
@@ -926,7 +918,10 @@ fn print_ir_dot(program: &Program) {
                     false_block,
                 } => {
                     println!("    bb{} -> bb{} [label=\"true\"];", bb_id.0, true_block.0);
-                    println!("    bb{} -> bb{} [label=\"false\"];", bb_id.0, false_block.0);
+                    println!(
+                        "    bb{} -> bb{} [label=\"false\"];",
+                        bb_id.0, false_block.0
+                    );
                 }
                 Terminator::Switch {
                     value: _,
@@ -937,7 +932,10 @@ fn print_ir_dot(program: &Program) {
                     for case in cases {
                         println!("    bb{} -> bb{};", bb_id.0, case.target.0);
                     }
-                    println!("    bb{} -> bb{} [label=\"default\"];", bb_id.0, default_block.0);
+                    println!(
+                        "    bb{} -> bb{} [label=\"default\"];",
+                        bb_id.0, default_block.0
+                    );
                     println!("    bb{} -> bb{} [label=\"exit\"];", bb_id.0, exit_block.0);
                 }
                 Terminator::Throw { .. } => {
@@ -1035,7 +1033,10 @@ fn build_compile_plan(input: &Path, root: Option<&str>) -> Result<CompilePlan> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Cannot infer module root from '{}'", input.display()))?;
     let file_name = canonical_input.file_name().ok_or_else(|| {
-        anyhow::anyhow!("Cannot infer module entry file name from '{}'", input.display())
+        anyhow::anyhow!(
+            "Cannot infer module entry file name from '{}'",
+            input.display()
+        )
     })?;
 
     let entry = format!("./{}", file_name.to_string_lossy());
@@ -1050,9 +1051,9 @@ fn bundle_plan_from_root(input: PathBuf, root: PathBuf) -> Result<CompilePlan> {
         .map_err(|e| anyhow::anyhow!("cannot canonicalize root path {:?}: {}", root, e))?;
     let canonical_input = std::fs::canonicalize(&input)
         .map_err(|e| anyhow::anyhow!("cannot canonicalize input path {:?}: {}", input, e))?;
-    let rel = canonical_input.strip_prefix(&canonical_root).map_err(|_| {
-        anyhow::anyhow!("input file {:?} is not under root {:?}", input, root)
-    })?;
+    let rel = canonical_input
+        .strip_prefix(&canonical_root)
+        .map_err(|_| anyhow::anyhow!("input file {:?} is not under root {:?}", input, root))?;
     let entry = format!("./{}", rel.to_string_lossy());
     Ok(CompilePlan::Bundle {
         entry,

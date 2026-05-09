@@ -381,7 +381,7 @@ pub fn lower_module(module: swc_ast::Module) -> Result<Program, LoweringError> {
 }
 
 /// 将多个模块编译为单一的 IR Program（模块 bundling）
-/// 
+///
 /// # 参数
 /// - `modules`: 模块列表，每个元素是 (ModuleId, AST)
 /// - `import_map`: 导入映射，module_id → ImportBinding 列表
@@ -394,12 +394,12 @@ pub fn lower_modules(
         let (_, module) = modules.into_iter().next().unwrap();
         return lower_module(module);
     }
-    
+
     // 多模块编译路径
     let mut lowerer = Lowerer::new();
     lowerer.import_bindings = import_map.clone();
     lowerer.shared_env_stack.push(None);
-    
+
     // 预扫描：为所有模块的变量声明创建作用域条目
     // 这样可以确保跨模块的 import 绑定能够找到目标变量
     for (module_id, module_ast) in &modules {
@@ -412,22 +412,22 @@ pub fn lower_modules(
                     let scope_id = lowerer
                         .scopes
                         .declare(&default_var, VarKind::Const, true)
-                        .map_err(|msg| {
-                            LoweringError::Diagnostic(Diagnostic::new(0, 0, msg))
-                        })?;
+                        .map_err(|msg| LoweringError::Diagnostic(Diagnostic::new(0, 0, msg)))?;
                     let ir_name = format!("${scope_id}.{default_var}");
-                    lowerer.export_map.insert((*module_id, "default".to_string()), ir_name);
+                    lowerer
+                        .export_map
+                        .insert((*module_id, "default".to_string()), ir_name);
                 }
                 swc_ast::ModuleItem::ModuleDecl(swc_ast::ModuleDecl::ExportDefaultDecl(_)) => {
                     let default_var = format!("_default_export_mod{}", module_id.0);
                     let scope_id = lowerer
                         .scopes
                         .declare(&default_var, VarKind::Const, true)
-                        .map_err(|msg| {
-                            LoweringError::Diagnostic(Diagnostic::new(0, 0, msg))
-                        })?;
+                        .map_err(|msg| LoweringError::Diagnostic(Diagnostic::new(0, 0, msg)))?;
                     let ir_name = format!("${scope_id}.{default_var}");
-                    lowerer.export_map.insert((*module_id, "default".to_string()), ir_name);
+                    lowerer
+                        .export_map
+                        .insert((*module_id, "default".to_string()), ir_name);
                 }
                 _ => {}
             }
@@ -443,14 +443,20 @@ pub fn lower_modules(
                 if imported_name == "*" {
                     // 命名空间导入（import * as ns from '...'）暂不支持
                     return Err(LoweringError::Diagnostic(Diagnostic::new(
-                        0, 0,
+                        0,
+                        0,
                         format!("namespace import (import * as ...) is not yet supported"),
                     )));
                 }
                 if imported_name == "default" {
-                    if let Some(source_ir_name) = lowerer.export_map.get(&(binding.source_module, "default".to_string())) {
+                    if let Some(source_ir_name) = lowerer
+                        .export_map
+                        .get(&(binding.source_module, "default".to_string()))
+                    {
                         if local_name != "default" {
-                            lowerer.import_aliases.insert(local_name.clone(), source_ir_name.clone());
+                            lowerer
+                                .import_aliases
+                                .insert(local_name.clone(), source_ir_name.clone());
                         }
                     }
                     continue;
@@ -458,21 +464,23 @@ pub fn lower_modules(
                 if local_name != imported_name {
                     if let Ok(scope_id) = lowerer.scopes.resolve_scope_id(imported_name) {
                         let source_ir_name = format!("${scope_id}.{imported_name}");
-                        lowerer.import_aliases.insert(local_name.clone(), source_ir_name);
+                        lowerer
+                            .import_aliases
+                            .insert(local_name.clone(), source_ir_name);
                     }
                 }
             }
         }
         let _ = module_ast;
     }
-    
+
     // 初始化全局内置变量（undefined, NaN, Infinity）
     // 这些变量在顶层作用域中，不需要模块前缀
     let entry = BasicBlockId(0);
-    
+
     // 初始化提升的 var 变量为 undefined
     lowerer.emit_hoisted_var_initializers(entry);
-    
+
     // undefined
     let undef_const = lowerer.module.add_constant(Constant::Undefined);
     let undef_val = lowerer.alloc_value();
@@ -524,7 +532,7 @@ pub fn lower_modules(
             value: inf_val,
         },
     );
-    
+
     // 处理每个模块的 body
     let mut flow = StmtFlow::Open(entry);
     for (module_id, module_ast) in &modules {
@@ -542,7 +550,8 @@ pub fn lower_modules(
                     match decl {
                         // export const/let/var/function/class → 将内层声明作为普通语句处理
                         swc_ast::ModuleDecl::ExportDecl(export_decl) => {
-                            flow = lowerer.lower_stmt(&swc_ast::Stmt::Decl(export_decl.decl.clone()), flow)?;
+                            flow = lowerer
+                                .lower_stmt(&swc_ast::Stmt::Decl(export_decl.decl.clone()), flow)?;
                         }
                         // export default expr → 计算表达式并存储到 _default_export_mod{id} 变量
                         swc_ast::ModuleDecl::ExportDefaultExpr(default_expr) => {
@@ -551,7 +560,10 @@ pub fn lower_modules(
                             let outer_block = lowerer.ensure_open(flow)?;
                             if let Some(current_mid) = lowerer.current_module_id {
                                 let default_var = format!("_default_export_mod{}", current_mid.0);
-                                if let Some(ir_name) = lowerer.export_map.get(&(current_mid, "default".to_string())) {
+                                if let Some(ir_name) = lowerer
+                                    .export_map
+                                    .get(&(current_mid, "default".to_string()))
+                                {
                                     lowerer.current_function.append_instruction(
                                         outer_block,
                                         Instruction::StoreVar {
@@ -560,7 +572,10 @@ pub fn lower_modules(
                                         },
                                     );
                                 } else {
-                                    let (scope_id, _) = lowerer.scopes.lookup(&default_var).map_err(|msg| lowerer.error(default_expr.span, msg))?;
+                                    let (scope_id, _) = lowerer
+                                        .scopes
+                                        .lookup(&default_var)
+                                        .map_err(|msg| lowerer.error(default_expr.span, msg))?;
                                     let ir_name = format!("${scope_id}.{default_var}");
                                     lowerer.current_function.append_instruction(
                                         outer_block,
@@ -578,20 +593,32 @@ pub fn lower_modules(
                             flow = match &default_decl.decl {
                                 swc_ast::DefaultDecl::Fn(fn_expr) => {
                                     let name = fn_expr.ident.as_ref().map_or_else(
-                                        || format!("_default_export_mod{}", lowerer.current_module_id.map_or(0, |m| m.0)),
+                                        || {
+                                            format!(
+                                                "_default_export_mod{}",
+                                                lowerer.current_module_id.map_or(0, |m| m.0)
+                                            )
+                                        },
                                         |ident| ident.sym.to_string(),
                                     );
                                     let outer_block = lowerer.ensure_open(flow)?;
                                     let fn_val = lowerer.lower_fn_expr(
                                         &swc_ast::FnExpr {
-                                            ident: Some(swc_ast::Ident::new(name.clone().into(), default_decl.span, swc_core::common::SyntaxContext::default())),
+                                            ident: Some(swc_ast::Ident::new(
+                                                name.clone().into(),
+                                                default_decl.span,
+                                                swc_core::common::SyntaxContext::default(),
+                                            )),
                                             function: fn_expr.function.clone(),
                                         },
                                         outer_block,
                                     )?;
                                     let outer_block = lowerer.ensure_open(flow)?;
                                     if let Some(current_mid) = lowerer.current_module_id {
-                                        if let Some(ir_name) = lowerer.export_map.get(&(current_mid, "default".to_string())) {
+                                        if let Some(ir_name) = lowerer
+                                            .export_map
+                                            .get(&(current_mid, "default".to_string()))
+                                        {
                                             lowerer.current_function.append_instruction(
                                                 outer_block,
                                                 Instruction::StoreVar {
@@ -614,7 +641,10 @@ pub fn lower_modules(
                                     )?;
                                     let outer_block = lowerer.ensure_open(flow)?;
                                     if let Some(current_mid) = lowerer.current_module_id {
-                                        if let Some(ir_name) = lowerer.export_map.get(&(current_mid, "default".to_string())) {
+                                        if let Some(ir_name) = lowerer
+                                            .export_map
+                                            .get(&(current_mid, "default".to_string()))
+                                        {
                                             lowerer.current_function.append_instruction(
                                                 outer_block,
                                                 Instruction::StoreVar {
@@ -642,22 +672,24 @@ pub fn lower_modules(
             }
         }
     }
-    
+
     // 完成：构建 main 函数
     match flow {
         StmtFlow::Open(block) => {
-            lowerer.current_function.set_terminator(block, Terminator::Return { value: None });
+            lowerer
+                .current_function
+                .set_terminator(block, Terminator::Return { value: None });
         }
         StmtFlow::Terminated => {}
     }
-    
+
     let blocks = lowerer.current_function.into_blocks();
     let mut function = Function::new("main", BasicBlockId(0));
     for block in blocks {
         function.push_block(block);
     }
     lowerer.module.push_function(function);
-    
+
     Ok(lowerer.module)
 }
 
@@ -707,6 +739,7 @@ struct Lowerer {
     is_async_fn: bool,
     async_state_counter: u32,
     captured_var_slots: std::collections::HashMap<String, u32>,
+    async_next_continuation_slot: u32,
     async_resume_blocks: Vec<(u32, BasicBlockId)>,
     async_promise_scope_id: usize,
     async_dispatch_block: Option<BasicBlockId>,
@@ -799,6 +832,7 @@ impl Lowerer {
             is_async_fn: false,
             async_state_counter: 0,
             captured_var_slots: std::collections::HashMap::new(),
+            async_next_continuation_slot: 0,
             async_resume_blocks: Vec::new(),
             async_promise_scope_id: 0,
             async_dispatch_block: None,
@@ -1019,7 +1053,8 @@ impl Lowerer {
                     match decl {
                         // export const/let/var/function/class → 将内层声明作为普通语句处理
                         swc_ast::ModuleDecl::ExportDecl(export_decl) => {
-                            flow = self.lower_stmt(&swc_ast::Stmt::Decl(export_decl.decl.clone()), flow)?;
+                            flow = self
+                                .lower_stmt(&swc_ast::Stmt::Decl(export_decl.decl.clone()), flow)?;
                         }
                         // export default expr → 将表达式作为普通语句处理
                         swc_ast::ModuleDecl::ExportDefaultExpr(default_expr) => {
@@ -1654,7 +1689,9 @@ impl Lowerer {
 
         let iterable = self.lower_expr(&for_of.right, block)?;
 
-        let async_iter_key_const = self.module.add_constant(Constant::String("Symbol.asyncIterator".to_string()));
+        let async_iter_key_const = self
+            .module
+            .add_constant(Constant::String("Symbol.asyncIterator".to_string()));
         let async_iter_key = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -1748,8 +1785,12 @@ impl Lowerer {
         );
 
         let continue_after_await = self.current_function.new_block();
-        self.current_function
-            .set_terminator(header, Terminator::Jump { target: continue_after_await });
+        self.current_function.set_terminator(
+            header,
+            Terminator::Jump {
+                target: continue_after_await,
+            },
+        );
 
         let resume_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -1776,10 +1817,8 @@ impl Lowerer {
                 false_block: continue_after_await,
             },
         );
-        self.current_function.set_terminator(
-            throw_block,
-            Terminator::Throw { value: resume_val },
-        );
+        self.current_function
+            .set_terminator(throw_block, Terminator::Throw { value: resume_val });
 
         let done_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -2627,7 +2666,11 @@ impl Lowerer {
         env_scope_id: usize,
         this_scope_id: usize,
     ) -> Result<Vec<String>, LoweringError> {
-        self.build_param_ir_names_impl(params.iter().map(|p| &p.pat).collect::<Vec<_>>().as_slice(), env_scope_id, this_scope_id)
+        self.build_param_ir_names_impl(
+            params.iter().map(|p| &p.pat).collect::<Vec<_>>().as_slice(),
+            env_scope_id,
+            this_scope_id,
+        )
     }
 
     /// 为箭头函数的参数（Vec<Pat>）构建 param_ir_names.
@@ -2637,7 +2680,11 @@ impl Lowerer {
         env_scope_id: usize,
         this_scope_id: usize,
     ) -> Result<Vec<String>, LoweringError> {
-        self.build_param_ir_names_impl(params.iter().collect::<Vec<_>>().as_slice(), env_scope_id, this_scope_id)
+        self.build_param_ir_names_impl(
+            params.iter().collect::<Vec<_>>().as_slice(),
+            env_scope_id,
+            this_scope_id,
+        )
     }
 
     fn build_param_ir_names_impl(
@@ -2759,8 +2806,7 @@ impl Lowerer {
                             name: ir_name.clone(),
                         },
                     );
-                    let resolved =
-                        self.lower_default_value_check(raw, &assign.right, block)?;
+                    let resolved = self.lower_default_value_check(raw, &assign.right, block)?;
                     // StoreVar 回原来的位置
                     let store_block = self.resolve_store_block(block);
                     self.current_function.append_instruction(
@@ -2782,7 +2828,10 @@ impl Lowerer {
                             },
                         );
                         self.lower_destructure_pattern(
-                            &assign.left, loaded, store_block, VarKind::Let,
+                            &assign.left,
+                            loaded,
+                            store_block,
+                            VarKind::Let,
                         )?;
                     }
                 }
@@ -2848,11 +2897,7 @@ impl Lowerer {
                 self.lower_array_destructure(array_pat, src_val, block, kind)?;
             }
             swc_ast::Pat::Assign(assign_pat) => {
-                let resolved = self.lower_default_value_check(
-                    src_val,
-                    &assign_pat.right,
-                    block,
-                )?;
+                let resolved = self.lower_default_value_check(src_val, &assign_pat.right, block)?;
                 self.lower_destructure_pattern(&assign_pat.left, resolved, block, kind)?;
             }
             swc_ast::Pat::Rest(_) => {
@@ -2914,8 +2959,7 @@ impl Lowerer {
 
                     // 如果有默认值 { key = default }
                     if let Some(default_expr) = &assign.value {
-                        let resolved =
-                            self.lower_default_value_check(dest, default_expr, block)?;
+                        let resolved = self.lower_default_value_check(dest, default_expr, block)?;
                         let scope_id = self
                             .scopes
                             .resolve_scope_id(&name)
@@ -2993,9 +3037,8 @@ impl Lowerer {
             if let swc_ast::Pat::Rest(rest) = elem {
                 has_rest = true;
                 // [...rest] — 使用 iterator 协议收集剩余元素
-                let rest_val = self.lower_array_rest_destructure(
-                    src_val, &rest.arg, idx, block, kind,
-                )?;
+                let rest_val =
+                    self.lower_array_rest_destructure(src_val, &rest.arg, idx, block, kind)?;
                 // rest.arg 可能是 Pat::Ident 或嵌套 pattern
                 // 但我们已经在 lower_array_rest_destructure 中处理了
                 let _ = rest_val;
@@ -3023,8 +3066,7 @@ impl Lowerer {
                             index: index_val,
                         },
                     );
-                    let resolved =
-                        self.lower_default_value_check(dest, &assign.right, block)?;
+                    let resolved = self.lower_default_value_check(dest, &assign.right, block)?;
                     self.lower_destructure_pattern(&assign.left, resolved, block, kind)?;
                 } else {
                     let dest = self.alloc_value();
@@ -3220,12 +3262,20 @@ impl Lowerer {
 
         // then_block: 求值默认表达式
         let default_val = self.lower_expr(default_expr, then_block)?;
-        self.current_function
-            .set_terminator(then_block, Terminator::Jump { target: merge_block });
+        self.current_function.set_terminator(
+            then_block,
+            Terminator::Jump {
+                target: merge_block,
+            },
+        );
 
         // else_block: 保留原值
-        self.current_function
-            .set_terminator(else_block, Terminator::Jump { target: merge_block });
+        self.current_function.set_terminator(
+            else_block,
+            Terminator::Jump {
+                target: merge_block,
+            },
+        );
 
         // merge_block: Phi
         let result = self.alloc_value();
@@ -3274,11 +3324,8 @@ impl Lowerer {
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
 
-        let param_ir_names = self.build_param_ir_names(
-            &fn_decl.function.params,
-            env_scope_id,
-            this_scope_id,
-        )?;
+        let param_ir_names =
+            self.build_param_ir_names(&fn_decl.function.params, env_scope_id, this_scope_id)?;
 
         // Predeclare hoisted vars in the function body.
         if let Some(body) = &fn_decl.function.body {
@@ -3289,11 +3336,7 @@ impl Lowerer {
         self.emit_hoisted_var_initializers(entry);
 
         // Emit parameter initialization (default values + destructuring)
-        let body_entry = self.emit_param_inits(
-            &fn_decl.function.params,
-            &param_ir_names,
-            entry,
-        )?;
+        let body_entry = self.emit_param_inits(&fn_decl.function.params, &param_ir_names, entry)?;
 
         // Lower the function body.
         let mut inner_flow = StmtFlow::Open(body_entry);
@@ -3434,11 +3477,8 @@ impl Lowerer {
         self.async_promise_scope_id = promise_scope_id;
         self.async_closure_env_ir_name = Some(format!("${closure_env_scope_id}.$closure_env"));
 
-        let user_param_ir_names = self.build_param_ir_names(
-            &fn_decl.function.params,
-            env_scope_id,
-            this_scope_id,
-        )?;
+        let user_param_ir_names =
+            self.build_param_ir_names(&fn_decl.function.params, env_scope_id, this_scope_id)?;
 
         let param_ir_names = vec![
             format!("${env_scope_id}.$env"),
@@ -3636,18 +3676,19 @@ impl Lowerer {
             );
         }
 
-        let after_inits = self.emit_param_inits(
-            &fn_decl.function.params,
-            &user_param_ir_names,
-            entry,
-        )?;
+        let after_inits =
+            self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
 
-        self.current_function
-            .set_terminator(after_inits, Terminator::Jump { target: dispatch_block });
+        self.current_function.set_terminator(
+            after_inits,
+            Terminator::Jump {
+                target: dispatch_block,
+            },
+        );
         self.current_function
             .set_terminator(dispatch_block, Terminator::Unreachable);
 
@@ -3725,7 +3766,9 @@ impl Lowerer {
                 target: body_entry,
             });
             for (state_num, target_block) in &resume_blocks {
-                let case_const_id = self.module.add_constant(Constant::Number(*state_num as f64));
+                let case_const_id = self
+                    .module
+                    .add_constant(Constant::Number(*state_num as f64));
                 switch_cases.push(SwitchCaseTarget {
                     constant: case_const_id,
                     target: *target_block,
@@ -3785,7 +3828,9 @@ impl Lowerer {
             },
         );
 
-        let func_ref_const = self.module.add_constant(Constant::FunctionRef(async_gen_fn_id));
+        let func_ref_const = self
+            .module
+            .add_constant(Constant::FunctionRef(async_gen_fn_id));
         let func_ref_val = self.alloc_value();
         self.current_function.append_instruction(
             outer_block,
@@ -3813,7 +3858,9 @@ impl Lowerer {
 
         let num_user_params = fn_decl.function.params.len();
         let count_val_num = 3 + num_user_params;
-        let count_const = self.module.add_constant(Constant::Number(count_val_num as f64));
+        let count_const = self
+            .module
+            .add_constant(Constant::Number(count_val_num as f64));
         let count_val = self.alloc_value();
         self.current_function.append_instruction(
             outer_block,
@@ -3913,7 +3960,10 @@ impl Lowerer {
 
         for (i, arg) in fn_decl.function.params.iter().enumerate() {
             if let swc_ast::Pat::Ident(binding) = &arg.pat {
-                let (scope_id, _) = self.scopes.lookup(&binding.id.sym).map_err(|msg| self.error(fn_decl.span(), msg))?;
+                let (scope_id, _) = self
+                    .scopes
+                    .lookup(&binding.id.sym)
+                    .map_err(|msg| self.error(fn_decl.span(), msg))?;
                 let arg_val = self.alloc_value();
                 self.current_function.append_instruction(
                     outer_block,
@@ -4045,11 +4095,9 @@ impl Lowerer {
         self.async_promise_scope_id = promise_scope_id;
         self.async_closure_env_ir_name = Some(format!("${closure_env_scope_id}.$closure_env"));
 
-        let user_param_ir_names = self.build_param_ir_names(
-            &fn_decl.function.params,
-            env_scope_id,
-            this_scope_id,
-        )?;
+        let user_param_ir_names =
+            self.build_param_ir_names(&fn_decl.function.params, env_scope_id, this_scope_id)?;
+        self.init_async_continuation_slots(&user_param_ir_names, 4);
 
         let param_ir_names = vec![
             format!("${env_scope_id}.$env"),
@@ -4221,18 +4269,19 @@ impl Lowerer {
             );
         }
 
-        let after_inits = self.emit_param_inits(
-            &fn_decl.function.params,
-            &user_param_ir_names,
-            entry,
-        )?;
+        let after_inits =
+            self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
 
-        self.current_function
-            .set_terminator(after_inits, Terminator::Jump { target: dispatch_block });
+        self.current_function.set_terminator(
+            after_inits,
+            Terminator::Jump {
+                target: dispatch_block,
+            },
+        );
 
         self.current_function
             .set_terminator(dispatch_block, Terminator::Unreachable);
@@ -4296,7 +4345,9 @@ impl Lowerer {
             switch_cases.push(zero_case);
 
             for (state_num, target_block) in &resume_blocks {
-                let case_const_id = self.module.add_constant(Constant::Number(*state_num as f64));
+                let case_const_id = self
+                    .module
+                    .add_constant(Constant::Number(*state_num as f64));
                 switch_cases.push(SwitchCaseTarget {
                     constant: case_const_id,
                     target: *target_block,
@@ -4324,6 +4375,8 @@ impl Lowerer {
                 .set_terminator(dispatch_block, Terminator::Jump { target: body_entry });
         }
 
+        let continuation_slot_count = self.async_next_continuation_slot;
+
         let old_fn = std::mem::replace(
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
@@ -4342,6 +4395,7 @@ impl Lowerer {
         self.is_async_fn = false;
         self.async_state_counter = 0;
         self.captured_var_slots.clear();
+        self.async_next_continuation_slot = 0;
         self.async_resume_blocks.clear();
         self.async_dispatch_block = None;
         self.async_closure_env_ir_name = None;
@@ -4416,9 +4470,10 @@ impl Lowerer {
             (closure_val, Some(env_val))
         };
 
-        let num_user_params = fn_decl.function.params.len();
-        let count_val_num = 4 + num_user_params;
-        let count_const = self.module.add_constant(Constant::Number(count_val_num as f64));
+        let count_val_num = continuation_slot_count;
+        let count_const = self
+            .module
+            .add_constant(Constant::Number(count_val_num as f64));
         let count_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,
@@ -4553,8 +4608,12 @@ impl Lowerer {
             },
         );
 
-        self.current_function
-            .set_terminator(wrapper_after_inits, Terminator::Return { value: Some(promise_val) });
+        self.current_function.set_terminator(
+            wrapper_after_inits,
+            Terminator::Return {
+                value: Some(promise_val),
+            },
+        );
 
         let old_fn = std::mem::replace(
             &mut self.current_function,
@@ -4573,7 +4632,9 @@ impl Lowerer {
 
         let outer_block = self.ensure_open(flow)?;
 
-        let wrapper_ref_const = self.module.add_constant(Constant::FunctionRef(wrapper_fn_id));
+        let wrapper_ref_const = self
+            .module
+            .add_constant(Constant::FunctionRef(wrapper_fn_id));
         let wrapper_ref_val = self.alloc_value();
         self.current_function.append_instruction(
             outer_block,
@@ -4650,11 +4711,8 @@ impl Lowerer {
                 .map_err(|msg| self.error(fn_expr.span(), msg))?;
         }
 
-        let param_ir_names = self.build_param_ir_names(
-            &fn_expr.function.params,
-            env_scope_id,
-            this_scope_id,
-        )?;
+        let param_ir_names =
+            self.build_param_ir_names(&fn_expr.function.params, env_scope_id, this_scope_id)?;
 
         // Predeclare hoisted vars in body.
         if let Some(body) = &fn_expr.function.body {
@@ -4664,11 +4722,7 @@ impl Lowerer {
         let entry = BasicBlockId(0);
         self.emit_hoisted_var_initializers(entry);
 
-        let body_entry = self.emit_param_inits(
-            &fn_expr.function.params,
-            &param_ir_names,
-            entry,
-        )?;
+        let body_entry = self.emit_param_inits(&fn_expr.function.params, &param_ir_names, entry)?;
 
         // Lower body.
         let mut inner_flow = StmtFlow::Open(body_entry);
@@ -4798,11 +4852,9 @@ impl Lowerer {
         self.async_promise_scope_id = promise_scope_id;
         self.async_closure_env_ir_name = Some(format!("${closure_env_scope_id}.$closure_env"));
 
-        let user_param_ir_names = self.build_param_ir_names(
-            &fn_expr.function.params,
-            env_scope_id,
-            this_scope_id,
-        )?;
+        let user_param_ir_names =
+            self.build_param_ir_names(&fn_expr.function.params, env_scope_id, this_scope_id)?;
+        self.init_async_continuation_slots(&user_param_ir_names, 4);
 
         let param_ir_names = vec![
             format!("${env_scope_id}.$env"),
@@ -4974,18 +5026,19 @@ impl Lowerer {
             );
         }
 
-        let after_inits = self.emit_param_inits(
-            &fn_expr.function.params,
-            &user_param_ir_names,
-            entry,
-        )?;
+        let after_inits =
+            self.emit_param_inits(&fn_expr.function.params, &user_param_ir_names, entry)?;
 
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
 
-        self.current_function
-            .set_terminator(after_inits, Terminator::Jump { target: dispatch_block });
+        self.current_function.set_terminator(
+            after_inits,
+            Terminator::Jump {
+                target: dispatch_block,
+            },
+        );
         self.current_function
             .set_terminator(dispatch_block, Terminator::Unreachable);
 
@@ -5045,7 +5098,9 @@ impl Lowerer {
                 target: body_entry,
             });
             for (state_num, target_block) in &resume_blocks {
-                let case_const_id = self.module.add_constant(Constant::Number(*state_num as f64));
+                let case_const_id = self
+                    .module
+                    .add_constant(Constant::Number(*state_num as f64));
                 switch_cases.push(SwitchCaseTarget {
                     constant: case_const_id,
                     target: *target_block,
@@ -5071,6 +5126,8 @@ impl Lowerer {
                 .set_terminator(dispatch_block, Terminator::Jump { target: body_entry });
         }
 
+        let continuation_slot_count = self.async_next_continuation_slot;
+
         let old_fn = std::mem::replace(
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
@@ -5089,6 +5146,7 @@ impl Lowerer {
         self.is_async_fn = false;
         self.async_state_counter = 0;
         self.captured_var_slots.clear();
+        self.async_next_continuation_slot = 0;
         self.async_resume_blocks.clear();
         self.async_dispatch_block = None;
         self.async_closure_env_ir_name = None;
@@ -5163,9 +5221,10 @@ impl Lowerer {
             (closure_val, Some(env_val))
         };
 
-        let num_user_params = fn_expr.function.params.len();
-        let count_val_num = 4 + num_user_params;
-        let count_const = self.module.add_constant(Constant::Number(count_val_num as f64));
+        let count_val_num = continuation_slot_count;
+        let count_const = self
+            .module
+            .add_constant(Constant::Number(count_val_num as f64));
         let count_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,
@@ -5300,8 +5359,12 @@ impl Lowerer {
             },
         );
 
-        self.current_function
-            .set_terminator(wrapper_after_inits, Terminator::Return { value: Some(promise_val) });
+        self.current_function.set_terminator(
+            wrapper_after_inits,
+            Terminator::Return {
+                value: Some(promise_val),
+            },
+        );
 
         let old_fn = std::mem::replace(
             &mut self.current_function,
@@ -5318,7 +5381,9 @@ impl Lowerer {
 
         self.pop_function_context();
 
-        let wrapper_ref_const = self.module.add_constant(Constant::FunctionRef(wrapper_fn_id));
+        let wrapper_ref_const = self
+            .module
+            .add_constant(Constant::FunctionRef(wrapper_fn_id));
         let wrapper_ref_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -5372,11 +5437,8 @@ impl Lowerer {
             .declare("$this", VarKind::Let, true)
             .map_err(|msg| self.error(arrow.span, msg))?;
 
-        let param_ir_names = self.build_arrow_param_ir_names(
-            &arrow.params,
-            env_scope_id,
-            this_scope_id,
-        )?;
+        let param_ir_names =
+            self.build_arrow_param_ir_names(&arrow.params, env_scope_id, this_scope_id)?;
 
         let entry = BasicBlockId(0);
         let mut inner_flow;
@@ -5386,11 +5448,8 @@ impl Lowerer {
                 // Predeclare and lower block body.
                 self.predeclare_block_stmts(&block_stmt.stmts)?;
                 self.emit_hoisted_var_initializers(entry);
-                let body_entry = self.emit_arrow_param_inits(
-                    &arrow.params,
-                    &param_ir_names,
-                    entry,
-                )?;
+                let body_entry =
+                    self.emit_arrow_param_inits(&arrow.params, &param_ir_names, entry)?;
                 inner_flow = StmtFlow::Open(body_entry);
                 for stmt in &block_stmt.stmts {
                     // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
@@ -5403,11 +5462,8 @@ impl Lowerer {
             swc_ast::BlockStmtOrExpr::Expr(expr) => {
                 // Expression body: param inits, lower expr, then return it.
                 self.emit_hoisted_var_initializers(entry);
-                let body_entry = self.emit_arrow_param_inits(
-                    &arrow.params,
-                    &param_ir_names,
-                    entry,
-                )?;
+                let body_entry =
+                    self.emit_arrow_param_inits(&arrow.params, &param_ir_names, entry)?;
                 let val = self.lower_expr(expr, body_entry)?;
                 self.current_function
                     .set_terminator(body_entry, Terminator::Return { value: Some(val) });
@@ -5521,11 +5577,9 @@ impl Lowerer {
         self.async_promise_scope_id = promise_scope_id;
         self.async_closure_env_ir_name = Some(format!("${closure_env_scope_id}.$closure_env"));
 
-        let user_param_ir_names = self.build_arrow_param_ir_names(
-            &arrow.params,
-            env_scope_id,
-            this_scope_id,
-        )?;
+        let user_param_ir_names =
+            self.build_arrow_param_ir_names(&arrow.params, env_scope_id, this_scope_id)?;
+        self.init_async_continuation_slots(&user_param_ir_names, 4);
 
         let param_ir_names = vec![
             format!("${env_scope_id}.$env"),
@@ -5693,18 +5747,19 @@ impl Lowerer {
             );
         }
 
-        let after_inits = self.emit_arrow_param_inits(
-            &arrow.params,
-            &user_param_ir_names,
-            entry,
-        )?;
+        let after_inits =
+            self.emit_arrow_param_inits(&arrow.params, &user_param_ir_names, entry)?;
 
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
 
-        self.current_function
-            .set_terminator(after_inits, Terminator::Jump { target: dispatch_block });
+        self.current_function.set_terminator(
+            after_inits,
+            Terminator::Jump {
+                target: dispatch_block,
+            },
+        );
         self.current_function
             .set_terminator(dispatch_block, Terminator::Unreachable);
 
@@ -5789,7 +5844,9 @@ impl Lowerer {
                 target: body_entry,
             });
             for (state_num, target_block) in &resume_blocks {
-                let case_const_id = self.module.add_constant(Constant::Number(*state_num as f64));
+                let case_const_id = self
+                    .module
+                    .add_constant(Constant::Number(*state_num as f64));
                 switch_cases.push(SwitchCaseTarget {
                     constant: case_const_id,
                     target: *target_block,
@@ -5815,6 +5872,8 @@ impl Lowerer {
                 .set_terminator(dispatch_block, Terminator::Jump { target: body_entry });
         }
 
+        let continuation_slot_count = self.async_next_continuation_slot;
+
         let old_fn = std::mem::replace(
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
@@ -5833,6 +5892,7 @@ impl Lowerer {
         self.is_async_fn = false;
         self.async_state_counter = 0;
         self.captured_var_slots.clear();
+        self.async_next_continuation_slot = 0;
         self.async_resume_blocks.clear();
         self.async_dispatch_block = None;
         self.async_closure_env_ir_name = None;
@@ -5907,9 +5967,10 @@ impl Lowerer {
             (closure_val, Some(env_val))
         };
 
-        let num_user_params = arrow.params.len();
-        let count_val_num = 4 + num_user_params;
-        let count_const = self.module.add_constant(Constant::Number(count_val_num as f64));
+        let count_val_num = continuation_slot_count;
+        let count_const = self
+            .module
+            .add_constant(Constant::Number(count_val_num as f64));
         let count_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,
@@ -6044,8 +6105,12 @@ impl Lowerer {
             },
         );
 
-        self.current_function
-            .set_terminator(wrapper_after_inits, Terminator::Return { value: Some(promise_val) });
+        self.current_function.set_terminator(
+            wrapper_after_inits,
+            Terminator::Return {
+                value: Some(promise_val),
+            },
+        );
 
         let old_fn = std::mem::replace(
             &mut self.current_function,
@@ -6062,7 +6127,9 @@ impl Lowerer {
 
         self.pop_function_context();
 
-        let wrapper_ref_const = self.module.add_constant(Constant::FunctionRef(wrapper_fn_id));
+        let wrapper_ref_const = self
+            .module
+            .add_constant(Constant::FunctionRef(wrapper_fn_id));
         let wrapper_ref_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -6272,7 +6339,9 @@ impl Lowerer {
                             let mut m_flow = StmtFlow::Open(m_entry);
                             if let Some(body) = &method.function.body {
                                 for stmt in &body.stmts {
-                                    if matches!(m_flow, StmtFlow::Terminated) { continue; }
+                                    if matches!(m_flow, StmtFlow::Terminated) {
+                                        continue;
+                                    }
                                     m_flow = self.lower_stmt(stmt, m_flow)?;
                                 }
                             }
@@ -6290,7 +6359,8 @@ impl Lowerer {
                             let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
                             m_ir_function.set_params(method_param_ir_names);
                             let m_captured = self.captured_names_stack.last().unwrap().clone();
-                            m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                            m_ir_function
+                                .set_captured_names(Self::captured_display_names(&m_captured));
                             // 设置 home_object（实例方法才有 super 访问）
                             if !is_static {
                                 m_ir_function.home_object = Some(ctor_function_id);
@@ -6314,7 +6384,8 @@ impl Lowerer {
                                 },
                             );
 
-                            let m_key_const = self.module.add_constant(Constant::String(method_name));
+                            let m_key_const =
+                                self.module.add_constant(Constant::String(method_name));
                             let m_key_dest = self.alloc_value();
                             self.current_function.append_instruction(
                                 outer_block,
@@ -6384,7 +6455,9 @@ impl Lowerer {
                             let mut m_flow = StmtFlow::Open(m_entry);
                             if let Some(body) = &method.function.body {
                                 for stmt in &body.stmts {
-                                    if matches!(m_flow, StmtFlow::Terminated) { continue; }
+                                    if matches!(m_flow, StmtFlow::Terminated) {
+                                        continue;
+                                    }
                                     m_flow = self.lower_stmt(stmt, m_flow)?;
                                 }
                             }
@@ -6402,7 +6475,8 @@ impl Lowerer {
                             let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
                             m_ir_function.set_params(param_ir_names);
                             let m_captured = self.captured_names_stack.last().unwrap().clone();
-                            m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                            m_ir_function
+                                .set_captured_names(Self::captured_display_names(&m_captured));
                             if !is_static {
                                 m_ir_function.home_object = Some(ctor_function_id);
                             }
@@ -6425,8 +6499,10 @@ impl Lowerer {
                             );
 
                             // Build descriptor and call DefineProperty
-                            let desc = self.build_descriptor(accessor, fn_dest, false, true, outer_block)?;
-                            let m_key_const = self.module.add_constant(Constant::String(method_name));
+                            let desc =
+                                self.build_descriptor(accessor, fn_dest, false, true, outer_block)?;
+                            let m_key_const =
+                                self.module.add_constant(Constant::String(method_name));
                             let m_key_dest = self.alloc_value();
                             self.current_function.append_instruction(
                                 outer_block,
@@ -6473,7 +6549,9 @@ impl Lowerer {
 
                     let mut m_flow = StmtFlow::Open(m_entry);
                     for stmt in &static_block.body.stmts {
-                        if matches!(m_flow, StmtFlow::Terminated) { continue; }
+                        if matches!(m_flow, StmtFlow::Terminated) {
+                            continue;
+                        }
                         m_flow = self.lower_stmt(stmt, m_flow)?;
                     }
 
@@ -6695,225 +6773,223 @@ impl Lowerer {
         let mut static_init_idx = 0u32;
         for member in &class_expr.class.body {
             match member {
-                swc_ast::ClassMember::Method(method) => {
-                    match method.kind {
-                        swc_ast::MethodKind::Method => {
-                            let is_static = method.is_static;
-                            let target = if is_static { ctor_dest } else { proto_dest };
+                swc_ast::ClassMember::Method(method) => match method.kind {
+                    swc_ast::MethodKind::Method => {
+                        let is_static = method.is_static;
+                        let target = if is_static { ctor_dest } else { proto_dest };
 
-                            let method_name = match &method.key {
-                                swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                                swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
-                                _ => continue,
-                            };
+                        let method_name = match &method.key {
+                            swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+                            swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                            _ => continue,
+                        };
 
-                            let fn_name = format!("{}.{}", class_name, method_name);
-                            self.push_function_context(&fn_name, BasicBlockId(0));
+                        let fn_name = format!("{}.{}", class_name, method_name);
+                        self.push_function_context(&fn_name, BasicBlockId(0));
 
-                            let env_scope_id = self
-                                .scopes
-                                .declare("$env", VarKind::Let, true)
-                                .map_err(|msg| self.error(method.span, msg))?;
-                            let this_scope_id = self
-                                .scopes
-                                .declare("$this", VarKind::Let, true)
-                                .map_err(|msg| self.error(method.span, msg))?;
+                        let env_scope_id = self
+                            .scopes
+                            .declare("$env", VarKind::Let, true)
+                            .map_err(|msg| self.error(method.span, msg))?;
+                        let this_scope_id = self
+                            .scopes
+                            .declare("$this", VarKind::Let, true)
+                            .map_err(|msg| self.error(method.span, msg))?;
 
-                            let mut method_param_ir_names = vec![
-                                format!("${env_scope_id}.$env"),
-                                format!("${this_scope_id}.$this"),
-                            ];
-                            for param in &method.function.params {
-                                if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
-                                    let name = binding_ident.id.sym.to_string();
-                                    let scope_id = self
-                                        .scopes
-                                        .declare(&name, VarKind::Let, true)
-                                        .map_err(|msg| self.error(method.span, msg))?;
-                                    method_param_ir_names.push(format!("${scope_id}.{name}"));
-                                }
+                        let mut method_param_ir_names = vec![
+                            format!("${env_scope_id}.$env"),
+                            format!("${this_scope_id}.$this"),
+                        ];
+                        for param in &method.function.params {
+                            if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
+                                let name = binding_ident.id.sym.to_string();
+                                let scope_id = self
+                                    .scopes
+                                    .declare(&name, VarKind::Let, true)
+                                    .map_err(|msg| self.error(method.span, msg))?;
+                                method_param_ir_names.push(format!("${scope_id}.{name}"));
                             }
-
-                            if let Some(body) = &method.function.body {
-                                self.predeclare_block_stmts(&body.stmts)?;
-                            }
-
-                            let m_entry = BasicBlockId(0);
-                            self.emit_hoisted_var_initializers(m_entry);
-
-                            let mut m_flow = StmtFlow::Open(m_entry);
-                            if let Some(body) = &method.function.body {
-                                for stmt in &body.stmts {
-                                    m_flow = self.lower_stmt(stmt, m_flow)?;
-                                }
-                            }
-
-                            if let StmtFlow::Open(b) = m_flow {
-                                self.current_function
-                                    .set_terminator(b, Terminator::Return { value: None });
-                            }
-
-                            let m_old_fn = std::mem::replace(
-                                &mut self.current_function,
-                                FunctionBuilder::new("", BasicBlockId(0)),
-                            );
-                            let m_blocks = m_old_fn.into_blocks();
-                            let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
-                            m_ir_function.set_params(method_param_ir_names);
-                            let m_captured = self.captured_names_stack.last().unwrap().clone();
-                            m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
-                            if !is_static {
-                                m_ir_function.home_object = Some(ctor_function_id);
-                            }
-                            for b in m_blocks {
-                                m_ir_function.push_block(b);
-                            }
-                            let m_function_id = self.module.push_function(m_ir_function);
-
-                            self.pop_function_context();
-
-                            let m_dest = self.alloc_value();
-                            let m_ref_const = self
-                                .module
-                                .add_constant(Constant::FunctionRef(m_function_id));
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::Const {
-                                    dest: m_dest,
-                                    constant: m_ref_const,
-                                },
-                            );
-
-                            let m_key_const = self.module.add_constant(Constant::String(method_name));
-                            let m_key_dest = self.alloc_value();
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::Const {
-                                    dest: m_key_dest,
-                                    constant: m_key_const,
-                                },
-                            );
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::SetProp {
-                                    object: target,
-                                    key: m_key_dest,
-                                    value: m_dest,
-                                },
-                            );
                         }
-                        swc_ast::MethodKind::Getter | swc_ast::MethodKind::Setter => {
-                            let accessor = if matches!(method.kind, swc_ast::MethodKind::Getter) {
-                                "get"
-                            } else {
-                                "set"
-                            };
-                            let is_static = method.is_static;
-                            let target = if is_static { ctor_dest } else { proto_dest };
 
-                            let method_name = match &method.key {
-                                swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                                swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
-                                _ => continue,
-                            };
-
-                            let fn_name = format!("{}.{}_{}", class_name, accessor, method_name);
-                            self.push_function_context(&fn_name, BasicBlockId(0));
-
-                            let env_scope_id = self
-                                .scopes
-                                .declare("$env", VarKind::Let, true)
-                                .map_err(|msg| self.error(method.span, msg))?;
-                            let this_scope_id = self
-                                .scopes
-                                .declare("$this", VarKind::Let, true)
-                                .map_err(|msg| self.error(method.span, msg))?;
-
-                            let mut param_ir_names = vec![
-                                format!("${env_scope_id}.$env"),
-                                format!("${this_scope_id}.$this"),
-                            ];
-                            for param in &method.function.params {
-                                if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
-                                    let name = binding_ident.id.sym.to_string();
-                                    let scope_id = self
-                                        .scopes
-                                        .declare(&name, VarKind::Let, true)
-                                        .map_err(|msg| self.error(method.span, msg))?;
-                                    param_ir_names.push(format!("${scope_id}.{name}"));
-                                }
-                            }
-
-                            if let Some(body) = &method.function.body {
-                                self.predeclare_block_stmts(&body.stmts)?;
-                            }
-
-                            let m_entry = BasicBlockId(0);
-                            self.emit_hoisted_var_initializers(m_entry);
-
-                            let mut m_flow = StmtFlow::Open(m_entry);
-                            if let Some(body) = &method.function.body {
-                                for stmt in &body.stmts {
-                                    m_flow = self.lower_stmt(stmt, m_flow)?;
-                                }
-                            }
-
-                            if let StmtFlow::Open(b) = m_flow {
-                                self.current_function
-                                    .set_terminator(b, Terminator::Return { value: None });
-                            }
-
-                            let m_old_fn = std::mem::replace(
-                                &mut self.current_function,
-                                FunctionBuilder::new("", BasicBlockId(0)),
-                            );
-                            let m_blocks = m_old_fn.into_blocks();
-                            let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
-                            m_ir_function.set_params(param_ir_names);
-                            let m_captured = self.captured_names_stack.last().unwrap().clone();
-                            m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
-                            if !is_static {
-                                m_ir_function.home_object = Some(ctor_function_id);
-                            }
-                            for b in m_blocks {
-                                m_ir_function.push_block(b);
-                            }
-                            let m_function_id = self.module.push_function(m_ir_function);
-                            self.pop_function_context();
-
-                            let fn_dest = self.alloc_value();
-                            let fn_ref_const = self
-                                .module
-                                .add_constant(Constant::FunctionRef(m_function_id));
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::Const {
-                                    dest: fn_dest,
-                                    constant: fn_ref_const,
-                                },
-                            );
-
-                            let desc = self.build_descriptor(accessor, fn_dest, false, true, block)?;
-                            let m_key_const = self.module.add_constant(Constant::String(method_name));
-                            let m_key_dest = self.alloc_value();
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::Const {
-                                    dest: m_key_dest,
-                                    constant: m_key_const,
-                                },
-                            );
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::CallBuiltin {
-                                    dest: None,
-                                    builtin: Builtin::DefineProperty,
-                                    args: vec![target, m_key_dest, desc],
-                                },
-                            );
+                        if let Some(body) = &method.function.body {
+                            self.predeclare_block_stmts(&body.stmts)?;
                         }
+
+                        let m_entry = BasicBlockId(0);
+                        self.emit_hoisted_var_initializers(m_entry);
+
+                        let mut m_flow = StmtFlow::Open(m_entry);
+                        if let Some(body) = &method.function.body {
+                            for stmt in &body.stmts {
+                                m_flow = self.lower_stmt(stmt, m_flow)?;
+                            }
+                        }
+
+                        if let StmtFlow::Open(b) = m_flow {
+                            self.current_function
+                                .set_terminator(b, Terminator::Return { value: None });
+                        }
+
+                        let m_old_fn = std::mem::replace(
+                            &mut self.current_function,
+                            FunctionBuilder::new("", BasicBlockId(0)),
+                        );
+                        let m_blocks = m_old_fn.into_blocks();
+                        let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                        m_ir_function.set_params(method_param_ir_names);
+                        let m_captured = self.captured_names_stack.last().unwrap().clone();
+                        m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                        if !is_static {
+                            m_ir_function.home_object = Some(ctor_function_id);
+                        }
+                        for b in m_blocks {
+                            m_ir_function.push_block(b);
+                        }
+                        let m_function_id = self.module.push_function(m_ir_function);
+
+                        self.pop_function_context();
+
+                        let m_dest = self.alloc_value();
+                        let m_ref_const = self
+                            .module
+                            .add_constant(Constant::FunctionRef(m_function_id));
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest: m_dest,
+                                constant: m_ref_const,
+                            },
+                        );
+
+                        let m_key_const = self.module.add_constant(Constant::String(method_name));
+                        let m_key_dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest: m_key_dest,
+                                constant: m_key_const,
+                            },
+                        );
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::SetProp {
+                                object: target,
+                                key: m_key_dest,
+                                value: m_dest,
+                            },
+                        );
                     }
-                }
+                    swc_ast::MethodKind::Getter | swc_ast::MethodKind::Setter => {
+                        let accessor = if matches!(method.kind, swc_ast::MethodKind::Getter) {
+                            "get"
+                        } else {
+                            "set"
+                        };
+                        let is_static = method.is_static;
+                        let target = if is_static { ctor_dest } else { proto_dest };
+
+                        let method_name = match &method.key {
+                            swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+                            swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                            _ => continue,
+                        };
+
+                        let fn_name = format!("{}.{}_{}", class_name, accessor, method_name);
+                        self.push_function_context(&fn_name, BasicBlockId(0));
+
+                        let env_scope_id = self
+                            .scopes
+                            .declare("$env", VarKind::Let, true)
+                            .map_err(|msg| self.error(method.span, msg))?;
+                        let this_scope_id = self
+                            .scopes
+                            .declare("$this", VarKind::Let, true)
+                            .map_err(|msg| self.error(method.span, msg))?;
+
+                        let mut param_ir_names = vec![
+                            format!("${env_scope_id}.$env"),
+                            format!("${this_scope_id}.$this"),
+                        ];
+                        for param in &method.function.params {
+                            if let swc_ast::Pat::Ident(binding_ident) = &param.pat {
+                                let name = binding_ident.id.sym.to_string();
+                                let scope_id = self
+                                    .scopes
+                                    .declare(&name, VarKind::Let, true)
+                                    .map_err(|msg| self.error(method.span, msg))?;
+                                param_ir_names.push(format!("${scope_id}.{name}"));
+                            }
+                        }
+
+                        if let Some(body) = &method.function.body {
+                            self.predeclare_block_stmts(&body.stmts)?;
+                        }
+
+                        let m_entry = BasicBlockId(0);
+                        self.emit_hoisted_var_initializers(m_entry);
+
+                        let mut m_flow = StmtFlow::Open(m_entry);
+                        if let Some(body) = &method.function.body {
+                            for stmt in &body.stmts {
+                                m_flow = self.lower_stmt(stmt, m_flow)?;
+                            }
+                        }
+
+                        if let StmtFlow::Open(b) = m_flow {
+                            self.current_function
+                                .set_terminator(b, Terminator::Return { value: None });
+                        }
+
+                        let m_old_fn = std::mem::replace(
+                            &mut self.current_function,
+                            FunctionBuilder::new("", BasicBlockId(0)),
+                        );
+                        let m_blocks = m_old_fn.into_blocks();
+                        let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                        m_ir_function.set_params(param_ir_names);
+                        let m_captured = self.captured_names_stack.last().unwrap().clone();
+                        m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                        if !is_static {
+                            m_ir_function.home_object = Some(ctor_function_id);
+                        }
+                        for b in m_blocks {
+                            m_ir_function.push_block(b);
+                        }
+                        let m_function_id = self.module.push_function(m_ir_function);
+                        self.pop_function_context();
+
+                        let fn_dest = self.alloc_value();
+                        let fn_ref_const = self
+                            .module
+                            .add_constant(Constant::FunctionRef(m_function_id));
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest: fn_dest,
+                                constant: fn_ref_const,
+                            },
+                        );
+
+                        let desc = self.build_descriptor(accessor, fn_dest, false, true, block)?;
+                        let m_key_const = self.module.add_constant(Constant::String(method_name));
+                        let m_key_dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest: m_key_dest,
+                                constant: m_key_const,
+                            },
+                        );
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: None,
+                                builtin: Builtin::DefineProperty,
+                                args: vec![target, m_key_dest, desc],
+                            },
+                        );
+                    }
+                },
                 swc_ast::ClassMember::StaticBlock(static_block) => {
                     let fn_name = format!("{}.static_init_{}", class_name, static_init_idx);
                     static_init_idx += 1;
@@ -7050,9 +7126,7 @@ impl Lowerer {
                 }
                 self.lower_await_expr(await_expr, block)
             }
-            swc_ast::Expr::Yield(yield_expr) => {
-                self.lower_yield_expr(yield_expr, block)
-            }
+            swc_ast::Expr::Yield(yield_expr) => self.lower_yield_expr(yield_expr, block),
             _ => Err(self.error(
                 expr.span(),
                 format!("unsupported expression kind `{}`", expr_kind(expr)),
@@ -7091,10 +7165,8 @@ impl Lowerer {
             }
         }
         let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::StringConcatVa { dest, parts },
-        );
+        self.current_function
+            .append_instruction(block, Instruction::StringConcatVa { dest, parts });
         Ok(dest)
     }
 
@@ -7109,7 +7181,9 @@ impl Lowerer {
         // 2. 构建 raw quasi 数组
         let raw_arr = self.lower_quasis_to_array(tpl, block, true)?;
         // 3. Object.defineProperty(cooked_arr, "raw", { value: raw_arr, ... })
-        let define_prop_const = self.module.add_constant(Constant::String("raw".to_string()));
+        let define_prop_const = self
+            .module
+            .add_constant(Constant::String("raw".to_string()));
         let define_prop_key = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -7128,7 +7202,9 @@ impl Lowerer {
             },
         );
         // value
-        let value_key = self.module.add_constant(Constant::String("value".to_string()));
+        let value_key = self
+            .module
+            .add_constant(Constant::String("value".to_string()));
         let value_key_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -7298,11 +7374,11 @@ impl Lowerer {
                     }
                     swc_ast::Prop::Getter(getter) => {
                         let key_dest = self.lower_prop_name(&getter.key, block)?;
-                        let body = getter.body.as_ref().ok_or_else(|| {
-                            self.error(getter.span, "getter must have a body")
-                        })?;
-                        let fn_value =
-                            self.lower_method_to_fn(&getter.key, body, None, block)?;
+                        let body = getter
+                            .body
+                            .as_ref()
+                            .ok_or_else(|| self.error(getter.span, "getter must have a body"))?;
+                        let fn_value = self.lower_method_to_fn(&getter.key, body, None, block)?;
                         let desc = self.build_descriptor("get", fn_value, true, true, block)?;
                         self.current_function.append_instruction(
                             block,
@@ -7315,9 +7391,10 @@ impl Lowerer {
                     }
                     swc_ast::Prop::Setter(setter) => {
                         let key_dest = self.lower_prop_name(&setter.key, block)?;
-                        let body = setter.body.as_ref().ok_or_else(|| {
-                            self.error(setter.span, "setter must have a body")
-                        })?;
+                        let body = setter
+                            .body
+                            .as_ref()
+                            .ok_or_else(|| self.error(setter.span, "setter must have a body"))?;
                         let fn_value =
                             self.lower_method_to_fn(&setter.key, body, Some(true), block)?;
                         let desc = self.build_descriptor("set", fn_value, true, true, block)?;
@@ -7385,9 +7462,7 @@ impl Lowerer {
                 );
                 Ok(key_dest)
             }
-            swc_ast::PropName::Computed(computed) => {
-                self.lower_expr(&computed.expr, block)
-            }
+            swc_ast::PropName::Computed(computed) => self.lower_expr(&computed.expr, block),
             _ => Err(self.error(key.span(), "unsupported property key kind")),
         }
     }
@@ -7484,7 +7559,9 @@ impl Lowerer {
 
         // Create FunctionRef
         let m_dest = self.alloc_value();
-        let m_ref_const = self.module.add_constant(Constant::FunctionRef(m_function_id));
+        let m_ref_const = self
+            .module
+            .add_constant(Constant::FunctionRef(m_function_id));
         self.current_function.append_instruction(
             block,
             Instruction::Const {
@@ -7515,7 +7592,9 @@ impl Lowerer {
         );
 
         // descriptor[accessor_kind] = fn
-        let key_const = self.module.add_constant(Constant::String(accessor_kind.to_string()));
+        let key_const = self
+            .module
+            .add_constant(Constant::String(accessor_kind.to_string()));
         let key_dest = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -7534,7 +7613,9 @@ impl Lowerer {
         );
 
         // descriptor.enumerable
-        let enum_key = self.module.add_constant(Constant::String("enumerable".to_string()));
+        let enum_key = self
+            .module
+            .add_constant(Constant::String("enumerable".to_string()));
         let enum_key_dest = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -7562,7 +7643,9 @@ impl Lowerer {
         );
 
         // descriptor.configurable
-        let conf_key = self.module.add_constant(Constant::String("configurable".to_string()));
+        let conf_key = self
+            .module
+            .add_constant(Constant::String("configurable".to_string()));
         let conf_key_dest = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -7704,13 +7787,8 @@ impl Lowerer {
         } else {
             "$env".to_string()
         };
-        self.current_function.append_instruction(
-            block,
-            Instruction::LoadVar {
-                dest,
-                name,
-            },
-        );
+        self.current_function
+            .append_instruction(block, Instruction::LoadVar { dest, name });
         dest
     }
 
@@ -7831,12 +7909,8 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         // 1. GetSuperBase: 从 home_object 的 proto 读取基类原型
         let base_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::GetSuperBase {
-                dest: base_val,
-            },
-        );
+        self.current_function
+            .append_instruction(block, Instruction::GetSuperBase { dest: base_val });
 
         // 2. 根据 prop 类型进行属性访问
         match &super_prop.prop {
@@ -7910,6 +7984,168 @@ impl Lowerer {
         }
     }
 
+    fn init_async_continuation_slots(&mut self, param_ir_names: &[String], first_param_slot: u32) {
+        self.captured_var_slots.clear();
+        for (offset, name) in param_ir_names.iter().skip(2).enumerate() {
+            self.captured_var_slots
+                .insert(name.clone(), first_param_slot + offset as u32);
+        }
+        self.async_next_continuation_slot =
+            first_param_slot + param_ir_names.len().saturating_sub(2) as u32;
+    }
+
+    fn is_async_internal_binding(name: &str) -> bool {
+        matches!(
+            name,
+            "$env"
+                | "$this"
+                | "$state"
+                | "$resume_val"
+                | "$is_rejected"
+                | "$promise"
+                | "$closure_env"
+                | "$generator"
+        ) || name.starts_with("$tmp.")
+    }
+
+    fn async_visible_binding_names(&self) -> Vec<String> {
+        let Some(&function_scope_id) = self.function_scope_id_stack.last() else {
+            return Vec::new();
+        };
+
+        let mut scope_chain = Vec::new();
+        let mut cursor = self.scopes.current_scope_id();
+        loop {
+            scope_chain.push(cursor);
+            if cursor == function_scope_id {
+                break;
+            }
+            let Some(parent) = self.scopes.arenas[cursor].parent else {
+                break;
+            };
+            cursor = parent;
+        }
+        scope_chain.reverse();
+
+        let mut seen = std::collections::HashSet::new();
+        let mut bindings = Vec::new();
+        for scope_id in scope_chain {
+            let scope = &self.scopes.arenas[scope_id];
+            let mut names: Vec<String> = scope.variables.keys().cloned().collect();
+            names.sort();
+            for name in names {
+                if Self::is_async_internal_binding(&name) {
+                    continue;
+                }
+                let ir_name = format!("${scope_id}.{name}");
+                if seen.insert(ir_name.clone()) {
+                    bindings.push(ir_name);
+                }
+            }
+        }
+        bindings
+    }
+
+    fn async_binding_slot(&mut self, ir_name: &str) -> u32 {
+        if let Some(slot) = self.captured_var_slots.get(ir_name) {
+            return *slot;
+        }
+        let slot = self.async_next_continuation_slot;
+        self.async_next_continuation_slot += 1;
+        self.captured_var_slots.insert(ir_name.to_string(), slot);
+        slot
+    }
+
+    fn emit_save_async_bindings(&mut self, block: BasicBlockId, bindings: &[String]) {
+        if bindings.is_empty() {
+            return;
+        }
+
+        let continuation = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: continuation,
+                name: format!("${}.$env", self.async_env_scope_id),
+            },
+        );
+
+        for binding in bindings {
+            let slot = self.async_binding_slot(binding);
+            let slot_const = self.module.add_constant(Constant::Number(slot as f64));
+            let slot_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: slot_val,
+                    constant: slot_const,
+                },
+            );
+            let value = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest: value,
+                    name: binding.clone(),
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ContinuationSaveVar,
+                    args: vec![continuation, slot_val, value],
+                },
+            );
+        }
+    }
+
+    fn emit_restore_async_bindings(&mut self, block: BasicBlockId, bindings: &[String]) {
+        if bindings.is_empty() {
+            return;
+        }
+
+        let continuation = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: continuation,
+                name: format!("${}.$env", self.async_env_scope_id),
+            },
+        );
+
+        for binding in bindings {
+            let Some(&slot) = self.captured_var_slots.get(binding) else {
+                continue;
+            };
+            let slot_const = self.module.add_constant(Constant::Number(slot as f64));
+            let slot_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: slot_val,
+                    constant: slot_const,
+                },
+            );
+            let value = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(value),
+                    builtin: Builtin::ContinuationLoadVar,
+                    args: vec![continuation, slot_val],
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::StoreVar {
+                    name: binding.clone(),
+                    value,
+                },
+            );
+        }
+    }
+
     fn lower_await_expr(
         &mut self,
         await_expr: &swc_ast::AwaitExpr,
@@ -7935,6 +8171,8 @@ impl Lowerer {
         let continue_block = self.current_function.new_block();
 
         self.async_resume_blocks.push((next_state, resume_block));
+        let saved_bindings = self.async_visible_binding_names();
+        self.emit_save_async_bindings(block, &saved_bindings);
 
         self.current_function.append_instruction(
             block,
@@ -7944,8 +8182,14 @@ impl Lowerer {
             },
         );
 
-        self.current_function
-            .set_terminator(block, Terminator::Jump { target: continue_block });
+        self.current_function.set_terminator(
+            block,
+            Terminator::Jump {
+                target: continue_block,
+            },
+        );
+
+        self.emit_restore_async_bindings(resume_block, &saved_bindings);
 
         let resume_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -8069,8 +8313,12 @@ impl Lowerer {
                 },
             );
 
-            self.current_function
-                .set_terminator(block, Terminator::Jump { target: continue_block });
+            self.current_function.set_terminator(
+                block,
+                Terminator::Jump {
+                    target: continue_block,
+                },
+            );
 
             let resume_val = self.alloc_value();
             self.current_function.append_instruction(
@@ -8217,10 +8465,8 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let promise_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::NewPromise { dest: promise_val },
-        );
+        self.current_function
+            .append_instruction(block, Instruction::NewPromise { dest: promise_val });
 
         if let Some(args) = &new_expr.args {
             if let Some(first_arg) = args.first() {
@@ -8342,7 +8588,9 @@ impl Lowerer {
                     // Array.prototype 方法调用优化：发出 CallBuiltin 代替 Call，
                     // 跳过运行时属性解析（原型链查找）。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
-                        if let Some(array_builtin) = builtin_from_array_proto_method(&prop_ident.sym) {
+                        if let Some(array_builtin) =
+                            builtin_from_array_proto_method(&prop_ident.sym)
+                        {
                             // obj.method() → obj 是 this
                             this_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![this_val];
@@ -8362,7 +8610,9 @@ impl Lowerer {
                         }
 
                         // Function.prototype.call/apply/bind: func.call(thisArg, ...args)
-                        if let Some(func_builtin) = builtin_from_function_proto_method(&prop_ident.sym) {
+                        if let Some(func_builtin) =
+                            builtin_from_function_proto_method(&prop_ident.sym)
+                        {
                             let func_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![func_val];
 
@@ -8373,7 +8623,13 @@ impl Lowerer {
                                 } else {
                                     let undef_const = self.module.add_constant(Constant::Undefined);
                                     let undef_val = self.alloc_value();
-                                    self.current_function.append_instruction(block, Instruction::Const { dest: undef_val, constant: undef_const });
+                                    self.current_function.append_instruction(
+                                        block,
+                                        Instruction::Const {
+                                            dest: undef_val,
+                                            constant: undef_const,
+                                        },
+                                    );
                                     builtin_args.push(undef_val);
                                 }
                                 if call.args.len() > 1 {
@@ -8381,7 +8637,13 @@ impl Lowerer {
                                 } else {
                                     let undef_const = self.module.add_constant(Constant::Undefined);
                                     let undef_val = self.alloc_value();
-                                    self.current_function.append_instruction(block, Instruction::Const { dest: undef_val, constant: undef_const });
+                                    self.current_function.append_instruction(
+                                        block,
+                                        Instruction::Const {
+                                            dest: undef_val,
+                                            constant: undef_const,
+                                        },
+                                    );
                                     builtin_args.push(undef_val);
                                 }
                             } else {
@@ -8393,7 +8655,13 @@ impl Lowerer {
                                 if call.args.is_empty() {
                                     let undef_const = self.module.add_constant(Constant::Undefined);
                                     let undef_val = self.alloc_value();
-                                    self.current_function.append_instruction(block, Instruction::Const { dest: undef_val, constant: undef_const });
+                                    self.current_function.append_instruction(
+                                        block,
+                                        Instruction::Const {
+                                            dest: undef_val,
+                                            constant: undef_const,
+                                        },
+                                    );
                                     builtin_args.push(undef_val);
                                 }
                             }
@@ -8411,7 +8679,9 @@ impl Lowerer {
                         }
 
                         // Object.prototype 方法调用优化：hasOwnProperty
-                        if let Some(obj_proto_builtin) = builtin_from_object_proto_method(&prop_ident.sym) {
+                        if let Some(obj_proto_builtin) =
+                            builtin_from_object_proto_method(&prop_ident.sym)
+                        {
                             // obj.method() → obj 是 this
                             let this_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![this_val];
@@ -8431,11 +8701,13 @@ impl Lowerer {
                         }
 
                         // String.prototype 方法调用优化：match/replace/search/split
-                        if let Some(string_builtin) = builtin_from_string_proto_method(&prop_ident.sym) {
+                        if let Some(string_builtin) =
+                            builtin_from_string_proto_method(&prop_ident.sym)
+                        {
                             // JavaScript 允许这些方法无参数调用（缺失参数默认为 undefined）
                             // 因此不在此处做参数数量限制，由运行时处理
                             let _ = builtin_call_signature(string_builtin); // 验证 builtin 有效
-                            
+
                             // str.method() → str 是 this
                             this_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![this_val];
@@ -8455,11 +8727,13 @@ impl Lowerer {
                         }
 
                         // RegExp.prototype 方法调用优化：test/exec
-                        if let Some(regexp_builtin) = builtin_from_regexp_proto_method(&prop_ident.sym) {
+                        if let Some(regexp_builtin) =
+                            builtin_from_regexp_proto_method(&prop_ident.sym)
+                        {
                             // JavaScript 允许这些方法无参数调用（缺失参数默认为 undefined）
                             // 因此不在此处做参数数量限制，由运行时处理
                             let _ = builtin_call_signature(regexp_builtin); // 验证 builtin 有效
-                            
+
                             // regex.method() → regex 是 this
                             this_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![this_val];
@@ -8478,13 +8752,17 @@ impl Lowerer {
                             return Ok(dest);
                         }
 
-                        if let Some(promise_proto_builtin) = builtin_from_promise_proto_method(&prop_ident.sym) {
+                        if let Some(promise_proto_builtin) =
+                            builtin_from_promise_proto_method(&prop_ident.sym)
+                        {
                             this_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![this_val];
                             for arg in &call.args {
                                 builtin_args.push(self.lower_expr(&arg.expr, block)?);
                             }
-                            if builtin_args.len() < 3 && matches!(promise_proto_builtin, Builtin::PromiseThen) {
+                            if builtin_args.len() < 3
+                                && matches!(promise_proto_builtin, Builtin::PromiseThen)
+                            {
                                 let undef_const = self.module.add_constant(Constant::Undefined);
                                 let undef_val = self.alloc_value();
                                 self.current_function.append_instruction(
@@ -8628,7 +8906,7 @@ impl Lowerer {
                     }
                 };
 
-				let is_computed = matches!(&member_expr.prop, swc_ast::MemberProp::Computed(_));
+                let is_computed = matches!(&member_expr.prop, swc_ast::MemberProp::Computed(_));
                 if assign.op == swc_ast::AssignOp::Assign {
                     // 简单赋值: obj.x = value 或 arr[computed] = value
                     let value_val = self.lower_expr(assign.right.as_ref(), block)?;
@@ -8672,24 +8950,24 @@ impl Lowerer {
                     self.error(assign.span, "unsupported compound assignment operator")
                 })?;
 
-				// 用 GetElem/GetProp 读取当前值（取决于是否为 computed 成员）
-				let loaded = self.alloc_value();
-				self.current_function.append_instruction(
-					block,
-					if is_computed {
-						Instruction::GetElem {
-							dest: loaded,
-							object: obj_val,
-							index: key,
-						}
-					} else {
-						Instruction::GetProp {
-							dest: loaded,
-							object: obj_val,
-							key,
-						}
-					},
-				);
+                // 用 GetElem/GetProp 读取当前值（取决于是否为 computed 成员）
+                let loaded = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    if is_computed {
+                        Instruction::GetElem {
+                            dest: loaded,
+                            object: obj_val,
+                            index: key,
+                        }
+                    } else {
+                        Instruction::GetProp {
+                            dest: loaded,
+                            object: obj_val,
+                            key,
+                        }
+                    },
+                );
 
                 let rhs = self.lower_expr(assign.right.as_ref(), block)?;
                 let dest = self.alloc_value();
@@ -8728,20 +9006,20 @@ impl Lowerer {
                         );
                     }
                 }
-				let instr = if is_computed {
-					Instruction::SetElem {
-						object: obj_val,
-						index: key,
-						value: dest,
-					}
-				} else {
-					Instruction::SetProp {
-						object: obj_val,
-						key,
-						value: dest,
-					}
-				};
-				self.current_function.append_instruction(block, instr);
+                let instr = if is_computed {
+                    Instruction::SetElem {
+                        object: obj_val,
+                        index: key,
+                        value: dest,
+                    }
+                } else {
+                    Instruction::SetProp {
+                        object: obj_val,
+                        key,
+                        value: dest,
+                    }
+                };
+                self.current_function.append_instruction(block, instr);
 
                 return Ok(dest);
             }
@@ -9915,15 +10193,11 @@ impl Lowerer {
                 Constant::String(string.value.to_string_lossy().into_owned())
             }
             swc_ast::Lit::Bool(b) => Constant::Bool(b.value),
-            swc_ast::Lit::BigInt(b) => {
-                Constant::BigInt(b.value.to_str_radix(10))
-            }
-            swc_ast::Lit::Regex(regex) => {
-                Constant::RegExp {
-                    pattern: regex.exp.to_string(),
-                    flags: regex.flags.to_string(),
-                }
-            }
+            swc_ast::Lit::BigInt(b) => Constant::BigInt(b.value.to_str_radix(10)),
+            swc_ast::Lit::Regex(regex) => Constant::RegExp {
+                pattern: regex.exp.to_string(),
+                flags: regex.flags.to_string(),
+            },
             swc_ast::Lit::Null(_) => Constant::Null,
             _ => {
                 return Err(self.error(
@@ -9975,7 +10249,12 @@ impl Lowerer {
                 }
                 swc_ast::Pat::Array(array_pat) => {
                     Self::extract_pat_bindings(
-                        &array_pat.elems.iter().flatten().cloned().collect::<Vec<_>>(),
+                        &array_pat
+                            .elems
+                            .iter()
+                            .flatten()
+                            .cloned()
+                            .collect::<Vec<_>>(),
                         result,
                     );
                 }
@@ -10049,8 +10328,7 @@ impl Lowerer {
                         let mut names = Vec::new();
                         Self::extract_pat_bindings(&[declarator.name.clone()], &mut names);
                         for name in names {
-                            if !matches!(kind, VarKind::Var)
-                                && matches!(mode, LexicalMode::Exclude)
+                            if !matches!(kind, VarKind::Var) && matches!(mode, LexicalMode::Exclude)
                             {
                                 continue;
                             }
@@ -10433,7 +10711,7 @@ fn builtin_from_function_proto_method(name: &str) -> Option<Builtin> {
 }
 /// 将 Object.prototype 方法名映射到 Builtin 变体，用于语义层优化。
 /// 当 `obj.hasOwnProperty(key)` 被识别时，跳过运行时属性解析，直接发出 CallBuiltin。
-/// 
+///
 /// 注意: toString / valueOf 未在此处拦截，因为它们在不同原型上有不同实现
 /// (Array.prototype.toString、Date.prototype.valueOf 等)，编译时无法确定接收者类型。
 /// 这些方法将在原型链实现后通过运行时属性查找调用。

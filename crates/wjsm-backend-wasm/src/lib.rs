@@ -280,13 +280,15 @@ impl Compiler {
         // Type 15: (i32) -> (i64) — closure_get_env(closure_idx)
         types.ty().function(vec![ValType::I32], vec![ValType::I64]);
         // Type 16: (i64, i64, i64) -> (i64) — 3-arg array functions (indexOf, slice)
-        types
-            .ty()
-            .function(vec![ValType::I64, ValType::I64, ValType::I64], vec![ValType::I64]);
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I64],
+            vec![ValType::I64],
+        );
         // Type 17: (i64, i64, i64, i64) -> (i64) — 4-arg array functions (fill)
-        types
-            .ty()
-            .function(vec![ValType::I64, ValType::I64, ValType::I64, ValType::I64], vec![ValType::I64]);
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I64, ValType::I64],
+            vec![ValType::I64],
+        );
         // Type 18: (i32, i32, i32) -> () — abort_shadow_stack_overflow
         types
             .ty()
@@ -456,32 +458,46 @@ impl Compiler {
         // Import index 76: arr_proto_is_array
         imports.import("env", "arr_proto_is_array", EntityType::Function(12));
         // Import index 77: abort_shadow_stack_overflow: (i32, i32, i32) -> ()
-        imports.import("env", "abort_shadow_stack_overflow", EntityType::Function(18));
+        imports.import(
+            "env",
+            "abort_shadow_stack_overflow",
+            EntityType::Function(18),
+        );
         // Type 21: (i64, i64, i64, i64, i64) -> (i64) — async_function_start
         types.ty().function(
-            vec![ValType::I64, ValType::I64, ValType::I64, ValType::I64, ValType::I64],
+            vec![
+                ValType::I64,
+                ValType::I64,
+                ValType::I64,
+                ValType::I64,
+                ValType::I64,
+            ],
             vec![ValType::I64],
         );
         // Type 22: (i64, i64, i64, i64, i64) -> () — async_function_resume
         types.ty().function(
-            vec![ValType::I64, ValType::I64, ValType::I64, ValType::I64, ValType::I64],
+            vec![
+                ValType::I64,
+                ValType::I64,
+                ValType::I64,
+                ValType::I64,
+                ValType::I64,
+            ],
             vec![],
         );
         // Type 23: (i64, i64, i32) -> () — async_function_suspend
-        types.ty().function(
-            vec![ValType::I64, ValType::I64, ValType::I32],
-            vec![],
-        );
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I64, ValType::I32], vec![]);
         // Type 24: (i64, i64, i64) -> (i64) — continuation_create
         types.ty().function(
             vec![ValType::I64, ValType::I64, ValType::I64],
             vec![ValType::I64],
         );
         // Type 25: (i64, i64, i64) -> () — continuation_save_var
-        types.ty().function(
-            vec![ValType::I64, ValType::I64, ValType::I64],
-            vec![],
-        );
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I64, ValType::I64], vec![]);
         // Import index 78: func_call — Type 12 (uses shadow stack for args)
         imports.import("env", "func_call", EntityType::Function(12));
         // Import index 79: func_apply — Type 16 (i64 func, i64 this, i64 argsArray) -> i64
@@ -1215,7 +1231,9 @@ impl Compiler {
             self.emit(WasmInstruction::I32Const(64));
             self.emit(WasmInstruction::Call(self.obj_new_func_idx));
             self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
-            self.emit(WasmInstruction::GlobalSet(self.array_proto_handle_global_idx));
+            self.emit(WasmInstruction::GlobalSet(
+                self.array_proto_handle_global_idx,
+            ));
             // 为每个原型方法在 Array.prototype 上设置属性
             let method_names: [(u32, &str); 27] = [
                 (0, "push"),
@@ -1259,7 +1277,9 @@ impl Compiler {
                 // 推入 name_id (i32)
                 self.emit(WasmInstruction::I32Const(name_id as i32));
                 // 推入编码后的函数表索引 (i64)
-                self.emit(WasmInstruction::I64Const(value::encode_function_idx(table_idx)));
+                self.emit(WasmInstruction::I64Const(value::encode_function_idx(
+                    table_idx,
+                )));
                 // 调用 $obj_set(proto, name_id, func_value)
                 self.emit(WasmInstruction::Call(self.obj_set_func_idx));
             }
@@ -1268,8 +1288,9 @@ impl Compiler {
             // 创建空对象（容量 64），存储 handle 到 Global 10
             self.emit(WasmInstruction::I32Const(64));
             self.emit(WasmInstruction::Call(self.obj_new_func_idx));
-            self.emit(WasmInstruction::GlobalSet(self.object_proto_handle_global_idx));
-
+            self.emit(WasmInstruction::GlobalSet(
+                self.object_proto_handle_global_idx,
+            ));
         }
 
         let cfg = Cfg::from_function(function);
@@ -1484,13 +1505,13 @@ impl Compiler {
             let mut func = Function::new(vec![(3, ValType::I32)]);
             let gc_collect_idx = self.gc_collect_func_idx;
 
-			// size = 16 + capacity * 32 (4 proto + 1 type + 3 pad + 4 capacity + 4 num_props + cap*32)
-			func.instruction(&WasmInstruction::LocalGet(0));
-			func.instruction(&WasmInstruction::I32Const(32));
-			func.instruction(&WasmInstruction::I32Mul);
-			func.instruction(&WasmInstruction::I32Const(16));
-			func.instruction(&WasmInstruction::I32Add);
-			func.instruction(&WasmInstruction::LocalSet(1));
+            // size = 16 + capacity * 32 (4 proto + 1 type + 3 pad + 4 capacity + 4 num_props + cap*32)
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32Const(32));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalSet(1));
 
             // ── GC 检查 ──
             // 检查: heap_ptr + size > memory.size * 65536
@@ -1558,52 +1579,52 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
-			func.instruction(&WasmInstruction::LocalGet(2));
-			// Write type byte HEAP_TYPE_OBJECT (0x00)
-			func.instruction(&WasmInstruction::I32Const(0));
-			func.instruction(&WasmInstruction::I32Store8(MemArg {
-				offset: 4,
-				align: 0,
-				memory_index: 0,
-			}));
-			// Zero pad bytes at offset 5-7
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I32Const(0));
-			func.instruction(&WasmInstruction::I32Store8(MemArg {
-				offset: 5,
-				align: 0,
-				memory_index: 0,
-			}));
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I32Const(0));
-			func.instruction(&WasmInstruction::I32Store8(MemArg {
-				offset: 6,
-				align: 0,
-				memory_index: 0,
-			}));
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I32Const(0));
-			func.instruction(&WasmInstruction::I32Store8(MemArg {
-				offset: 7,
-				align: 0,
-				memory_index: 0,
-			}));
-			// capacity at offset 8
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::LocalGet(0));
-			func.instruction(&WasmInstruction::I32Store(MemArg {
-				offset: 8,
-				align: 2,
-				memory_index: 0,
-			}));
-			// num_props = 0 at offset 12
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I32Const(0));
-			func.instruction(&WasmInstruction::I32Store(MemArg {
-				offset: 12,
-				align: 2,
-				memory_index: 0,
-			}));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            // Write type byte HEAP_TYPE_OBJECT (0x00)
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Store8(MemArg {
+                offset: 4,
+                align: 0,
+                memory_index: 0,
+            }));
+            // Zero pad bytes at offset 5-7
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Store8(MemArg {
+                offset: 5,
+                align: 0,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Store8(MemArg {
+                offset: 6,
+                align: 0,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Store8(MemArg {
+                offset: 7,
+                align: 0,
+                memory_index: 0,
+            }));
+            // capacity at offset 8
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32Store(MemArg {
+                offset: 8,
+                align: 2,
+                memory_index: 0,
+            }));
+            // num_props = 0 at offset 12
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Store(MemArg {
+                offset: 12,
+                align: 2,
+                memory_index: 0,
+            }));
             // handle_idx = obj_table_count
             func.instruction(&WasmInstruction::GlobalGet(obj_table_count_global));
             func.instruction(&WasmInstruction::LocalTee(3));
@@ -1667,29 +1688,29 @@ impl Compiler {
             // ── 原型链遍历 ──
             func.instruction(&WasmInstruction::Block(BlockType::Empty));
             func.instruction(&WasmInstruction::Loop(BlockType::Empty));
-			// 读 type byte (offset 4) → 数组没有 own property slots
-			func.instruction(&WasmInstruction::LocalGet(5));
-			func.instruction(&WasmInstruction::I32Load8U(MemArg {
-				offset: 4,
-				align: 0,
-				memory_index: 0,
-			}));
-			func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
-			func.instruction(&WasmInstruction::I32Eq);
-			func.instruction(&WasmInstruction::If(BlockType::Empty));
-			// 数组 → num_props = 0 (跳过属性搜索)
-			func.instruction(&WasmInstruction::I32Const(0));
-			func.instruction(&WasmInstruction::LocalSet(2));
-			func.instruction(&WasmInstruction::Else);
-			// 普通对象 → 读取 num_props (offset 12)
-			func.instruction(&WasmInstruction::LocalGet(5));
-			func.instruction(&WasmInstruction::I32Load(MemArg {
-				offset: 12,
-				align: 2,
-				memory_index: 0,
-			}));
-			func.instruction(&WasmInstruction::LocalSet(2));
-			func.instruction(&WasmInstruction::End);
+            // 读 type byte (offset 4) → 数组没有 own property slots
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Load8U(MemArg {
+                offset: 4,
+                align: 0,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // 数组 → num_props = 0 (跳过属性搜索)
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::LocalSet(2));
+            func.instruction(&WasmInstruction::Else);
+            // 普通对象 → 读取 num_props (offset 12)
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 12,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(2));
+            func.instruction(&WasmInstruction::End);
 
             func.instruction(&WasmInstruction::I32Const(0));
             func.instruction(&WasmInstruction::LocalSet(3));
@@ -1700,9 +1721,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32GeU);
             func.instruction(&WasmInstruction::BrIf(1));
             // slot_addr = ptr + 12 + i * 32
-			func.instruction(&WasmInstruction::LocalGet(5));
-			func.instruction(&WasmInstruction::I32Const(16));
-			func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
@@ -1847,7 +1868,7 @@ impl Compiler {
             // ── 搜索已有属性 ──
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Load(MemArg {
-			offset: 12,
+                offset: 12,
                 align: 2,
                 memory_index: 0,
             }));
@@ -1861,9 +1882,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32GeU);
             func.instruction(&WasmInstruction::BrIf(1));
             // slot_addr = ptr + 12 + i * 32
-			func.instruction(&WasmInstruction::LocalGet(8));
-			func.instruction(&WasmInstruction::I32Const(16));
-			func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(8));
+            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
@@ -1964,7 +1985,7 @@ impl Compiler {
             // ── 未找到 → 检查是否需要扩容 ──
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Load(MemArg {
-			offset: 8,
+                offset: 8,
                 align: 2,
                 memory_index: 0,
             }));
@@ -1995,7 +2016,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(7));
             func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
-			func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(16));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::GlobalSet(heap_global));
@@ -2010,7 +2031,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
-			func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(16));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::I32GeU);
             func.instruction(&WasmInstruction::BrIf(1)); // break
@@ -2057,7 +2078,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::LocalGet(7));
             func.instruction(&WasmInstruction::I32Store(MemArg {
-			offset: 8,
+                offset: 8,
                 align: 2,
                 memory_index: 0,
             }));
@@ -2066,7 +2087,7 @@ impl Compiler {
 
             // 添加新属性（无论是否扩容）
             func.instruction(&WasmInstruction::LocalGet(8));
-			func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Const(16));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(4));
             func.instruction(&WasmInstruction::I32Const(32));
@@ -2119,7 +2140,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::I32Store(MemArg {
-			offset: 12,
+                offset: 12,
                 align: 2,
                 memory_index: 0,
             }));
@@ -2161,7 +2182,7 @@ impl Compiler {
             // 搜索属性
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Load(MemArg {
-			offset: 12,
+                offset: 12,
                 align: 2,
                 memory_index: 0,
             }));
@@ -2176,9 +2197,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::BrIf(1));
 
             // slot_addr = ptr + 12 + i * 32
-			func.instruction(&WasmInstruction::LocalGet(5));
-			func.instruction(&WasmInstruction::I32Const(16));
-			func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
@@ -2215,7 +2236,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalTee(2));
             func.instruction(&WasmInstruction::LocalGet(5));
             func.instruction(&WasmInstruction::I32Store(MemArg {
-			offset: 12,
+                offset: 12,
                 align: 2,
                 memory_index: 0,
             }));
@@ -2227,9 +2248,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::If(BlockType::Empty));
 
             // last_slot_addr = ptr + 12 + num_props * 32
-			func.instruction(&WasmInstruction::LocalGet(5));
-			func.instruction(&WasmInstruction::I32Const(16));
-			func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
@@ -2425,7 +2446,6 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
         }
-
     }
 
     fn compile_array_helpers(&mut self) {
@@ -2443,13 +2463,13 @@ impl Compiler {
             let mut func = Function::new(locals);
             let gc_collect_idx = self.gc_collect_func_idx;
 
-			// size = 16 + capacity * 8 (4 proto + 1 type + 3 pad + 4 length + 4 capacity + cap*8)
-			func.instruction(&WasmInstruction::LocalGet(0));
-			func.instruction(&WasmInstruction::I32Const(8));
-			func.instruction(&WasmInstruction::I32Mul);
-			func.instruction(&WasmInstruction::I32Const(16));
-			func.instruction(&WasmInstruction::I32Add);
-			func.instruction(&WasmInstruction::LocalSet(1));
+            // size = 16 + capacity * 8 (4 proto + 1 type + 3 pad + 4 length + 4 capacity + cap*8)
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32Const(8));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalSet(1));
 
             // ── GC 检查 ──
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
@@ -2498,29 +2518,57 @@ impl Compiler {
             // proto = array_proto_handle from global (or -1 if not set)
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::GlobalGet(array_proto_global));
-            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
-			// Write type byte HEAP_TYPE_ARRAY (0x01) at offset 4
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I32Const(1));
-			func.instruction(&WasmInstruction::I32Store8(MemArg { offset: 4, align: 0, memory_index: 0 }));
-			// Zero pad at offsets 5-7
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I32Const(0));
-			func.instruction(&WasmInstruction::I32Store8(MemArg { offset: 5, align: 0, memory_index: 0 }));
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I32Const(0));
-			func.instruction(&WasmInstruction::I32Store8(MemArg { offset: 6, align: 0, memory_index: 0 }));
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I32Const(0));
-			func.instruction(&WasmInstruction::I32Store8(MemArg { offset: 7, align: 0, memory_index: 0 }));
-			// length = 0 at offset 8
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I32Const(0));
-			func.instruction(&WasmInstruction::I32Store(MemArg { offset: 8, align: 2, memory_index: 0 }));
-			// capacity = capacity (param 0) at offset 12
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::LocalGet(0));
-			func.instruction(&WasmInstruction::I32Store(MemArg { offset: 12, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            // Write type byte HEAP_TYPE_ARRAY (0x01) at offset 4
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32Store8(MemArg {
+                offset: 4,
+                align: 0,
+                memory_index: 0,
+            }));
+            // Zero pad at offsets 5-7
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Store8(MemArg {
+                offset: 5,
+                align: 0,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Store8(MemArg {
+                offset: 6,
+                align: 0,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Store8(MemArg {
+                offset: 7,
+                align: 0,
+                memory_index: 0,
+            }));
+            // length = 0 at offset 8
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Store(MemArg {
+                offset: 8,
+                align: 2,
+                memory_index: 0,
+            }));
+            // capacity = capacity (param 0) at offset 12
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32Store(MemArg {
+                offset: 12,
+                align: 2,
+                memory_index: 0,
+            }));
 
             // handle_idx = obj_table_count
             func.instruction(&WasmInstruction::GlobalGet(obj_table_count_global));
@@ -2531,7 +2579,11 @@ impl Compiler {
             func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I32Store(MemArg { offset: 0, align: 2, memory_index: 0 }));
+            func.instruction(&WasmInstruction::I32Store(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
             // obj_table_count++
             func.instruction(&WasmInstruction::GlobalGet(obj_table_count_global));
             func.instruction(&WasmInstruction::I32Const(1));
@@ -2545,145 +2597,170 @@ impl Compiler {
 
         // ── $elem_get (param $boxed i64) (param $index i32) (result i64) — Type 8 ──
         {
-			// local 0 = $boxed (i64), local 1 = $index (i32)
-			// local 2 = ptr (i32)
-			let mut func = Function::new(vec![(2, ValType::I32)]);
+            // local 0 = $boxed (i64), local 1 = $index (i32)
+            // local 2 = ptr (i32)
+            let mut func = Function::new(vec![(2, ValType::I32)]);
 
-			// 检查是否为 TAG_ARRAY
-			// ((boxed >> 32) & 0xF) == TAG_ARRAY
-			func.instruction(&WasmInstruction::LocalGet(0));
-			func.instruction(&WasmInstruction::I64Const(32));
-			func.instruction(&WasmInstruction::I64ShrU);
-			func.instruction(&WasmInstruction::I64Const(0xF));
-			func.instruction(&WasmInstruction::I64And);
-			func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
-			func.instruction(&WasmInstruction::I64Eq);
-			func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
+            // 检查是否为 TAG_ARRAY
+            // ((boxed >> 32) & 0xF) == TAG_ARRAY
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I64Const(0xF));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
 
-			// ── Array path ──
-			// 解析 handle → ptr
-			func.instruction(&WasmInstruction::LocalGet(0));
-			func.instruction(&WasmInstruction::I32WrapI64);
-			func.instruction(&WasmInstruction::I32Const(4));
-			func.instruction(&WasmInstruction::I32Mul);
-			func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
-			func.instruction(&WasmInstruction::I32Add);
-			func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
-			func.instruction(&WasmInstruction::LocalTee(2));
+            // ── Array path ──
+            // 解析 handle → ptr
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalTee(2));
 
-			// ptr == 0 → return undefined
-			func.instruction(&WasmInstruction::I32Eqz);
-			func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
-			func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-			func.instruction(&WasmInstruction::Else);
+            // ptr == 0 → return undefined
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::Else);
 
-			// 读取 length (offset 8)
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I32Load(MemArg { offset: 8, align: 2, memory_index: 0 }));
-			func.instruction(&WasmInstruction::LocalSet(3)); // save length, consume stack
-			func.instruction(&WasmInstruction::LocalGet(1)); // index
-			func.instruction(&WasmInstruction::LocalGet(3)); // length
-			func.instruction(&WasmInstruction::I32LtU); // index < length
-			func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
-			// 读取 elements[ index ] at ptr + 16 + index * 8
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I32Const(16));
-			func.instruction(&WasmInstruction::I32Add);
-			func.instruction(&WasmInstruction::LocalGet(1));
-			func.instruction(&WasmInstruction::I32Const(8));
-			func.instruction(&WasmInstruction::I32Mul);
-			func.instruction(&WasmInstruction::I32Add);
-			func.instruction(&WasmInstruction::I64Load(MemArg { offset: 0, align: 3, memory_index: 0 }));
-			func.instruction(&WasmInstruction::Else);
-			func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
-			func.instruction(&WasmInstruction::End);
-			func.instruction(&WasmInstruction::End);
+            // 读取 length (offset 8)
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 8,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(3)); // save length, consume stack
+            func.instruction(&WasmInstruction::LocalGet(1)); // index
+            func.instruction(&WasmInstruction::LocalGet(3)); // length
+            func.instruction(&WasmInstruction::I32LtU); // index < length
+            func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
+            // 读取 elements[ index ] at ptr + 16 + index * 8
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Const(8));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I64Load(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::Else);
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::End);
 
-			func.instruction(&WasmInstruction::Else);
-			// 不是 TAG_ARRAY → 委托给 $obj_get 进行属性访问
-			func.instruction(&WasmInstruction::LocalGet(0));
-			func.instruction(&WasmInstruction::LocalGet(1));
-			func.instruction(&WasmInstruction::Call(self.obj_get_func_idx));
-			func.instruction(&WasmInstruction::End);
-			func.instruction(&WasmInstruction::End);
-			self.codes.function(&func);
-		}
+            func.instruction(&WasmInstruction::Else);
+            // 不是 TAG_ARRAY → 委托给 $obj_get 进行属性访问
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Call(self.obj_get_func_idx));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::End);
+            self.codes.function(&func);
+        }
 
         // ── $elem_set (param $boxed i64) (param $index i32) (param $value i64) — Type 9 ──
         // 简化实现：不处理扩容（假设容量充足）
         {
-			// local 0 = $boxed (i64), local 1 = $index (i32), local 2 = $value (i64)
-			// local 3 = ptr (i32), local 4 = length (i32)
-			let mut func = Function::new(vec![
-				(2, ValType::I32),
-			]);
+            // local 0 = $boxed (i64), local 1 = $index (i32), local 2 = $value (i64)
+            // local 3 = ptr (i32), local 4 = length (i32)
+            let mut func = Function::new(vec![(2, ValType::I32)]);
 
-			// 检查 TAG_ARRAY
-			func.instruction(&WasmInstruction::LocalGet(0));
-			func.instruction(&WasmInstruction::I64Const(32));
-			func.instruction(&WasmInstruction::I64ShrU);
-			func.instruction(&WasmInstruction::I64Const(0xF));
-			func.instruction(&WasmInstruction::I64And);
-			func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
-			func.instruction(&WasmInstruction::I64Eq);
-			func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // 检查 TAG_ARRAY
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I64Const(0xF));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
 
-			// ── Array path ──
-			// 解析 handle → ptr
-			func.instruction(&WasmInstruction::LocalGet(0));
-			func.instruction(&WasmInstruction::I32WrapI64);
-			func.instruction(&WasmInstruction::I32Const(4));
-			func.instruction(&WasmInstruction::I32Mul);
-			func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
-			func.instruction(&WasmInstruction::I32Add);
-			func.instruction(&WasmInstruction::I32Load(MemArg { offset: 0, align: 2, memory_index: 0 }));
-			func.instruction(&WasmInstruction::LocalTee(3));
+            // ── Array path ──
+            // 解析 handle → ptr
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalTee(3));
 
-			// ptr == 0 → no-op
-			func.instruction(&WasmInstruction::I32Eqz);
-			func.instruction(&WasmInstruction::If(BlockType::Empty));
-			func.instruction(&WasmInstruction::Return);
-			func.instruction(&WasmInstruction::End);
+            // ptr == 0 → no-op
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
 
-			// 读取 length (offset 8)
-			func.instruction(&WasmInstruction::LocalGet(3));
-			func.instruction(&WasmInstruction::I32Load(MemArg { offset: 8, align: 2, memory_index: 0 }));
-			func.instruction(&WasmInstruction::LocalSet(4));
+            // 读取 length (offset 8)
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 8,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(4));
 
-			// 写入 elements[index] = value at ptr + 16 + index * 8
-			func.instruction(&WasmInstruction::LocalGet(3));
-			func.instruction(&WasmInstruction::I32Const(16));
-			func.instruction(&WasmInstruction::I32Add);
-			func.instruction(&WasmInstruction::LocalGet(1));
-			func.instruction(&WasmInstruction::I32Const(8));
-			func.instruction(&WasmInstruction::I32Mul);
-			func.instruction(&WasmInstruction::I32Add);
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
+            // 写入 elements[index] = value at ptr + 16 + index * 8
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Const(8));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
 
-			// 更新 length 如果 index >= length
-			func.instruction(&WasmInstruction::LocalGet(1));
-			func.instruction(&WasmInstruction::LocalGet(4));
-			func.instruction(&WasmInstruction::I32GeU);
-			func.instruction(&WasmInstruction::If(BlockType::Empty));
-			func.instruction(&WasmInstruction::LocalGet(3));
-			func.instruction(&WasmInstruction::LocalGet(1));
-			func.instruction(&WasmInstruction::I32Const(1));
-			func.instruction(&WasmInstruction::I32Add);
-			func.instruction(&WasmInstruction::I32Store(MemArg { offset: 8, align: 2, memory_index: 0 }));
-			func.instruction(&WasmInstruction::End);
+            // 更新 length 如果 index >= length
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::LocalGet(4));
+            func.instruction(&WasmInstruction::I32GeU);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Store(MemArg {
+                offset: 8,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::End);
 
-			func.instruction(&WasmInstruction::Else);
-			// 不是 TAG_ARRAY → 委托给 $obj_set 进行属性设置
-			func.instruction(&WasmInstruction::LocalGet(0));
-			func.instruction(&WasmInstruction::LocalGet(1));
-			func.instruction(&WasmInstruction::LocalGet(2));
-			func.instruction(&WasmInstruction::Call(self.obj_set_func_idx));
-			func.instruction(&WasmInstruction::End);
-			func.instruction(&WasmInstruction::End);
-			self.codes.function(&func);
-	}
-	
+            func.instruction(&WasmInstruction::Else);
+            // 不是 TAG_ARRAY → 委托给 $obj_set 进行属性设置
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::Call(self.obj_set_func_idx));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::End);
+            self.codes.function(&func);
+        }
 
         // ── $get_prototype_from_constructor (param $ctor i64) (result i64) — Type 3 ──
         // GetPrototypeFromConstructor(F): 读取 F.prototype，若非 Object 类型则回退到 Object.prototype
@@ -2763,7 +2840,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
 
             // 回退：返回 Object.prototype (Global 10)
-            func.instruction(&WasmInstruction::GlobalGet(self.object_proto_handle_global_idx));
+            func.instruction(&WasmInstruction::GlobalGet(
+                self.object_proto_handle_global_idx,
+            ));
             func.instruction(&WasmInstruction::I64ExtendI32U);
             let box_base = value::BOX_BASE as i64;
             let tag_object = (value::TAG_OBJECT << 32) as i64;
@@ -2773,7 +2852,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
         }
-	}
+    }
 
     fn compile_region_tree(
         &mut self,
@@ -3576,7 +3655,11 @@ impl Compiler {
 
     // ── Instruction compilation ─────────────────────────────────────────────
 
-    fn compile_instruction(&mut self, module: &IrModule, instruction: &Instruction) -> Result<bool> {
+    fn compile_instruction(
+        &mut self,
+        module: &IrModule,
+        instruction: &Instruction,
+    ) -> Result<bool> {
         match instruction {
             Instruction::Const { dest, constant } => {
                 let constant = module
@@ -3853,7 +3936,9 @@ impl Compiler {
                 dest,
                 builtin,
                 args,
-            } => self.compile_builtin_call(*dest, builtin, args).map(|_| false),
+            } => self
+                .compile_builtin_call(*dest, builtin, args)
+                .map(|_| false),
             Instruction::LoadVar { dest, name } => {
                 let local_idx = self
                     .var_locals
@@ -4088,47 +4173,53 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(false)
             }
-			Instruction::GetElem { dest, object, index } => {
-				// Call $to_int32(index) first (index is an f64), then $elem_get
-				self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
-				self.emit(WasmInstruction::LocalGet(self.local_idx(index.0)));
-				self.emit(WasmInstruction::Call(self.to_int32_func_idx));
-				self.emit(WasmInstruction::Call(self.elem_get_func_idx));
-				self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-				Ok(false)
-			}
-			Instruction::SetElem { object, index, value } => {
-				// Call $to_int32(index) first, then $elem_set
-				self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
-				self.emit(WasmInstruction::LocalGet(self.local_idx(index.0)));
-				self.emit(WasmInstruction::Call(self.to_int32_func_idx));
-				self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
-				self.emit(WasmInstruction::Call(self.elem_set_func_idx));
-				Ok(false)
-			}
-			Instruction::StringConcatVa { dest, parts } => {
-				self.compile_string_concat_va(dest, parts).map(|_| false)
-			}
-			Instruction::OptionalGetProp { dest, object, key } => {
-				self.compile_optional_get(dest, object, true, Some(key), false).map(|_| false)
-			}
-			Instruction::OptionalGetElem { dest, object, key } => {
-				self.compile_optional_get(dest, object, false, Some(key), false).map(|_| false)
-			}
-			Instruction::OptionalCall {
-				dest,
-				callee,
-				this_val,
-				args,
-			} => {
-				self.compile_optional_call(dest, callee, this_val, args).map(|_| false)
-			}
-			Instruction::ObjectSpread { dest, source } => {
-				self.compile_object_spread(dest, source).map(|_| false)
-			}
-			Instruction::GetSuperBase { dest } => {
-                self.compile_get_super_base(dest).map(|_| false)
+            Instruction::GetElem {
+                dest,
+                object,
+                index,
+            } => {
+                // Call $to_int32(index) first (index is an f64), then $elem_get
+                self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(index.0)));
+                self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+                self.emit(WasmInstruction::Call(self.elem_get_func_idx));
+                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                Ok(false)
             }
+            Instruction::SetElem {
+                object,
+                index,
+                value,
+            } => {
+                // Call $to_int32(index) first, then $elem_set
+                self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(index.0)));
+                self.emit(WasmInstruction::Call(self.to_int32_func_idx));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                self.emit(WasmInstruction::Call(self.elem_set_func_idx));
+                Ok(false)
+            }
+            Instruction::StringConcatVa { dest, parts } => {
+                self.compile_string_concat_va(dest, parts).map(|_| false)
+            }
+            Instruction::OptionalGetProp { dest, object, key } => self
+                .compile_optional_get(dest, object, true, Some(key), false)
+                .map(|_| false),
+            Instruction::OptionalGetElem { dest, object, key } => self
+                .compile_optional_get(dest, object, false, Some(key), false)
+                .map(|_| false),
+            Instruction::OptionalCall {
+                dest,
+                callee,
+                this_val,
+                args,
+            } => self
+                .compile_optional_call(dest, callee, this_val, args)
+                .map(|_| false),
+            Instruction::ObjectSpread { dest, source } => {
+                self.compile_object_spread(dest, source).map(|_| false)
+            }
+            Instruction::GetSuperBase { dest } => self.compile_get_super_base(dest).map(|_| false),
             Instruction::NewPromise { dest } => {
                 let func_idx = self.builtin_func_indices[&Builtin::PromiseCreate];
                 self.emit(WasmInstruction::I64Const(0));
@@ -4252,18 +4343,20 @@ impl Compiler {
         builtin: &Builtin,
         args: &[ValueId],
     ) -> Result<()> {
-        let import_idx = self.builtin_func_indices.get(builtin).copied().with_context(|| {
-            format!("no WASM func index for builtin {builtin}")
-        })?;
+        let import_idx = self
+            .builtin_func_indices
+            .get(builtin)
+            .copied()
+            .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
         // 确定 this_val 和影子栈参数
         // ArrayIsArray: this_val=undefined, 所有 args 走影子栈
         // 其他方法: this_val=args[0], args[1..] 走影子栈
         let (this_val_idx, shadow_args) = if matches!(builtin, Builtin::ArrayIsArray) {
             (None, args)
         } else {
-            let this = args.first().with_context(|| {
-                format!("{builtin} expects at least 1 argument (this_val)")
-            })?;
+            let this = args
+                .first()
+                .with_context(|| format!("{builtin} expects at least 1 argument (this_val)"))?;
             (Some(this.0), &args[1..])
         };
         // 保存 shadow_sp 基址
@@ -4502,7 +4595,7 @@ impl Compiler {
         // 简化：通过 env 的 "home" 属性获取基类原型
         // env_obj 在 WASM local 0
         // 读取 home_obj = $obj_get(env, "home")
-        // 然后 home_obj.__proto__ 
+        // 然后 home_obj.__proto__
         // 如果 env 不是对象或没有 home 属性，返回 undefined
         self.emit(WasmInstruction::LocalGet(0)); // env_obj
         self.emit(WasmInstruction::I64Const(32));
@@ -4845,9 +4938,12 @@ impl Compiler {
                 Ok(())
             }
             // ── Array method builtins ─────────────────────────────────────
-            Builtin::ArrayPush | Builtin::ArrayPop
-            | Builtin::ArrayIncludes | Builtin::ArrayJoin
-            | Builtin::ArrayConcat | Builtin::ArrayReverse
+            Builtin::ArrayPush
+            | Builtin::ArrayPop
+            | Builtin::ArrayIncludes
+            | Builtin::ArrayJoin
+            | Builtin::ArrayConcat
+            | Builtin::ArrayReverse
             | Builtin::ArrayInitLength
             | Builtin::ArrayGetLength => {
                 // Single arg: (i64) -> i64 or Two arg: (i64, i64) -> i64
@@ -4855,9 +4951,11 @@ impl Compiler {
                 for arg in args {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 }
-                let func_idx = self.builtin_func_indices.get(builtin).copied().with_context(|| {
-                    format!("no WASM func index for builtin {builtin}")
-                })?;
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
@@ -4869,9 +4967,11 @@ impl Compiler {
                 for arg in args {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 }
-                let func_idx = self.builtin_func_indices.get(builtin).copied().with_context(|| {
-                    format!("no WASM func index for builtin {builtin}")
-                })?;
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
@@ -4879,24 +4979,29 @@ impl Compiler {
                 Ok(())
             }
             // ── Array prototype method calls (Type 12 imports) ─────────────
-            Builtin::ArrayShift | Builtin::ArraySort
-            | Builtin::ArrayAt | Builtin::ArrayCopyWithin
-            | Builtin::ArrayForEach | Builtin::ArrayMap | Builtin::ArrayFilter
-            | Builtin::ArrayReduce | Builtin::ArrayReduceRight
-            | Builtin::ArrayFind | Builtin::ArrayFindIndex
-            | Builtin::ArraySome | Builtin::ArrayEvery | Builtin::ArrayFlatMap
+            Builtin::ArrayShift
+            | Builtin::ArraySort
+            | Builtin::ArrayAt
+            | Builtin::ArrayCopyWithin
+            | Builtin::ArrayForEach
+            | Builtin::ArrayMap
+            | Builtin::ArrayFilter
+            | Builtin::ArrayReduce
+            | Builtin::ArrayReduceRight
+            | Builtin::ArrayFind
+            | Builtin::ArrayFindIndex
+            | Builtin::ArraySome
+            | Builtin::ArrayEvery
+            | Builtin::ArrayFlatMap
             | Builtin::ArrayFlat
-            | Builtin::ArraySpliceVa | Builtin::ArrayConcatVa | Builtin::ArrayUnshiftVa => {
-                self.compile_proto_method_call(dest, builtin, args)
-            }
-            Builtin::ArrayIsArray => {
-                self.compile_proto_method_call(dest, builtin, args)
-            }
+            | Builtin::ArraySpliceVa
+            | Builtin::ArrayConcatVa
+            | Builtin::ArrayUnshiftVa => self.compile_proto_method_call(dest, builtin, args),
+            Builtin::ArrayIsArray => self.compile_proto_method_call(dest, builtin, args),
             Builtin::AbortShadowStackOverflow => {
                 bail!("AbortShadowStackOverflow should not appear in compile_builtin_call");
             }
-            Builtin::FuncCall
-            | Builtin::FuncBind => {
+            Builtin::FuncCall | Builtin::FuncBind => {
                 // These use shadow stack: compile like array proto methods
                 self.compile_proto_method_call(dest, builtin, args)
             }
@@ -4909,8 +5014,7 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Builtin::ObjectRest
-            | Builtin::FuncApply => {
+            Builtin::ObjectRest | Builtin::FuncApply => {
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 for arg in args.iter() {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
@@ -4923,12 +5027,20 @@ impl Compiler {
             }
             // ── Object builtin methods ─────────────────────────────────
             Builtin::HasOwnProperty => {
-                let obj_arg = args.first().context("HasOwnProperty expects 2 args (obj, key)")?;
-                let key_arg = args.get(1).context("HasOwnProperty expects 2 args (obj, key)")?;
+                let obj_arg = args
+                    .first()
+                    .context("HasOwnProperty expects 2 args (obj, key)")?;
+                let key_arg = args
+                    .get(1)
+                    .context("HasOwnProperty expects 2 args (obj, key)")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
                 self.emit(WasmInstruction::I32WrapI64);
-                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(83);
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(83);
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
@@ -4944,24 +5056,27 @@ impl Compiler {
             | Builtin::ObjectProtoValueOf => {
                 let val = args.first().context("Object method expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied().with_context(|| {
-                    format!("no WASM func index for builtin {builtin}")
-                })?;
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
                 Ok(())
             }
-            Builtin::ObjectSetPrototypeOf
-            | Builtin::ObjectIs => {
+            Builtin::ObjectSetPrototypeOf | Builtin::ObjectIs => {
                 let a = args.first().context("Object method expects 2 args")?;
                 let b = args.get(1).context("Object method expects 2 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied().with_context(|| {
-                    format!("no WASM func index for builtin {builtin}")
-                })?;
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
@@ -4977,9 +5092,11 @@ impl Compiler {
                 } else {
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
-                let func_idx = self.builtin_func_indices.get(builtin).copied().with_context(|| {
-                    format!("no WASM func index for builtin {builtin}")
-                })?;
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
@@ -5015,7 +5132,11 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(target.0)));
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
                 self.emit(WasmInstruction::I32Const(shadow_args.len() as i32));
-                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(87);
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(87);
                 self.emit(WasmInstruction::Call(func_idx));
                 // 恢复 shadow_sp
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
@@ -5030,14 +5151,22 @@ impl Compiler {
                 // Handled in compile_instruction (Const)
                 bail!("BigIntFromLiteral should not reach compile_builtin_call");
             }
-            Builtin::BigIntAdd | Builtin::BigIntSub | Builtin::BigIntMul
-            | Builtin::BigIntDiv | Builtin::BigIntMod | Builtin::BigIntPow
-            | Builtin::BigIntEq | Builtin::BigIntCmp => {
+            Builtin::BigIntAdd
+            | Builtin::BigIntSub
+            | Builtin::BigIntMul
+            | Builtin::BigIntDiv
+            | Builtin::BigIntMod
+            | Builtin::BigIntPow
+            | Builtin::BigIntEq
+            | Builtin::BigIntCmp => {
                 let a = args.first().context("BigInt binary op expects 2 args")?;
                 let b = args.get(1).context("BigInt binary op expects 2 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5048,7 +5177,10 @@ impl Compiler {
             Builtin::BigIntNeg => {
                 let a = args.first().context("BigIntNeg expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5064,7 +5196,10 @@ impl Compiler {
                 } else {
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5075,7 +5210,10 @@ impl Compiler {
             Builtin::SymbolFor | Builtin::SymbolKeyFor => {
                 let arg = args.first().context("Symbol for/keyFor expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5088,7 +5226,10 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 self.emit(WasmInstruction::F64ReinterpretI64);
                 self.emit(WasmInstruction::I32TruncF64S);
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5108,7 +5249,10 @@ impl Compiler {
                     // 缺失参数默认为 undefined
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5123,7 +5267,9 @@ impl Compiler {
             // ── String prototype builtins (2-arg) ──
             Builtin::StringMatch | Builtin::StringSearch => {
                 // str.match(regexp) / str.search(regexp) - regexp 参数可选（默认 undefined）
-                let str_arg = args.first().context("String match/search expects receiver")?;
+                let str_arg = args
+                    .first()
+                    .context("String match/search expects receiver")?;
                 let regexp = args.get(1);
                 self.emit(WasmInstruction::LocalGet(self.local_idx(str_arg.0)));
                 if let Some(re) = regexp {
@@ -5132,7 +5278,10 @@ impl Compiler {
                     // 缺失参数默认为 undefined
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5143,11 +5292,15 @@ impl Compiler {
             // ── String prototype builtins (3-arg) ──
             Builtin::StringReplace | Builtin::StringSplit => {
                 // str.replace(search, replace) / str.split(sep, limit) - 3 args
-                let str_arg = args.first().context("String replace/split expects at least 2 arguments")?;
-                let second = args.get(1).context("String replace/split expects at least 2 arguments")?;
+                let str_arg = args
+                    .first()
+                    .context("String replace/split expects at least 2 arguments")?;
+                let second = args
+                    .get(1)
+                    .context("String replace/split expects at least 2 arguments")?;
                 // For StringSplit, limit is optional; for StringReplace, both are required
                 let third = args.get(2);
-                
+
                 self.emit(WasmInstruction::LocalGet(self.local_idx(str_arg.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(second.0)));
                 if let Some(third_arg) = third {
@@ -5156,7 +5309,10 @@ impl Compiler {
                     // Push undefined as default for missing optional argument
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5166,7 +5322,10 @@ impl Compiler {
             }
             // ── Promise builtins ──
             Builtin::PromiseCreate => {
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::I64Const(0));
                 self.emit(WasmInstruction::Call(func_idx));
@@ -5176,11 +5335,18 @@ impl Compiler {
                 Ok(())
             }
             Builtin::PromiseInstanceResolve | Builtin::PromiseInstanceReject => {
-                let promise = args.first().context("promise instance resolve/reject expects 2 args")?;
-                let val = args.get(1).context("promise instance resolve/reject expects 2 args")?;
+                let promise = args
+                    .first()
+                    .context("promise instance resolve/reject expects 2 args")?;
+                let val = args
+                    .get(1)
+                    .context("promise instance resolve/reject expects 2 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5196,7 +5362,10 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(on_fulfilled.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(on_rejected.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5205,11 +5374,18 @@ impl Compiler {
                 Ok(())
             }
             Builtin::PromiseCatch | Builtin::PromiseFinally => {
-                let promise = args.first().context("promise catch/finally expects 2 args")?;
-                let callback = args.get(1).context("promise catch/finally expects 2 args")?;
+                let promise = args
+                    .first()
+                    .context("promise catch/finally expects 2 args")?;
+                let callback = args
+                    .get(1)
+                    .context("promise catch/finally expects 2 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(callback.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5217,12 +5393,20 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Builtin::PromiseAll | Builtin::PromiseRace | Builtin::PromiseAllSettled
-            | Builtin::PromiseAny | Builtin::PromiseResolveStatic | Builtin::PromiseRejectStatic
-            | Builtin::IsPromise | Builtin::AsyncGeneratorStart => {
+            Builtin::PromiseAll
+            | Builtin::PromiseRace
+            | Builtin::PromiseAllSettled
+            | Builtin::PromiseAny
+            | Builtin::PromiseResolveStatic
+            | Builtin::PromiseRejectStatic
+            | Builtin::IsPromise
+            | Builtin::AsyncGeneratorStart => {
                 let val = args.first().context("expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5233,7 +5417,10 @@ impl Compiler {
             Builtin::QueueMicrotask => {
                 let callback = args.first().context("queue_microtask expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(callback.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5243,7 +5430,10 @@ impl Compiler {
                 Ok(())
             }
             Builtin::DrainMicrotasks => {
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5253,7 +5443,10 @@ impl Compiler {
                 Ok(())
             }
             Builtin::AsyncFunctionStart => {
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 for arg in args.iter().take(1) {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
@@ -5265,7 +5458,10 @@ impl Compiler {
                 Ok(())
             }
             Builtin::AsyncFunctionResume => {
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 for arg in args.iter().take(5) {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
@@ -5281,7 +5477,10 @@ impl Compiler {
                 bail!("AsyncFunctionSuspend should be handled in compile_instruction (Suspend)");
             }
             Builtin::ContinuationCreate => {
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 for arg in args.iter().take(3) {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
@@ -5293,7 +5492,10 @@ impl Compiler {
                 Ok(())
             }
             Builtin::ContinuationSaveVar => {
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 for arg in args.iter().take(3) {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
@@ -5306,7 +5508,10 @@ impl Compiler {
                 Ok(())
             }
             Builtin::ContinuationLoadVar => {
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 for arg in args.iter().take(2) {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
@@ -5317,13 +5522,21 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Builtin::AsyncGeneratorNext | Builtin::AsyncGeneratorReturn
+            Builtin::AsyncGeneratorNext
+            | Builtin::AsyncGeneratorReturn
             | Builtin::AsyncGeneratorThrow => {
-                let generator = args.first().context("async generator method expects 2 args")?;
-                let val = args.get(1).context("async generator method expects 2 args")?;
+                let generator = args
+                    .first()
+                    .context("async generator method expects 2 args")?;
+                let val = args
+                    .get(1)
+                    .context("async generator method expects 2 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(generator.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
-                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
@@ -5333,7 +5546,6 @@ impl Compiler {
             }
         }
     }
-
 
     // ── Constant encoding ────────────────────────────────────────────────────
 
@@ -5386,7 +5598,6 @@ impl Compiler {
         self.string_ptr_cache.insert(s.to_string(), ptr);
         ptr
     }
-
 
     /// Emit WASM instructions that test whether a NaN-boxed i64 value is null or undefined.
     fn emit_is_nullish_i32(&mut self, val_id: u32) {
@@ -5727,8 +5938,16 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
         Instruction::DeleteProp { dest, object, key } => dest.0.max(object.0).max(key.0),
         Instruction::SetProto { object, value } => object.0.max(value.0),
         Instruction::NewArray { dest, capacity: _ } => dest.0,
-        Instruction::GetElem { dest, object, index } => dest.0.max(object.0).max(index.0),
-        Instruction::SetElem { object, index, value } => object.0.max(index.0).max(value.0),
+        Instruction::GetElem {
+            dest,
+            object,
+            index,
+        } => dest.0.max(object.0).max(index.0),
+        Instruction::SetElem {
+            object,
+            index,
+            value,
+        } => object.0.max(index.0).max(value.0),
         Instruction::StringConcatVa { dest, parts } => {
             parts.iter().map(|v| v.0).max().unwrap_or(0).max(dest.0)
         }
