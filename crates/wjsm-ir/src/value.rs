@@ -76,7 +76,6 @@ pub fn decode_symbol_handle(val: i64) -> u32 {
     (val as u64 & 0xFFFF_FFFF) as u32
 }
 
-
 pub fn is_array(val: i64) -> bool {
     let uval = val as u64;
     (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_ARRAY

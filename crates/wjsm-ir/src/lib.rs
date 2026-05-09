@@ -72,7 +72,10 @@ pub enum Constant {
     /// BigInt 字面量（十进制字符串）
     BigInt(String),
     /// RegExp 字面量（pattern 和 flags）
-    RegExp { pattern: String, flags: String },
+    RegExp {
+        pattern: String,
+        flags: String,
+    },
 }
 
 impl fmt::Display for Constant {
@@ -496,10 +499,18 @@ impl fmt::Display for Instruction {
             Self::NewArray { dest, capacity } => {
                 write!(formatter, "{dest} = new_array(capacity={capacity})")
             }
-            Self::GetElem { dest, object, index } => {
+            Self::GetElem {
+                dest,
+                object,
+                index,
+            } => {
                 write!(formatter, "{dest} = get_elem {object}, {index}")
             }
-            Self::SetElem { object, index, value } => {
+            Self::SetElem {
+                object,
+                index,
+                value,
+            } => {
                 write!(formatter, "set_elem {object}, {index}, {value}")
             }
             Self::OptionalGetProp { dest, object, key } => {
