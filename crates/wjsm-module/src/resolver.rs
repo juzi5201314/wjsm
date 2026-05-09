@@ -64,6 +64,7 @@ pub enum ExportEntry {
 
 /// 模块解析器
 pub struct ModuleResolver {
+    #[allow(dead_code)]
     root_path: PathBuf,
     next_id: u32,
     visited: HashMap<PathBuf, ModuleId>,
