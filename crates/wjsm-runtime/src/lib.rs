@@ -534,10 +534,13 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 let proto_handle =
                     u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
 
-                if proto_handle == 0xFFFF_FFFF {}
-                // 通过 handle 表解析 proto_handle → proto_ptr
+                if proto_handle == 0xFFFF_FFFF {
+                    return value::encode_bool(false);
+                }
                 if let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) {
                     ptr = proto_ptr;
+                } else {
+                    return value::encode_bool(false);
                 }
             }
         },
