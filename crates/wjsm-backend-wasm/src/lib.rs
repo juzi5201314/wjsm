@@ -591,12 +591,12 @@ impl Compiler {
         imports.import("env", "queue_microtask", EntityType::Function(0));
         // Import index 130: drain_microtasks: () -> ()
         imports.import("env", "drain_microtasks", EntityType::Function(1));
-        // Import index 131: async_function_start: (i64, i64, i64, i64, i64) -> i64
-        imports.import("env", "async_function_start", EntityType::Function(21));
+        // Import index 131: async_function_start: (i64) -> i64
+        imports.import("env", "async_function_start", EntityType::Function(3));
         // Import index 132: async_function_resume: (i64, i64, i64, i64, i64) -> ()
         imports.import("env", "async_function_resume", EntityType::Function(22));
-        // Import index 133: async_function_suspend: (i64, i64, i32) -> ()
-        imports.import("env", "async_function_suspend", EntityType::Function(23));
+        // Import index 133: async_function_suspend: (i64, i64, i64) -> ()
+        imports.import("env", "async_function_suspend", EntityType::Function(25));
         // Import index 134: continuation_create: (i64, i64, i64) -> i64
         imports.import("env", "continuation_create", EntityType::Function(24));
         // Import index 135: continuation_save_var: (i64, i64, i64) -> ()
@@ -4129,9 +4129,9 @@ impl Compiler {
             }
             Instruction::Suspend { promise, state } => {
                 let func_idx = self.builtin_func_indices[&Builtin::AsyncFunctionSuspend];
-                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
                 self.emit(WasmInstruction::LocalGet(self.continuation_local_idx));
-                self.emit(WasmInstruction::I32Const(*state as i32));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
+                self.emit(WasmInstruction::I64Const(*state as i64));
                 self.emit(WasmInstruction::Call(func_idx));
                 self.emit(WasmInstruction::Return);
                 Ok(())
@@ -5229,7 +5229,7 @@ impl Compiler {
             Builtin::AsyncFunctionStart => {
                 let func_idx = self.builtin_func_indices.get(builtin).copied()
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
-                for arg in args.iter().take(5) {
+                for arg in args.iter().take(1) {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 }
                 self.emit(WasmInstruction::Call(func_idx));
@@ -5847,7 +5847,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::IsPromise => ("is_promise", 1),
         Builtin::QueueMicrotask => ("queue_microtask", 1),
         Builtin::DrainMicrotasks => ("drain_microtasks", 0),
-        Builtin::AsyncFunctionStart => ("async_function.start", 5),
+        Builtin::AsyncFunctionStart => ("async_function.start", 1),
         Builtin::AsyncFunctionResume => ("async_function.resume", 5),
         Builtin::AsyncFunctionSuspend => ("async_function.suspend", 3),
         Builtin::ContinuationCreate => ("continuation.create", 3),
