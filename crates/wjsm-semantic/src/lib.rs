@@ -4363,7 +4363,7 @@ impl Lowerer {
             wrapper_this_scope_id,
         )?;
 
-        let wrapper_param_ir_names = vec![
+        let _wrapper_param_ir_names = vec![
             format!("${wrapper_env_scope_id}.$env"),
             format!("${wrapper_this_scope_id}.$this"),
         ];
@@ -5110,7 +5110,7 @@ impl Lowerer {
             wrapper_this_scope_id,
         )?;
 
-        let wrapper_param_ir_names = vec![
+        let _wrapper_param_ir_names = vec![
             format!("${wrapper_env_scope_id}.$env"),
             format!("${wrapper_this_scope_id}.$this"),
         ];
@@ -5854,7 +5854,7 @@ impl Lowerer {
             wrapper_this_scope_id,
         )?;
 
-        let wrapper_param_ir_names = vec![
+        let _wrapper_param_ir_names = vec![
             format!("${wrapper_env_scope_id}.$env"),
             format!("${wrapper_this_scope_id}.$this"),
         ];
@@ -10649,6 +10649,7 @@ fn literal_kind(lit: &swc_ast::Lit) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 fn module_decl_kind(decl: &swc_ast::ModuleDecl) -> &'static str {
     match decl {
         swc_ast::ModuleDecl::Import(_) => "import",

@@ -367,37 +367,44 @@ fn cmd_build(
     stage: Option<Stage>,
     root: Option<&str>,
 ) -> Result<ExitCode> {
-    let source = read_input(input)?;
     let stage = stage.unwrap_or(Stage::Compile);
 
-    let result = run_pipeline(&source, stage, cli.verbose, cli.time, cli.target)?;
-
     match stage {
-        Stage::Parse => {
-            if let Some(ast) = &result.ast {
-                let json = serde_json::to_string_pretty(ast)?;
-                println!("{}", json);
-            }
-        }
-        Stage::Lower => {
-            if let Some(program) = &result.program {
-                print_ir(program);
+        Stage::Parse | Stage::Lower => {
+            let source = read_input(input)?;
+            let result = run_pipeline(&source, stage, cli.verbose, cli.time, cli.target)?;
+
+            if matches!(stage, Stage::Parse) {
+                if let Some(ast) = &result.ast {
+                    let json = serde_json::to_string_pretty(ast)?;
+                    println!("{}", json);
+                }
+            } else {
+                if let Some(program) = &result.program {
+                    print_ir(program);
+                }
             }
         }
         Stage::Compile | Stage::Execute => {
-            if let Some(wasm) = &result.wasm {
-                if output == "-" {
-                    io::stdout().write_all(wasm)?;
-                } else {
-                    fs::write(output, wasm)?;
-                    if cli.verbose >= 1 {
-                        eprintln!("Wrote {} bytes to {}", wasm.len(), output);
-                    }
-                }
+            let wasm = if input == "-" {
+                let mut source = String::new();
+                io::stdin().read_to_string(&mut source)?;
+                compile_source(&source, cli.target)?
+            } else {
+                compile_from_file_input(input, root, cli.target)?
+            };
 
-                if cli.stats {
-                    print_stats(&result);
+            if output == "-" {
+                io::stdout().write_all(&wasm)?;
+            } else {
+                fs::write(output, &wasm)?;
+                if cli.verbose >= 1 {
+                    eprintln!("Wrote {} bytes to {}", wasm.len(), output);
                 }
+            }
+
+            if cli.stats {
+                eprintln!("Output: {} bytes", wasm.len());
             }
         }
     }
