@@ -1,16 +1,16 @@
 // wjsm-module: ES Module / CommonJS bundling support
 // 将多个模块编译为单一 WASM 二进制
 
-mod resolver;
-mod graph;
 mod bundler;
-mod semantic;
 pub mod cjs_transform;
+mod graph;
+mod resolver;
+mod semantic;
 use swc_core::ecma::ast;
 
-pub use resolver::{ModuleResolver, ResolvedModule, ImportEntry, ExportEntry};
-pub use graph::{ModuleGraph, ModuleId};
 pub use bundler::ModuleBundler;
+pub use graph::{ModuleGraph, ModuleId};
+pub use resolver::{ExportEntry, ImportEntry, ModuleResolver, ResolvedModule};
 pub use semantic::{ModuleLinkResult, analyze_module_links};
 
 use anyhow::Result;
@@ -66,9 +66,19 @@ mod tests {
         }
 
         let result = bundle("./main.js", &fixtures_dir);
-        assert!(result.is_ok(), "public bundle should succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "public bundle should succeed: {:?}",
+            result.err()
+        );
         let wasm_bytes = result.unwrap();
-        assert!(!wasm_bytes.is_empty(), "should produce non-empty WASM output");
-        assert!(wasm_bytes.starts_with(b"\x00asm"), "output should be valid WASM binary");
+        assert!(
+            !wasm_bytes.is_empty(),
+            "should produce non-empty WASM output"
+        );
+        assert!(
+            wasm_bytes.starts_with(b"\x00asm"),
+            "output should be valid WASM binary"
+        );
     }
 }
