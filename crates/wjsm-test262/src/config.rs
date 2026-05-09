@@ -59,10 +59,7 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
 ];
 
 /// 需要忽略的 flags（当前 wjsm 不支持）。
-pub const IGNORED_FLAGS: &[TestFlag] = &[
-    TestFlag::Async,
-    TestFlag::Module,
-];
+pub const IGNORED_FLAGS: &[TestFlag] = &[TestFlag::Async, TestFlag::Module];
 
 /// 检查是否应该运行某个测试。
 ///
