@@ -4993,10 +4993,19 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 131: async_function_start(i32) -> i64 ────────────────────────
+    // ── Import 131: async_function_start(i64) -> i64 ────────────────────────
     let async_function_start_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, fn_table_idx: i32| -> i64 {
+        |caller: Caller<'_, RuntimeState>, fn_table_idx: i64| -> i64 {
+            let fn_table_idx = if value::is_function(fn_table_idx) {
+                value::decode_function_idx(fn_table_idx)
+            } else if value::is_closure(fn_table_idx) {
+                let idx = value::decode_closure_idx(fn_table_idx);
+                let closures = caller.data().closures.lock().unwrap();
+                closures.get(idx as usize).map(|e| e.func_idx).unwrap_or(0)
+            } else {
+                nanbox_to_u32(fn_table_idx)
+            };
             let mut p_table = caller.data().promise_table.lock().expect("promise table mutex");
             let outer_handle = p_table.len() as u32;
             p_table.push(PromiseEntry {
@@ -5009,15 +5018,19 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let mut c_table = caller.data().continuation_table.lock().expect("continuation table mutex");
             let cont_handle = c_table.len() as u32;
             c_table.push(ContinuationEntry {
-                fn_table_idx: fn_table_idx as u32,
+                fn_table_idx,
                 outer_promise: outer_handle as i64,
-                captured_vars: Vec::new(),
+                captured_vars: vec![value::encode_undefined(); 2],
             });
+            if let Some(entry) = c_table.get_mut(cont_handle as usize) {
+                entry.captured_vars[0] = value::encode_f64(0.0);
+                entry.captured_vars[1] = value::encode_bool(false);
+            }
             drop(c_table);
 
             let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
             queue.push_back(Microtask::AsyncResume {
-                fn_table_idx: fn_table_idx as u32,
+                fn_table_idx,
                 continuation: cont_handle as i64,
                 state: 0,
                 resume_val: value::encode_undefined(),
@@ -5028,29 +5041,56 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 132: async_function_resume(i32, i64, i32, i64, i32) -> () ───
+    // ── Import 132: async_function_resume(i64, i64, i64, i64, i64) -> () ───
     let async_function_resume_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, fn_table_idx: i32, continuation: i64, state: i32, resume_val: i64, is_rejected: i32| {
+        |caller: Caller<'_, RuntimeState>, fn_table_idx: i64, continuation: i64, state: i64, resume_val: i64, is_rejected: i64| {
+            let resolved_fn_idx = if value::is_function(fn_table_idx) {
+                value::decode_function_idx(fn_table_idx)
+            } else {
+                nanbox_to_u32(fn_table_idx)
+            };
+            let state = nanbox_to_u32(state);
+            let is_rejected_bool = nanbox_to_bool(is_rejected);
+            {
+                let cont_handle = value::decode_object_handle(continuation) as usize;
+                let mut c_table = caller.data().continuation_table.lock().expect("continuation table mutex");
+                if let Some(entry) = c_table.get_mut(cont_handle) {
+                    while entry.captured_vars.len() < 2 {
+                        entry.captured_vars.push(value::encode_undefined());
+                    }
+                    entry.captured_vars[0] = value::encode_f64(state as f64);
+                    entry.captured_vars[1] = value::encode_bool(is_rejected_bool);
+                }
+            }
             let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
             queue.push_back(Microtask::AsyncResume {
-                fn_table_idx: fn_table_idx as u32,
+                fn_table_idx: resolved_fn_idx,
                 continuation,
-                state: state as u32,
+                state,
                 resume_val,
-                is_rejected: is_rejected != 0,
+                is_rejected: is_rejected_bool,
             });
         },
     );
 
-    // ── Import 133: async_function_suspend(i64, i64) -> () ──────────────────
+    // ── Import 133: async_function_suspend(i64, i64, i64) -> () ─────────────
     let async_function_suspend_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, continuation: i64, awaited_promise: i64| {
-            let cont_handle = continuation as u32;
+        |caller: Caller<'_, RuntimeState>, continuation: i64, awaited_promise: i64, state: i64| {
+            let cont_handle = value::decode_object_handle(continuation) as usize;
+            {
+                let mut c_table = caller.data().continuation_table.lock().expect("continuation table mutex");
+                if let Some(entry) = c_table.get_mut(cont_handle) {
+                    while entry.captured_vars.len() < 2 {
+                        entry.captured_vars.push(value::encode_undefined());
+                    }
+                    entry.captured_vars[0] = value::encode_f64(state as f64);
+                }
+            }
             let cont_fn_idx = {
                 let c_table = caller.data().continuation_table.lock().expect("continuation table mutex");
-                c_table.get(cont_handle as usize).map(|e| e.fn_table_idx).unwrap_or(0)
+                c_table.get(cont_handle).map(|e| e.fn_table_idx).unwrap_or(0)
             };
 
             let on_fulfilled = value::encode_function_idx(cont_fn_idx);
@@ -5073,54 +5113,70 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 134: continuation_create(i32, i64, i32) -> i64 ───────────────
+    // ── Import 134: continuation_create(i64, i64, i64) -> i64 ───────────────
     let continuation_create_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, fn_table_idx: i32, outer_promise: i64, captured_var_count: i32| -> i64 {
+        |caller: Caller<'_, RuntimeState>, fn_table_idx: i64, outer_promise: i64, captured_var_count: i64| -> i64 {
+            let resolved_fn_idx = if value::is_function(fn_table_idx) {
+                value::decode_function_idx(fn_table_idx)
+            } else if value::is_closure(fn_table_idx) {
+                let idx = value::decode_closure_idx(fn_table_idx);
+                let closures = caller.data().closures.lock().unwrap();
+                closures.get(idx as usize).map(|e| e.func_idx).unwrap_or(0)
+            } else {
+                nanbox_to_u32(fn_table_idx)
+            };
             let mut table = caller.data().continuation_table.lock().expect("continuation table mutex");
             let handle = table.len() as u32;
+            let total_slots = 2 + nanbox_to_usize(captured_var_count);
             table.push(ContinuationEntry {
-                fn_table_idx: fn_table_idx as u32,
+                fn_table_idx: resolved_fn_idx,
                 outer_promise,
-                captured_vars: vec![value::encode_undefined(); captured_var_count as usize],
+                captured_vars: vec![value::encode_undefined(); total_slots],
             });
+            if let Some(entry) = table.get_mut(handle as usize) {
+                entry.captured_vars[0] = value::encode_f64(0.0);
+                entry.captured_vars[1] = value::encode_bool(false);
+            }
             value::encode_object_handle(handle)
         },
     );
 
-    // ── Import 135: continuation_save_var(i64, i32, i64) -> () ──────────────
+    // ── Import 135: continuation_save_var(i64, i64, i64) -> () ──────────────
     let continuation_save_var_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, continuation: i64, slot: i32, val: i64| {
+        |caller: Caller<'_, RuntimeState>, continuation: i64, slot: i64, val: i64| {
             let handle = value::decode_object_handle(continuation) as usize;
+            let actual_slot = 2 + nanbox_to_usize(slot);
             let mut table = caller.data().continuation_table.lock().expect("continuation table mutex");
             if let Some(entry) = table.get_mut(handle) {
-                if (slot as usize) < entry.captured_vars.len() {
-                    entry.captured_vars[slot as usize] = val;
+                if actual_slot < entry.captured_vars.len() {
+                    entry.captured_vars[actual_slot] = val;
                 }
             }
         },
     );
 
-    // ── Import 136: continuation_load_var(i64, i32) -> i64 ──────────────────
+    // ── Import 136: continuation_load_var(i64, i64) -> i64 ──────────────────
     let continuation_load_var_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, continuation: i64, slot: i32| -> i64 {
+        |caller: Caller<'_, RuntimeState>, continuation: i64, slot: i64| -> i64 {
             let handle = value::decode_object_handle(continuation) as usize;
+            let actual_slot = nanbox_to_usize(slot);
             let table = caller.data().continuation_table.lock().expect("continuation table mutex");
             if let Some(entry) = table.get(handle) {
-                if (slot as usize) < entry.captured_vars.len() {
-                    return entry.captured_vars[slot as usize];
+                if actual_slot < entry.captured_vars.len() {
+                    return entry.captured_vars[actual_slot];
                 }
             }
             value::encode_undefined()
         },
     );
 
-    // ── Import 137: async_generator_start(i32) -> i64 ───────────────────────
+    // ── Import 137: async_generator_start(i64) -> i64 ───────────────────────
     let async_generator_start_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, _fn_table_idx: i32| -> i64 {
+        |caller: Caller<'_, RuntimeState>, _fn_table_idx: i64| -> i64 {
             let mut table = caller.data().async_generator_table.lock().expect("async generator table mutex");
             let handle = table.len() as u32;
             table.push(AsyncGeneratorEntry {
@@ -7021,6 +7077,26 @@ fn call_host_function_from_caller(
     let _ = func.call(&mut *caller, &[Val::I64(env_obj), Val::I64(argument), Val::I32(0), Val::I32(0)], &mut results);
 }
 
+fn nanbox_to_usize(val: i64) -> usize {
+    if value::is_bool(val) {
+        if value::decode_bool(val) { 1 } else { 0 }
+    } else {
+        f64::from_bits(val as u64) as usize
+    }
+}
+
+fn nanbox_to_u32(val: i64) -> u32 {
+    nanbox_to_usize(val) as u32
+}
+
+fn nanbox_to_bool(val: i64) -> bool {
+    if value::is_bool(val) {
+        value::decode_bool(val)
+    } else {
+        f64::from_bits(val as u64) != 0.0
+    }
+}
+
 fn resume_async_function_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     func_table: &Table,
@@ -7030,13 +7106,24 @@ fn resume_async_function_from_caller(
     resume_val: i64,
     is_rejected: bool,
 ) {
+    {
+        let cont_handle = value::decode_object_handle(continuation) as usize;
+        let mut c_table = caller.data().continuation_table.lock().expect("continuation table mutex");
+        if let Some(entry) = c_table.get_mut(cont_handle) {
+            while entry.captured_vars.len() < 2 {
+                entry.captured_vars.push(value::encode_undefined());
+            }
+            entry.captured_vars[0] = value::encode_f64(state as f64);
+            entry.captured_vars[1] = value::encode_bool(is_rejected);
+        }
+    }
     let func_ref = func_table.get(&mut *caller, fn_table_idx as u64);
     let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
     let Some(func) = func else { return };
     let mut results = [Val::I64(0)];
     let _ = func.call(
         &mut *caller,
-        &[Val::I64(continuation), Val::I64(state as i64), Val::I64(resume_val), Val::I64(if is_rejected { 1 } else { 0 })],
+        &[Val::I64(continuation), Val::I64(resume_val), Val::I32(0), Val::I32(0)],
         &mut results,
     );
 }
@@ -7079,13 +7166,24 @@ fn resume_async_function_from_store(
     resume_val: i64,
     is_rejected: bool,
 ) {
+    {
+        let cont_handle = value::decode_object_handle(continuation) as usize;
+        let mut c_table = store.data().continuation_table.lock().expect("continuation table mutex");
+        if let Some(entry) = c_table.get_mut(cont_handle) {
+            while entry.captured_vars.len() < 2 {
+                entry.captured_vars.push(value::encode_undefined());
+            }
+            entry.captured_vars[0] = value::encode_f64(state as f64);
+            entry.captured_vars[1] = value::encode_bool(is_rejected);
+        }
+    }
     let func_ref = func_table.get(&mut *store, fn_table_idx as u64);
     let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
     let Some(func) = func else { return };
     let mut results = [Val::I64(0)];
     let _ = func.call(
         &mut *store,
-        &[Val::I64(continuation), Val::I64(state as i64), Val::I64(resume_val), Val::I64(if is_rejected { 1 } else { 0 })],
+        &[Val::I64(continuation), Val::I64(resume_val), Val::I32(0), Val::I32(0)],
         &mut results,
     );
 }
