@@ -534,12 +534,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 let proto_handle =
                     u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
 
-                if proto_handle == 0xFFFF_FFFF {}
-                // 通过 handle 表解析 proto_handle → proto_ptr
-                let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
+                if proto_handle == 0xFFFF_FFFF {
                     return value::encode_bool(false);
-                };
-                ptr = proto_ptr;
+                }
+                if let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) {
+                    ptr = proto_ptr;
+                } else {
+                    return value::encode_bool(false);
+                }
             }
         },
     );
@@ -2061,8 +2063,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             ]);
             name_ids.push(name_id);
         }
-        drop(data);
-        drop(mem);
+        let _ = data;
+        let _ = mem;
         let mut names = Vec::new();
         for name_id in name_ids {
             let name_bytes = read_string_bytes(caller, name_id);
@@ -3210,7 +3212,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
                 return value::encode_null();
             }
-            let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
+            let Some(_proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
                 return value::encode_null();
             };
             value::encode_object_handle(proto_handle)
@@ -4981,11 +4983,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             c_table.push(ContinuationEntry {
                 fn_table_idx,
                 outer_promise: outer_handle as i64,
-                captured_vars: vec![value::encode_undefined(); 2],
+                captured_vars: vec![value::encode_undefined(); 4],
             });
             if let Some(entry) = c_table.get_mut(cont_handle as usize) {
                 entry.captured_vars[0] = value::encode_f64(0.0);
                 entry.captured_vars[1] = value::encode_bool(false);
+                entry.captured_vars[2] = value::encode_object_handle(outer_handle);
             }
             drop(c_table);
 
@@ -5008,6 +5011,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         |caller: Caller<'_, RuntimeState>, fn_table_idx: i64, continuation: i64, state: i64, resume_val: i64, is_rejected: i64| {
             let resolved_fn_idx = if value::is_function(fn_table_idx) {
                 value::decode_function_idx(fn_table_idx)
+            } else if value::is_closure(fn_table_idx) {
+                let idx = value::decode_closure_idx(fn_table_idx);
+                let closures = caller.data().closures.lock().unwrap();
+                closures.get(idx as usize).map(|e| e.func_idx).unwrap_or(0)
             } else {
                 nanbox_to_u32(fn_table_idx)
             };
@@ -5419,7 +5426,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     if main_result.is_ok() {
         loop {
             let now = Instant::now();
-            let mut entry_to_fire: Option<TimerEntry> = None;
+            let mut _entry_to_fire: Option<TimerEntry> = None;
 
             {
                 let mut timers = store.data().timers.lock().expect("timers mutex");
@@ -5439,7 +5446,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
                 // Find earliest expired timer
                 if let Some(idx) = timers.iter().position(|t| t.deadline <= now) {
-                    entry_to_fire = Some(timers.remove(idx));
+                    _entry_to_fire = Some(timers.remove(idx));
                 } else {
                     // Sleep until next timer
                     let next = timers.iter().min_by_key(|t| t.deadline).unwrap().deadline;
@@ -5451,7 +5458,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 }
             }
 
-            if let Some(entry) = entry_to_fire {
+            if let Some(entry) = _entry_to_fire {
                 let callback = entry.callback;
                 let repeating = entry.repeating;
                 let interval = entry.interval;
@@ -5537,6 +5544,7 @@ struct RuntimeState {
     /// 分配计数器：每次对象分配后递增，用于触发周期性 GC。
     alloc_counter: Arc<Mutex<u64>>,
     /// GC 触发阈值：当 alloc_counter 达到此值时触发 GC。
+    #[allow(dead_code)]
     gc_threshold: u64,
     /// 定时器列表
     timers: Arc<Mutex<Vec<TimerEntry>>>,
@@ -5649,11 +5657,13 @@ impl PromiseReaction {
 }
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 enum ReactionType {
     Fulfill,
     Reject,
 }
 
+#[allow(dead_code)]
 enum Microtask {
     PromiseReaction {
         promise: i64,
@@ -5673,18 +5683,21 @@ enum Microtask {
     },
 }
 
+#[allow(dead_code)]
 struct ContinuationEntry {
     fn_table_idx: u32,
     outer_promise: i64,
     captured_vars: Vec<i64>,
 }
 
+#[allow(dead_code)]
 struct AsyncGeneratorEntry {
     state: AsyncGeneratorState,
     queue: Vec<AsyncGeneratorRequest>,
 }
 
 #[derive(Clone)]
+#[allow(dead_code)]
 enum AsyncGeneratorState {
     SuspendedStart,
     SuspendedYield,
@@ -5692,6 +5705,7 @@ enum AsyncGeneratorState {
     Completed,
 }
 
+#[allow(dead_code)]
 struct AsyncGeneratorRequest {
     completion_type: AsyncGeneratorCompletionType,
     value: i64,

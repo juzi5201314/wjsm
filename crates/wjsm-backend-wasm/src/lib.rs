@@ -1377,7 +1377,7 @@ impl Compiler {
         let var_rebase_start = self.ssa_local_base;
         // rebase: 所有 >= ssa_local_base 的 var/phi local 索引偏移到 ssa_max 之后
         let offset = ssa_max.saturating_sub(var_rebase_start);
-        for (name, idx) in self.var_locals.iter_mut() {
+        for (_name, idx) in self.var_locals.iter_mut() {
             if *idx >= var_rebase_start {
                 *idx += offset;
             }
