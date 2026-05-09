@@ -123,6 +123,8 @@ struct Compiler {
     get_proto_from_ctor_func_idx: u32,
     /// WASM global index for Object.prototype handle.
     object_proto_handle_global_idx: u32,
+    /// WASM local index for continuation handle (used in async state machine functions).
+    continuation_local_idx: u32,
 }
 /// 循环元信息（编译前预扫描得到）。
 #[derive(Debug, Clone)]
@@ -455,11 +457,30 @@ impl Compiler {
         imports.import("env", "arr_proto_is_array", EntityType::Function(12));
         // Import index 77: abort_shadow_stack_overflow: (i32, i32, i32) -> ()
         imports.import("env", "abort_shadow_stack_overflow", EntityType::Function(18));
-        // Type 20: (i64, i64, i64, i32, i32) -> (i64) — JS 函数签名（含 home_object）
-        //   param 0 = env_obj, param 1 = home_obj, param 2 = this_val, param 3 = args_base, param 4 = args_count
+        // Type 21: (i64, i64, i64, i64, i64) -> (i64) — async_function_start
         types.ty().function(
-            vec![ValType::I64, ValType::I64, ValType::I64, ValType::I32, ValType::I32],
+            vec![ValType::I64, ValType::I64, ValType::I64, ValType::I64, ValType::I64],
             vec![ValType::I64],
+        );
+        // Type 22: (i64, i64, i64, i64, i64) -> () — async_function_resume
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I64, ValType::I64, ValType::I64],
+            vec![],
+        );
+        // Type 23: (i64, i64, i32) -> () — async_function_suspend
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I32],
+            vec![],
+        );
+        // Type 24: (i64, i64, i64) -> (i64) — continuation_create
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I64],
+            vec![ValType::I64],
+        );
+        // Type 25: (i64, i64, i64) -> () — continuation_save_var
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I64],
+            vec![],
         );
         // Import index 78: func_call — Type 12 (uses shadow stack for args)
         imports.import("env", "func_call", EntityType::Function(12));
@@ -539,6 +560,57 @@ impl Compiler {
         imports.import("env", "string_search", EntityType::Function(2));
         // Import index 115: string_split: (i64, i64, i64) -> i64
         imports.import("env", "string_split", EntityType::Function(16));
+        // ── Promise / Async builtins ──
+        // Import index 116: promise_create: (i64) -> i64
+        imports.import("env", "promise_create", EntityType::Function(3));
+        // Import index 117: promise_instance_resolve: (i64, i64) -> ()
+        imports.import("env", "promise_instance_resolve", EntityType::Function(5));
+        // Import index 118: promise_instance_reject: (i64, i64) -> ()
+        imports.import("env", "promise_instance_reject", EntityType::Function(5));
+        // Import index 119: promise_then: (i64, i64, i64) -> i64
+        imports.import("env", "promise_then", EntityType::Function(16));
+        // Import index 120: promise_catch: (i64, i64) -> i64
+        imports.import("env", "promise_catch", EntityType::Function(2));
+        // Import index 121: promise_finally: (i64, i64) -> i64
+        imports.import("env", "promise_finally", EntityType::Function(2));
+        // Import index 122: promise_all: (i64) -> i64
+        imports.import("env", "promise_all", EntityType::Function(3));
+        // Import index 123: promise_race: (i64) -> i64
+        imports.import("env", "promise_race", EntityType::Function(3));
+        // Import index 124: promise_all_settled: (i64) -> i64
+        imports.import("env", "promise_all_settled", EntityType::Function(3));
+        // Import index 125: promise_any: (i64) -> i64
+        imports.import("env", "promise_any", EntityType::Function(3));
+        // Import index 126: promise_resolve_static: (i64) -> i64
+        imports.import("env", "promise_resolve_static", EntityType::Function(3));
+        // Import index 127: promise_reject_static: (i64) -> i64
+        imports.import("env", "promise_reject_static", EntityType::Function(3));
+        // Import index 128: is_promise: (i64) -> i64
+        imports.import("env", "is_promise", EntityType::Function(3));
+        // Import index 129: queue_microtask: (i64) -> ()
+        imports.import("env", "queue_microtask", EntityType::Function(0));
+        // Import index 130: drain_microtasks: () -> ()
+        imports.import("env", "drain_microtasks", EntityType::Function(1));
+        // Import index 131: async_function_start: (i64) -> i64
+        imports.import("env", "async_function_start", EntityType::Function(3));
+        // Import index 132: async_function_resume: (i64, i64, i64, i64, i64) -> ()
+        imports.import("env", "async_function_resume", EntityType::Function(22));
+        // Import index 133: async_function_suspend: (i64, i64, i64) -> ()
+        imports.import("env", "async_function_suspend", EntityType::Function(25));
+        // Import index 134: continuation_create: (i64, i64, i64) -> i64
+        imports.import("env", "continuation_create", EntityType::Function(24));
+        // Import index 135: continuation_save_var: (i64, i64, i64) -> ()
+        imports.import("env", "continuation_save_var", EntityType::Function(25));
+        // Import index 136: continuation_load_var: (i64, i64) -> i64
+        imports.import("env", "continuation_load_var", EntityType::Function(2));
+        // Import index 137: async_generator_start: (i64) -> i64
+        imports.import("env", "async_generator_start", EntityType::Function(3));
+        // Import index 138: async_generator_next: (i64, i64) -> i64
+        imports.import("env", "async_generator_next", EntityType::Function(2));
+        // Import index 139: async_generator_return: (i64, i64) -> i64
+        imports.import("env", "async_generator_return", EntityType::Function(2));
+        // Import index 140: async_generator_throw: (i64, i64) -> i64
+        imports.import("env", "async_generator_throw", EntityType::Function(2));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -644,6 +716,32 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::StringReplace, 113);
         builtin_func_indices.insert(Builtin::StringSearch, 114);
         builtin_func_indices.insert(Builtin::StringSplit, 115);
+        // ── Promise / Async builtins ──
+        builtin_func_indices.insert(Builtin::PromiseCreate, 116);
+        builtin_func_indices.insert(Builtin::PromiseInstanceResolve, 117);
+        builtin_func_indices.insert(Builtin::PromiseInstanceReject, 118);
+        builtin_func_indices.insert(Builtin::PromiseThen, 119);
+        builtin_func_indices.insert(Builtin::PromiseCatch, 120);
+        builtin_func_indices.insert(Builtin::PromiseFinally, 121);
+        builtin_func_indices.insert(Builtin::PromiseAll, 122);
+        builtin_func_indices.insert(Builtin::PromiseRace, 123);
+        builtin_func_indices.insert(Builtin::PromiseAllSettled, 124);
+        builtin_func_indices.insert(Builtin::PromiseAny, 125);
+        builtin_func_indices.insert(Builtin::PromiseResolveStatic, 126);
+        builtin_func_indices.insert(Builtin::PromiseRejectStatic, 127);
+        builtin_func_indices.insert(Builtin::IsPromise, 128);
+        builtin_func_indices.insert(Builtin::QueueMicrotask, 129);
+        builtin_func_indices.insert(Builtin::DrainMicrotasks, 130);
+        builtin_func_indices.insert(Builtin::AsyncFunctionStart, 131);
+        builtin_func_indices.insert(Builtin::AsyncFunctionResume, 132);
+        builtin_func_indices.insert(Builtin::AsyncFunctionSuspend, 133);
+        builtin_func_indices.insert(Builtin::ContinuationCreate, 134);
+        builtin_func_indices.insert(Builtin::ContinuationSaveVar, 135);
+        builtin_func_indices.insert(Builtin::ContinuationLoadVar, 136);
+        builtin_func_indices.insert(Builtin::AsyncGeneratorStart, 137);
+        builtin_func_indices.insert(Builtin::AsyncGeneratorNext, 138);
+        builtin_func_indices.insert(Builtin::AsyncGeneratorReturn, 139);
+        builtin_func_indices.insert(Builtin::AsyncGeneratorThrow, 140);
 
         let functions = FunctionSection::new();
 
@@ -680,7 +778,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 116, // 116 imports (0-115)
+            _next_import_func: 141, // 141 imports (0-140)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -716,6 +814,7 @@ impl Compiler {
             obj_spread_func_idx: 0,
             get_proto_from_ctor_func_idx: 0,
             object_proto_handle_global_idx: 0,
+            continuation_local_idx: 0,
         }
     }
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -2768,9 +2867,17 @@ impl Compiler {
 
             let block = &blocks[idx];
 
-            // 编译指令
+            let mut suspended = false;
             for instruction in block.instructions() {
-                self.compile_instruction(module, instruction)?;
+                if self.compile_instruction(module, instruction)? {
+                    suspended = true;
+                    break;
+                }
+            }
+
+            if suspended {
+                idx += 1;
+                continue;
             }
 
             match block.terminator() {
@@ -2898,10 +3005,9 @@ impl Compiler {
                     default_block,
                     exit_block,
                 } => {
-                    // 构建 switch entry 列表（含 default），按 block index 排序以还原源码顺序
-                    // 这样 fallthrough（如 default → 下一个 case）可以正确工作
                     let exit_idx = exit_block.0 as usize;
                     self.compiled_blocks.insert(idx);
+                    let default_target_idx = default_block.0 as usize;
 
                     struct SwitchEntry {
                         is_default: bool,
@@ -2917,28 +3023,26 @@ impl Compiler {
                             target_idx: case.target.0 as usize,
                         });
                     }
-                    let default_idx = default_block.0 as usize;
                     entries.push(SwitchEntry {
                         is_default: true,
                         constant_idx: None,
-                        target_idx: default_idx,
+                        target_idx: default_target_idx,
                     });
 
-                    // 按 target block index 排序，还原源码中的声明顺序
                     entries.sort_by_key(|e| e.target_idx);
 
                     let num_entries = entries.len();
                     let default_pos = entries.iter().position(|e| e.is_default).unwrap();
 
-                    // 发射 switch exit block（最外层）
+                    self.compiled_blocks.insert(default_target_idx);
+                    self.compiled_blocks.insert(exit_idx);
+
                     self.emit(WasmInstruction::Block(BlockType::Empty));
 
-                    // 发射 entry blocks（反序嵌套，entries[0] 最内层）
                     for _ in 0..num_entries {
                         self.emit(WasmInstruction::Block(BlockType::Empty));
                     }
 
-                    // 发射比较链（跳过 default entry）
                     for (i, entry) in entries.iter().enumerate() {
                         if entry.is_default {
                             continue;
@@ -2952,12 +3056,13 @@ impl Compiler {
                         self.emit(WasmInstruction::I64Eq);
                         self.emit(WasmInstruction::BrIf(i as u32));
                     }
-                    // br 到 default（fallback）
                     self.emit(WasmInstruction::Br(default_pos as u32));
 
-                    // 按嵌套顺序编译 case body（从内到外 = 源码顺序）
                     for i in 0..num_entries {
-                        self.emit(WasmInstruction::End); // 关闭 entry block
+                        if i == default_pos {
+                            self.compiled_blocks.remove(&default_target_idx);
+                        }
+                        self.emit(WasmInstruction::End);
                         let entry_target = entries[i].target_idx;
                         let switch_break_depth = (num_entries - i - 1) as u32;
                         let extra_depth = (num_entries - i) as u32;
@@ -2972,9 +3077,11 @@ impl Compiler {
                         )?;
                     }
 
-                    // 关闭 exit block
                     self.emit(WasmInstruction::End);
-                    self.compiled_blocks.insert(exit_idx);
+
+                    if self.current_func_returns_value {
+                        self.emit(WasmInstruction::Unreachable);
+                    }
 
                     idx = exit_idx;
                 }
@@ -3047,9 +3154,16 @@ impl Compiler {
 
             let block = &blocks[idx];
 
-            // 编译指令
+            let mut suspended = false;
             for instruction in block.instructions() {
-                self.compile_instruction(module, instruction)?;
+                if self.compile_instruction(module, instruction)? {
+                    suspended = true;
+                    break;
+                }
+            }
+
+            if suspended {
+                break;
             }
 
             match block.terminator() {
@@ -3300,8 +3414,16 @@ impl Compiler {
         }
         let block = &blocks[idx];
 
+        let mut suspended = false;
         for instruction in block.instructions() {
-            self.compile_instruction(module, instruction)?;
+            if self.compile_instruction(module, instruction)? {
+                suspended = true;
+                break;
+            }
+        }
+
+        if suspended {
+            return Ok(());
         }
 
         match block.terminator() {
@@ -3454,7 +3576,7 @@ impl Compiler {
 
     // ── Instruction compilation ─────────────────────────────────────────────
 
-    fn compile_instruction(&mut self, module: &IrModule, instruction: &Instruction) -> Result<()> {
+    fn compile_instruction(&mut self, module: &IrModule, instruction: &Instruction) -> Result<bool> {
         match instruction {
             Instruction::Const { dest, constant } => {
                 let constant = module
@@ -3496,7 +3618,7 @@ impl Compiler {
                     self.emit(WasmInstruction::I64Const(encoded));
                     self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 }
-                Ok(())
+                Ok(false)
             }
             Instruction::Binary { dest, op, lhs, rhs } => {
                 match op {
@@ -3591,7 +3713,7 @@ impl Compiler {
                         bail!("Mod/Exp should be lowered to CallBuiltin, not Binary op");
                     }
                 }
-                Ok(())
+                Ok(false)
             }
             Instruction::Unary { dest, op, value } => {
                 match op {
@@ -3712,10 +3834,10 @@ impl Compiler {
                         );
                     }
                 }
-                Ok(())
+                Ok(false)
             }
             Instruction::Compare { dest, op, lhs, rhs } => {
-                self.compile_compare(*dest, *op, *lhs, *rhs)
+                self.compile_compare(*dest, *op, *lhs, *rhs).map(|_| false)
             }
             Instruction::Phi { dest, .. } => {
                 let phi_local = self
@@ -3725,13 +3847,13 @@ impl Compiler {
                     .with_context(|| format!("phi {dest} has no assigned WASM local"))?;
                 self.emit(WasmInstruction::LocalGet(phi_local));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
             Instruction::CallBuiltin {
                 dest,
                 builtin,
                 args,
-            } => self.compile_builtin_call(*dest, builtin, args),
+            } => self.compile_builtin_call(*dest, builtin, args).map(|_| false),
             Instruction::LoadVar { dest, name } => {
                 let local_idx = self
                     .var_locals
@@ -3739,7 +3861,7 @@ impl Compiler {
                     .with_context(|| format!("variable `{name}` has no assigned WASM local"))?;
                 self.emit(WasmInstruction::LocalGet(*local_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
             Instruction::StoreVar { name, value } => {
                 let local_idx = *self
@@ -3748,7 +3870,7 @@ impl Compiler {
                     .with_context(|| format!("variable `{name}` has no assigned WASM local"))?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 self.emit(WasmInstruction::LocalSet(local_idx));
-                Ok(())
+                Ok(false)
             }
             Instruction::Call {
                 dest,
@@ -3838,7 +3960,7 @@ impl Compiler {
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(())
+                Ok(false)
             }
             Instruction::NewObject { dest, capacity } => {
                 // Call $obj_new(capacity)
@@ -3852,7 +3974,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(box_base | tag_object));
                 self.emit(WasmInstruction::I64Or);
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
             Instruction::GetProp { dest, object, key } => {
                 // Pass full boxed i64 value — helper resolves tag internally.
@@ -3863,7 +3985,7 @@ impl Compiler {
                 // Call $obj_get(boxed, name_id) -> i64
                 self.emit(WasmInstruction::Call(self.obj_get_func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
             Instruction::SetProp { object, key, value } => {
                 // Pass full boxed i64 value — helper resolves tag internally.
@@ -3875,7 +3997,7 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 // Call $obj_set(boxed, name_id, value)
                 self.emit(WasmInstruction::Call(self.obj_set_func_idx));
-                Ok(())
+                Ok(false)
             }
             Instruction::DeleteProp { dest, object, key } => {
                 // delete obj.prop -> bool (成功删除返回 true)
@@ -3886,7 +4008,7 @@ impl Compiler {
                 // Call $obj_delete(boxed, name_id) -> i64 (NaN-boxed bool)
                 self.emit(WasmInstruction::Call(self.obj_delete_func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
             Instruction::SetProto { object, value } => {
                 // 验证 value 是有效的对象/函数引用后再设置 __proto__
@@ -3951,7 +4073,7 @@ impl Compiler {
                     memory_index: 0,
                 }));
                 self.emit(WasmInstruction::End);
-                Ok(())
+                Ok(false)
             }
             Instruction::NewArray { dest, capacity } => {
                 // Call $arr_new(capacity) -> i32 (handle index)
@@ -3964,7 +4086,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(box_base | tag_array));
                 self.emit(WasmInstruction::I64Or);
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
 			Instruction::GetElem { dest, object, index } => {
 				// Call $to_int32(index) first (index is an f64), then $elem_get
@@ -3973,7 +4095,7 @@ impl Compiler {
 				self.emit(WasmInstruction::Call(self.to_int32_func_idx));
 				self.emit(WasmInstruction::Call(self.elem_get_func_idx));
 				self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-				Ok(())
+				Ok(false)
 			}
 			Instruction::SetElem { object, index, value } => {
 				// Call $to_int32(index) first, then $elem_set
@@ -3982,16 +4104,16 @@ impl Compiler {
 				self.emit(WasmInstruction::Call(self.to_int32_func_idx));
 				self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
 				self.emit(WasmInstruction::Call(self.elem_set_func_idx));
-				Ok(())
+				Ok(false)
 			}
 			Instruction::StringConcatVa { dest, parts } => {
-				self.compile_string_concat_va(dest, parts)
+				self.compile_string_concat_va(dest, parts).map(|_| false)
 			}
 			Instruction::OptionalGetProp { dest, object, key } => {
-				self.compile_optional_get(dest, object, true, Some(key), false)
+				self.compile_optional_get(dest, object, true, Some(key), false).map(|_| false)
 			}
 			Instruction::OptionalGetElem { dest, object, key } => {
-				self.compile_optional_get(dest, object, false, Some(key), false)
+				self.compile_optional_get(dest, object, false, Some(key), false).map(|_| false)
 			}
 			Instruction::OptionalCall {
 				dest,
@@ -3999,14 +4121,47 @@ impl Compiler {
 				this_val,
 				args,
 			} => {
-				self.compile_optional_call(dest, callee, this_val, args)
+				self.compile_optional_call(dest, callee, this_val, args).map(|_| false)
 			}
 			Instruction::ObjectSpread { dest, source } => {
-				self.compile_object_spread(dest, source)
+				self.compile_object_spread(dest, source).map(|_| false)
 			}
 			Instruction::GetSuperBase { dest } => {
-				self.compile_get_super_base(dest)
-			}
+                self.compile_get_super_base(dest).map(|_| false)
+            }
+            Instruction::NewPromise { dest } => {
+                let func_idx = self.builtin_func_indices[&Builtin::PromiseCreate];
+                self.emit(WasmInstruction::I64Const(0));
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                Ok(false)
+            }
+            Instruction::PromiseResolve { promise, value } => {
+                let func_idx = self.builtin_func_indices[&Builtin::PromiseInstanceResolve];
+                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                self.emit(WasmInstruction::Call(func_idx));
+                Ok(false)
+            }
+            Instruction::PromiseReject { promise, reason } => {
+                let func_idx = self.builtin_func_indices[&Builtin::PromiseInstanceReject];
+                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(reason.0)));
+                self.emit(WasmInstruction::Call(func_idx));
+                Ok(false)
+            }
+            Instruction::Suspend { promise, state } => {
+                let func_idx = self.builtin_func_indices[&Builtin::AsyncFunctionSuspend];
+                self.emit(WasmInstruction::LocalGet(self.continuation_local_idx));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
+                self.emit(WasmInstruction::I64Const(*state as i64));
+                self.emit(WasmInstruction::Call(func_idx));
+                if self.current_func_returns_value {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                self.emit(WasmInstruction::Return);
+                Ok(true)
+            }
         }
     }
 
@@ -5009,6 +5164,173 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── Promise builtins ──
+            Builtin::PromiseCreate => {
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::I64Const(0));
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PromiseInstanceResolve | Builtin::PromiseInstanceReject => {
+                let promise = args.first().context("promise instance resolve/reject expects 2 args")?;
+                let val = args.get(1).context("promise instance resolve/reject expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PromiseThen => {
+                let promise = args.first().context("promise.then expects 3 args")?;
+                let on_fulfilled = args.get(1).context("promise.then expects 3 args")?;
+                let on_rejected = args.get(2).context("promise.then expects 3 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(on_fulfilled.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(on_rejected.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PromiseCatch | Builtin::PromiseFinally => {
+                let promise = args.first().context("promise catch/finally expects 2 args")?;
+                let callback = args.get(1).context("promise catch/finally expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(callback.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PromiseAll | Builtin::PromiseRace | Builtin::PromiseAllSettled
+            | Builtin::PromiseAny | Builtin::PromiseResolveStatic | Builtin::PromiseRejectStatic
+            | Builtin::IsPromise | Builtin::AsyncGeneratorStart => {
+                let val = args.first().context("expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::QueueMicrotask => {
+                let callback = args.first().context("queue_microtask expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(callback.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::DrainMicrotasks => {
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::AsyncFunctionStart => {
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                for arg in args.iter().take(1) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::AsyncFunctionResume => {
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                for arg in args.iter().take(5) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::AsyncFunctionSuspend => {
+                bail!("AsyncFunctionSuspend should be handled in compile_instruction (Suspend)");
+            }
+            Builtin::ContinuationCreate => {
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                for arg in args.iter().take(3) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::ContinuationSaveVar => {
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                for arg in args.iter().take(3) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::ContinuationLoadVar => {
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                for arg in args.iter().take(2) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::AsyncGeneratorNext | Builtin::AsyncGeneratorReturn
+            | Builtin::AsyncGeneratorThrow => {
+                let generator = args.first().context("async generator method expects 2 args")?;
+                let val = args.get(1).context("async generator method expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(generator.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
         }
     }
 
@@ -5424,6 +5746,143 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
         }
         Instruction::ObjectSpread { dest, source } => dest.0.max(source.0),
         Instruction::GetSuperBase { dest } => dest.0,
+        Instruction::NewPromise { dest } => dest.0,
+        Instruction::PromiseResolve { promise, value } => promise.0.max(value.0),
+        Instruction::PromiseReject { promise, reason } => promise.0.max(reason.0),
+        Instruction::Suspend { promise, .. } => promise.0,
+    }
+}
+
+pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
+    match builtin {
+        Builtin::ConsoleLog => ("console.log", 1),
+        Builtin::ConsoleError => ("console.error", 1),
+        Builtin::ConsoleWarn => ("console.warn", 1),
+        Builtin::ConsoleInfo => ("console.info", 1),
+        Builtin::ConsoleDebug => ("console.debug", 1),
+        Builtin::ConsoleTrace => ("console.trace", 1),
+        Builtin::Debugger => ("debugger", 0),
+        Builtin::Throw => ("throw", 1),
+        Builtin::AbortShadowStackOverflow => ("abort_shadow_stack_overflow", 3),
+        Builtin::F64Mod => ("f64.mod", 2),
+        Builtin::F64Exp => ("f64.exp", 2),
+        Builtin::IteratorFrom => ("iterator.from", 1),
+        Builtin::IteratorNext => ("iterator.next", 1),
+        Builtin::IteratorClose => ("iterator.close", 1),
+        Builtin::IteratorValue => ("iterator.value", 1),
+        Builtin::IteratorDone => ("iterator.done", 1),
+        Builtin::EnumeratorFrom => ("enumerator.from", 1),
+        Builtin::EnumeratorNext => ("enumerator.next", 1),
+        Builtin::EnumeratorKey => ("enumerator.key", 1),
+        Builtin::EnumeratorDone => ("enumerator.done", 1),
+        Builtin::TypeOf => ("typeof", 1),
+        Builtin::In => ("op_in", 2),
+        Builtin::InstanceOf => ("op_instanceof", 2),
+        Builtin::AbstractEq => ("abstract_eq", 2),
+        Builtin::AbstractCompare => ("abstract_compare", 2),
+        Builtin::DefineProperty => ("define_property", 3),
+        Builtin::GetOwnPropDesc => ("get_own_prop_desc", 2),
+        Builtin::SetTimeout => ("setTimeout", 2),
+        Builtin::ClearTimeout => ("clearTimeout", 1),
+        Builtin::SetInterval => ("setInterval", 2),
+        Builtin::ClearInterval => ("clearInterval", 1),
+        Builtin::Fetch => ("fetch", 1),
+        Builtin::JsonStringify => ("JSON.stringify", 1),
+        Builtin::JsonParse => ("JSON.parse", 1),
+        Builtin::CreateClosure => ("create_closure", 2),
+        Builtin::ArrayPush => ("array.push", 2),
+        Builtin::ArrayPop => ("array.pop", 1),
+        Builtin::ArrayIncludes => ("array.includes", 2),
+        Builtin::ArrayIndexOf => ("array.index_of", 3),
+        Builtin::ArrayJoin => ("array.join", 2),
+        Builtin::ArrayConcat => ("array.concat", 2),
+        Builtin::ArraySlice => ("array.slice", 3),
+        Builtin::ArrayFill => ("array.fill", 4),
+        Builtin::ArrayReverse => ("array.reverse", 1),
+        Builtin::ArrayFlat => ("array.flat", 2),
+        Builtin::ArrayInitLength => ("array.init_length", 2),
+        Builtin::ArrayGetLength => ("array.get_length", 1),
+        Builtin::ArrayShift => ("array.shift", 1),
+        Builtin::ArrayUnshiftVa => ("array.unshift", 1),
+        Builtin::ArraySort => ("array.sort", 1),
+        Builtin::ArrayAt => ("array.at", 2),
+        Builtin::ArrayCopyWithin => ("array.copy_within", 1),
+        Builtin::ArrayForEach => ("array.for_each", 1),
+        Builtin::ArrayMap => ("array.map", 1),
+        Builtin::ArrayFilter => ("array.filter", 1),
+        Builtin::ArrayReduce => ("array.reduce", 1),
+        Builtin::ArrayReduceRight => ("array.reduce_right", 1),
+        Builtin::ArrayFind => ("array.find", 1),
+        Builtin::ArrayFindIndex => ("array.find_index", 1),
+        Builtin::ArraySome => ("array.some", 1),
+        Builtin::ArrayEvery => ("array.every", 1),
+        Builtin::ArrayFlatMap => ("array.flat_map", 1),
+        Builtin::ArraySpliceVa => ("array.splice_va", 1),
+        Builtin::ArrayIsArray => ("array.is_array", 1),
+        Builtin::ArrayConcatVa => ("array.concat_va", 1),
+        Builtin::FuncCall => ("func_call", 1),
+        Builtin::FuncApply => ("func_apply", 3),
+        Builtin::FuncBind => ("func_bind", 1),
+        Builtin::ObjectRest => ("object_rest", 2),
+        Builtin::GetPrototypeFromConstructor => ("get_prototype_from_constructor", 1),
+        Builtin::HasOwnProperty => ("has_own_property", 2),
+        Builtin::ObjectProtoToString => ("object_proto_to_string", 1),
+        Builtin::ObjectProtoValueOf => ("object_proto_value_of", 1),
+        Builtin::ObjectKeys => ("object.keys", 1),
+        Builtin::ObjectValues => ("object.values", 1),
+        Builtin::ObjectEntries => ("object.entries", 1),
+        Builtin::ObjectAssign => ("object.assign", 1),
+        Builtin::ObjectCreate => ("object.create", 2),
+        Builtin::ObjectGetPrototypeOf => ("object.get_prototype_of", 1),
+        Builtin::ObjectSetPrototypeOf => ("object.set_prototype_of", 2),
+        Builtin::ObjectGetOwnPropertyNames => ("object.get_own_property_names", 1),
+        Builtin::ObjectIs => ("object.is", 2),
+        Builtin::BigIntFromLiteral => ("bigint.from_literal", 2),
+        Builtin::BigIntAdd => ("bigint.add", 2),
+        Builtin::BigIntSub => ("bigint.sub", 2),
+        Builtin::BigIntMul => ("bigint.mul", 2),
+        Builtin::BigIntDiv => ("bigint.div", 2),
+        Builtin::BigIntMod => ("bigint.mod", 2),
+        Builtin::BigIntPow => ("bigint.pow", 2),
+        Builtin::BigIntNeg => ("bigint.neg", 1),
+        Builtin::BigIntEq => ("bigint.eq", 2),
+        Builtin::BigIntCmp => ("bigint.cmp", 2),
+        Builtin::SymbolCreate => ("symbol.create", 1),
+        Builtin::SymbolFor => ("symbol.for", 1),
+        Builtin::SymbolKeyFor => ("symbol.key_for", 1),
+        Builtin::SymbolWellKnown => ("symbol.well_known", 1),
+        Builtin::RegExpCreate => ("regexp.create", 4),
+        Builtin::RegExpTest => ("regexp.test", 2),
+        Builtin::RegExpExec => ("regexp.exec", 2),
+        Builtin::StringMatch => ("string.match", 2),
+        Builtin::StringReplace => ("string.replace", 3),
+        Builtin::StringSearch => ("string.search", 2),
+        Builtin::StringSplit => ("string.split", 3),
+        Builtin::PromiseCreate => ("promise.create", 0),
+        Builtin::PromiseInstanceResolve => ("promise.instance_resolve", 2),
+        Builtin::PromiseInstanceReject => ("promise.instance_reject", 2),
+        Builtin::PromiseThen => ("promise.then", 3),
+        Builtin::PromiseCatch => ("promise.catch", 2),
+        Builtin::PromiseFinally => ("promise.finally", 2),
+        Builtin::PromiseAll => ("promise.all", 1),
+        Builtin::PromiseRace => ("promise.race", 1),
+        Builtin::PromiseAllSettled => ("promise.all_settled", 1),
+        Builtin::PromiseAny => ("promise.any", 1),
+        Builtin::PromiseResolveStatic => ("promise.resolve_static", 1),
+        Builtin::PromiseRejectStatic => ("promise.reject_static", 1),
+        Builtin::IsPromise => ("is_promise", 1),
+        Builtin::QueueMicrotask => ("queue_microtask", 1),
+        Builtin::DrainMicrotasks => ("drain_microtasks", 0),
+        Builtin::AsyncFunctionStart => ("async_function.start", 1),
+        Builtin::AsyncFunctionResume => ("async_function.resume", 5),
+        Builtin::AsyncFunctionSuspend => ("async_function.suspend", 3),
+        Builtin::ContinuationCreate => ("continuation.create", 3),
+        Builtin::ContinuationSaveVar => ("continuation.save_var", 3),
+        Builtin::ContinuationLoadVar => ("continuation.load_var", 2),
+        Builtin::AsyncGeneratorStart => ("async_generator.start", 1),
+        Builtin::AsyncGeneratorNext => ("async_generator.next", 2),
+        Builtin::AsyncGeneratorReturn => ("async_generator.return", 2),
+        Builtin::AsyncGeneratorThrow => ("async_generator.throw", 2),
     }
 }
 
