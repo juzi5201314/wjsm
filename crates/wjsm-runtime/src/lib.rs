@@ -1,5 +1,5 @@
 use anyhow::Result;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -36,6 +36,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let symbol_table: Arc<Mutex<Vec<SymbolEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let regex_table: Arc<Mutex<Vec<RegexEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
+    let promise_table: Arc<Mutex<Vec<PromiseEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let microtask_queue: Arc<Mutex<VecDeque<Microtask>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let continuation_table: Arc<Mutex<Vec<ContinuationEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>> = Arc::new(Mutex::new(Vec::new()));
+
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     let alloc_counter: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
@@ -59,6 +64,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             bigint_table: Arc::clone(&bigint_table),
             symbol_table: Arc::clone(&symbol_table),
             regex_table: Arc::clone(&regex_table),
+            promise_table: Arc::clone(&promise_table),
+            microtask_queue: Arc::clone(&microtask_queue),
+            continuation_table: Arc::clone(&continuation_table),
+            async_generator_table: Arc::clone(&async_generator_table),
         },
     );
 
@@ -4327,7 +4336,882 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
         },
     );
-    
+
+    // ── Import 116: promise_create() -> i64 ────────────────────────────────
+    let promise_create_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            let handle = table.len() as u32;
+            table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            value::encode_object_handle(handle)
+        },
+    );
+
+    // ── Import 117: promise_instance_resolve(i64, i64) -> () ───────────────
+    let promise_instance_resolve_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, promise: i64, value: i64| {
+            let handle = value::decode_object_handle(promise) as usize;
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            if let Some(entry) = table.get_mut(handle) {
+                if !matches!(entry.state, PromiseState::Pending) {
+                    return;
+                }
+                let reactions = std::mem::take(&mut entry.fulfill_reactions);
+                entry.state = PromiseState::Fulfilled(value);
+                drop(table);
+                let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+                for reaction in reactions {
+                    queue.push_back(Microtask::PromiseReaction {
+                        promise: reaction.target_promise,
+                        reaction_type: reaction.reaction_type,
+                        handler: reaction.handler,
+                        argument: value,
+                    });
+                }
+            }
+        },
+    );
+
+    // ── Import 118: promise_instance_reject(i64, i64) -> () ────────────────
+    let promise_instance_reject_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, promise: i64, reason: i64| {
+            let handle = value::decode_object_handle(promise) as usize;
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            if let Some(entry) = table.get_mut(handle) {
+                if !matches!(entry.state, PromiseState::Pending) {
+                    return;
+                }
+                let reactions = std::mem::take(&mut entry.reject_reactions);
+                entry.state = PromiseState::Rejected(reason);
+                drop(table);
+                let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+                for reaction in reactions {
+                    queue.push_back(Microtask::PromiseReaction {
+                        promise: reaction.target_promise,
+                        reaction_type: reaction.reaction_type,
+                        handler: reaction.handler,
+                        argument: reason,
+                    });
+                }
+            }
+        },
+    );
+
+    // ── Import 119: promise_then(i64, i64, i64) -> i64 ─────────────────────
+    let promise_then_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, promise: i64, on_fulfilled: i64, on_rejected: i64| -> i64 {
+            let handle = value::decode_object_handle(promise) as usize;
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            let result_handle = table.len() as u32;
+            table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(result_handle);
+            if let Some(entry) = table.get_mut(handle) {
+                match &entry.state {
+                    PromiseState::Pending => {
+                        if !value::is_undefined(on_fulfilled) {
+                            entry.fulfill_reactions.push(PromiseReaction {
+                                handler: on_fulfilled,
+                                target_promise: result_handle as i64,
+                                reaction_type: ReactionType::Fulfill,
+                            });
+                        } else {
+                            entry.fulfill_reactions.push(PromiseReaction {
+                                handler: value::encode_undefined(),
+                                target_promise: result_handle as i64,
+                                reaction_type: ReactionType::Fulfill,
+                            });
+                        }
+                        if !value::is_undefined(on_rejected) {
+                            entry.reject_reactions.push(PromiseReaction {
+                                handler: on_rejected,
+                                target_promise: result_handle as i64,
+                                reaction_type: ReactionType::Reject,
+                            });
+                        } else {
+                            entry.reject_reactions.push(PromiseReaction {
+                                handler: value::encode_undefined(),
+                                target_promise: result_handle as i64,
+                                reaction_type: ReactionType::Reject,
+                            });
+                        }
+                    }
+                    PromiseState::Fulfilled(val) => {
+                        let val = *val;
+                        drop(table);
+                        let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+                        queue.push_back(Microtask::PromiseReaction {
+                            promise: result_handle as i64,
+                            reaction_type: ReactionType::Fulfill,
+                            handler: on_fulfilled,
+                            argument: val,
+                        });
+                        return result_promise;
+                    }
+                    PromiseState::Rejected(reason) => {
+                        let reason = *reason;
+                        drop(table);
+                        let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+                        queue.push_back(Microtask::PromiseReaction {
+                            promise: result_handle as i64,
+                            reaction_type: ReactionType::Reject,
+                            handler: on_rejected,
+                            argument: reason,
+                        });
+                        return result_promise;
+                    }
+                }
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 120: promise_catch(i64, i64) -> i64 ──────────────────────────
+    let promise_catch_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, promise: i64, on_rejected: i64| -> i64 {
+            let handle = value::decode_object_handle(promise) as usize;
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            let result_handle = table.len() as u32;
+            table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(result_handle);
+            if let Some(entry) = table.get_mut(handle) {
+                match &entry.state {
+                    PromiseState::Pending => {
+                        entry.fulfill_reactions.push(PromiseReaction {
+                            handler: value::encode_undefined(),
+                            target_promise: result_handle as i64,
+                            reaction_type: ReactionType::Fulfill,
+                        });
+                        entry.reject_reactions.push(PromiseReaction {
+                            handler: on_rejected,
+                            target_promise: result_handle as i64,
+                            reaction_type: ReactionType::Reject,
+                        });
+                    }
+                    PromiseState::Fulfilled(val) => {
+                        let val = *val;
+                        drop(table);
+                        let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+                        queue.push_back(Microtask::PromiseReaction {
+                            promise: result_handle as i64,
+                            reaction_type: ReactionType::Fulfill,
+                            handler: value::encode_undefined(),
+                            argument: val,
+                        });
+                        return result_promise;
+                    }
+                    PromiseState::Rejected(reason) => {
+                        let reason = *reason;
+                        drop(table);
+                        let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+                        queue.push_back(Microtask::PromiseReaction {
+                            promise: result_handle as i64,
+                            reaction_type: ReactionType::Reject,
+                            handler: on_rejected,
+                            argument: reason,
+                        });
+                        return result_promise;
+                    }
+                }
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 121: promise_finally(i64, i64) -> i64 ────────────────────────
+    let promise_finally_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, promise: i64, on_finally: i64| -> i64 {
+            let handle = value::decode_object_handle(promise) as usize;
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            let result_handle = table.len() as u32;
+            table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(result_handle);
+            if let Some(entry) = table.get_mut(handle) {
+                match &entry.state {
+                    PromiseState::Pending => {
+                        entry.fulfill_reactions.push(PromiseReaction {
+                            handler: on_finally,
+                            target_promise: result_handle as i64,
+                            reaction_type: ReactionType::Fulfill,
+                        });
+                        entry.reject_reactions.push(PromiseReaction {
+                            handler: on_finally,
+                            target_promise: result_handle as i64,
+                            reaction_type: ReactionType::Reject,
+                        });
+                    }
+                    PromiseState::Fulfilled(val) => {
+                        let val = *val;
+                        drop(table);
+                        let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+                        queue.push_back(Microtask::PromiseReaction {
+                            promise: result_handle as i64,
+                            reaction_type: ReactionType::Fulfill,
+                            handler: on_finally,
+                            argument: val,
+                        });
+                        return result_promise;
+                    }
+                    PromiseState::Rejected(reason) => {
+                        let reason = *reason;
+                        drop(table);
+                        let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+                        queue.push_back(Microtask::PromiseReaction {
+                            promise: result_handle as i64,
+                            reaction_type: ReactionType::Reject,
+                            handler: on_finally,
+                            argument: reason,
+                        });
+                        return result_promise;
+                    }
+                }
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 122: promise_all(i64) -> i64 ─────────────────────────────────
+    let promise_all_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+            let arr_ptr = resolve_array_ptr(&mut caller, arr);
+            let len = arr_ptr.and_then(|p| read_array_length(&mut caller, p)).unwrap_or(0);
+
+            let elems: Vec<i64> = if let Some(ptr) = arr_ptr {
+                (0..len).filter_map(|i| read_array_elem(&mut caller, ptr, i)).collect()
+            } else {
+                Vec::new()
+            };
+
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            let result_handle = table.len() as u32;
+            table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(result_handle);
+
+            if arr_ptr.is_none() {
+                if let Some(entry) = table.get_mut(result_handle as usize) {
+                    entry.state = PromiseState::Rejected(value::encode_undefined());
+                }
+                return result_promise;
+            }
+
+            if len == 0 {
+                drop(table);
+                let empty_arr = alloc_array(&mut caller, 0);
+                if let Some(empty_ptr) = resolve_array_ptr(&mut caller, empty_arr) {
+                    write_array_length(&mut caller, empty_ptr, 0);
+                }
+                let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+                if let Some(entry) = table.get_mut(result_handle as usize) {
+                    entry.state = PromiseState::Fulfilled(empty_arr);
+                }
+                return result_promise;
+            }
+
+            let mut fulfill_count: u32 = 0;
+            let mut rejected: Option<i64> = None;
+            let mut result_vals = vec![value::encode_undefined(); len as usize];
+
+            for (i, elem) in elems.iter().enumerate() {
+                if value::is_object(*elem) {
+                    let elem_handle = value::decode_object_handle(*elem) as usize;
+                    if let Some(p_entry) = table.get(elem_handle) {
+                        match &p_entry.state {
+                            PromiseState::Fulfilled(val) => {
+                                result_vals[i] = *val;
+                                fulfill_count += 1;
+                            }
+                            PromiseState::Rejected(reason) => {
+                                if rejected.is_none() {
+                                    rejected = Some(*reason);
+                                }
+                            }
+                            PromiseState::Pending => {
+                                if let Some(elem_entry) = table.get_mut(elem_handle) {
+                                    elem_entry.fulfill_reactions.push(PromiseReaction {
+                                        handler: value::encode_undefined(),
+                                        target_promise: result_handle as i64,
+                                        reaction_type: ReactionType::Fulfill,
+                                    });
+                                    elem_entry.reject_reactions.push(PromiseReaction {
+                                        handler: value::encode_undefined(),
+                                        target_promise: result_handle as i64,
+                                        reaction_type: ReactionType::Reject,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(reason) = rejected {
+                if let Some(entry) = table.get_mut(result_handle as usize) {
+                    entry.state = PromiseState::Rejected(reason);
+                }
+            } else if fulfill_count == len {
+                drop(table);
+                let res_arr = alloc_array(&mut caller, len);
+                if let Some(res_ptr) = resolve_array_ptr(&mut caller, res_arr) {
+                    for (j, v) in result_vals.iter().enumerate() {
+                        write_array_elem(&mut caller, res_ptr, j as u32, *v);
+                    }
+                    write_array_length(&mut caller, res_ptr, len);
+                }
+                let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+                if let Some(entry) = table.get_mut(result_handle as usize) {
+                    entry.state = PromiseState::Fulfilled(res_arr);
+                }
+            }
+
+            result_promise
+        },
+    );
+
+    // ── Import 123: promise_race(i64) -> i64 ────────────────────────────────
+    let promise_race_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+            let arr_ptr = resolve_array_ptr(&mut caller, arr);
+            let len = arr_ptr.and_then(|p| read_array_length(&mut caller, p)).unwrap_or(0);
+
+            let elems: Vec<i64> = if let Some(ptr) = arr_ptr {
+                (0..len).filter_map(|i| read_array_elem(&mut caller, ptr, i)).collect()
+            } else {
+                Vec::new()
+            };
+
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            let result_handle = table.len() as u32;
+            table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(result_handle);
+
+            if arr_ptr.is_none() {
+                if let Some(entry) = table.get_mut(result_handle as usize) {
+                    entry.state = PromiseState::Rejected(value::encode_undefined());
+                }
+                return result_promise;
+            }
+
+            for elem in &elems {
+                if value::is_object(*elem) {
+                    let elem_handle = value::decode_object_handle(*elem) as usize;
+                    if let Some(p_entry) = table.get(elem_handle) {
+                        match &p_entry.state {
+                            PromiseState::Fulfilled(val) => {
+                                let val = *val;
+                                if let Some(entry) = table.get_mut(result_handle as usize) {
+                                    if matches!(entry.state, PromiseState::Pending) {
+                                        entry.state = PromiseState::Fulfilled(val);
+                                    }
+                                }
+                                return result_promise;
+                            }
+                            PromiseState::Rejected(reason) => {
+                                let reason = *reason;
+                                if let Some(entry) = table.get_mut(result_handle as usize) {
+                                    if matches!(entry.state, PromiseState::Pending) {
+                                        entry.state = PromiseState::Rejected(reason);
+                                    }
+                                }
+                                return result_promise;
+                            }
+                            PromiseState::Pending => {
+                                if let Some(elem_entry) = table.get_mut(elem_handle) {
+                                    elem_entry.fulfill_reactions.push(PromiseReaction {
+                                        handler: value::encode_undefined(),
+                                        target_promise: result_handle as i64,
+                                        reaction_type: ReactionType::Fulfill,
+                                    });
+                                    elem_entry.reject_reactions.push(PromiseReaction {
+                                        handler: value::encode_undefined(),
+                                        target_promise: result_handle as i64,
+                                        reaction_type: ReactionType::Reject,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 124: promise_all_settled(i64) -> i64 ─────────────────────────
+    let promise_all_settled_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+            let arr_ptr = resolve_array_ptr(&mut caller, arr);
+            let len = arr_ptr.and_then(|p| read_array_length(&mut caller, p)).unwrap_or(0);
+
+            let elems: Vec<i64> = if let Some(ptr) = arr_ptr {
+                (0..len).filter_map(|i| read_array_elem(&mut caller, ptr, i)).collect()
+            } else {
+                Vec::new()
+            };
+
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            let result_handle = table.len() as u32;
+            table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(result_handle);
+
+            if arr_ptr.is_none() || len == 0 {
+                drop(table);
+                let empty_arr = alloc_array(&mut caller, 0);
+                if let Some(empty_ptr) = resolve_array_ptr(&mut caller, empty_arr) {
+                    write_array_length(&mut caller, empty_ptr, 0);
+                }
+                let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+                if let Some(entry) = table.get_mut(result_handle as usize) {
+                    entry.state = PromiseState::Fulfilled(empty_arr);
+                }
+                return result_promise;
+            }
+
+            let mut settled_count: u32 = 0;
+
+            for elem in &elems {
+                if value::is_object(*elem) {
+                    let elem_handle = value::decode_object_handle(*elem) as usize;
+                    if let Some(p_entry) = table.get(elem_handle) {
+                        match &p_entry.state {
+                            PromiseState::Fulfilled(_) | PromiseState::Rejected(_) => {
+                                settled_count += 1;
+                            }
+                            PromiseState::Pending => {
+                                if let Some(elem_entry) = table.get_mut(elem_handle) {
+                                    elem_entry.fulfill_reactions.push(PromiseReaction {
+                                        handler: value::encode_undefined(),
+                                        target_promise: result_handle as i64,
+                                        reaction_type: ReactionType::Fulfill,
+                                    });
+                                    elem_entry.reject_reactions.push(PromiseReaction {
+                                        handler: value::encode_undefined(),
+                                        target_promise: result_handle as i64,
+                                        reaction_type: ReactionType::Reject,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if settled_count == len {
+                drop(table);
+                let res_arr = alloc_array(&mut caller, len);
+                if let Some(res_ptr) = resolve_array_ptr(&mut caller, res_arr) {
+                    write_array_length(&mut caller, res_ptr, len);
+                }
+                let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+                if let Some(entry) = table.get_mut(result_handle as usize) {
+                    entry.state = PromiseState::Fulfilled(res_arr);
+                }
+            }
+
+            result_promise
+        },
+    );
+
+    // ── Import 125: promise_any(i64) -> i64 ─────────────────────────────────
+    let promise_any_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+            let arr_ptr = resolve_array_ptr(&mut caller, arr);
+            let len = arr_ptr.and_then(|p| read_array_length(&mut caller, p)).unwrap_or(0);
+
+            let elems: Vec<i64> = if let Some(ptr) = arr_ptr {
+                (0..len).filter_map(|i| read_array_elem(&mut caller, ptr, i)).collect()
+            } else {
+                Vec::new()
+            };
+
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            let result_handle = table.len() as u32;
+            table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(result_handle);
+
+            if arr_ptr.is_none() {
+                if let Some(entry) = table.get_mut(result_handle as usize) {
+                    entry.state = PromiseState::Rejected(value::encode_undefined());
+                }
+                return result_promise;
+            }
+
+            let mut reject_count: u32 = 0;
+
+            for elem in &elems {
+                if value::is_object(*elem) {
+                    let elem_handle = value::decode_object_handle(*elem) as usize;
+                    if let Some(p_entry) = table.get(elem_handle) {
+                        match &p_entry.state {
+                            PromiseState::Fulfilled(val) => {
+                                let val = *val;
+                                if let Some(entry) = table.get_mut(result_handle as usize) {
+                                    if matches!(entry.state, PromiseState::Pending) {
+                                        entry.state = PromiseState::Fulfilled(val);
+                                    }
+                                }
+                                return result_promise;
+                            }
+                            PromiseState::Rejected(_) => {
+                                reject_count += 1;
+                                if reject_count == len {
+                                    if let Some(entry) = table.get_mut(result_handle as usize) {
+                                        if matches!(entry.state, PromiseState::Pending) {
+                                            entry.state = PromiseState::Rejected(value::encode_undefined());
+                                        }
+                                    }
+                                }
+                            }
+                            PromiseState::Pending => {
+                                if let Some(elem_entry) = table.get_mut(elem_handle) {
+                                    elem_entry.fulfill_reactions.push(PromiseReaction {
+                                        handler: value::encode_undefined(),
+                                        target_promise: result_handle as i64,
+                                        reaction_type: ReactionType::Fulfill,
+                                    });
+                                    elem_entry.reject_reactions.push(PromiseReaction {
+                                        handler: value::encode_undefined(),
+                                        target_promise: result_handle as i64,
+                                        reaction_type: ReactionType::Reject,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 126: promise_resolve_static(i64) -> i64 ──────────────────────
+    let promise_resolve_static_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            if value::is_object(val) {
+                let handle = value::decode_object_handle(val) as usize;
+                let table = caller.data().promise_table.lock().expect("promise table mutex");
+                if table.get(handle).is_some() {
+                    return val;
+                }
+            }
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            let handle = table.len() as u32;
+            table.push(PromiseEntry {
+                state: PromiseState::Fulfilled(val),
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            value::encode_object_handle(handle)
+        },
+    );
+
+    // ── Import 127: promise_reject_static(i64) -> i64 ───────────────────────
+    let promise_reject_static_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, reason: i64| -> i64 {
+            let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+            let handle = table.len() as u32;
+            table.push(PromiseEntry {
+                state: PromiseState::Rejected(reason),
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            value::encode_object_handle(handle)
+        },
+    );
+
+    // ── Import 128: is_promise(i64) -> i64 ──────────────────────────────────
+    let is_promise_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            if !value::is_object(val) {
+                return value::encode_bool(false);
+            }
+            let handle = value::decode_object_handle(val) as usize;
+            let table = caller.data().promise_table.lock().expect("promise table mutex");
+            value::encode_bool(table.get(handle).is_some())
+        },
+    );
+
+    // ── Import 129: queue_microtask(i64) -> () ──────────────────────────────
+    let queue_microtask_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, callback: i64| {
+            let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+            queue.push_back(Microtask::MicrotaskCallback { callback });
+        },
+    );
+
+    // ── Import 130: drain_microtasks() -> () ────────────────────────────────
+    let drain_microtasks_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>| {
+            let table = caller.get_export("__table").and_then(|e| e.into_table());
+            let Some(func_table) = table else { return };
+            drain_microtasks_from_caller(&mut caller, &func_table);
+        },
+    );
+
+    // ── Import 131: async_function_start(i32) -> i64 ────────────────────────
+    let async_function_start_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, fn_table_idx: i32| -> i64 {
+            let mut p_table = caller.data().promise_table.lock().expect("promise table mutex");
+            let outer_handle = p_table.len() as u32;
+            p_table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            drop(p_table);
+
+            let mut c_table = caller.data().continuation_table.lock().expect("continuation table mutex");
+            let cont_handle = c_table.len() as u32;
+            c_table.push(ContinuationEntry {
+                fn_table_idx: fn_table_idx as u32,
+                outer_promise: outer_handle as i64,
+                captured_vars: Vec::new(),
+            });
+            drop(c_table);
+
+            let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+            queue.push_back(Microtask::AsyncResume {
+                fn_table_idx: fn_table_idx as u32,
+                continuation: cont_handle as i64,
+                state: 0,
+                resume_val: value::encode_undefined(),
+                is_rejected: false,
+            });
+
+            value::encode_object_handle(outer_handle)
+        },
+    );
+
+    // ── Import 132: async_function_resume(i32, i64, i32, i64, i32) -> () ───
+    let async_function_resume_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, fn_table_idx: i32, continuation: i64, state: i32, resume_val: i64, is_rejected: i32| {
+            let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+            queue.push_back(Microtask::AsyncResume {
+                fn_table_idx: fn_table_idx as u32,
+                continuation,
+                state: state as u32,
+                resume_val,
+                is_rejected: is_rejected != 0,
+            });
+        },
+    );
+
+    // ── Import 133: async_function_suspend(i64, i64) -> () ──────────────────
+    let async_function_suspend_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, continuation: i64, awaited_promise: i64| {
+            let cont_handle = continuation as u32;
+            let cont_fn_idx = {
+                let c_table = caller.data().continuation_table.lock().expect("continuation table mutex");
+                c_table.get(cont_handle as usize).map(|e| e.fn_table_idx).unwrap_or(0)
+            };
+
+            let on_fulfilled = value::encode_function_idx(cont_fn_idx);
+            let on_rejected = value::encode_function_idx(cont_fn_idx);
+
+            let awaited_handle = value::decode_object_handle(awaited_promise) as usize;
+            let mut p_table = caller.data().promise_table.lock().expect("promise table mutex");
+            if let Some(entry) = p_table.get_mut(awaited_handle) {
+                entry.fulfill_reactions.push(PromiseReaction {
+                    handler: on_fulfilled,
+                    target_promise: continuation,
+                    reaction_type: ReactionType::Fulfill,
+                });
+                entry.reject_reactions.push(PromiseReaction {
+                    handler: on_rejected,
+                    target_promise: continuation,
+                    reaction_type: ReactionType::Reject,
+                });
+            }
+        },
+    );
+
+    // ── Import 134: continuation_create(i32, i64, i32) -> i64 ───────────────
+    let continuation_create_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, fn_table_idx: i32, outer_promise: i64, captured_var_count: i32| -> i64 {
+            let mut table = caller.data().continuation_table.lock().expect("continuation table mutex");
+            let handle = table.len() as u32;
+            table.push(ContinuationEntry {
+                fn_table_idx: fn_table_idx as u32,
+                outer_promise,
+                captured_vars: vec![value::encode_undefined(); captured_var_count as usize],
+            });
+            value::encode_object_handle(handle)
+        },
+    );
+
+    // ── Import 135: continuation_save_var(i64, i32, i64) -> () ──────────────
+    let continuation_save_var_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, continuation: i64, slot: i32, val: i64| {
+            let handle = value::decode_object_handle(continuation) as usize;
+            let mut table = caller.data().continuation_table.lock().expect("continuation table mutex");
+            if let Some(entry) = table.get_mut(handle) {
+                if (slot as usize) < entry.captured_vars.len() {
+                    entry.captured_vars[slot as usize] = val;
+                }
+            }
+        },
+    );
+
+    // ── Import 136: continuation_load_var(i64, i32) -> i64 ──────────────────
+    let continuation_load_var_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, continuation: i64, slot: i32| -> i64 {
+            let handle = value::decode_object_handle(continuation) as usize;
+            let table = caller.data().continuation_table.lock().expect("continuation table mutex");
+            if let Some(entry) = table.get(handle) {
+                if (slot as usize) < entry.captured_vars.len() {
+                    return entry.captured_vars[slot as usize];
+                }
+            }
+            value::encode_undefined()
+        },
+    );
+
+    // ── Import 137: async_generator_start(i32) -> i64 ───────────────────────
+    let async_generator_start_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, _fn_table_idx: i32| -> i64 {
+            let mut table = caller.data().async_generator_table.lock().expect("async generator table mutex");
+            let handle = table.len() as u32;
+            table.push(AsyncGeneratorEntry {
+                state: AsyncGeneratorState::SuspendedStart,
+                queue: Vec::new(),
+            });
+            value::encode_object_handle(handle)
+        },
+    );
+
+    // ── Import 138: async_generator_next(i64, i64) -> i64 ───────────────────
+    let async_generator_next_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
+            let handle = value::decode_object_handle(generator) as usize;
+            let mut p_table = caller.data().promise_table.lock().expect("promise table mutex");
+            let result_handle = p_table.len() as u32;
+            p_table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(result_handle);
+            drop(p_table);
+
+            let mut g_table = caller.data().async_generator_table.lock().expect("async generator table mutex");
+            if let Some(entry) = g_table.get_mut(handle) {
+                entry.queue.push(AsyncGeneratorRequest {
+                    completion_type: AsyncGeneratorCompletionType::Next,
+                    value,
+                    promise: result_handle as i64,
+                });
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 139: async_generator_return(i64, i64) -> i64 ─────────────────
+    let async_generator_return_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
+            let handle = value::decode_object_handle(generator) as usize;
+            let mut p_table = caller.data().promise_table.lock().expect("promise table mutex");
+            let result_handle = p_table.len() as u32;
+            p_table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(result_handle);
+            drop(p_table);
+
+            let mut g_table = caller.data().async_generator_table.lock().expect("async generator table mutex");
+            if let Some(entry) = g_table.get_mut(handle) {
+                entry.queue.push(AsyncGeneratorRequest {
+                    completion_type: AsyncGeneratorCompletionType::Return,
+                    value,
+                    promise: result_handle as i64,
+                });
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 140: async_generator_throw(i64, i64) -> i64 ──────────────────
+    let async_generator_throw_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
+            let handle = value::decode_object_handle(generator) as usize;
+            let mut p_table = caller.data().promise_table.lock().expect("promise table mutex");
+            let result_handle = p_table.len() as u32;
+            p_table.push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(result_handle);
+            drop(p_table);
+
+            let mut g_table = caller.data().async_generator_table.lock().expect("async generator table mutex");
+            if let Some(entry) = g_table.get_mut(handle) {
+                entry.queue.push(AsyncGeneratorRequest {
+                    completion_type: AsyncGeneratorCompletionType::Throw,
+                    value,
+                    promise: result_handle as i64,
+                });
+            }
+            result_promise
+        },
+    );
+
     let imports = [
         console_log.into(),          // 0
         f64_mod.into(),              // 1
@@ -4449,12 +5333,45 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         string_replace_fn.into(),            // 113
         string_search_fn.into(),             // 114
         string_split_fn.into(),              // 115
+        // ── Promise / async imports ──
+        promise_create_fn.into(),            // 116
+        promise_instance_resolve_fn.into(),  // 117
+        promise_instance_reject_fn.into(),   // 118
+        promise_then_fn.into(),              // 119
+        promise_catch_fn.into(),             // 120
+        promise_finally_fn.into(),           // 121
+        promise_all_fn.into(),               // 122
+        promise_race_fn.into(),              // 123
+        promise_all_settled_fn.into(),       // 124
+        promise_any_fn.into(),               // 125
+        promise_resolve_static_fn.into(),    // 126
+        promise_reject_static_fn.into(),     // 127
+        is_promise_fn.into(),                // 128
+        queue_microtask_fn.into(),           // 129
+        drain_microtasks_fn.into(),          // 130
+        async_function_start_fn.into(),      // 131
+        async_function_resume_fn.into(),     // 132
+        async_function_suspend_fn.into(),    // 133
+        continuation_create_fn.into(),       // 134
+        continuation_save_var_fn.into(),     // 135
+        continuation_load_var_fn.into(),     // 136
+        async_generator_start_fn.into(),     // 137
+        async_generator_next_fn.into(),      // 138
+        async_generator_return_fn.into(),    // 139
+        async_generator_throw_fn.into(),     // 140
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
     // ── Run main ─────────────────────────────────────────────────────────
     let main = instance.get_typed_func::<(), ()>(&mut store, "main")?;
     let main_result = main.call(&mut store, ());
+
+    // ── Drain microtasks after main() ────────────────────────────────────
+    if main_result.is_ok() {
+        if let Some(Extern::Table(func_table)) = instance.get_export(&mut store, "__table") {
+            drain_microtasks_from_store(&mut store, &func_table);
+        }
+    }
 
     // ── Timer event loop (only if main succeeded) ─────────────────────────
     // Poll timers; fire expired callbacks via the WASM function table.
@@ -4521,6 +5438,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             }
                         }
                     }
+                    // Drain microtasks after timer callback
+                    drain_microtasks_from_store(&mut store, &tbl);
                 }
 
                 // Re-schedule if repeating
@@ -4590,6 +5509,14 @@ struct RuntimeState {
     symbol_table: Arc<Mutex<Vec<SymbolEntry>>>,
     /// RegExp 侧表：存储编译后的正则表达式和元数据
     regex_table: Arc<Mutex<Vec<RegexEntry>>>,
+    /// Promise 侧表：存储 Promise 状态和反应
+    promise_table: Arc<Mutex<Vec<PromiseEntry>>>,
+    /// 微任务队列
+    microtask_queue: Arc<Mutex<VecDeque<Microtask>>>,
+    /// Continuation 侧表：存储异步函数续延
+    continuation_table: Arc<Mutex<Vec<ContinuationEntry>>>,
+    /// AsyncGenerator 侧表：存储异步生成器状态
+    async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>>,
 }
 
 /// 绑定函数记录
@@ -4644,6 +5571,83 @@ enum EnumeratorState {
         index: usize,
     },
     Error,
+}
+
+#[derive(Clone)]
+enum PromiseState {
+    Pending,
+    Fulfilled(i64),
+    Rejected(i64),
+}
+
+struct PromiseEntry {
+    state: PromiseState,
+    fulfill_reactions: Vec<PromiseReaction>,
+    reject_reactions: Vec<PromiseReaction>,
+}
+
+#[derive(Clone)]
+struct PromiseReaction {
+    handler: i64,
+    target_promise: i64,
+    reaction_type: ReactionType,
+}
+
+#[derive(Clone, Copy)]
+enum ReactionType {
+    Fulfill,
+    Reject,
+}
+
+enum Microtask {
+    PromiseReaction {
+        promise: i64,
+        reaction_type: ReactionType,
+        handler: i64,
+        argument: i64,
+    },
+    MicrotaskCallback {
+        callback: i64,
+    },
+    AsyncResume {
+        fn_table_idx: u32,
+        continuation: i64,
+        state: u32,
+        resume_val: i64,
+        is_rejected: bool,
+    },
+}
+
+struct ContinuationEntry {
+    fn_table_idx: u32,
+    outer_promise: i64,
+    captured_vars: Vec<i64>,
+}
+
+struct AsyncGeneratorEntry {
+    state: AsyncGeneratorState,
+    queue: Vec<AsyncGeneratorRequest>,
+}
+
+#[derive(Clone)]
+enum AsyncGeneratorState {
+    SuspendedStart,
+    SuspendedYield,
+    Executing,
+    Completed,
+}
+
+struct AsyncGeneratorRequest {
+    completion_type: AsyncGeneratorCompletionType,
+    value: i64,
+    promise: i64,
+}
+
+#[derive(Clone, Copy)]
+enum AsyncGeneratorCompletionType {
+    Next,
+    Return,
+    Throw,
 }
 
 fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<String> {
@@ -5934,6 +6938,156 @@ fn obj_spread_impl(
 ) {
     // 简化实现：不做任何复制
     // 完整实现需要遍历 source 的 own properties 并复制到 dest
+}
+
+fn drain_microtasks_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_table: &Table,
+) {
+    loop {
+        let task = {
+            let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+            queue.pop_front()
+        };
+        match task {
+            Some(Microtask::PromiseReaction { handler, argument, .. }) => {
+                if !value::is_undefined(handler) {
+                    call_host_function_from_caller(caller, func_table, handler, argument);
+                }
+            }
+            Some(Microtask::MicrotaskCallback { callback }) => {
+                call_host_function_from_caller(caller, func_table, callback, value::encode_undefined());
+            }
+            Some(Microtask::AsyncResume { fn_table_idx, continuation, state, resume_val, is_rejected }) => {
+                resume_async_function_from_caller(caller, func_table, fn_table_idx, continuation, state, resume_val, is_rejected);
+            }
+            None => break,
+        }
+    }
+}
+
+fn drain_microtasks_from_store(
+    store: &mut Store<RuntimeState>,
+    func_table: &Table,
+) {
+    loop {
+        let task = {
+            let mut queue = store.data().microtask_queue.lock().expect("microtask queue mutex");
+            queue.pop_front()
+        };
+        match task {
+            Some(Microtask::PromiseReaction { handler, argument, .. }) => {
+                if !value::is_undefined(handler) {
+                    call_host_function_from_store(store, func_table, handler, argument);
+                }
+            }
+            Some(Microtask::MicrotaskCallback { callback }) => {
+                call_host_function_from_store(store, func_table, callback, value::encode_undefined());
+            }
+            Some(Microtask::AsyncResume { fn_table_idx, continuation, state, resume_val, is_rejected }) => {
+                resume_async_function_from_store(store, func_table, fn_table_idx, continuation, state, resume_val, is_rejected);
+            }
+            None => break,
+        }
+    }
+}
+
+fn call_host_function_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_table: &Table,
+    handler: i64,
+    argument: i64,
+) {
+    let (func_idx, env_obj) = if value::is_closure(handler) {
+        let idx = value::decode_closure_idx(handler);
+        let closures = caller.data().closures.lock().unwrap();
+        let entry = &closures[idx as usize];
+        (entry.func_idx, entry.env_obj)
+    } else if value::is_function(handler) {
+        (value::decode_function_idx(handler), value::encode_undefined())
+    } else if value::is_bound(handler) {
+        let bound_idx = value::decode_bound_idx(handler);
+        let bound = caller.data().bound_objects.lock().unwrap();
+        let record = &bound[bound_idx as usize];
+        (value::decode_function_idx(record.target_func), record.bound_this)
+    } else {
+        return;
+    };
+
+    let func_ref = func_table.get(&mut *caller, func_idx as u64);
+    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
+    let Some(func) = func else { return };
+    let mut results = [Val::I64(0)];
+    let _ = func.call(&mut *caller, &[Val::I64(env_obj), Val::I64(argument), Val::I32(0), Val::I32(0)], &mut results);
+}
+
+fn resume_async_function_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_table: &Table,
+    fn_table_idx: u32,
+    continuation: i64,
+    state: u32,
+    resume_val: i64,
+    is_rejected: bool,
+) {
+    let func_ref = func_table.get(&mut *caller, fn_table_idx as u64);
+    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
+    let Some(func) = func else { return };
+    let mut results = [Val::I64(0)];
+    let _ = func.call(
+        &mut *caller,
+        &[Val::I64(continuation), Val::I64(state as i64), Val::I64(resume_val), Val::I64(if is_rejected { 1 } else { 0 })],
+        &mut results,
+    );
+}
+
+fn call_host_function_from_store(
+    store: &mut Store<RuntimeState>,
+    func_table: &Table,
+    handler: i64,
+    argument: i64,
+) {
+    let (func_idx, env_obj) = if value::is_closure(handler) {
+        let idx = value::decode_closure_idx(handler);
+        let closures = store.data().closures.lock().unwrap();
+        let entry = &closures[idx as usize];
+        (entry.func_idx, entry.env_obj)
+    } else if value::is_function(handler) {
+        (value::decode_function_idx(handler), value::encode_undefined())
+    } else if value::is_bound(handler) {
+        let bound_idx = value::decode_bound_idx(handler);
+        let bound = store.data().bound_objects.lock().unwrap();
+        let record = &bound[bound_idx as usize];
+        (value::decode_function_idx(record.target_func), record.bound_this)
+    } else {
+        return;
+    };
+
+    let func_ref = func_table.get(&mut *store, func_idx as u64);
+    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
+    let Some(func) = func else { return };
+    let mut results = [Val::I64(0)];
+    let _ = func.call(&mut *store, &[Val::I64(env_obj), Val::I64(argument), Val::I32(0), Val::I32(0)], &mut results);
+}
+
+fn resume_async_function_from_store(
+    store: &mut Store<RuntimeState>,
+    func_table: &Table,
+    fn_table_idx: u32,
+    continuation: i64,
+    state: u32,
+    resume_val: i64,
+    is_rejected: bool,
+) {
+    let func_ref = func_table.get(&mut *store, fn_table_idx as u64);
+    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
+    let Some(func) = func else { return };
+    let mut results = [Val::I64(0)];
+    let _ = func.call(
+        &mut *store,
+        &[Val::I64(continuation), Val::I64(state as i64), Val::I64(resume_val), Val::I64(if is_rejected { 1 } else { 0 })],
+        &mut results,
+    );
 }
 
 #[cfg(test)]
