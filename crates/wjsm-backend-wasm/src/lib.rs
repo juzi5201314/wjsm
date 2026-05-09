@@ -3008,40 +3008,68 @@ impl Compiler {
                     let exit_idx = exit_block.0 as usize;
                     self.compiled_blocks.insert(idx);
                     let default_target_idx = default_block.0 as usize;
-                    let num_cases = cases.len();
 
-                    let mut sorted_cases: Vec<&wjsm_ir::SwitchCaseTarget> = cases.iter().collect();
-                    sorted_cases.sort_by_key(|case| case.target.0);
+                    struct SwitchEntry {
+                        is_default: bool,
+                        constant_idx: Option<u32>,
+                        target_idx: usize,
+                    }
+
+                    let mut entries: Vec<SwitchEntry> = Vec::new();
+                    for case in cases.iter() {
+                        entries.push(SwitchEntry {
+                            is_default: false,
+                            constant_idx: Some(case.constant.0),
+                            target_idx: case.target.0 as usize,
+                        });
+                    }
+                    entries.push(SwitchEntry {
+                        is_default: true,
+                        constant_idx: None,
+                        target_idx: default_target_idx,
+                    });
+
+                    entries.sort_by_key(|e| e.target_idx);
+
+                    let num_entries = entries.len();
+                    let default_pos = entries.iter().position(|e| e.is_default).unwrap();
 
                     self.compiled_blocks.insert(default_target_idx);
+                    self.compiled_blocks.insert(exit_idx);
 
                     self.emit(WasmInstruction::Block(BlockType::Empty));
-                    self.emit(WasmInstruction::Block(BlockType::Empty));
-                    for _ in 0..num_cases {
+
+                    for _ in 0..num_entries {
                         self.emit(WasmInstruction::Block(BlockType::Empty));
                     }
 
-                    for (i, case) in sorted_cases.iter().enumerate() {
+                    for (i, entry) in entries.iter().enumerate() {
+                        if entry.is_default {
+                            continue;
+                        }
                         self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                         let const_val = self.encode_constant(
-                            &module.constants()[case.constant.0 as usize],
+                            &module.constants()[entry.constant_idx.unwrap() as usize],
                             module,
                         )?;
                         self.emit(WasmInstruction::I64Const(const_val));
                         self.emit(WasmInstruction::I64Eq);
                         self.emit(WasmInstruction::BrIf(i as u32));
                     }
-                    self.emit(WasmInstruction::Br(num_cases as u32));
+                    self.emit(WasmInstruction::Br(default_pos as u32));
 
-                    for (i, case) in sorted_cases.iter().enumerate() {
+                    for i in 0..num_entries {
+                        if i == default_pos {
+                            self.compiled_blocks.remove(&default_target_idx);
+                        }
                         self.emit(WasmInstruction::End);
-                        let case_target = case.target.0 as usize;
-                        let switch_break_depth = (num_cases - i) as u32;
-                        let extra_depth = (num_cases - i + 1) as u32;
+                        let entry_target = entries[i].target_idx;
+                        let switch_break_depth = (num_entries - i - 1) as u32;
+                        let extra_depth = (num_entries - i) as u32;
                         self.compile_switch_case(
                             module,
                             blocks,
-                            case_target,
+                            entry_target,
                             exit_idx,
                             switch_break_depth,
                             extra_depth,
@@ -3050,19 +3078,10 @@ impl Compiler {
                     }
 
                     self.emit(WasmInstruction::End);
-                    self.compiled_blocks.remove(&default_target_idx);
-                    self.compile_switch_case(
-                        module,
-                        blocks,
-                        default_target_idx,
-                        exit_idx,
-                        0,
-                        1,
-                        &loops,
-                    )?;
 
-                    self.emit(WasmInstruction::End);
-                    self.compiled_blocks.insert(exit_idx);
+                    if self.current_func_returns_value {
+                        self.emit(WasmInstruction::Unreachable);
+                    }
 
                     idx = exit_idx;
                 }

@@ -4372,12 +4372,22 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 drop(table);
                 let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
                 for reaction in reactions {
-                    queue.push_back(Microtask::PromiseReaction {
-                        promise: reaction.target_promise,
-                        reaction_type: reaction.reaction_type,
-                        handler: reaction.handler,
-                        argument: value,
-                    });
+                    if let Some(async_state) = reaction.async_resume_state {
+                        queue.push_back(Microtask::AsyncResume {
+                            fn_table_idx: reaction.handler as u32,
+                            continuation: reaction.target_promise,
+                            state: async_state as u32,
+                            resume_val: value,
+                            is_rejected: false,
+                        });
+                    } else {
+                        queue.push_back(Microtask::PromiseReaction {
+                            promise: reaction.target_promise,
+                            reaction_type: reaction.reaction_type,
+                            handler: reaction.handler,
+                            argument: value,
+                        });
+                    }
                 }
             }
         },
@@ -4398,12 +4408,22 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 drop(table);
                 let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
                 for reaction in reactions {
-                    queue.push_back(Microtask::PromiseReaction {
-                        promise: reaction.target_promise,
-                        reaction_type: reaction.reaction_type,
-                        handler: reaction.handler,
-                        argument: reason,
-                    });
+                    if let Some(async_state) = reaction.async_resume_state {
+                        queue.push_back(Microtask::AsyncResume {
+                            fn_table_idx: reaction.handler as u32,
+                            continuation: reaction.target_promise,
+                            state: async_state as u32,
+                            resume_val: reason,
+                            is_rejected: true,
+                        });
+                    } else {
+                        queue.push_back(Microtask::PromiseReaction {
+                            promise: reaction.target_promise,
+                            reaction_type: reaction.reaction_type,
+                            handler: reaction.handler,
+                            argument: reason,
+                        });
+                    }
                 }
             }
         },
@@ -4426,30 +4446,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 match &entry.state {
                     PromiseState::Pending => {
                         if !value::is_undefined(on_fulfilled) {
-                            entry.fulfill_reactions.push(PromiseReaction {
-                                handler: on_fulfilled,
-                                target_promise: result_handle as i64,
-                                reaction_type: ReactionType::Fulfill,
-                            });
+                            entry.fulfill_reactions.push(PromiseReaction::new(on_fulfilled, result_handle as i64, ReactionType::Fulfill,));
                         } else {
-                            entry.fulfill_reactions.push(PromiseReaction {
-                                handler: value::encode_undefined(),
-                                target_promise: result_handle as i64,
-                                reaction_type: ReactionType::Fulfill,
-                            });
+                            entry.fulfill_reactions.push(PromiseReaction::new(value::encode_undefined(), result_handle as i64, ReactionType::Fulfill,));
                         }
                         if !value::is_undefined(on_rejected) {
-                            entry.reject_reactions.push(PromiseReaction {
-                                handler: on_rejected,
-                                target_promise: result_handle as i64,
-                                reaction_type: ReactionType::Reject,
-                            });
+                            entry.reject_reactions.push(PromiseReaction::new(on_rejected, result_handle as i64, ReactionType::Reject,));
                         } else {
-                            entry.reject_reactions.push(PromiseReaction {
-                                handler: value::encode_undefined(),
-                                target_promise: result_handle as i64,
-                                reaction_type: ReactionType::Reject,
-                            });
+                            entry.reject_reactions.push(PromiseReaction::new(value::encode_undefined(), result_handle as i64, ReactionType::Reject,));
                         }
                     }
                     PromiseState::Fulfilled(val) => {
@@ -4498,16 +4502,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             if let Some(entry) = table.get_mut(handle) {
                 match &entry.state {
                     PromiseState::Pending => {
-                        entry.fulfill_reactions.push(PromiseReaction {
-                            handler: value::encode_undefined(),
-                            target_promise: result_handle as i64,
-                            reaction_type: ReactionType::Fulfill,
-                        });
-                        entry.reject_reactions.push(PromiseReaction {
-                            handler: on_rejected,
-                            target_promise: result_handle as i64,
-                            reaction_type: ReactionType::Reject,
-                        });
+                        entry.fulfill_reactions.push(PromiseReaction::new(value::encode_undefined(), result_handle as i64, ReactionType::Fulfill,));
+                        entry.reject_reactions.push(PromiseReaction::new(on_rejected, result_handle as i64, ReactionType::Reject,));
                     }
                     PromiseState::Fulfilled(val) => {
                         let val = *val;
@@ -4555,16 +4551,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             if let Some(entry) = table.get_mut(handle) {
                 match &entry.state {
                     PromiseState::Pending => {
-                        entry.fulfill_reactions.push(PromiseReaction {
-                            handler: on_finally,
-                            target_promise: result_handle as i64,
-                            reaction_type: ReactionType::Fulfill,
-                        });
-                        entry.reject_reactions.push(PromiseReaction {
-                            handler: on_finally,
-                            target_promise: result_handle as i64,
-                            reaction_type: ReactionType::Reject,
-                        });
+                        entry.fulfill_reactions.push(PromiseReaction::new(on_finally, result_handle as i64, ReactionType::Fulfill,));
+                        entry.reject_reactions.push(PromiseReaction::new(on_finally, result_handle as i64, ReactionType::Reject,));
                     }
                     PromiseState::Fulfilled(val) => {
                         let val = *val;
@@ -4658,16 +4646,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             }
                             PromiseState::Pending => {
                                 if let Some(elem_entry) = table.get_mut(elem_handle) {
-                                    elem_entry.fulfill_reactions.push(PromiseReaction {
-                                        handler: value::encode_undefined(),
-                                        target_promise: result_handle as i64,
-                                        reaction_type: ReactionType::Fulfill,
-                                    });
-                                    elem_entry.reject_reactions.push(PromiseReaction {
-                                        handler: value::encode_undefined(),
-                                        target_promise: result_handle as i64,
-                                        reaction_type: ReactionType::Reject,
-                                    });
+                                    elem_entry.fulfill_reactions.push(PromiseReaction::new(value::encode_undefined(), result_handle as i64, ReactionType::Fulfill,));
+                                    elem_entry.reject_reactions.push(PromiseReaction::new(value::encode_undefined(), result_handle as i64, ReactionType::Reject,));
                                 }
                             }
                         }
@@ -4752,16 +4732,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             }
                             PromiseState::Pending => {
                                 if let Some(elem_entry) = table.get_mut(elem_handle) {
-                                    elem_entry.fulfill_reactions.push(PromiseReaction {
-                                        handler: value::encode_undefined(),
-                                        target_promise: result_handle as i64,
-                                        reaction_type: ReactionType::Fulfill,
-                                    });
-                                    elem_entry.reject_reactions.push(PromiseReaction {
-                                        handler: value::encode_undefined(),
-                                        target_promise: result_handle as i64,
-                                        reaction_type: ReactionType::Reject,
-                                    });
+                                    elem_entry.fulfill_reactions.push(PromiseReaction::new(value::encode_undefined(), result_handle as i64, ReactionType::Fulfill,));
+                                    elem_entry.reject_reactions.push(PromiseReaction::new(value::encode_undefined(), result_handle as i64, ReactionType::Reject,));
                                 }
                             }
                         }
@@ -4819,16 +4791,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             }
                             PromiseState::Pending => {
                                 if let Some(elem_entry) = table.get_mut(elem_handle) {
-                                    elem_entry.fulfill_reactions.push(PromiseReaction {
-                                        handler: value::encode_undefined(),
-                                        target_promise: result_handle as i64,
-                                        reaction_type: ReactionType::Fulfill,
-                                    });
-                                    elem_entry.reject_reactions.push(PromiseReaction {
-                                        handler: value::encode_undefined(),
-                                        target_promise: result_handle as i64,
-                                        reaction_type: ReactionType::Reject,
-                                    });
+                                    elem_entry.fulfill_reactions.push(PromiseReaction::new(value::encode_undefined(), result_handle as i64, ReactionType::Fulfill,));
+                                    elem_entry.reject_reactions.push(PromiseReaction::new(value::encode_undefined(), result_handle as i64, ReactionType::Reject,));
                                 }
                             }
                         }
@@ -4909,16 +4873,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             }
                             PromiseState::Pending => {
                                 if let Some(elem_entry) = table.get_mut(elem_handle) {
-                                    elem_entry.fulfill_reactions.push(PromiseReaction {
-                                        handler: value::encode_undefined(),
-                                        target_promise: result_handle as i64,
-                                        reaction_type: ReactionType::Fulfill,
-                                    });
-                                    elem_entry.reject_reactions.push(PromiseReaction {
-                                        handler: value::encode_undefined(),
-                                        target_promise: result_handle as i64,
-                                        reaction_type: ReactionType::Reject,
-                                    });
+                                    elem_entry.fulfill_reactions.push(PromiseReaction::new(value::encode_undefined(), result_handle as i64, ReactionType::Fulfill,));
+                                    elem_entry.reject_reactions.push(PromiseReaction::new(value::encode_undefined(), result_handle as i64, ReactionType::Reject,));
                                 }
                             }
                         }
@@ -5087,10 +5043,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             {
                 let mut c_table = caller.data().continuation_table.lock().expect("continuation table mutex");
                 if let Some(entry) = c_table.get_mut(cont_handle) {
-                    while entry.captured_vars.len() < 2 {
+                    while entry.captured_vars.len() < 4 {
                         entry.captured_vars.push(value::encode_undefined());
                     }
                     entry.captured_vars[0] = value::encode_f64(state as f64);
+                    entry.captured_vars[1] = value::encode_bool(false);
                 }
             }
             let cont_fn_idx = {
@@ -5098,22 +5055,41 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 c_table.get(cont_handle).map(|e| e.fn_table_idx).unwrap_or(0)
             };
 
-            let on_fulfilled = value::encode_function_idx(cont_fn_idx);
-            let on_rejected = value::encode_function_idx(cont_fn_idx);
-
             let awaited_handle = value::decode_object_handle(awaited_promise) as usize;
             let mut p_table = caller.data().promise_table.lock().expect("promise table mutex");
             if let Some(entry) = p_table.get_mut(awaited_handle) {
-                entry.fulfill_reactions.push(PromiseReaction {
-                    handler: on_fulfilled,
-                    target_promise: continuation,
-                    reaction_type: ReactionType::Fulfill,
-                });
-                entry.reject_reactions.push(PromiseReaction {
-                    handler: on_rejected,
-                    target_promise: continuation,
-                    reaction_type: ReactionType::Reject,
-                });
+                match &entry.state {
+                    PromiseState::Pending => {
+                        entry.fulfill_reactions.push(PromiseReaction::new_async(cont_fn_idx as i64, continuation, ReactionType::Fulfill, state));
+                        entry.reject_reactions.push(PromiseReaction::new_async(cont_fn_idx as i64, continuation, ReactionType::Reject, state));
+                    }
+                    PromiseState::Fulfilled(val) => {
+                        let val = *val;
+                        drop(p_table);
+                        let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+                        queue.push_back(Microtask::AsyncResume {
+                            fn_table_idx: cont_fn_idx,
+                            continuation,
+                            state: state as u32,
+                            resume_val: val,
+                            is_rejected: false,
+                        });
+                        return;
+                    }
+                    PromiseState::Rejected(reason) => {
+                        let reason = *reason;
+                        drop(p_table);
+                        let mut queue = caller.data().microtask_queue.lock().expect("microtask queue mutex");
+                        queue.push_back(Microtask::AsyncResume {
+                            fn_table_idx: cont_fn_idx,
+                            continuation,
+                            state: state as u32,
+                            resume_val: reason,
+                            is_rejected: true,
+                        });
+                        return;
+                    }
+                }
             }
         },
     );
@@ -5133,7 +5109,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             };
             let mut table = caller.data().continuation_table.lock().expect("continuation table mutex");
             let handle = table.len() as u32;
-            let total_slots = 2 + nanbox_to_usize(captured_var_count);
+            let total_slots = nanbox_to_usize(captured_var_count);
             table.push(ContinuationEntry {
                 fn_table_idx: resolved_fn_idx,
                 outer_promise,
@@ -5152,7 +5128,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |caller: Caller<'_, RuntimeState>, continuation: i64, slot: i64, val: i64| {
             let handle = value::decode_object_handle(continuation) as usize;
-            let actual_slot = 2 + nanbox_to_usize(slot);
+            let actual_slot = nanbox_to_usize(slot);
             let mut table = caller.data().continuation_table.lock().expect("continuation table mutex");
             if let Some(entry) = table.get_mut(handle) {
                 if actual_slot < entry.captured_vars.len() {
@@ -5660,6 +5636,16 @@ struct PromiseReaction {
     handler: i64,
     target_promise: i64,
     reaction_type: ReactionType,
+    async_resume_state: Option<i64>,
+}
+
+impl PromiseReaction {
+    fn new(handler: i64, target_promise: i64, reaction_type: ReactionType) -> Self {
+        Self { handler, target_promise, reaction_type, async_resume_state: None }
+    }
+    fn new_async(handler: i64, target_promise: i64, reaction_type: ReactionType, state: i64) -> Self {
+        Self { handler, target_promise, reaction_type, async_resume_state: Some(state) }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -7058,7 +7044,9 @@ fn drain_microtasks_from_store(
             Some(Microtask::AsyncResume { fn_table_idx, continuation, state, resume_val, is_rejected }) => {
                 resume_async_function_from_store(store, func_table, fn_table_idx, continuation, state, resume_val, is_rejected);
             }
-            None => break,
+            None => {
+                break;
+            }
         }
     }
 }

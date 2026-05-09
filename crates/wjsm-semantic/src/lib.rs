@@ -4417,7 +4417,7 @@ impl Lowerer {
         };
 
         let num_user_params = fn_decl.function.params.len();
-        let count_val_num = 2 + num_user_params;
+        let count_val_num = 4 + num_user_params;
         let count_const = self.module.add_constant(Constant::Number(count_val_num as f64));
         let count_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -4438,7 +4438,7 @@ impl Lowerer {
             },
         );
 
-        let save_slot0_const = self.module.add_constant(Constant::Number(0.0));
+        let save_slot0_const = self.module.add_constant(Constant::Number(2.0));
         let save_slot0_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,
@@ -4456,7 +4456,7 @@ impl Lowerer {
             },
         );
 
-        let save_slot1_const = self.module.add_constant(Constant::Number(1.0));
+        let save_slot1_const = self.module.add_constant(Constant::Number(3.0));
         let save_slot1_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,
@@ -4498,7 +4498,7 @@ impl Lowerer {
                     name: param_ir_name.clone(),
                 },
             );
-            let save_slot_const = self.module.add_constant(Constant::Number((2 + i) as f64));
+            let save_slot_const = self.module.add_constant(Constant::Number((4 + i) as f64));
             let save_slot_val = self.alloc_value();
             self.current_function.append_instruction(
                 wrapper_after_inits,
@@ -5164,7 +5164,7 @@ impl Lowerer {
         };
 
         let num_user_params = fn_expr.function.params.len();
-        let count_val_num = 2 + num_user_params;
+        let count_val_num = 4 + num_user_params;
         let count_const = self.module.add_constant(Constant::Number(count_val_num as f64));
         let count_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -5185,7 +5185,7 @@ impl Lowerer {
             },
         );
 
-        let save_slot0_const = self.module.add_constant(Constant::Number(0.0));
+        let save_slot0_const = self.module.add_constant(Constant::Number(2.0));
         let save_slot0_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,
@@ -5203,7 +5203,7 @@ impl Lowerer {
             },
         );
 
-        let save_slot1_const = self.module.add_constant(Constant::Number(1.0));
+        let save_slot1_const = self.module.add_constant(Constant::Number(3.0));
         let save_slot1_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,
@@ -5245,7 +5245,7 @@ impl Lowerer {
                     name: param_ir_name.clone(),
                 },
             );
-            let save_slot_const = self.module.add_constant(Constant::Number((2 + i) as f64));
+            let save_slot_const = self.module.add_constant(Constant::Number((4 + i) as f64));
             let save_slot_val = self.alloc_value();
             self.current_function.append_instruction(
                 wrapper_after_inits,
@@ -5908,7 +5908,7 @@ impl Lowerer {
         };
 
         let num_user_params = arrow.params.len();
-        let count_val_num = 2 + num_user_params;
+        let count_val_num = 4 + num_user_params;
         let count_const = self.module.add_constant(Constant::Number(count_val_num as f64));
         let count_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -5929,7 +5929,7 @@ impl Lowerer {
             },
         );
 
-        let save_slot0_const = self.module.add_constant(Constant::Number(0.0));
+        let save_slot0_const = self.module.add_constant(Constant::Number(2.0));
         let save_slot0_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,
@@ -5947,7 +5947,7 @@ impl Lowerer {
             },
         );
 
-        let save_slot1_const = self.module.add_constant(Constant::Number(1.0));
+        let save_slot1_const = self.module.add_constant(Constant::Number(3.0));
         let save_slot1_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,
@@ -5989,7 +5989,7 @@ impl Lowerer {
                     name: param_ir_name.clone(),
                 },
             );
-            let save_slot_const = self.module.add_constant(Constant::Number((2 + i) as f64));
+            let save_slot_const = self.module.add_constant(Constant::Number((4 + i) as f64));
             let save_slot_val = self.alloc_value();
             self.current_function.append_instruction(
                 wrapper_after_inits,
