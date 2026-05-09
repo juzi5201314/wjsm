@@ -326,3 +326,7 @@ pub fn is_bound(val: i64) -> bool {
 pub fn decode_bound_idx(val: i64) -> u32 {
     (val as u64 & 0xFFFF_FFFF) as u32
 }
+
+pub const HEAP_TYPE_PROMISE: u8 = 0x02;
+pub const HEAP_TYPE_CONTINUATION: u8 = 0x03;
+pub const HEAP_TYPE_ASYNC_GENERATOR: u8 = 0x04;

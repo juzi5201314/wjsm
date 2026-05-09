@@ -704,6 +704,18 @@ struct Lowerer {
     /// 导入别名映射：local_name → source_ir_name
     /// 用于 `import { x as y }` 和 `import x from './dep'` 等场景
     import_aliases: std::collections::HashMap<String, String>,
+    is_async_fn: bool,
+    async_state_counter: u32,
+    captured_var_slots: std::collections::HashMap<String, u32>,
+    async_resume_block: Option<BasicBlockId>,
+    async_state_ir_name: Option<String>,
+    async_resume_val_ir_name: Option<String>,
+    async_is_rejected_ir_name: Option<String>,
+    async_continuation_ir_name: Option<String>,
+    async_promise_ir_name: Option<String>,
+    promise_resolve_cb_fn_id: Option<wjsm_ir::FunctionId>,
+    promise_reject_cb_fn_id: Option<wjsm_ir::FunctionId>,
+    async_state_blocks: Vec<BasicBlockId>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct HoistedVar {
@@ -785,6 +797,18 @@ impl Lowerer {
             import_bindings: std::collections::HashMap::new(),
             export_map: std::collections::HashMap::new(),
             import_aliases: std::collections::HashMap::new(),
+            is_async_fn: false,
+            async_state_counter: 0,
+            captured_var_slots: std::collections::HashMap::new(),
+            async_resume_block: None,
+            async_state_ir_name: None,
+            async_resume_val_ir_name: None,
+            async_is_rejected_ir_name: None,
+            async_continuation_ir_name: None,
+            async_promise_ir_name: None,
+            promise_resolve_cb_fn_id: None,
+            promise_reject_cb_fn_id: None,
+            async_state_blocks: Vec::new(),
         }
     }
 
@@ -1510,6 +1534,9 @@ impl Lowerer {
         for_of: &swc_ast::ForOfStmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
+        if for_of.is_await {
+            return self.lower_for_await_of(for_of, flow);
+        }
         let block = self.ensure_open(flow)?;
 
         let iterable = self.lower_expr(&for_of.right, block)?;
@@ -1618,6 +1645,14 @@ impl Lowerer {
             .set_terminator(next_block, Terminator::Jump { target: header });
 
         Ok(StmtFlow::Open(exit))
+    }
+
+    fn lower_for_await_of(
+        &mut self,
+        for_of: &swc_ast::ForOfStmt,
+        flow: StmtFlow,
+    ) -> Result<StmtFlow, LoweringError> {
+        self.lower_for_of(for_of, flow)
     }
 
     /// Lower the LHS of a for...in or for...of loop.
@@ -1905,8 +1940,14 @@ impl Lowerer {
         let return_block = self.resolve_store_block(block);
         match self.lower_pending_finalizers(return_block)? {
             StmtFlow::Open(after_finally) => {
-                self.current_function
-                    .set_terminator(after_finally, Terminator::Return { value });
+                if self.is_async_fn {
+                    self.emit_async_resolve(after_finally, value);
+                    self.current_function
+                        .set_terminator(after_finally, Terminator::Return { value: None });
+                } else {
+                    self.current_function
+                        .set_terminator(after_finally, Terminator::Return { value });
+                }
             }
             StmtFlow::Terminated => {}
         }
@@ -2047,6 +2088,23 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
         let value = self.lower_expr(&throw_stmt.arg, block)?;
+
+        if self.is_async_fn {
+            self.emit_async_reject(block, value);
+            let undef_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: undef_val,
+                    constant: self.module.add_constant(Constant::Undefined),
+                },
+            );
+            self.current_function.set_terminator(
+                block,
+                Terminator::Return { value: Some(undef_val) },
+            );
+            return Ok(StmtFlow::Terminated);
+        }
 
         if let Some(try_ctx) = self.try_contexts.last() {
             if let Some(catch_entry) = try_ctx.catch_entry {
@@ -2985,6 +3043,9 @@ impl Lowerer {
         fn_decl: &swc_ast::FnDecl,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
+        if fn_decl.function.is_async {
+            return self.lower_async_fn_decl(fn_decl, flow);
+        }
         let name = fn_decl.ident.sym.to_string();
         self.push_function_context(&name, BasicBlockId(0));
 
@@ -3104,6 +3165,929 @@ impl Lowerer {
         Ok(StmtFlow::Open(outer_block))
     }
 
+    fn lower_async_fn_decl(
+        &mut self,
+        fn_decl: &swc_ast::FnDecl,
+        flow: StmtFlow,
+    ) -> Result<StmtFlow, LoweringError> {
+        let name = fn_decl.ident.sym.to_string();
+        let async_name = format!("{name}$async");
+        let wrapper_name = format!("{name}$wrapper");
+
+        let prev_is_async = self.is_async_fn;
+        let prev_state_counter = self.async_state_counter;
+        let prev_captured_slots = self.captured_var_slots.clone();
+        self.is_async_fn = true;
+        self.async_state_counter = 0;
+        self.captured_var_slots.clear();
+
+        self.push_function_context(&async_name, BasicBlockId(0));
+
+        let state_scope_id = self
+            .scopes
+            .declare("$state", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+        let resume_val_scope_id = self
+            .scopes
+            .declare("$resume_val", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+        let is_rejected_scope_id = self
+            .scopes
+            .declare("$is_rejected", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+        let continuation_scope_id = self
+            .scopes
+            .declare("$continuation", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+        let promise_scope_id = self
+            .scopes
+            .declare("$promise", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+        let this_scope_id = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+
+        let mut user_param_names: Vec<String> = Vec::new();
+        for param in &fn_decl.function.params {
+            if let swc_ast::Pat::Ident(ident) = &param.pat {
+                let pname = ident.id.sym.to_string();
+                let _ = self
+                    .scopes
+                    .declare(&pname, VarKind::Let, true)
+                    .map_err(|msg| self.error(fn_decl.span(), msg))?;
+                let slot = self.captured_var_slots.len() as u32;
+                self.captured_var_slots.insert(pname.clone(), slot);
+                user_param_names.push(pname);
+            }
+        }
+
+        let param_ir_names: Vec<String> = vec![
+            format!("${state_scope_id}.$state"),
+            format!("${resume_val_scope_id}.$resume_val"),
+            format!("${is_rejected_scope_id}.$is_rejected"),
+            format!("${continuation_scope_id}.$continuation"),
+            format!("${promise_scope_id}.$promise"),
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+        ];
+
+        self.async_state_ir_name = Some(format!("${state_scope_id}.$state"));
+        self.async_resume_val_ir_name = Some(format!("${resume_val_scope_id}.$resume_val"));
+        self.async_is_rejected_ir_name = Some(format!("${is_rejected_scope_id}.$is_rejected"));
+        self.async_continuation_ir_name = Some(format!("${continuation_scope_id}.$continuation"));
+        self.async_promise_ir_name = Some(format!("${promise_scope_id}.$promise"));
+
+        if let Some(body) = &fn_decl.function.body {
+            self.pre_scan_awaits(&body.stmts)?;
+        }
+
+        if let Some(body) = &fn_decl.function.body {
+            self.predeclare_block_stmts(&body.stmts)?;
+        }
+
+        let entry = BasicBlockId(0);
+        self.emit_hoisted_var_initializers(entry);
+
+        let state0_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            entry,
+            Terminator::Jump { target: state0_block },
+        );
+
+        let cont_val_init = self.alloc_value();
+        self.current_function.append_instruction(
+            state0_block,
+            Instruction::LoadVar {
+                dest: cont_val_init,
+                name: self.async_continuation_ir_name.clone().unwrap_or("$continuation".to_string()),
+            },
+        );
+        for pname in &user_param_names {
+            let slot = self.captured_var_slots[pname];
+            let slot_const = self.alloc_value();
+            self.current_function.append_instruction(
+                state0_block,
+                Instruction::Const {
+                    dest: slot_const,
+                    constant: self.module.add_constant(Constant::Number(slot as f64)),
+                },
+            );
+            let loaded = self.alloc_value();
+            self.current_function.append_instruction(
+                state0_block,
+                Instruction::CallBuiltin {
+                    dest: Some(loaded),
+                    builtin: Builtin::ContinuationLoadVar,
+                    args: vec![cont_val_init, slot_const],
+                },
+            );
+            let (scope_id, _) = self.scopes.lookup(pname)
+                .map_err(|msg| self.error(fn_decl.span(), msg))?;
+            let ir_name = format!("${scope_id}.{pname}");
+            self.current_function.append_instruction(
+                state0_block,
+                Instruction::StoreVar {
+                    name: ir_name,
+                    value: loaded,
+                },
+            );
+        }
+
+        let body_entry = self.emit_async_state_dispatch(state0_block)?;
+
+        let mut inner_flow = StmtFlow::Open(body_entry);
+        if let Some(body) = &fn_decl.function.body {
+            for stmt in &body.stmts {
+                if matches!(inner_flow, StmtFlow::Terminated) {
+                    continue;
+                }
+                inner_flow = self.lower_stmt(stmt, inner_flow)?;
+            }
+        }
+
+        if let StmtFlow::Open(block) = inner_flow {
+            self.emit_async_resolve(block, None);
+            self.current_function
+                .set_terminator(block, Terminator::Return { value: None });
+        }
+
+        let old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let blocks = old_fn.into_blocks();
+        let mut ir_function = Function::new(&async_name, BasicBlockId(0));
+        ir_function.set_params(param_ir_names);
+        let async_captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&async_captured));
+        for block in blocks {
+            ir_function.push_block(block);
+        }
+        let async_fn_id = self.module.push_function(ir_function);
+
+        self.pop_function_context();
+
+        self.push_function_context(&wrapper_name, BasicBlockId(0));
+        let wrapper_env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+        let wrapper_this_scope_id = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+        let mut wrapper_param_ir_names: Vec<String> = vec![
+            format!("${wrapper_env_scope_id}.$env"),
+            format!("${wrapper_this_scope_id}.$this"),
+        ];
+        let user_wrapper_param_names = self.build_param_ir_names(
+            &fn_decl.function.params,
+            wrapper_env_scope_id,
+            wrapper_this_scope_id,
+        )?;
+        wrapper_param_ir_names.extend(user_wrapper_param_names[2..].to_vec());
+
+        let wrapper_entry = BasicBlockId(0);
+
+        let promise_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::NewPromise { dest: promise_val },
+        );
+
+        let fn_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: fn_ref_val,
+                constant: self.module.add_constant(Constant::FunctionRef(async_fn_id)),
+            },
+        );
+
+        let env_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::LoadVar {
+                dest: env_val,
+                name: "$env".to_string(),
+            },
+        );
+
+        let this_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::LoadVar {
+                dest: this_val,
+                name: "$this".to_string(),
+            },
+        );
+
+        let cont_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: Some(cont_val),
+                builtin: Builtin::ContinuationCreate,
+                args: vec![fn_ref_val, promise_val, env_val, this_val],
+            },
+        );
+
+        for pname in &user_param_names {
+            let slot = prev_captured_slots.get(pname).copied().unwrap_or_else(|| {
+                let slot = self.captured_var_slots.len() as u32;
+                slot
+            });
+            let (scope_id, _) = self.scopes.lookup(pname)
+                .map_err(|msg| self.error(fn_decl.span(), msg))?;
+            let ir_name = format!("${scope_id}.{pname}");
+            let var_val = self.alloc_value();
+            self.current_function.append_instruction(
+                wrapper_entry,
+                Instruction::LoadVar {
+                    dest: var_val,
+                    name: ir_name,
+                },
+            );
+            let slot_const = self.alloc_value();
+            self.current_function.append_instruction(
+                wrapper_entry,
+                Instruction::Const {
+                    dest: slot_const,
+                    constant: self.module.add_constant(Constant::Number(slot as f64)),
+                },
+            );
+            self.current_function.append_instruction(
+                wrapper_entry,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ContinuationSaveVar,
+                    args: vec![cont_val, slot_const, var_val],
+                },
+            );
+        }
+
+        let start_result = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: Some(start_result),
+                builtin: Builtin::AsyncFunctionStart,
+                args: vec![fn_ref_val, cont_val],
+            },
+        );
+
+        self.current_function
+            .set_terminator(wrapper_entry, Terminator::Return { value: Some(promise_val) });
+
+        let old_wrapper_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let wrapper_blocks = old_wrapper_fn.into_blocks();
+        let mut wrapper_ir_function = Function::new(&wrapper_name, BasicBlockId(0));
+        wrapper_ir_function.set_params(wrapper_param_ir_names);
+        let wrapper_captured = self.captured_names_stack.last().unwrap().clone();
+        wrapper_ir_function.set_captured_names(Self::captured_display_names(&wrapper_captured));
+        for block in wrapper_blocks {
+            wrapper_ir_function.push_block(block);
+        }
+        let wrapper_fn_id = self.module.push_function(wrapper_ir_function);
+
+        self.pop_function_context();
+
+        let outer_block = self.ensure_open(flow)?;
+
+        let func_ref_const = self.module.add_constant(Constant::FunctionRef(wrapper_fn_id));
+        let func_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            outer_block,
+            Instruction::Const {
+                dest: func_ref_val,
+                constant: func_ref_const,
+            },
+        );
+
+        let callee_val = if async_captured.is_empty() {
+            func_ref_val
+        } else {
+            let env_val = self.ensure_shared_env(outer_block, &async_captured, fn_decl.span())?;
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                outer_block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![func_ref_val, env_val],
+                },
+            );
+            closure_val
+        };
+
+        let (scope_id, _) = self
+            .scopes
+            .lookup(&name)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+        let ir_name = format!("${scope_id}.{name}");
+        self.current_function.append_instruction(
+            outer_block,
+            Instruction::StoreVar {
+                name: ir_name,
+                value: callee_val,
+            },
+        );
+
+        self.is_async_fn = prev_is_async;
+        self.async_state_counter = prev_state_counter;
+        self.captured_var_slots = prev_captured_slots;
+        self.async_state_ir_name = None;
+        self.async_resume_val_ir_name = None;
+        self.async_is_rejected_ir_name = None;
+        self.async_continuation_ir_name = None;
+        self.async_promise_ir_name = None;
+        self.async_resume_block = None;
+        self.async_state_blocks = vec![];
+
+        Ok(StmtFlow::Open(outer_block))
+    }
+
+    fn lower_async_fn_expr(
+        &mut self,
+        fn_expr: &swc_ast::FnExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let name = fn_expr.ident.as_ref().map_or_else(
+            || format!("anon_{}", self.module.functions().len()),
+            |ident| ident.sym.to_string(),
+        );
+        let async_name = format!("{name}$async");
+
+        let prev_is_async = self.is_async_fn;
+        let prev_state_counter = self.async_state_counter;
+        let prev_captured_slots = self.captured_var_slots.clone();
+        self.is_async_fn = true;
+        self.async_state_counter = 0;
+        self.captured_var_slots.clear();
+
+        self.push_function_context(&async_name, BasicBlockId(0));
+
+        let state_scope_id = self
+            .scopes
+            .declare("$state", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_expr.span(), msg))?;
+        let resume_val_scope_id = self
+            .scopes
+            .declare("$resume_val", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_expr.span(), msg))?;
+        let is_rejected_scope_id = self
+            .scopes
+            .declare("$is_rejected", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_expr.span(), msg))?;
+        let continuation_scope_id = self
+            .scopes
+            .declare("$continuation", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_expr.span(), msg))?;
+        let promise_scope_id = self
+            .scopes
+            .declare("$promise", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_expr.span(), msg))?;
+
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_expr.span(), msg))?;
+        let this_scope_id = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_expr.span(), msg))?;
+
+        if let Some(ref ident) = fn_expr.ident {
+            let _ = self
+                .scopes
+                .declare(&ident.sym.to_string(), VarKind::Let, true)
+                .map_err(|msg| self.error(fn_expr.span(), msg))?;
+        }
+
+        let mut param_ir_names: Vec<String> = vec![
+            format!("${state_scope_id}.$state"),
+            format!("${resume_val_scope_id}.$resume_val"),
+            format!("${is_rejected_scope_id}.$is_rejected"),
+            format!("${continuation_scope_id}.$continuation"),
+            format!("${promise_scope_id}.$promise"),
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+        ];
+
+        self.async_state_ir_name = Some(format!("${state_scope_id}.$state"));
+        self.async_resume_val_ir_name = Some(format!("${resume_val_scope_id}.$resume_val"));
+        self.async_is_rejected_ir_name = Some(format!("${is_rejected_scope_id}.$is_rejected"));
+        self.async_continuation_ir_name = Some(format!("${continuation_scope_id}.$continuation"));
+        self.async_promise_ir_name = Some(format!("${promise_scope_id}.$promise"));
+
+        let user_param_ir_names = self.build_param_ir_names(
+            &fn_expr.function.params,
+            env_scope_id,
+            this_scope_id,
+        )?;
+        param_ir_names.extend(user_param_ir_names[2..].to_vec());
+
+        if let Some(body) = &fn_expr.function.body {
+            self.pre_scan_awaits(&body.stmts)?;
+        }
+
+        if let Some(body) = &fn_expr.function.body {
+            self.predeclare_block_stmts(&body.stmts)?;
+        }
+
+        let entry = BasicBlockId(0);
+        self.emit_hoisted_var_initializers(entry);
+
+        let body_entry = self.emit_async_state_dispatch(entry)?;
+
+        let mut inner_flow = StmtFlow::Open(body_entry);
+        if let Some(body) = &fn_expr.function.body {
+            for stmt in &body.stmts {
+                if matches!(inner_flow, StmtFlow::Terminated) {
+                    continue;
+                }
+                inner_flow = self.lower_stmt(stmt, inner_flow)?;
+            }
+        }
+
+        if let StmtFlow::Open(b) = inner_flow {
+            self.emit_async_resolve(b, None);
+            self.current_function
+                .set_terminator(b, Terminator::Return { value: None });
+        }
+
+        let old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let blocks = old_fn.into_blocks();
+        let mut ir_function = Function::new(&async_name, BasicBlockId(0));
+        ir_function.set_params(param_ir_names);
+        let async_captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&async_captured));
+        for b in blocks {
+            ir_function.push_block(b);
+        }
+        let function_id = self.module.push_function(ir_function);
+
+        self.pop_function_context();
+
+        let wrapper_name = format!("{name}$wrapper");
+        self.push_function_context(&wrapper_name, BasicBlockId(0));
+        let wrapper_env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_expr.span(), msg))?;
+        let wrapper_this_scope_id = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_expr.span(), msg))?;
+        let mut wrapper_param_ir_names: Vec<String> = vec![
+            format!("${wrapper_env_scope_id}.$env"),
+            format!("${wrapper_this_scope_id}.$this"),
+        ];
+        let user_wrapper_param_names = self.build_param_ir_names(
+            &fn_expr.function.params,
+            wrapper_env_scope_id,
+            wrapper_this_scope_id,
+        )?;
+        wrapper_param_ir_names.extend(user_wrapper_param_names[2..].to_vec());
+
+        let wrapper_entry = BasicBlockId(0);
+
+        let promise_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::NewPromise { dest: promise_val },
+        );
+
+        let fn_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: fn_ref_val,
+                constant: self.module.add_constant(Constant::FunctionRef(function_id)),
+            },
+        );
+
+        let env_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::LoadVar {
+                dest: env_val,
+                name: "$env".to_string(),
+            },
+        );
+
+        let this_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::LoadVar {
+                dest: this_val,
+                name: "$this".to_string(),
+            },
+        );
+
+        let cont_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: Some(cont_val),
+                builtin: Builtin::ContinuationCreate,
+                args: vec![fn_ref_val, promise_val, env_val, this_val],
+            },
+        );
+
+        let start_result = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: Some(start_result),
+                builtin: Builtin::AsyncFunctionStart,
+                args: vec![fn_ref_val, cont_val],
+            },
+        );
+
+        self.current_function
+            .set_terminator(wrapper_entry, Terminator::Return { value: Some(promise_val) });
+
+        let old_wrapper_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let wrapper_blocks = old_wrapper_fn.into_blocks();
+        let mut wrapper_ir_function = Function::new(&wrapper_name, BasicBlockId(0));
+        wrapper_ir_function.set_params(wrapper_param_ir_names);
+        let wrapper_captured = self.captured_names_stack.last().unwrap().clone();
+        wrapper_ir_function.set_captured_names(Self::captured_display_names(&wrapper_captured));
+        for b in wrapper_blocks {
+            wrapper_ir_function.push_block(b);
+        }
+        let wrapper_fn_id = self.module.push_function(wrapper_ir_function);
+
+        self.pop_function_context();
+
+        let func_ref_const = self.module.add_constant(Constant::FunctionRef(wrapper_fn_id));
+        let func_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: func_ref_val,
+                constant: func_ref_const,
+            },
+        );
+
+        let callee_val = if async_captured.is_empty() {
+            func_ref_val
+        } else {
+            let env_val = self.ensure_shared_env(block, &async_captured, fn_expr.span())?;
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![func_ref_val, env_val],
+                },
+            );
+            closure_val
+        };
+
+        self.is_async_fn = prev_is_async;
+        self.async_state_counter = prev_state_counter;
+        self.captured_var_slots = prev_captured_slots;
+        self.async_state_ir_name = None;
+        self.async_resume_val_ir_name = None;
+        self.async_is_rejected_ir_name = None;
+        self.async_continuation_ir_name = None;
+        self.async_promise_ir_name = None;
+        self.async_resume_block = None;
+        self.async_state_blocks = vec![];
+
+        Ok(callee_val)
+    }
+
+    fn lower_async_arrow_expr(
+        &mut self,
+        arrow: &swc_ast::ArrowExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let name = format!("arrow_{}", self.module.functions().len());
+        let async_name = format!("{name}$async");
+        let wrapper_name = format!("{name}$wrapper");
+
+        let prev_is_async = self.is_async_fn;
+        let prev_state_counter = self.async_state_counter;
+        let prev_captured_slots = self.captured_var_slots.clone();
+        self.is_async_fn = true;
+        self.async_state_counter = 0;
+        self.captured_var_slots.clear();
+
+        self.push_function_context(&async_name, BasicBlockId(0));
+        *self.is_arrow_fn_stack.last_mut().unwrap() = true;
+
+        let state_scope_id = self
+            .scopes
+            .declare("$state", VarKind::Let, true)
+            .map_err(|msg| self.error(arrow.span, msg))?;
+        let resume_val_scope_id = self
+            .scopes
+            .declare("$resume_val", VarKind::Let, true)
+            .map_err(|msg| self.error(arrow.span, msg))?;
+        let is_rejected_scope_id = self
+            .scopes
+            .declare("$is_rejected", VarKind::Let, true)
+            .map_err(|msg| self.error(arrow.span, msg))?;
+        let continuation_scope_id = self
+            .scopes
+            .declare("$continuation", VarKind::Let, true)
+            .map_err(|msg| self.error(arrow.span, msg))?;
+        let promise_scope_id = self
+            .scopes
+            .declare("$promise", VarKind::Let, true)
+            .map_err(|msg| self.error(arrow.span, msg))?;
+
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(arrow.span, msg))?;
+        let this_scope_id = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| self.error(arrow.span, msg))?;
+
+        let mut param_ir_names: Vec<String> = vec![
+            format!("${state_scope_id}.$state"),
+            format!("${resume_val_scope_id}.$resume_val"),
+            format!("${is_rejected_scope_id}.$is_rejected"),
+            format!("${continuation_scope_id}.$continuation"),
+            format!("${promise_scope_id}.$promise"),
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+        ];
+
+        self.async_state_ir_name = Some(format!("${state_scope_id}.$state"));
+        self.async_resume_val_ir_name = Some(format!("${resume_val_scope_id}.$resume_val"));
+        self.async_is_rejected_ir_name = Some(format!("${is_rejected_scope_id}.$is_rejected"));
+        self.async_continuation_ir_name = Some(format!("${continuation_scope_id}.$continuation"));
+        self.async_promise_ir_name = Some(format!("${promise_scope_id}.$promise"));
+
+        let user_param_ir_names = self.build_arrow_param_ir_names(
+            &arrow.params,
+            env_scope_id,
+            this_scope_id,
+        )?;
+        param_ir_names.extend(user_param_ir_names[2..].to_vec());
+
+        let mut user_param_names: Vec<String> = Vec::new();
+        for param in &arrow.params {
+            if let swc_ast::Pat::Ident(ident) = param {
+                let pname = ident.id.sym.to_string();
+                let slot = self.captured_var_slots.len() as u32;
+                self.captured_var_slots.insert(pname.clone(), slot);
+                user_param_names.push(pname);
+            }
+        }
+
+        let entry = BasicBlockId(0);
+        let mut inner_flow;
+
+        match arrow.body.as_ref() {
+            swc_ast::BlockStmtOrExpr::BlockStmt(block_stmt) => {
+                self.pre_scan_awaits(&block_stmt.stmts)?;
+                self.predeclare_block_stmts(&block_stmt.stmts)?;
+                self.emit_hoisted_var_initializers(entry);
+                let body_entry = self.emit_async_state_dispatch(entry)?;
+                let body_entry = self.emit_arrow_param_inits(
+                    &arrow.params,
+                    &param_ir_names,
+                    body_entry,
+                )?;
+                inner_flow = StmtFlow::Open(body_entry);
+                for stmt in &block_stmt.stmts {
+                    if matches!(inner_flow, StmtFlow::Terminated) {
+                        continue;
+                    }
+                    inner_flow = self.lower_stmt(stmt, inner_flow)?;
+                }
+            }
+            swc_ast::BlockStmtOrExpr::Expr(expr) => {
+                self.emit_hoisted_var_initializers(entry);
+                let body_entry = self.emit_async_state_dispatch(entry)?;
+                let body_entry = self.emit_arrow_param_inits(
+                    &arrow.params,
+                    &param_ir_names,
+                    body_entry,
+                )?;
+                let val = self.lower_expr(expr, body_entry)?;
+                let resume_block = self.async_resume_block.take();
+                let target_block = resume_block.unwrap_or(body_entry);
+                self.emit_async_resolve(target_block, Some(val));
+                self.current_function
+                    .set_terminator(target_block, Terminator::Return { value: None });
+                inner_flow = StmtFlow::Terminated;
+            }
+        }
+
+        if let StmtFlow::Open(b) = inner_flow {
+            self.emit_async_resolve(b, None);
+            self.current_function
+                .set_terminator(b, Terminator::Return { value: None });
+        }
+
+        let old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let blocks = old_fn.into_blocks();
+        let mut ir_function = Function::new(&async_name, BasicBlockId(0));
+        ir_function.set_params(param_ir_names);
+        let async_captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&async_captured));
+        for b in blocks {
+            ir_function.push_block(b);
+        }
+        let async_fn_id = self.module.push_function(ir_function);
+
+        self.pop_function_context();
+
+        self.push_function_context(&wrapper_name, BasicBlockId(0));
+        let wrapper_env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(arrow.span, msg))?;
+        let wrapper_this_scope_id = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| self.error(arrow.span, msg))?;
+        let mut wrapper_param_ir_names: Vec<String> = vec![
+            format!("${wrapper_env_scope_id}.$env"),
+            format!("${wrapper_this_scope_id}.$this"),
+        ];
+        let user_wrapper_param_names = self.build_arrow_param_ir_names(
+            &arrow.params,
+            wrapper_env_scope_id,
+            wrapper_this_scope_id,
+        )?;
+        wrapper_param_ir_names.extend(user_wrapper_param_names[2..].to_vec());
+
+        let wrapper_entry = BasicBlockId(0);
+
+        let promise_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::NewPromise { dest: promise_val },
+        );
+
+        let fn_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: fn_ref_val,
+                constant: self.module.add_constant(Constant::FunctionRef(async_fn_id)),
+            },
+        );
+
+        let env_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::LoadVar {
+                dest: env_val,
+                name: "$env".to_string(),
+            },
+        );
+
+        let this_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::LoadVar {
+                dest: this_val,
+                name: "$this".to_string(),
+            },
+        );
+
+        let cont_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: Some(cont_val),
+                builtin: Builtin::ContinuationCreate,
+                args: vec![fn_ref_val, promise_val, env_val, this_val],
+            },
+        );
+
+        for pname in &user_param_names {
+            let slot = prev_captured_slots.get(pname).copied().unwrap_or_else(|| {
+                let slot = self.captured_var_slots.len() as u32;
+                slot
+            });
+            let (scope_id, _) = self.scopes.lookup(pname)
+                .map_err(|msg| self.error(arrow.span, msg))?;
+            let ir_name = format!("${scope_id}.{pname}");
+            let var_val = self.alloc_value();
+            self.current_function.append_instruction(
+                wrapper_entry,
+                Instruction::LoadVar {
+                    dest: var_val,
+                    name: ir_name,
+                },
+            );
+            let slot_const = self.alloc_value();
+            self.current_function.append_instruction(
+                wrapper_entry,
+                Instruction::Const {
+                    dest: slot_const,
+                    constant: self.module.add_constant(Constant::Number(slot as f64)),
+                },
+            );
+            self.current_function.append_instruction(
+                wrapper_entry,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ContinuationSaveVar,
+                    args: vec![cont_val, slot_const, var_val],
+                },
+            );
+        }
+
+        let start_result = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: Some(start_result),
+                builtin: Builtin::AsyncFunctionStart,
+                args: vec![fn_ref_val, cont_val],
+            },
+        );
+
+        self.current_function
+            .set_terminator(wrapper_entry, Terminator::Return { value: Some(promise_val) });
+
+        let old_wrapper_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let wrapper_blocks = old_wrapper_fn.into_blocks();
+        let mut wrapper_ir_function = Function::new(&wrapper_name, BasicBlockId(0));
+        wrapper_ir_function.set_params(wrapper_param_ir_names);
+        let wrapper_captured = self.captured_names_stack.last().unwrap().clone();
+        wrapper_ir_function.set_captured_names(Self::captured_display_names(&wrapper_captured));
+        for b in wrapper_blocks {
+            wrapper_ir_function.push_block(b);
+        }
+        let wrapper_fn_id = self.module.push_function(wrapper_ir_function);
+
+        self.pop_function_context();
+
+        self.is_async_fn = prev_is_async;
+        self.async_state_counter = prev_state_counter;
+        self.captured_var_slots = prev_captured_slots;
+        self.async_state_ir_name = None;
+        self.async_resume_val_ir_name = None;
+        self.async_is_rejected_ir_name = None;
+        self.async_continuation_ir_name = None;
+        self.async_promise_ir_name = None;
+        self.async_resume_block = None;
+        self.async_state_blocks = vec![];
+
+        let func_ref_const = self.module.add_constant(Constant::FunctionRef(wrapper_fn_id));
+        let func_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: func_ref_val,
+                constant: func_ref_const,
+            },
+        );
+
+        let callee_val = if async_captured.is_empty() {
+            func_ref_val
+        } else {
+            let env_val = self.ensure_shared_env(block, &async_captured, arrow.span)?;
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![func_ref_val, env_val],
+                },
+            );
+            closure_val
+        };
+
+        Ok(callee_val)
+    }
+
     /// Lower an anonymous function expression `function(...) { ... }`.
     /// Returns a ValueId for the FunctionRef constant.
     fn lower_fn_expr(
@@ -3111,6 +4095,9 @@ impl Lowerer {
         fn_expr: &swc_ast::FnExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        if fn_expr.function.is_async {
+            return self.lower_async_fn_expr(fn_expr, block);
+        }
         let name = fn_expr.ident.as_ref().map_or_else(
             || format!("anon_{}", self.module.functions().len()),
             |ident| ident.sym.to_string(),
@@ -3229,6 +4216,9 @@ impl Lowerer {
         arrow: &swc_ast::ArrowExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        if arrow.is_async {
+            return self.lower_async_arrow_expr(arrow, block);
+        }
         let name = format!("arrow_{}", self.module.functions().len());
         self.push_function_context(&name, BasicBlockId(0));
         // 标记当前为箭头函数
@@ -4295,11 +5285,185 @@ impl Lowerer {
             swc_ast::Expr::Tpl(tpl) => self.lower_tpl(tpl, block),
             swc_ast::Expr::TaggedTpl(tagged_tpl) => self.lower_tagged_tpl(tagged_tpl, block),
             swc_ast::Expr::SuperProp(super_prop) => self.lower_super_prop(super_prop, block),
+            swc_ast::Expr::Await(await_expr) => {
+                if !self.is_async_fn {
+                    return Err(self.error(await_expr.span, "await is only valid in async functions"));
+                }
+                self.lower_await_expr(await_expr, block)
+            }
             _ => Err(self.error(
                 expr.span(),
                 format!("unsupported expression kind `{}`", expr_kind(expr)),
             )),
         }
+    }
+
+    fn lower_await_expr(
+        &mut self,
+        await_expr: &swc_ast::AwaitExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let value = self.lower_expr(&await_expr.arg, block)?;
+        let block = self.async_resume_block.take().unwrap_or(block);
+
+        let promise = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(promise),
+                builtin: Builtin::PromiseResolveStatic,
+                args: vec![value],
+            },
+        );
+
+        let state = self.async_state_counter;
+        self.async_state_counter += 1;
+
+        let cont_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: cont_val,
+                name: self.async_continuation_ir_name.clone().unwrap_or("$continuation".to_string()),
+            },
+        );
+
+        let captured_slots: Vec<(String, u32)> = self.captured_var_slots.iter().map(|(k, v)| (k.clone(), *v)).collect();
+        for (var_name, slot_idx) in &captured_slots {
+            let (scope_id, _) = self.scopes.lookup(var_name)
+                .map_err(|msg| self.error(await_expr.span, msg))?;
+            let ir_name = format!("${scope_id}.{var_name}");
+            let var_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest: var_val,
+                    name: ir_name,
+                },
+            );
+            let slot_const = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: slot_const,
+                    constant: self.module.add_constant(Constant::Number(*slot_idx as f64)),
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ContinuationSaveVar,
+                    args: vec![cont_val, slot_const, var_val],
+                },
+            );
+        }
+
+        self.current_function.append_instruction(
+            block,
+            Instruction::Suspend {
+                promise,
+                continuation: cont_val,
+                state,
+            },
+        );
+
+        let resume_block = if !self.async_state_blocks.is_empty() && (state as usize) < self.async_state_blocks.len() {
+            self.async_state_blocks[state as usize]
+        } else {
+            self.current_function.new_block()
+        };
+        self.current_function.set_terminator(
+            block,
+            Terminator::Unreachable,
+        );
+
+        let cont_val_resume = self.alloc_value();
+        self.current_function.append_instruction(
+            resume_block,
+            Instruction::LoadVar {
+                dest: cont_val_resume,
+                name: self.async_continuation_ir_name.clone().unwrap_or("$continuation".to_string()),
+            },
+        );
+
+        for (var_name, slot_idx) in &captured_slots {
+            let (scope_id, _) = self.scopes.lookup(var_name)
+                .map_err(|msg| self.error(await_expr.span, msg))?;
+            let ir_name = format!("${scope_id}.{var_name}");
+            let slot_const = self.alloc_value();
+            self.current_function.append_instruction(
+                resume_block,
+                Instruction::Const {
+                    dest: slot_const,
+                    constant: self.module.add_constant(Constant::Number(*slot_idx as f64)),
+                },
+            );
+            let var_val = self.alloc_value();
+            self.current_function.append_instruction(
+                resume_block,
+                Instruction::CallBuiltin {
+                    dest: Some(var_val),
+                    builtin: Builtin::ContinuationLoadVar,
+                    args: vec![cont_val_resume, slot_const],
+                },
+            );
+            self.current_function.append_instruction(
+                resume_block,
+                Instruction::StoreVar {
+                    name: ir_name,
+                    value: var_val,
+                },
+            );
+        }
+
+        let resume_val = self.alloc_value();
+        self.current_function.append_instruction(
+            resume_block,
+            Instruction::LoadVar {
+                dest: resume_val,
+                name: self.async_resume_val_ir_name.clone().unwrap_or("$resume_val".to_string()),
+            },
+        );
+
+        let is_rejected = self.alloc_value();
+        self.current_function.append_instruction(
+            resume_block,
+            Instruction::LoadVar {
+                dest: is_rejected,
+                name: self.async_is_rejected_ir_name.clone().unwrap_or("$is_rejected".to_string()),
+            },
+        );
+
+        let normal_block = self.current_function.new_block();
+        let reject_block = self.current_function.new_block();
+
+        self.current_function.set_terminator(
+            resume_block,
+            Terminator::Branch {
+                condition: is_rejected,
+                true_block: reject_block,
+                false_block: normal_block,
+            },
+        );
+
+        self.emit_async_reject(reject_block, resume_val);
+        let undef_val = self.alloc_value();
+        self.current_function.append_instruction(
+            reject_block,
+            Instruction::Const {
+                dest: undef_val,
+                constant: self.module.add_constant(Constant::Undefined),
+            },
+        );
+        self.current_function.set_terminator(
+            reject_block,
+            Terminator::Return { value: Some(undef_val) },
+        );
+
+        self.async_resume_block = Some(normal_block);
+
+        Ok(resume_val)
     }
 
     fn lower_tpl(
@@ -5154,6 +6318,17 @@ impl Lowerer {
         new_expr: &swc_ast::NewExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        match new_expr.callee.as_ref() {
+            swc_ast::Expr::Ident(ident) => {
+                if ident.sym == "Promise" {
+                    if self.scopes.lookup("Promise").is_err() {
+                        return self.lower_promise_constructor(new_expr, block);
+                    }
+                }
+            }
+            _ => {}
+        }
+
         let callee_val = self.lower_expr(&new_expr.callee, block)?;
 
         // Create new object.
@@ -5167,9 +6342,6 @@ impl Lowerer {
         );
 
         // Get prototype from constructor via GetPrototypeFromConstructor builtin.
-        // 语义等价于 ECMAScript GetPrototypeFromConstructor(F)：
-        // 1. 读取 ctor.prototype（含原型链遍历）
-        // 2. 若非 Object 类型（包含 Array、Function、Closure 等），回退到 Object.prototype
         let proto_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -5190,7 +6362,6 @@ impl Lowerer {
         );
 
         // Lower arguments.
-        // 性能优化：预分配容量避免循环中多次 reallocation
         let cap = new_expr.args.as_ref().map_or(0, |a| a.len());
         let mut arg_vals = Vec::with_capacity(cap);
         if let Some(args) = &new_expr.args {
@@ -5212,6 +6383,87 @@ impl Lowerer {
         );
 
         Ok(obj_val)
+    }
+
+    fn lower_promise_constructor(
+        &mut self,
+        new_expr: &swc_ast::NewExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        self.ensure_promise_callbacks()?;
+
+        let promise_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewPromise { dest: promise_val },
+        );
+
+        let resolve_fn_id = self.promise_resolve_cb_fn_id.unwrap();
+        let reject_fn_id = self.promise_reject_cb_fn_id.unwrap();
+
+        let resolve_fn_ref = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: resolve_fn_ref,
+                constant: self.module.add_constant(Constant::FunctionRef(resolve_fn_id)),
+            },
+        );
+
+        let resolve_closure = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(resolve_closure),
+                builtin: Builtin::CreateClosure,
+                args: vec![resolve_fn_ref, promise_val],
+            },
+        );
+
+        let reject_fn_ref = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: reject_fn_ref,
+                constant: self.module.add_constant(Constant::FunctionRef(reject_fn_id)),
+            },
+        );
+
+        let reject_closure = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(reject_closure),
+                builtin: Builtin::CreateClosure,
+                args: vec![reject_fn_ref, promise_val],
+            },
+        );
+
+        if let Some(args) = &new_expr.args {
+            if let Some(executor_arg) = args.first() {
+                let executor_val = self.lower_expr(&executor_arg.expr, block)?;
+                let undef_const = self.module.add_constant(Constant::Undefined);
+                let undef_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: undef_val,
+                        constant: undef_const,
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Call {
+                        dest: None,
+                        callee: executor_val,
+                        this_val: undef_val,
+                        args: vec![resolve_closure, reject_closure],
+                    },
+                );
+            }
+        }
+
+        Ok(promise_val)
     }
 
     // ── Identifiers ─────────────────────────────────────────────────────────
@@ -5399,11 +6651,8 @@ impl Lowerer {
 
                         // RegExp.prototype 方法调用优化：test/exec
                         if let Some(regexp_builtin) = builtin_from_regexp_proto_method(&prop_ident.sym) {
-                            // JavaScript 允许这些方法无参数调用（缺失参数默认为 undefined）
-                            // 因此不在此处做参数数量限制，由运行时处理
-                            let _ = builtin_call_signature(regexp_builtin); // 验证 builtin 有效
+                            let _ = builtin_call_signature(regexp_builtin);
                             
-                            // regex.method() → regex 是 this
                             this_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![this_val];
                             for arg in &call.args {
@@ -5415,6 +6664,39 @@ impl Lowerer {
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin: regexp_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+
+                        // Promise.prototype 方法调用优化：then/catch/finally
+                        if let Some(promise_builtin) = builtin_from_promise_proto_method(&prop_ident.sym) {
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let required = match promise_builtin {
+                                Builtin::PromiseThen => 3,
+                                Builtin::PromiseCatch | Builtin::PromiseFinally => 2,
+                                _ => 1,
+                            };
+                            while builtin_args.len() < required {
+                                let undef_const = self.module.add_constant(Constant::Undefined);
+                                let undef_val = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::Const { dest: undef_val, constant: undef_const },
+                                );
+                                builtin_args.push(undef_val);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: promise_builtin,
                                     args: builtin_args,
                                 },
                             );
@@ -7116,57 +8398,60 @@ impl Lowerer {
             return block;
         };
 
-        let Terminator::Branch {
-            true_block,
-            false_block,
-            ..
-        } = b.terminator()
-        else {
-            return block;
-        };
-
-        let jump_target = |id: BasicBlockId| -> Option<BasicBlockId> {
-            self.current_function
-                .block(id)
-                .and_then(|candidate| match candidate.terminator() {
-                    Terminator::Jump { target } => Some(*target),
-                    _ => None,
-                })
-        };
-
-        match (jump_target(*true_block), jump_target(*false_block)) {
-            (Some(left), Some(right)) if left == right => left,
-            (Some(target), _) => target,
-            (_, Some(target)) => target,
-            _ => {
-                let true_has_phi =
-                    self.current_function
-                        .block(*true_block)
-                        .map_or(false, |candidate| {
-                            candidate
-                                .instructions()
-                                .iter()
-                                .any(|instruction| matches!(instruction, Instruction::Phi { .. }))
-                        });
-                if true_has_phi {
-                    return *true_block;
-                }
-
-                let false_has_phi =
-                    self.current_function
-                        .block(*false_block)
-                        .map_or(false, |candidate| {
-                            candidate
-                                .instructions()
-                                .iter()
-                                .any(|instruction| matches!(instruction, Instruction::Phi { .. }))
-                        });
-                if false_has_phi {
-                    return *false_block;
-                }
-
-                block
+        match b.terminator() {
+            Terminator::Unreachable => {
+                self.async_resume_block.unwrap_or(block)
             }
+            Terminator::Branch {
+                true_block,
+                false_block,
+                ..
+            } => {
+                let jump_target = |id: BasicBlockId| -> Option<BasicBlockId> {
+                    self.current_function
+                        .block(id)
+                        .and_then(|candidate| match candidate.terminator() {
+                            Terminator::Jump { target } => Some(*target),
+                            _ => None,
+                        })
+                };
+
+                match (jump_target(*true_block), jump_target(*false_block)) {
+                    (Some(left), Some(right)) if left == right => left,
+                    (Some(target), _) => target,
+                    (_, Some(target)) => target,
+                    _ => {
+                        let true_has_phi =
+                            self.current_function
+                                .block(*true_block)
+                                .map_or(false, |candidate| {
+                                    candidate
+                                        .instructions()
+                                        .iter()
+                                        .any(|instruction| matches!(instruction, Instruction::Phi { .. }))
+                                });
+                        if true_has_phi {
+                            return *true_block;
+                        }
+
+                        let false_has_phi =
+                            self.current_function
+                                .block(*false_block)
+                                .map_or(false, |candidate| {
+                                    candidate
+                                        .instructions()
+                                        .iter()
+                                        .any(|instruction| matches!(instruction, Instruction::Phi { .. }))
+                                });
+                        if false_has_phi {
+                            return *false_block;
+                        }
+
+                        block
+                    }
+                }
+            }
+            _ => block,
         }
     }
     fn resolve_open_after_expr(
@@ -7203,6 +8488,375 @@ impl Lowerer {
 
     fn error(&self, span: Span, message: impl Into<String>) -> LoweringError {
         LoweringError::Diagnostic(Diagnostic::new(span.lo.0, span.hi.0, message))
+    }
+
+    fn pre_scan_awaits(&mut self, stmts: &[swc_ast::Stmt]) -> Result<(), LoweringError> {
+        for stmt in stmts {
+            self.scan_stmt_for_awaits(stmt)?;
+        }
+        Ok(())
+    }
+
+    fn scan_stmt_for_awaits(&mut self, stmt: &swc_ast::Stmt) -> Result<(), LoweringError> {
+        match stmt {
+            swc_ast::Stmt::Expr(expr_stmt) => {
+                self.scan_expr_for_awaits(&expr_stmt.expr)?;
+            }
+            swc_ast::Stmt::Block(block_stmt) => {
+                for s in &block_stmt.stmts {
+                    self.scan_stmt_for_awaits(s)?;
+                }
+            }
+            swc_ast::Stmt::If(if_stmt) => {
+                self.scan_expr_for_awaits(&if_stmt.test)?;
+                self.scan_stmt_for_awaits(&if_stmt.cons)?;
+                if let Some(alt) = &if_stmt.alt {
+                    self.scan_stmt_for_awaits(alt)?;
+                }
+            }
+            swc_ast::Stmt::Try(try_stmt) => {
+                for s in &try_stmt.block.stmts {
+                    self.scan_stmt_for_awaits(s)?;
+                }
+                if let Some(handler) = &try_stmt.handler {
+                    for s in &handler.body.stmts {
+                        self.scan_stmt_for_awaits(s)?;
+                    }
+                }
+                if let Some(finalizer) = &try_stmt.finalizer {
+                    for s in &finalizer.stmts {
+                        self.scan_stmt_for_awaits(s)?;
+                    }
+                }
+            }
+            swc_ast::Stmt::ForOf(for_of) => {
+                self.scan_expr_for_awaits(&for_of.right)?;
+                self.scan_stmt_for_awaits(&for_of.body)?;
+            }
+            swc_ast::Stmt::ForIn(for_in) => {
+                self.scan_expr_for_awaits(&for_in.right)?;
+                self.scan_stmt_for_awaits(&for_in.body)?;
+            }
+            swc_ast::Stmt::For(for_stmt) => {
+                if let Some(init) = &for_stmt.init {
+                    match init {
+                        swc_ast::VarDeclOrExpr::Expr(expr) => {
+                            self.scan_expr_for_awaits(expr)?;
+                        }
+                        swc_ast::VarDeclOrExpr::VarDecl(var_decl) => {
+                            for decl in &var_decl.decls {
+                                if let Some(init) = &decl.init {
+                                    self.scan_expr_for_awaits(init)?;
+                                }
+                            }
+                        }
+                    }
+                }
+                if let Some(test) = &for_stmt.test {
+                    self.scan_expr_for_awaits(test)?;
+                }
+                if let Some(update) = &for_stmt.update {
+                    self.scan_expr_for_awaits(update)?;
+                }
+                self.scan_stmt_for_awaits(&for_stmt.body)?;
+            }
+            swc_ast::Stmt::While(while_stmt) => {
+                self.scan_expr_for_awaits(&while_stmt.test)?;
+                self.scan_stmt_for_awaits(&while_stmt.body)?;
+            }
+            swc_ast::Stmt::Return(return_stmt) => {
+                if let Some(arg) = &return_stmt.arg {
+                    self.scan_expr_for_awaits(arg)?;
+                }
+            }
+            swc_ast::Stmt::Switch(switch_stmt) => {
+                self.scan_expr_for_awaits(&switch_stmt.discriminant)?;
+                for case in &switch_stmt.cases {
+                    for s in &case.cons {
+                        self.scan_stmt_for_awaits(s)?;
+                    }
+                }
+            }
+            swc_ast::Stmt::Throw(throw_stmt) => {
+                self.scan_expr_for_awaits(&throw_stmt.arg)?;
+            }
+            swc_ast::Stmt::Decl(decl) => match decl {
+                swc_ast::Decl::Var(var_decl) => {
+                    for decl in &var_decl.decls {
+                        if let Some(init) = &decl.init {
+                            self.scan_expr_for_awaits(init)?;
+                        }
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn scan_expr_for_awaits(&mut self, expr: &swc_ast::Expr) -> Result<(), LoweringError> {
+        match expr {
+            swc_ast::Expr::Await(_) => {
+                self.async_state_counter += 1;
+            }
+            swc_ast::Expr::Call(call_expr) => {
+                if let Some(callee) = &call_expr.callee.as_expr() {
+                    self.scan_expr_for_awaits(callee)?;
+                }
+                for arg in &call_expr.args {
+                    self.scan_expr_for_awaits(&arg.expr)?;
+                }
+            }
+            swc_ast::Expr::Bin(bin_expr) => {
+                self.scan_expr_for_awaits(&bin_expr.left)?;
+                self.scan_expr_for_awaits(&bin_expr.right)?;
+            }
+            swc_ast::Expr::Unary(unary_expr) => {
+                self.scan_expr_for_awaits(&unary_expr.arg)?;
+            }
+            swc_ast::Expr::Assign(assign_expr) => {
+                self.scan_expr_for_awaits(&assign_expr.right)?;
+            }
+            swc_ast::Expr::Member(member_expr) => {
+                self.scan_expr_for_awaits(&member_expr.obj)?;
+            }
+            swc_ast::Expr::Paren(paren_expr) => {
+                self.scan_expr_for_awaits(&paren_expr.expr)?;
+            }
+            swc_ast::Expr::Cond(cond_expr) => {
+                self.scan_expr_for_awaits(&cond_expr.test)?;
+                self.scan_expr_for_awaits(&cond_expr.cons)?;
+                self.scan_expr_for_awaits(&cond_expr.alt)?;
+            }
+            swc_ast::Expr::Seq(seq_expr) => {
+                for e in &seq_expr.exprs {
+                    self.scan_expr_for_awaits(e)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    fn emit_async_state_dispatch(&mut self, entry: BasicBlockId) -> Result<BasicBlockId, LoweringError> {
+        if self.async_state_counter == 0 {
+            self.async_state_blocks.clear();
+            return Ok(entry);
+        }
+
+        let state_val = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::LoadVar {
+                dest: state_val,
+                name: self.async_state_ir_name.clone().unwrap_or("$state".to_string()),
+            },
+        );
+
+        let state0_block = self.current_function.new_block();
+        let mut state_blocks = vec![state0_block];
+        for _ in 1..=self.async_state_counter {
+            state_blocks.push(self.current_function.new_block());
+        }
+
+        let default_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            default_block,
+            Terminator::Return { value: None },
+        );
+
+        let exit_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            exit_block,
+            Terminator::Unreachable,
+        );
+
+        let mut cases = Vec::with_capacity(state_blocks.len());
+        for (i, target_block) in state_blocks.iter().enumerate() {
+            cases.push(SwitchCaseTarget {
+                constant: self.module.add_constant(Constant::Number(i as f64)),
+                target: *target_block,
+            });
+        }
+
+        self.current_function.set_terminator(
+            entry,
+            Terminator::Switch {
+                value: state_val,
+                cases,
+                default_block,
+                exit_block,
+            },
+        );
+
+        self.async_state_blocks = state_blocks;
+        self.async_state_counter = 1;
+
+        Ok(state0_block)
+    }
+
+    fn emit_async_resolve(&mut self, block: BasicBlockId, value: Option<ValueId>) {
+        let promise_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: promise_val,
+                name: self.async_promise_ir_name.clone().unwrap_or("$promise".to_string()),
+            },
+        );
+        let resolve_value = match value {
+            Some(v) => v,
+            None => {
+                let undef_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: undef_val,
+                        constant: self.module.add_constant(Constant::Undefined),
+                    },
+                );
+                undef_val
+            }
+        };
+        let resolve_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(resolve_val),
+                builtin: Builtin::PromiseInstanceResolve,
+                args: vec![promise_val, resolve_value],
+            },
+        );
+    }
+
+    fn emit_async_reject(&mut self, block: BasicBlockId, reason: ValueId) {
+        let promise_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: promise_val,
+                name: self.async_promise_ir_name.clone().unwrap_or("$promise".to_string()),
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::PromiseInstanceReject,
+                args: vec![promise_val, reason],
+            },
+        );
+    }
+
+    fn ensure_promise_callbacks(&mut self) -> Result<(), LoweringError> {
+        if self.promise_resolve_cb_fn_id.is_some() && self.promise_reject_cb_fn_id.is_some() {
+            return Ok(());
+        }
+
+        let saved_next_value = self.next_value;
+        let saved_next_temp = self.next_temp;
+
+        self.push_function_context("__promise_resolve_cb", BasicBlockId(0));
+        let env_scope_id = self.scopes.declare("$env", VarKind::Let, true).map_err(|msg| self.error(DUMMY_SP, msg))?;
+        let this_scope_id = self.scopes.declare("$this", VarKind::Let, true).map_err(|msg| self.error(DUMMY_SP, msg))?;
+        let value_scope_id = self.scopes.declare("$value", VarKind::Let, true).map_err(|msg| self.error(DUMMY_SP, msg))?;
+
+        let param_ir_names = vec![
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+            format!("${value_scope_id}.$value"),
+        ];
+
+        let entry = BasicBlockId(0);
+        let env_val = self.alloc_value();
+        self.current_function.append_instruction(entry, Instruction::LoadVar {
+            dest: env_val,
+            name: format!("${env_scope_id}.$env"),
+        });
+        let value_val = self.alloc_value();
+        self.current_function.append_instruction(entry, Instruction::LoadVar {
+            dest: value_val,
+            name: format!("${value_scope_id}.$value"),
+        });
+        self.current_function.append_instruction(entry, Instruction::CallBuiltin {
+            dest: None,
+            builtin: Builtin::PromiseInstanceResolve,
+            args: vec![env_val, value_val],
+        });
+        let undef_const = self.module.add_constant(Constant::Undefined);
+        let undef_val = self.alloc_value();
+        self.current_function.append_instruction(entry, Instruction::Const {
+            dest: undef_val,
+            constant: undef_const,
+        });
+        self.current_function.set_terminator(entry, Terminator::Return { value: Some(undef_val) });
+
+        let old_fn = std::mem::replace(&mut self.current_function, FunctionBuilder::new("", BasicBlockId(0)));
+        let blocks = old_fn.into_blocks();
+        let mut ir_function = Function::new("__promise_resolve_cb", BasicBlockId(0));
+        ir_function.set_params(param_ir_names);
+        let captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&captured));
+        for b in blocks {
+            ir_function.push_block(b);
+        }
+        let resolve_fn_id = self.module.push_function(ir_function);
+        self.pop_function_context();
+
+        self.push_function_context("__promise_reject_cb", BasicBlockId(0));
+        let env_scope_id2 = self.scopes.declare("$env", VarKind::Let, true).map_err(|msg| self.error(DUMMY_SP, msg))?;
+        let this_scope_id2 = self.scopes.declare("$this", VarKind::Let, true).map_err(|msg| self.error(DUMMY_SP, msg))?;
+        let reason_scope_id = self.scopes.declare("$reason", VarKind::Let, true).map_err(|msg| self.error(DUMMY_SP, msg))?;
+
+        let param_ir_names2 = vec![
+            format!("${env_scope_id2}.$env"),
+            format!("${this_scope_id2}.$this"),
+            format!("${reason_scope_id}.$reason"),
+        ];
+
+        let entry2 = BasicBlockId(0);
+        let env_val2 = self.alloc_value();
+        self.current_function.append_instruction(entry2, Instruction::LoadVar {
+            dest: env_val2,
+            name: format!("${env_scope_id2}.$env"),
+        });
+        let reason_val = self.alloc_value();
+        self.current_function.append_instruction(entry2, Instruction::LoadVar {
+            dest: reason_val,
+            name: format!("${reason_scope_id}.$reason"),
+        });
+        self.current_function.append_instruction(entry2, Instruction::CallBuiltin {
+            dest: None,
+            builtin: Builtin::PromiseInstanceReject,
+            args: vec![env_val2, reason_val],
+        });
+        let undef_const2 = self.module.add_constant(Constant::Undefined);
+        let undef_val2 = self.alloc_value();
+        self.current_function.append_instruction(entry2, Instruction::Const {
+            dest: undef_val2,
+            constant: undef_const2,
+        });
+        self.current_function.set_terminator(entry2, Terminator::Return { value: Some(undef_val2) });
+
+        let old_fn2 = std::mem::replace(&mut self.current_function, FunctionBuilder::new("", BasicBlockId(0)));
+        let blocks2 = old_fn2.into_blocks();
+        let mut ir_function2 = Function::new("__promise_reject_cb", BasicBlockId(0));
+        ir_function2.set_params(param_ir_names2);
+        let captured2 = self.captured_names_stack.last().unwrap().clone();
+        ir_function2.set_captured_names(Self::captured_display_names(&captured2));
+        for b in blocks2 {
+            ir_function2.push_block(b);
+        }
+        let reject_fn_id = self.module.push_function(ir_function2);
+        self.pop_function_context();
+
+        self.next_value = saved_next_value;
+        self.next_temp = saved_next_temp;
+
+        self.promise_resolve_cb_fn_id = Some(resolve_fn_id);
+        self.promise_reject_cb_fn_id = Some(reject_fn_id);
+        Ok(())
     }
 }
 
@@ -7251,6 +8905,7 @@ fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "clearInterval" => Some(Builtin::ClearInterval),
         "fetch" => Some(Builtin::Fetch),
         "Symbol" => Some(Builtin::SymbolCreate),
+        "queueMicrotask" => Some(Builtin::QueueMicrotask),
         _ => None,
     }
 }
@@ -7288,6 +8943,15 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
         "Symbol" => match property {
             "for" => Some(Builtin::SymbolFor),
             "keyFor" => Some(Builtin::SymbolKeyFor),
+            _ => None,
+        },
+        "Promise" => match property {
+            "resolve" => Some(Builtin::PromiseResolveStatic),
+            "reject" => Some(Builtin::PromiseRejectStatic),
+            "all" => Some(Builtin::PromiseAll),
+            "race" => Some(Builtin::PromiseRace),
+            "allSettled" => Some(Builtin::PromiseAllSettled),
+            "any" => Some(Builtin::PromiseAny),
             _ => None,
         },
         _ => None,
@@ -7366,6 +9030,17 @@ fn builtin_from_regexp_proto_method(name: &str) -> Option<Builtin> {
         _ => None,
     }
 }
+
+fn builtin_from_promise_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "then" => Some(PromiseThen),
+        "catch" => Some(PromiseCatch),
+        "finally" => Some(PromiseFinally),
+        _ => None,
+    }
+}
+
 fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
     match builtin {
         Builtin::ConsoleLog => ("console.log", 1),
@@ -7422,6 +9097,7 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::StringReplace => ("String.prototype.replace", 3),
         Builtin::StringSearch => ("String.prototype.search", 2),
         Builtin::StringSplit => ("String.prototype.split", 3),
+        Builtin::QueueMicrotask => ("queueMicrotask", 1),
         _ => ("builtin", 0),
     }
 }

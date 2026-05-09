@@ -382,6 +382,22 @@ pub enum Instruction {
     GetSuperBase {
         dest: ValueId,
     },
+    NewPromise {
+        dest: ValueId,
+    },
+    PromiseResolve {
+        promise: ValueId,
+        value: ValueId,
+    },
+    PromiseReject {
+        promise: ValueId,
+        reason: ValueId,
+    },
+    Suspend {
+        promise: ValueId,
+        continuation: ValueId,
+        state: u32,
+    },
 }
 
 impl fmt::Display for Instruction {
@@ -520,6 +536,16 @@ impl fmt::Display for Instruction {
             }
             Self::GetSuperBase { dest } => {
                 write!(formatter, "{dest} = get_super_base")
+            }
+            Self::NewPromise { dest } => write!(formatter, "{dest} = new_promise"),
+            Self::PromiseResolve { promise, value } => {
+                write!(formatter, "promise_resolve {promise}, {value}")
+            }
+            Self::PromiseReject { promise, reason } => {
+                write!(formatter, "promise_reject {promise}, {reason}")
+            }
+            Self::Suspend { promise, continuation, state } => {
+                write!(formatter, "suspend {promise}, cont={continuation}, state={state}")
             }
         }
     }
@@ -721,6 +747,31 @@ pub enum Builtin {
     StringReplace,
     StringSearch,
     StringSplit,
+    PromiseCreate,
+    PromiseInstanceResolve,
+    PromiseInstanceReject,
+    PromiseThen,
+    PromiseCatch,
+    PromiseFinally,
+    PromiseAll,
+    PromiseRace,
+    PromiseAllSettled,
+    PromiseAny,
+    PromiseResolveStatic,
+    PromiseRejectStatic,
+    IsPromise,
+    QueueMicrotask,
+    DrainMicrotasks,
+    AsyncFunctionStart,
+    AsyncFunctionResume,
+    AsyncFunctionSuspend,
+    ContinuationCreate,
+    ContinuationSaveVar,
+    ContinuationLoadVar,
+    AsyncGeneratorStart,
+    AsyncGeneratorNext,
+    AsyncGeneratorReturn,
+    AsyncGeneratorThrow,
 }
 
 impl fmt::Display for Builtin {
@@ -829,6 +880,31 @@ impl fmt::Display for Builtin {
             Self::StringReplace => "string.replace",
             Self::StringSearch => "string.search",
             Self::StringSplit => "string.split",
+            Self::PromiseCreate => "promise.create",
+            Self::PromiseInstanceResolve => "promise.instance_resolve",
+            Self::PromiseInstanceReject => "promise.instance_reject",
+            Self::PromiseThen => "promise.then",
+            Self::PromiseCatch => "promise.catch",
+            Self::PromiseFinally => "promise.finally",
+            Self::PromiseAll => "promise.all",
+            Self::PromiseRace => "promise.race",
+            Self::PromiseAllSettled => "promise.all_settled",
+            Self::PromiseAny => "promise.any",
+            Self::PromiseResolveStatic => "promise.resolve_static",
+            Self::PromiseRejectStatic => "promise.reject_static",
+            Self::IsPromise => "is_promise",
+            Self::QueueMicrotask => "queue_microtask",
+            Self::DrainMicrotasks => "drain_microtasks",
+            Self::AsyncFunctionStart => "async_function.start",
+            Self::AsyncFunctionResume => "async_function.resume",
+            Self::AsyncFunctionSuspend => "async_function.suspend",
+            Self::ContinuationCreate => "continuation.create",
+            Self::ContinuationSaveVar => "continuation.save_var",
+            Self::ContinuationLoadVar => "continuation.load_var",
+            Self::AsyncGeneratorStart => "async_generator.start",
+            Self::AsyncGeneratorNext => "async_generator.next",
+            Self::AsyncGeneratorReturn => "async_generator.return",
+            Self::AsyncGeneratorThrow => "async_generator.throw",
         })
     }
 }

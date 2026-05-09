@@ -1,5 +1,6 @@
 use anyhow::Result;
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -9,6 +10,370 @@ use num_traits::cast::ToPrimitive;
 const SHADOW_STACK_SIZE: u32 = 65536;
 
 use wjsm_ir::{constants, value};
+
+
+fn resolve_promise_value(
+    store: &mut Store<RuntimeState>,
+    instance: &Instance,
+    promise_val: i64,
+    value_val: i64,
+) {
+    if !value::is_object(promise_val) { return; }
+    let obj_handle = value::decode_object_handle(promise_val);
+    let Some(Extern::Global(g)) = instance.get_export(&mut *store, "__obj_table_ptr") else { return; };
+    let obj_table_ptr = g.get(&mut *store).i32().unwrap_or(0) as u32;
+    let Some(Extern::Memory(mem)) = instance.get_export(&mut *store, "memory") else { return; };
+    let promise_idx;
+    {
+        let data = mem.data(&*store);
+        let slot_addr = (obj_table_ptr + obj_handle * 4) as usize;
+        if slot_addr + 4 > data.len() { return; }
+        let obj_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+        if obj_ptr + 16 > data.len() { return; }
+        if data[obj_ptr + 4] != value::HEAP_TYPE_PROMISE { return; }
+        promise_idx = u32::from_le_bytes([data[obj_ptr+8], data[obj_ptr+9], data[obj_ptr+10], data[obj_ptr+11]]) as usize;
+    }
+    if value::is_object(value_val) {
+        let value_obj_handle = value::decode_object_handle(value_val);
+        let mut maybe_value_promise_idx: Option<usize>;
+        {
+            let data = mem.data(&*store);
+            let slot_addr = (obj_table_ptr + value_obj_handle * 4) as usize;
+            maybe_value_promise_idx = None;
+            if slot_addr + 4 <= data.len() {
+                let obj_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+                if obj_ptr + 16 <= data.len() && data[obj_ptr + 4] == value::HEAP_TYPE_PROMISE {
+                    maybe_value_promise_idx = Some(u32::from_le_bytes([data[obj_ptr+8], data[obj_ptr+9], data[obj_ptr+10], data[obj_ptr+11]]) as usize);
+                }
+            }
+        }
+        if let Some(value_promise_idx) = maybe_value_promise_idx {
+            let mut ptable = store.data().promise_table.lock().expect("promise_table mutex");
+            if value_promise_idx < ptable.len() {
+                let state_result = {
+                    let entry = &ptable[value_promise_idx];
+                    match &entry.state {
+                        PromiseState::Fulfilled(v) => Some(Ok(*v)),
+                        PromiseState::Rejected(r) => Some(Err(*r)),
+                        PromiseState::Pending => None,
+                    }
+                };
+                match state_result {
+                    Some(Ok(v)) => {
+                        drop(ptable);
+                        resolve_promise_value(store, instance, promise_val, v);
+                        return;
+                    }
+                    Some(Err(r)) => {
+                        drop(ptable);
+                        reject_promise_value(store, instance, promise_val, r);
+                        return;
+                    }
+                    None => {
+                        ptable[value_promise_idx].fulfill_reactions.push(PromiseReaction {
+                            handler: value::encode_undefined(),
+                            target_promise: promise_val,
+                            reaction_type: ReactionType::Fulfill,
+                        });
+                        ptable[value_promise_idx].reject_reactions.push(PromiseReaction {
+                            handler: value::encode_undefined(),
+                            target_promise: promise_val,
+                            reaction_type: ReactionType::Reject,
+                        });
+                        drop(ptable);
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    let mut ptable = store.data().promise_table.lock().expect("promise_table mutex");
+    if promise_idx >= ptable.len() { return; }
+    let entry = &mut ptable[promise_idx];
+    if !matches!(entry.state, PromiseState::Pending) { return; }
+    let reactions = std::mem::take(&mut entry.fulfill_reactions);
+    let reject_reactions = std::mem::take(&mut entry.reject_reactions);
+    entry.state = PromiseState::Fulfilled(value_val);
+    drop(ptable);
+    let mut queue = store.data().microtask_queue.lock().expect("microtask_queue mutex");
+    for reaction in reactions {
+        queue.push_back(Microtask::PromiseReaction {
+            promise: reaction.target_promise,
+            reaction_type: reaction.reaction_type,
+            handler: reaction.handler,
+            argument: value_val,
+        });
+    }
+    for reaction in reject_reactions {
+        queue.push_back(Microtask::PromiseReaction {
+            promise: reaction.target_promise,
+            reaction_type: reaction.reaction_type,
+            handler: reaction.handler,
+            argument: value_val,
+        });
+    }
+}
+
+fn reject_promise_value(
+    store: &mut Store<RuntimeState>,
+    instance: &Instance,
+    promise_val: i64,
+    reason_val: i64,
+) {
+    if !value::is_object(promise_val) { return; }
+    let obj_handle = value::decode_object_handle(promise_val);
+    let Some(Extern::Global(g)) = instance.get_export(&mut *store, "__obj_table_ptr") else { return; };
+    let obj_table_ptr = g.get(&mut *store).i32().unwrap_or(0) as u32;
+    let Some(Extern::Memory(mem)) = instance.get_export(&mut *store, "memory") else { return; };
+    let promise_idx;
+    {
+        let data = mem.data(&*store);
+        let slot_addr = (obj_table_ptr + obj_handle * 4) as usize;
+        if slot_addr + 4 > data.len() { return; }
+        let obj_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+        if obj_ptr + 16 > data.len() { return; }
+        if data[obj_ptr + 4] != value::HEAP_TYPE_PROMISE { return; }
+        promise_idx = u32::from_le_bytes([data[obj_ptr+8], data[obj_ptr+9], data[obj_ptr+10], data[obj_ptr+11]]) as usize;
+    }
+    let mut ptable = store.data().promise_table.lock().expect("promise_table mutex");
+    if promise_idx >= ptable.len() { return; }
+    let entry = &mut ptable[promise_idx];
+    if !matches!(entry.state, PromiseState::Pending) { return; }
+    let _fulfill_reactions = std::mem::take(&mut entry.fulfill_reactions);
+    let reactions = std::mem::take(&mut entry.reject_reactions);
+    entry.state = PromiseState::Rejected(reason_val);
+    drop(ptable);
+    let mut queue = store.data().microtask_queue.lock().expect("microtask_queue mutex");
+    for reaction in reactions {
+        queue.push_back(Microtask::PromiseReaction {
+            promise: reaction.target_promise,
+            reaction_type: reaction.reaction_type,
+            handler: reaction.handler,
+            argument: reason_val,
+        });
+    }
+}
+
+fn drain_microtasks_impl(
+    store: &mut Store<RuntimeState>,
+    instance: &Instance,
+) {
+    loop {
+        let task = {
+            let mut queue = store.data().microtask_queue.lock().expect("microtask_queue mutex");
+            queue.pop_front()
+        };
+        let Some(task) = task else { break; };
+
+        match task {
+            Microtask::PromiseReaction { promise: result_promise, reaction_type, handler, argument } => {
+                eprintln!("DBG microtask: PromiseReaction reaction_type={:?} handler_is_undefined={}", reaction_type, value::is_undefined(handler));
+                if value::is_undefined(handler) {
+                    match reaction_type {
+                        ReactionType::Fulfill => {
+                            resolve_promise_value(store, instance, result_promise, argument);
+                        }
+                        ReactionType::Reject => {
+                            reject_promise_value(store, instance, result_promise, argument);
+                        }
+                    }
+                    continue;
+                }
+
+                let is_continuation = {
+                    let Some(Extern::Memory(mem)) = instance.get_export(&mut *store, "memory") else { continue };
+                    let Some(Extern::Global(g)) = instance.get_export(&mut *store, "__obj_table_ptr") else { continue };
+                    let obj_table_ptr = g.get(&mut *store).i32().unwrap_or(0) as u32;
+                    let data = mem.data(&*store);
+                    if value::is_object(handler) {
+                        let handle = value::decode_object_handle(handler);
+                        let slot_addr = (obj_table_ptr + handle * 4) as usize;
+                        if slot_addr + 4 <= data.len() {
+                            let obj_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+                            if obj_ptr + 8 <= data.len() {
+                                data[obj_ptr + 4] == value::HEAP_TYPE_CONTINUATION
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                };
+
+                if is_continuation {
+                    eprintln!("DBG microtask: is_continuation=true");
+                    let (fn_table_idx, next_state) = {
+                        let Some(Extern::Memory(mem)) = instance.get_export(&mut *store, "memory") else { continue };
+                        let Some(Extern::Global(g)) = instance.get_export(&mut *store, "__obj_table_ptr") else { continue };
+                        let obj_table_ptr = g.get(&mut *store).i32().unwrap_or(0) as u32;
+                        let data = mem.data(&*store);
+                        let handle = value::decode_object_handle(handler);
+                        let slot_addr = (obj_table_ptr + handle * 4) as usize;
+                        if slot_addr + 4 > data.len() { continue; }
+                        let obj_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+                        if obj_ptr + 12 > data.len() { continue; }
+                        let cont_idx = u32::from_le_bytes([data[obj_ptr+8], data[obj_ptr+9], data[obj_ptr+10], data[obj_ptr+11]]) as usize;
+                        drop(data);
+                        let ctable = store.data().continuation_table.lock().expect("continuation_table mutex");
+                        if cont_idx < ctable.len() {
+                            (ctable[cont_idx].fn_table_idx, ctable[cont_idx].next_state)
+                        } else {
+                            continue;
+                        }
+                    };
+                    let is_rejected = matches!(task, Microtask::PromiseReaction { reaction_type: ReactionType::Reject, .. });
+                    eprintln!("DBG microtask: queueing AsyncResume is_rejected={}", is_rejected);
+                    let mut queue = store.data().microtask_queue.lock().expect("microtask_queue mutex");
+                    queue.push_back(Microtask::AsyncResume {
+                        fn_table_idx,
+                        continuation: handler,
+                        state: next_state,
+                        resume_val: argument,
+                        is_rejected,
+                    });
+                    continue;
+                }
+
+                if !value::is_callable(handler) {
+                    continue;
+                }
+                let (raw_idx, handler_env) = if value::is_function(handler) {
+                    (value::decode_function_idx(handler) as u64, value::encode_undefined())
+                } else if value::is_closure(handler) {
+                    let closure_idx = value::decode_closure_idx(handler) as usize;
+                    let closures = store.data().closures.lock().expect("closures mutex");
+                    match closures.get(closure_idx) {
+                        Some(c) => (c.func_idx as u64, c.env_obj),
+                        None => continue,
+                    }
+                } else if value::is_bound(handler) {
+                    let bound_idx = value::decode_bound_idx(handler) as usize;
+                    let bound_objects = store.data().bound_objects.lock().expect("bound_objects mutex");
+                    match bound_objects.get(bound_idx) {
+                        Some(b) => {
+                            if value::is_function(b.target_func) {
+                                (value::decode_function_idx(b.target_func) as u64, value::encode_undefined())
+                            } else if value::is_closure(b.target_func) {
+                                let cidx = value::decode_closure_idx(b.target_func) as usize;
+                                let closures = store.data().closures.lock().expect("closures mutex");
+                                match closures.get(cidx) {
+                                    Some(c) => (c.func_idx as u64, c.env_obj),
+                                    None => continue,
+                                }
+                            } else {
+                                continue;
+                            }
+                        }
+                        None => continue,
+                    }
+                } else {
+                    continue;
+                };
+
+                let args_base: u32 = 65536;
+                if let Some(Extern::Memory(mem)) = instance.get_export(&mut *store, "memory") {
+                    let data = mem.data_mut(&mut *store);
+                    let base = args_base as usize;
+                    if base + 8 <= data.len() {
+                        data[base..base+8].copy_from_slice(&argument.to_le_bytes());
+                    }
+                }
+
+                if let Some(Extern::Table(tbl)) = instance.get_export(&mut *store, "__table") {
+                    if let Some(Ref::Func(Some(func))) = tbl.get(&mut *store, raw_idx) {
+                        if let Ok(typed) = func.typed::<(i64, i64, i32, i32), i64>(&*store) {
+                            match typed.call(&mut *store, (handler_env, value::encode_undefined(), args_base as i32, 1i32)) {
+                                Ok(ret_val) => {
+                                    resolve_promise_value(store, instance, result_promise, ret_val);
+                                }
+                                Err(_) => {
+                                    reject_promise_value(store, instance, result_promise, value::encode_undefined());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Microtask::MicrotaskCallback { callback } => {
+                let raw_idx = if value::is_function(callback) {
+                    value::decode_function_idx(callback) as u64
+                } else if value::is_closure(callback) {
+                    let closure_idx = value::decode_closure_idx(callback) as usize;
+                    let closures = store.data().closures.lock().expect("closures mutex");
+                    match closures.get(closure_idx) {
+                        Some(c) => c.func_idx as u64,
+                        None => continue,
+                    }
+                } else {
+                    continue;
+                };
+
+                if let Some(Extern::Table(tbl)) = instance.get_export(&mut *store, "__table") {
+                    if let Some(Ref::Func(Some(func))) = tbl.get(&mut *store, raw_idx) {
+                        if let Ok(typed) = func.typed::<(i64, i64, i32, i32), i64>(&*store) {
+                            let _ = typed.call(&mut *store, (value::encode_undefined(), value::encode_undefined(), 0i32, 0i32));
+                        }
+                    }
+                }
+            }
+            Microtask::AsyncResume { fn_table_idx, continuation, state, resume_val, is_rejected } => {
+                eprintln!("DBG microtask: AsyncResume fn_table_idx={} is_rejected={} state={} resume_val={}", fn_table_idx, is_rejected, state, resume_val);
+                let cont_idx = if value::is_object(continuation) {
+                    let cont_handle = value::decode_object_handle(continuation);
+                    let obj_table_ptr = if let Some(Extern::Global(g)) = instance.get_export(&mut *store, "__obj_table_ptr") {
+                        g.get(&mut *store).i32().unwrap_or(0) as u32
+                    } else {
+                        continue;
+                    };
+                    let Some(Extern::Memory(mem)) = instance.get_export(&mut *store, "memory") else { continue };
+                    let data = mem.data(&*store);
+                    let cont_slot = (obj_table_ptr + cont_handle * 4) as usize;
+                    if cont_slot + 4 > data.len() { continue; }
+                    let cont_ptr = u32::from_le_bytes([data[cont_slot], data[cont_slot+1], data[cont_slot+2], data[cont_slot+3]]) as usize;
+                    if cont_ptr + 12 > data.len() || data[cont_ptr + 4] != value::HEAP_TYPE_CONTINUATION { continue; }
+                    u32::from_le_bytes([data[cont_ptr+8], data[cont_ptr+9], data[cont_ptr+10], data[cont_ptr+11]]) as usize
+                } else {
+                    continue;
+                };
+
+                let (env, this_val, outer_promise) = {
+                    let ctable = store.data().continuation_table.lock().expect("continuation_table mutex");
+                    if cont_idx < ctable.len() {
+                        (ctable[cont_idx].env, ctable[cont_idx].this_val, ctable[cont_idx].outer_promise)
+                    } else {
+                        continue;
+                    }
+                };
+
+                let args_base: u32 = 65536;
+                let args_count: u32 = 5;
+                if let Some(Extern::Memory(mem)) = instance.get_export(&mut *store, "memory") {
+                    let data = mem.data_mut(&mut *store);
+                    let base = args_base as usize;
+                    if base + (args_count as usize) * 8 <= data.len() {
+                        data[base..base+8].copy_from_slice(&value::encode_f64(state as f64).to_le_bytes());
+                        data[base+8..base+16].copy_from_slice(&resume_val.to_le_bytes());
+                        data[base+16..base+24].copy_from_slice(&value::encode_bool(is_rejected).to_le_bytes());
+                        data[base+24..base+32].copy_from_slice(&continuation.to_le_bytes());
+                        data[base+32..base+40].copy_from_slice(&outer_promise.to_le_bytes());
+                    }
+                }
+
+                if let Some(Extern::Table(tbl)) = instance.get_export(&mut *store, "__table") {
+                    if let Some(Ref::Func(Some(func))) = tbl.get(&mut *store, fn_table_idx as u64) {
+                        if let Ok(typed) = func.typed::<(i64, i64, i32, i32), i64>(&*store) {
+                            let result = typed.call(&mut *store, (env, this_val, args_base as i32, args_count as i32));
+                            eprintln!("DBG AsyncResume: call result={:?}", result.as_ref().map(|v| *v).map_err(|e| e.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 pub fn execute(wasm_bytes: &[u8]) -> Result<()> {
     let stdout = io::stdout();
@@ -36,6 +401,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let symbol_table: Arc<Mutex<Vec<SymbolEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let regex_table: Arc<Mutex<Vec<RegexEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
+    let promise_table: Arc<Mutex<Vec<PromiseEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let microtask_queue: Arc<Mutex<VecDeque<Microtask>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let continuation_table: Arc<Mutex<Vec<ContinuationEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>> = Arc::new(Mutex::new(Vec::new()));
+
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     let alloc_counter: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
@@ -59,6 +429,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             bigint_table: Arc::clone(&bigint_table),
             symbol_table: Arc::clone(&symbol_table),
             regex_table: Arc::clone(&regex_table),
+            promise_table: Arc::clone(&promise_table),
+            microtask_queue: Arc::clone(&microtask_queue),
+            continuation_table: Arc::clone(&continuation_table),
+            async_generator_table: Arc::clone(&async_generator_table),
         },
     );
 
@@ -66,6 +440,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let console_log = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, val: i64| {
+            eprintln!("DBG console_log: val={}", val);
             write_console_value(&mut caller, val, None);
         },
     );
@@ -4327,7 +4702,1357 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
         },
     );
-    
+
+    let promise_create_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>| -> i64 {
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let promise_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&promise_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            value::encode_object_handle(obj_table_count)
+        },
+    );
+
+    let promise_instance_resolve_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, promise_val: i64, value_val: i64| {
+            eprintln!("DBG resolve_fn: promise_val={} value_val={}", promise_val, value_val);
+            if !value::is_object(promise_val) { return; }
+            let obj_handle = value::decode_object_handle(promise_val);
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return; };
+            let obj_table_ptr = g.get(&mut caller).i32().unwrap_or(0) as u32;
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return; };
+            let promise_idx;
+            {
+                let data = mem.data(&caller);
+                let slot_addr = (obj_table_ptr + obj_handle * 4) as usize;
+                if slot_addr + 4 > data.len() { return; }
+                let obj_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+                if obj_ptr + 16 > data.len() { return; }
+                if data[obj_ptr + 4] != value::HEAP_TYPE_PROMISE { return; }
+                promise_idx = u32::from_le_bytes([data[obj_ptr+8], data[obj_ptr+9], data[obj_ptr+10], data[obj_ptr+11]]) as usize;
+            }
+            if value::is_object(value_val) {
+                let value_obj_handle = value::decode_object_handle(value_val);
+                let mut maybe_value_promise_idx: Option<usize>;
+                {
+                    let data = mem.data(&caller);
+                    let slot_addr = (obj_table_ptr + value_obj_handle * 4) as usize;
+                    maybe_value_promise_idx = None;
+                    if slot_addr + 4 <= data.len() {
+                        let obj_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+                        if obj_ptr + 16 <= data.len() && data[obj_ptr + 4] == value::HEAP_TYPE_PROMISE {
+                            maybe_value_promise_idx = Some(u32::from_le_bytes([data[obj_ptr+8], data[obj_ptr+9], data[obj_ptr+10], data[obj_ptr+11]]) as usize);
+                        }
+                    }
+                }
+                if let Some(value_promise_idx) = maybe_value_promise_idx {
+                    let mut ptable = caller.data().promise_table.lock().expect("promise_table mutex");
+                    if value_promise_idx < ptable.len() {
+                        let state_result = {
+                            let entry = &ptable[value_promise_idx];
+                            match &entry.state {
+                                PromiseState::Fulfilled(v) => Some(Ok(*v)),
+                                PromiseState::Rejected(r) => Some(Err(*r)),
+                                PromiseState::Pending => None,
+                            }
+                        };
+                        match state_result {
+                            Some(Ok(v)) => {
+                                drop(ptable);
+                                let mut ptable2 = caller.data().promise_table.lock().expect("promise_table mutex");
+                                if promise_idx >= ptable2.len() { return; }
+                                let entry2 = &mut ptable2[promise_idx];
+                                if !matches!(entry2.state, PromiseState::Pending) { return; }
+                                let reactions = std::mem::take(&mut entry2.fulfill_reactions);
+                                let _reject_reactions = std::mem::take(&mut entry2.reject_reactions);
+                                entry2.state = PromiseState::Fulfilled(v);
+                                drop(ptable2);
+                                let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+                                for reaction in reactions {
+                                    queue.push_back(Microtask::PromiseReaction {
+                                        promise: reaction.target_promise,
+                                        reaction_type: reaction.reaction_type,
+                                        handler: reaction.handler,
+                                        argument: v,
+                                    });
+                                }
+                                return;
+                            }
+                            Some(Err(r)) => {
+                                drop(ptable);
+                                let mut ptable2 = caller.data().promise_table.lock().expect("promise_table mutex");
+                                if promise_idx >= ptable2.len() { return; }
+                                let entry2 = &mut ptable2[promise_idx];
+                                if !matches!(entry2.state, PromiseState::Pending) { return; }
+                                let _fulfill_reactions = std::mem::take(&mut entry2.fulfill_reactions);
+                                let reactions = std::mem::take(&mut entry2.reject_reactions);
+                                entry2.state = PromiseState::Rejected(r);
+                                drop(ptable2);
+                                let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+                                for reaction in reactions {
+                                    queue.push_back(Microtask::PromiseReaction {
+                                        promise: reaction.target_promise,
+                                        reaction_type: reaction.reaction_type,
+                                        handler: reaction.handler,
+                                        argument: r,
+                                    });
+                                }
+                                return;
+                            }
+                            None => {
+                                ptable[value_promise_idx].fulfill_reactions.push(PromiseReaction {
+                                    handler: value::encode_undefined(),
+                                    target_promise: promise_val,
+                                    reaction_type: ReactionType::Fulfill,
+                                });
+                                ptable[value_promise_idx].reject_reactions.push(PromiseReaction {
+                                    handler: value::encode_undefined(),
+                                    target_promise: promise_val,
+                                    reaction_type: ReactionType::Reject,
+                                });
+                                drop(ptable);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            let mut ptable = caller.data().promise_table.lock().expect("promise_table mutex");
+            if promise_idx >= ptable.len() { return; }
+            let entry = &mut ptable[promise_idx];
+            if !matches!(entry.state, PromiseState::Pending) { return; }
+            let reactions = std::mem::take(&mut entry.fulfill_reactions);
+            let _reject_reactions = std::mem::take(&mut entry.reject_reactions);
+            entry.state = PromiseState::Fulfilled(value_val);
+            drop(ptable);
+            let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+            for reaction in reactions {
+                queue.push_back(Microtask::PromiseReaction {
+                    promise: reaction.target_promise,
+                    reaction_type: reaction.reaction_type,
+                    handler: reaction.handler,
+                    argument: value_val,
+                });
+            }
+        },
+    );
+
+    let promise_instance_reject_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, promise_val: i64, reason_val: i64| {
+            if !value::is_object(promise_val) { return; }
+            let obj_handle = value::decode_object_handle(promise_val);
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return; };
+            let obj_table_ptr = g.get(&mut caller).i32().unwrap_or(0) as u32;
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return; };
+            let promise_idx;
+            {
+                let data = mem.data(&caller);
+                let slot_addr = (obj_table_ptr + obj_handle * 4) as usize;
+                if slot_addr + 4 > data.len() { return; }
+                let obj_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+                if obj_ptr + 16 > data.len() { return; }
+                if data[obj_ptr + 4] != value::HEAP_TYPE_PROMISE { return; }
+                promise_idx = u32::from_le_bytes([data[obj_ptr+8], data[obj_ptr+9], data[obj_ptr+10], data[obj_ptr+11]]) as usize;
+            }
+            let mut ptable = caller.data().promise_table.lock().expect("promise_table mutex");
+            if promise_idx >= ptable.len() { return; }
+            let entry = &mut ptable[promise_idx];
+            if !matches!(entry.state, PromiseState::Pending) { return; }
+            let _fulfill_reactions = std::mem::take(&mut entry.fulfill_reactions);
+            let reactions = std::mem::take(&mut entry.reject_reactions);
+            entry.state = PromiseState::Rejected(reason_val);
+            drop(ptable);
+            let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+            for reaction in reactions {
+                queue.push_back(Microtask::PromiseReaction {
+                    promise: reaction.target_promise,
+                    reaction_type: reaction.reaction_type,
+                    handler: reaction.handler,
+                    argument: reason_val,
+                });
+            }
+        },
+    );
+
+    let promise_then_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, promise_val: i64, on_fulfilled: i64, on_rejected: i64| -> i64 {
+            if !value::is_object(promise_val) { return value::encode_undefined(); }
+            let obj_handle = value::decode_object_handle(promise_val);
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let result_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&result_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(obj_table_count);
+
+            let promise_idx;
+            {
+                let data = mem.data(&caller);
+                let slot_addr = (obj_table_ptr + obj_handle * 4) as usize;
+                if slot_addr + 4 > data.len() { return result_promise; }
+                let src_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+                if src_ptr + 16 > data.len() { return result_promise; }
+                if data[src_ptr + 4] != value::HEAP_TYPE_PROMISE { return result_promise; }
+                promise_idx = u32::from_le_bytes([data[src_ptr+8], data[src_ptr+9], data[src_ptr+10], data[src_ptr+11]]) as usize;
+            }
+
+            let mut ptable = caller.data().promise_table.lock().expect("promise_table mutex");
+            if promise_idx >= ptable.len() { return result_promise; }
+            let entry = &mut ptable[promise_idx];
+            match &entry.state {
+                PromiseState::Pending => {
+                    entry.fulfill_reactions.push(PromiseReaction {
+                        handler: on_fulfilled,
+                        target_promise: result_promise,
+                        reaction_type: ReactionType::Fulfill,
+                    });
+                    entry.reject_reactions.push(PromiseReaction {
+                        handler: on_rejected,
+                        target_promise: result_promise,
+                        reaction_type: ReactionType::Reject,
+                    });
+                }
+                PromiseState::Fulfilled(val) => {
+                    let val = *val;
+                    drop(ptable);
+                    let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+                    queue.push_back(Microtask::PromiseReaction {
+                        promise: result_promise,
+                        reaction_type: ReactionType::Fulfill,
+                        handler: on_fulfilled,
+                        argument: val,
+                    });
+                }
+                PromiseState::Rejected(reason) => {
+                    let reason = *reason;
+                    drop(ptable);
+                    let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+                    queue.push_back(Microtask::PromiseReaction {
+                        promise: result_promise,
+                        reaction_type: ReactionType::Reject,
+                        handler: on_rejected,
+                        argument: reason,
+                    });
+                }
+            }
+            result_promise
+        },
+    );
+
+    let promise_catch_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, promise_val: i64, on_rejected: i64| -> i64 {
+            let on_fulfilled = value::encode_undefined();
+            if !value::is_object(promise_val) { return value::encode_undefined(); }
+            let obj_handle = value::decode_object_handle(promise_val);
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let result_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&result_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(obj_table_count);
+
+            let promise_idx;
+            {
+                let data = mem.data(&caller);
+                let src_slot = (obj_table_ptr + obj_handle * 4) as usize;
+                if src_slot + 4 > data.len() { return result_promise; }
+                let src_ptr = u32::from_le_bytes([data[src_slot], data[src_slot+1], data[src_slot+2], data[src_slot+3]]) as usize;
+                if src_ptr + 16 > data.len() { return result_promise; }
+                if data[src_ptr + 4] != value::HEAP_TYPE_PROMISE { return result_promise; }
+                promise_idx = u32::from_le_bytes([data[src_ptr+8], data[src_ptr+9], data[src_ptr+10], data[src_ptr+11]]) as usize;
+            }
+
+            let mut ptable = caller.data().promise_table.lock().expect("promise_table mutex");
+            if promise_idx >= ptable.len() { return result_promise; }
+            let entry = &mut ptable[promise_idx];
+            match &entry.state {
+                PromiseState::Pending => {
+                    entry.fulfill_reactions.push(PromiseReaction {
+                        handler: on_fulfilled,
+                        target_promise: result_promise,
+                        reaction_type: ReactionType::Fulfill,
+                    });
+                    entry.reject_reactions.push(PromiseReaction {
+                        handler: on_rejected,
+                        target_promise: result_promise,
+                        reaction_type: ReactionType::Reject,
+                    });
+                }
+                PromiseState::Fulfilled(val) => {
+                    let val = *val;
+                    drop(ptable);
+                    let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+                    queue.push_back(Microtask::PromiseReaction {
+                        promise: result_promise,
+                        reaction_type: ReactionType::Fulfill,
+                        handler: on_fulfilled,
+                        argument: val,
+                    });
+                }
+                PromiseState::Rejected(reason) => {
+                    let reason = *reason;
+                    drop(ptable);
+                    let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+                    queue.push_back(Microtask::PromiseReaction {
+                        promise: result_promise,
+                        reaction_type: ReactionType::Reject,
+                        handler: on_rejected,
+                        argument: reason,
+                    });
+                }
+            }
+            result_promise
+        },
+    );
+
+    let promise_finally_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, promise_val: i64, on_finally: i64| -> i64 {
+            if !value::is_object(promise_val) { return value::encode_undefined(); }
+            let obj_handle = value::decode_object_handle(promise_val);
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let result_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&result_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let result_promise = value::encode_object_handle(obj_table_count);
+
+            let promise_idx;
+            {
+                let data = mem.data(&caller);
+                let src_slot = (obj_table_ptr + obj_handle * 4) as usize;
+                if src_slot + 4 > data.len() { return result_promise; }
+                let src_ptr = u32::from_le_bytes([data[src_slot], data[src_slot+1], data[src_slot+2], data[src_slot+3]]) as usize;
+                if src_ptr + 16 > data.len() { return result_promise; }
+                if data[src_ptr + 4] != value::HEAP_TYPE_PROMISE { return result_promise; }
+                promise_idx = u32::from_le_bytes([data[src_ptr+8], data[src_ptr+9], data[src_ptr+10], data[src_ptr+11]]) as usize;
+            }
+
+            let mut ptable = caller.data().promise_table.lock().expect("promise_table mutex");
+            if promise_idx >= ptable.len() { return result_promise; }
+            let entry = &mut ptable[promise_idx];
+            match &entry.state {
+                PromiseState::Pending => {
+                    entry.fulfill_reactions.push(PromiseReaction {
+                        handler: on_finally,
+                        target_promise: result_promise,
+                        reaction_type: ReactionType::Fulfill,
+                    });
+                    entry.reject_reactions.push(PromiseReaction {
+                        handler: on_finally,
+                        target_promise: result_promise,
+                        reaction_type: ReactionType::Reject,
+                    });
+                }
+                PromiseState::Fulfilled(val) => {
+                    let val = *val;
+                    drop(ptable);
+                    let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+                    queue.push_back(Microtask::PromiseReaction {
+                        promise: result_promise,
+                        reaction_type: ReactionType::Fulfill,
+                        handler: on_finally,
+                        argument: val,
+                    });
+                }
+                PromiseState::Rejected(reason) => {
+                    let reason = *reason;
+                    drop(ptable);
+                    let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+                    queue.push_back(Microtask::PromiseReaction {
+                        promise: result_promise,
+                        reaction_type: ReactionType::Reject,
+                        handler: on_finally,
+                        argument: reason,
+                    });
+                }
+            }
+            result_promise
+        },
+    );
+
+    let promise_all_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _iterable: i64| -> i64 {
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let result_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&result_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            value::encode_object_handle(obj_table_count)
+        },
+    );
+
+    let promise_race_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _iterable: i64| -> i64 {
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let result_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&result_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            value::encode_object_handle(obj_table_count)
+        },
+    );
+
+    let promise_all_settled_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _iterable: i64| -> i64 {
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let result_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&result_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            value::encode_object_handle(obj_table_count)
+        },
+    );
+
+    let promise_any_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _iterable: i64| -> i64 {
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let result_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&result_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            value::encode_object_handle(obj_table_count)
+        },
+    );
+
+    let promise_resolve_static_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            if value::is_object(val) {
+                let obj_handle = value::decode_object_handle(val);
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                let obj_table_ptr = g.get(&mut caller).i32().unwrap_or(0) as u32;
+                let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+                let is_promise;
+                {
+                    let data = mem.data(&caller);
+                    let slot_addr = (obj_table_ptr + obj_handle * 4) as usize;
+                    is_promise = slot_addr + 4 <= data.len() && {
+                        let obj_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+                        obj_ptr + 8 <= data.len() && data[obj_ptr + 4] == value::HEAP_TYPE_PROMISE
+                    };
+                }
+                if is_promise { return val; }
+            }
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let promise_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&promise_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Fulfilled(val),
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            value::encode_object_handle(obj_table_count)
+        },
+    );
+
+    let promise_reject_static_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, reason: i64| -> i64 {
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let promise_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&promise_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Rejected(reason),
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            value::encode_object_handle(obj_table_count)
+        },
+    );
+
+    let is_promise_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            if !value::is_object(val) { return value::encode_bool(false); }
+            let obj_handle = value::decode_object_handle(val);
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_bool(false); };
+            let obj_table_ptr = g.get(&mut caller).i32().unwrap_or(0) as u32;
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_bool(false); };
+            let data = mem.data(&caller);
+            let slot_addr = (obj_table_ptr + obj_handle * 4) as usize;
+            if slot_addr + 4 > data.len() { return value::encode_bool(false); }
+            let obj_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+            if obj_ptr + 8 > data.len() { return value::encode_bool(false); }
+            value::encode_bool(data[obj_ptr + 4] == value::HEAP_TYPE_PROMISE)
+        },
+    );
+
+    let queue_microtask_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, callback: i64| {
+            let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+            queue.push_back(Microtask::MicrotaskCallback { callback });
+        },
+    );
+
+    let drain_microtasks_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>| {
+        },
+    );
+
+    let async_function_start_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, fn_table_idx: i32, continuation_val: i64| -> i64 {
+            let outer_promise = if value::is_object(continuation_val) {
+                let cont_handle = value::decode_object_handle(continuation_val);
+                let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                let obj_table_ptr = g.get(&mut caller).i32().unwrap_or(0) as u32;
+                let data = mem.data(&caller);
+                let cont_slot = (obj_table_ptr + cont_handle * 4) as usize;
+                if cont_slot + 4 > data.len() { return value::encode_undefined(); }
+                let cont_ptr = u32::from_le_bytes([data[cont_slot], data[cont_slot+1], data[cont_slot+2], data[cont_slot+3]]) as usize;
+                if cont_ptr + 8 > data.len() || data[cont_ptr + 4] != value::HEAP_TYPE_CONTINUATION { return value::encode_undefined(); }
+                let cont_idx = u32::from_le_bytes([data[cont_ptr+8], data[cont_ptr+9], data[cont_ptr+10], data[cont_ptr+11]]) as usize;
+                drop(data);
+                drop(mem);
+                drop(g);
+                let ctable = caller.data().continuation_table.lock().expect("continuation_table mutex");
+                if cont_idx < ctable.len() {
+                    ctable[cont_idx].outer_promise
+                } else {
+                    return value::encode_undefined();
+                }
+            } else {
+                return value::encode_undefined();
+            };
+
+            let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+            queue.push_back(Microtask::AsyncResume {
+                fn_table_idx: fn_table_idx as u32,
+                continuation: continuation_val,
+                state: 0,
+                resume_val: value::encode_undefined(),
+                is_rejected: false,
+            });
+
+            outer_promise
+        },
+    );
+
+    let async_function_resume_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, _a: i64, _b: i64, _c: i64, _d: i64, _e: i32| {
+        },
+    );
+
+    let async_function_suspend_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, awaited_promise: i64, continuation_val: i64, next_state: i32| {
+            if !value::is_object(awaited_promise) { return; }
+            let obj_handle = value::decode_object_handle(awaited_promise);
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return; };
+            let obj_table_ptr = g.get(&mut caller).i32().unwrap_or(0) as u32;
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return; };
+            let promise_idx;
+            {
+                let data = mem.data(&caller);
+                let slot_addr = (obj_table_ptr + obj_handle * 4) as usize;
+                if slot_addr + 4 > data.len() { return; }
+                let obj_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+                if obj_ptr + 16 > data.len() { return; }
+                if data[obj_ptr + 4] != value::HEAP_TYPE_PROMISE { return; }
+                promise_idx = u32::from_le_bytes([data[obj_ptr+8], data[obj_ptr+9], data[obj_ptr+10], data[obj_ptr+11]]) as usize;
+            }
+
+            let cont_fn_idx;
+            if value::is_object(continuation_val) {
+                let cont_handle = value::decode_object_handle(continuation_val);
+                let data = mem.data(&caller);
+                let cont_slot = (obj_table_ptr + cont_handle * 4) as usize;
+                if cont_slot + 4 > data.len() { return; }
+                let cont_ptr = u32::from_le_bytes([data[cont_slot], data[cont_slot+1], data[cont_slot+2], data[cont_slot+3]]) as usize;
+                if cont_ptr + 8 > data.len() || data[cont_ptr + 4] != value::HEAP_TYPE_CONTINUATION { return; }
+                let cidx = u32::from_le_bytes([data[cont_ptr+8], data[cont_ptr+9], data[cont_ptr+10], data[cont_ptr+11]]) as usize;
+                drop(data);
+                let mut ctable = caller.data().continuation_table.lock().expect("continuation_table mutex");
+                if cidx < ctable.len() {
+                    cont_fn_idx = ctable[cidx].fn_table_idx;
+                    ctable[cidx].next_state = next_state as u32;
+                } else {
+                    return;
+                }
+            } else {
+                return;
+            }
+
+            let mut ptable = caller.data().promise_table.lock().expect("promise_table mutex");
+            if promise_idx >= ptable.len() { return; }
+            let entry = &mut ptable[promise_idx];
+            match &entry.state {
+                PromiseState::Pending => {
+                    entry.fulfill_reactions.push(PromiseReaction {
+                        handler: continuation_val,
+                        target_promise: awaited_promise,
+                        reaction_type: ReactionType::Fulfill,
+                    });
+                    entry.reject_reactions.push(PromiseReaction {
+                        handler: continuation_val,
+                        target_promise: awaited_promise,
+                        reaction_type: ReactionType::Reject,
+                    });
+                }
+                PromiseState::Fulfilled(val) => {
+                    let val = *val;
+                    drop(ptable);
+                    let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+                    queue.push_back(Microtask::AsyncResume {
+                        fn_table_idx: cont_fn_idx,
+                        continuation: continuation_val,
+                        state: next_state as u32,
+                        resume_val: val,
+                        is_rejected: false,
+                    });
+                }
+                PromiseState::Rejected(reason) => {
+                    let reason = *reason;
+                    drop(ptable);
+                    let mut queue = caller.data().microtask_queue.lock().expect("microtask_queue mutex");
+                    queue.push_back(Microtask::AsyncResume {
+                        fn_table_idx: cont_fn_idx,
+                        continuation: continuation_val,
+                        state: next_state as u32,
+                        resume_val: reason,
+                        is_rejected: true,
+                    });
+                }
+            }
+        },
+    );
+
+    let continuation_create_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, fn_table_idx: i32, outer_promise: i64, env: i64, this_val: i64| -> i64 {
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let cont_idx = caller.data().continuation_table.lock().expect("continuation_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_CONTINUATION;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&cont_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().continuation_table.lock().expect("continuation_table mutex").push(ContinuationEntry {
+                fn_table_idx: fn_table_idx as u32,
+                outer_promise,
+                captured_vars: Vec::new(),
+                env,
+                this_val,
+                next_state: 0,
+            });
+            value::encode_object_handle(obj_table_count)
+        },
+    );
+
+    let continuation_save_var_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, continuation_val: i64, slot_index: i32, val: i64| {
+            if !value::is_object(continuation_val) { return; }
+            let cont_handle = value::decode_object_handle(continuation_val);
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return; };
+            let obj_table_ptr = g.get(&mut caller).i32().unwrap_or(0) as u32;
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return; };
+            let cont_idx;
+            {
+                let data = mem.data(&caller);
+                let slot_addr = (obj_table_ptr + cont_handle * 4) as usize;
+                if slot_addr + 4 > data.len() { return; }
+                let cont_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+                if cont_ptr + 16 > data.len() { return; }
+                if data[cont_ptr + 4] != value::HEAP_TYPE_CONTINUATION { return; }
+                cont_idx = u32::from_le_bytes([data[cont_ptr+8], data[cont_ptr+9], data[cont_ptr+10], data[cont_ptr+11]]) as usize;
+            }
+            let mut ctable = caller.data().continuation_table.lock().expect("continuation_table mutex");
+            if cont_idx >= ctable.len() { return; }
+            let entry = &mut ctable[cont_idx];
+            let idx = slot_index as usize;
+            if idx >= entry.captured_vars.len() {
+                entry.captured_vars.resize(idx + 1, value::encode_undefined());
+            }
+            entry.captured_vars[idx] = val;
+        },
+    );
+
+    let continuation_load_var_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, continuation_val: i64, slot_index: i32| -> i64 {
+            if !value::is_object(continuation_val) { return value::encode_undefined(); }
+            let cont_handle = value::decode_object_handle(continuation_val);
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+            let obj_table_ptr = g.get(&mut caller).i32().unwrap_or(0) as u32;
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            let cont_idx;
+            {
+                let data = mem.data(&caller);
+                let slot_addr = (obj_table_ptr + cont_handle * 4) as usize;
+                if slot_addr + 4 > data.len() { return value::encode_undefined(); }
+                let cont_ptr = u32::from_le_bytes([data[slot_addr], data[slot_addr+1], data[slot_addr+2], data[slot_addr+3]]) as usize;
+                if cont_ptr + 16 > data.len() { return value::encode_undefined(); }
+                if data[cont_ptr + 4] != value::HEAP_TYPE_CONTINUATION { return value::encode_undefined(); }
+                cont_idx = u32::from_le_bytes([data[cont_ptr+8], data[cont_ptr+9], data[cont_ptr+10], data[cont_ptr+11]]) as usize;
+            }
+            let ctable = caller.data().continuation_table.lock().expect("continuation_table mutex");
+            if cont_idx >= ctable.len() { return value::encode_undefined(); }
+            let entry = &ctable[cont_idx];
+            let idx = slot_index as usize;
+            if idx < entry.captured_vars.len() {
+                entry.captured_vars[idx]
+            } else {
+                value::encode_undefined()
+            }
+        },
+    );
+
+    let async_generator_start_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, fn_table_idx: i64| -> i64 {
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let ag_idx = caller.data().async_generator_table.lock().expect("async_generator_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_ASYNC_GENERATOR;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&ag_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&fn_table_idx.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().async_generator_table.lock().expect("async_generator_table mutex").push(AsyncGeneratorEntry {
+                state: AsyncGeneratorState::SuspendedStart,
+                queue: Vec::new(),
+            });
+            value::encode_object_handle(obj_table_count)
+        },
+    );
+
+    let async_generator_next_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, gen_val: i64, value_val: i64| -> i64 {
+            if !value::is_object(gen_val) { return value::encode_undefined(); }
+            let gen_handle = value::decode_object_handle(gen_val);
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let promise_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&promise_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let request_promise = value::encode_object_handle(obj_table_count);
+
+            let ag_idx;
+            {
+                let data = mem.data(&caller);
+                let gen_slot = (obj_table_ptr + gen_handle * 4) as usize;
+                if gen_slot + 4 > data.len() { return request_promise; }
+                let gen_ptr = u32::from_le_bytes([data[gen_slot], data[gen_slot+1], data[gen_slot+2], data[gen_slot+3]]) as usize;
+                if gen_ptr + 16 > data.len() { return request_promise; }
+                if data[gen_ptr + 4] != value::HEAP_TYPE_ASYNC_GENERATOR { return request_promise; }
+                ag_idx = u32::from_le_bytes([data[gen_ptr+8], data[gen_ptr+9], data[gen_ptr+10], data[gen_ptr+11]]) as usize;
+            }
+
+            let mut agtable = caller.data().async_generator_table.lock().expect("async_generator_table mutex");
+            if ag_idx >= agtable.len() { return request_promise; }
+            agtable[ag_idx].queue.push(AsyncGeneratorRequest {
+                completion_type: AsyncGeneratorCompletionType::Next,
+                value: value_val,
+                promise: request_promise,
+            });
+            request_promise
+        },
+    );
+
+    let async_generator_return_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, gen_val: i64, value_val: i64| -> i64 {
+            if !value::is_object(gen_val) { return value::encode_undefined(); }
+            let gen_handle = value::decode_object_handle(gen_val);
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let promise_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&promise_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let request_promise = value::encode_object_handle(obj_table_count);
+
+            let ag_idx;
+            {
+                let data = mem.data(&caller);
+                let gen_slot = (obj_table_ptr + gen_handle * 4) as usize;
+                if gen_slot + 4 > data.len() { return request_promise; }
+                let gen_ptr = u32::from_le_bytes([data[gen_slot], data[gen_slot+1], data[gen_slot+2], data[gen_slot+3]]) as usize;
+                if gen_ptr + 16 > data.len() { return request_promise; }
+                if data[gen_ptr + 4] != value::HEAP_TYPE_ASYNC_GENERATOR { return request_promise; }
+                ag_idx = u32::from_le_bytes([data[gen_ptr+8], data[gen_ptr+9], data[gen_ptr+10], data[gen_ptr+11]]) as usize;
+            }
+
+            let mut agtable = caller.data().async_generator_table.lock().expect("async_generator_table mutex");
+            if ag_idx >= agtable.len() { return request_promise; }
+            agtable[ag_idx].queue.push(AsyncGeneratorRequest {
+                completion_type: AsyncGeneratorCompletionType::Return,
+                value: value_val,
+                promise: request_promise,
+            });
+            request_promise
+        },
+    );
+
+    let async_generator_throw_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, gen_val: i64, value_val: i64| -> i64 {
+            if !value::is_object(gen_val) { return value::encode_undefined(); }
+            let gen_handle = value::decode_object_handle(gen_val);
+            let heap_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_count = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let obj_table_ptr = {
+                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+                g.get(&mut caller).i32().unwrap_or(0) as u32
+            };
+            let promise_idx = caller.data().promise_table.lock().expect("promise_table mutex").len() as u32;
+            let size: u32 = 16;
+            let new_heap_ptr = heap_ptr + size;
+            if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+                let _ = g.set(&mut caller, Val::I32(new_heap_ptr as i32));
+            }
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            {
+                let d = mem.data_mut(&mut caller);
+                let ptr = heap_ptr as usize;
+                if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+                d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+                d[ptr + 4] = value::HEAP_TYPE_PROMISE;
+                d[ptr + 5..ptr + 8].fill(0);
+                d[ptr + 8..ptr + 12].copy_from_slice(&promise_idx.to_le_bytes());
+                d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+                let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+                if slot_addr + 4 <= d.len() {
+                    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+                }
+            }
+            if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
+                let _ = g.set(&mut caller, Val::I32((obj_table_count + 1) as i32));
+            }
+            caller.data().promise_table.lock().expect("promise_table mutex").push(PromiseEntry {
+                state: PromiseState::Pending,
+                fulfill_reactions: Vec::new(),
+                reject_reactions: Vec::new(),
+            });
+            let request_promise = value::encode_object_handle(obj_table_count);
+
+            let ag_idx;
+            {
+                let data = mem.data(&caller);
+                let gen_slot = (obj_table_ptr + gen_handle * 4) as usize;
+                if gen_slot + 4 > data.len() { return request_promise; }
+                let gen_ptr = u32::from_le_bytes([data[gen_slot], data[gen_slot+1], data[gen_slot+2], data[gen_slot+3]]) as usize;
+                if gen_ptr + 16 > data.len() { return request_promise; }
+                if data[gen_ptr + 4] != value::HEAP_TYPE_ASYNC_GENERATOR { return request_promise; }
+                ag_idx = u32::from_le_bytes([data[gen_ptr+8], data[gen_ptr+9], data[gen_ptr+10], data[gen_ptr+11]]) as usize;
+            }
+
+            let mut agtable = caller.data().async_generator_table.lock().expect("async_generator_table mutex");
+            if ag_idx >= agtable.len() { return request_promise; }
+            agtable[ag_idx].queue.push(AsyncGeneratorRequest {
+                completion_type: AsyncGeneratorCompletionType::Throw,
+                value: value_val,
+                promise: request_promise,
+            });
+            request_promise
+        },
+    );
+
     let imports = [
         console_log.into(),          // 0
         f64_mod.into(),              // 1
@@ -4449,12 +6174,41 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         string_replace_fn.into(),            // 113
         string_search_fn.into(),             // 114
         string_split_fn.into(),              // 115
+        promise_create_fn.into(),            // 116
+        promise_instance_resolve_fn.into(),  // 117
+        promise_instance_reject_fn.into(),   // 118
+        promise_then_fn.into(),              // 119
+        promise_catch_fn.into(),             // 120
+        promise_finally_fn.into(),           // 121
+        promise_all_fn.into(),               // 122
+        promise_race_fn.into(),              // 123
+        promise_all_settled_fn.into(),       // 124
+        promise_any_fn.into(),               // 125
+        promise_resolve_static_fn.into(),    // 126
+        promise_reject_static_fn.into(),     // 127
+        is_promise_fn.into(),                // 128
+        queue_microtask_fn.into(),           // 129
+        drain_microtasks_fn.into(),          // 130
+        async_function_start_fn.into(),      // 131
+        async_function_resume_fn.into(),     // 132
+        async_function_suspend_fn.into(),    // 133
+        continuation_create_fn.into(),       // 134
+        continuation_save_var_fn.into(),     // 135
+        continuation_load_var_fn.into(),     // 136
+        async_generator_start_fn.into(),     // 137
+        async_generator_next_fn.into(),      // 138
+        async_generator_return_fn.into(),    // 139
+        async_generator_throw_fn.into(),     // 140
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
     // ── Run main ─────────────────────────────────────────────────────────
     let main = instance.get_typed_func::<(), ()>(&mut store, "main")?;
     let main_result = main.call(&mut store, ());
+
+    if main_result.is_ok() {
+        drain_microtasks_impl(&mut store, &instance);
+    }
 
     // ── Timer event loop (only if main succeeded) ─────────────────────────
     // Poll timers; fire expired callbacks via the WASM function table.
@@ -4523,6 +6277,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     }
                 }
 
+                drain_microtasks_impl(&mut store, &instance);
+
                 // Re-schedule if repeating
                 if repeating {
                     store
@@ -4590,6 +6346,10 @@ struct RuntimeState {
     symbol_table: Arc<Mutex<Vec<SymbolEntry>>>,
     /// RegExp 侧表：存储编译后的正则表达式和元数据
     regex_table: Arc<Mutex<Vec<RegexEntry>>>,
+    promise_table: Arc<Mutex<Vec<PromiseEntry>>>,
+    microtask_queue: Arc<Mutex<VecDeque<Microtask>>>,
+    continuation_table: Arc<Mutex<Vec<ContinuationEntry>>>,
+    async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>>,
 }
 
 /// 绑定函数记录
@@ -4612,6 +6372,87 @@ struct RegexEntry {
     flags: String,
     compiled: regress::Regex,
     last_index: i64,
+}
+
+
+#[derive(Clone)]
+enum PromiseState {
+    Pending,
+    Fulfilled(i64),
+    Rejected(i64),
+}
+
+struct PromiseEntry {
+    state: PromiseState,
+    fulfill_reactions: Vec<PromiseReaction>,
+    reject_reactions: Vec<PromiseReaction>,
+}
+
+#[derive(Clone)]
+struct PromiseReaction {
+    handler: i64,
+    target_promise: i64,
+    reaction_type: ReactionType,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ReactionType {
+    Fulfill,
+    Reject,
+}
+
+enum Microtask {
+    PromiseReaction {
+        promise: i64,
+        reaction_type: ReactionType,
+        handler: i64,
+        argument: i64,
+    },
+    MicrotaskCallback {
+        callback: i64,
+    },
+    AsyncResume {
+        fn_table_idx: u32,
+        continuation: i64,
+        state: u32,
+        resume_val: i64,
+        is_rejected: bool,
+    },
+}
+
+struct ContinuationEntry {
+    fn_table_idx: u32,
+    outer_promise: i64,
+    captured_vars: Vec<i64>,
+    env: i64,
+    this_val: i64,
+    next_state: u32,
+}
+
+struct AsyncGeneratorEntry {
+    state: AsyncGeneratorState,
+    queue: Vec<AsyncGeneratorRequest>,
+}
+
+#[derive(Clone)]
+enum AsyncGeneratorState {
+    SuspendedStart,
+    SuspendedYield,
+    Executing,
+    Completed,
+}
+
+struct AsyncGeneratorRequest {
+    completion_type: AsyncGeneratorCompletionType,
+    value: i64,
+    promise: i64,
+}
+
+#[derive(Clone, Copy)]
+enum AsyncGeneratorCompletionType {
+    Next,
+    Return,
+    Throw,
 }
 
 /// 闭包条目

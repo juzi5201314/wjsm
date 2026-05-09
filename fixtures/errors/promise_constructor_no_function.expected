@@ -1,0 +1,4 @@
+exit_code: 2
+--- stdout ---
+--- stderr ---
+Runtime error: TypeError: Promise resolver is not a function

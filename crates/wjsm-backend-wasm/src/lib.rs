@@ -455,12 +455,40 @@ impl Compiler {
         imports.import("env", "arr_proto_is_array", EntityType::Function(12));
         // Import index 77: abort_shadow_stack_overflow: (i32, i32, i32) -> ()
         imports.import("env", "abort_shadow_stack_overflow", EntityType::Function(18));
-        // Type 20: (i64, i64, i64, i32, i32) -> (i64) — JS 函数签名（含 home_object）
+        // Type 21: (i64, i64, i64, i32, i32) -> (i64) — JS 函数签名（含 home_object）
         //   param 0 = env_obj, param 1 = home_obj, param 2 = this_val, param 3 = args_base, param 4 = args_count
         types.ty().function(
             vec![ValType::I64, ValType::I64, ValType::I64, ValType::I32, ValType::I32],
             vec![ValType::I64],
         );
+        // Type 22: (i64, i64, i32) -> () — async_function.suspend
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I64, ValType::I32], vec![]);
+        // Type 23: (i64, i64, i32) -> (i64) — continuation.create
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I64, ValType::I32], vec![ValType::I64]);
+        // Type 24: (i64, i32, i64) -> () — continuation.save_var
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I32, ValType::I64], vec![]);
+        // Type 25: (i64, i32) -> (i64) — continuation.load_var
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I32], vec![ValType::I64]);
+        // Type 26: (i64, i64, i64, i64, i32) -> () — async_function.resume
+        types
+            .ty()
+            .function(vec![ValType::I64, ValType::I64, ValType::I64, ValType::I64, ValType::I32], vec![]);
+        // Type 27: (i32, i64) -> (i64) — async_function.start(fn_table_idx, continuation)
+        types
+            .ty()
+            .function(vec![ValType::I32, ValType::I64], vec![ValType::I64]);
+        // Type 28: (i32, i64, i64, i64) -> (i64) — continuation.create(fn_table_idx, promise, env, this)
+        types
+            .ty()
+            .function(vec![ValType::I32, ValType::I64, ValType::I64, ValType::I64], vec![ValType::I64]);
         // Import index 78: func_call — Type 12 (uses shadow stack for args)
         imports.import("env", "func_call", EntityType::Function(12));
         // Import index 79: func_apply — Type 16 (i64 func, i64 this, i64 argsArray) -> i64
@@ -539,6 +567,31 @@ impl Compiler {
         imports.import("env", "string_search", EntityType::Function(2));
         // Import index 115: string_split: (i64, i64, i64) -> i64
         imports.import("env", "string_split", EntityType::Function(16));
+        imports.import("env", "promise_create", EntityType::Function(4));
+        imports.import("env", "promise_instance_resolve", EntityType::Function(5));
+        imports.import("env", "promise_instance_reject", EntityType::Function(5));
+        imports.import("env", "promise_then", EntityType::Function(16));
+        imports.import("env", "promise_catch", EntityType::Function(2));
+        imports.import("env", "promise_finally", EntityType::Function(2));
+        imports.import("env", "promise_all", EntityType::Function(3));
+        imports.import("env", "promise_race", EntityType::Function(3));
+        imports.import("env", "promise_all_settled", EntityType::Function(3));
+        imports.import("env", "promise_any", EntityType::Function(3));
+        imports.import("env", "promise_resolve_static", EntityType::Function(3));
+        imports.import("env", "promise_reject_static", EntityType::Function(3));
+        imports.import("env", "is_promise", EntityType::Function(3));
+        imports.import("env", "queue_microtask", EntityType::Function(0));
+        imports.import("env", "drain_microtasks", EntityType::Function(1));
+        imports.import("env", "async_function_start", EntityType::Function(27));
+        imports.import("env", "async_function_resume", EntityType::Function(26));
+        imports.import("env", "async_function_suspend", EntityType::Function(22));
+        imports.import("env", "continuation_create", EntityType::Function(28));
+        imports.import("env", "continuation_save_var", EntityType::Function(9));
+        imports.import("env", "continuation_load_var", EntityType::Function(8));
+        imports.import("env", "async_generator_start", EntityType::Function(3));
+        imports.import("env", "async_generator_next", EntityType::Function(2));
+        imports.import("env", "async_generator_return", EntityType::Function(2));
+        imports.import("env", "async_generator_throw", EntityType::Function(2));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -644,6 +697,31 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::StringReplace, 113);
         builtin_func_indices.insert(Builtin::StringSearch, 114);
         builtin_func_indices.insert(Builtin::StringSplit, 115);
+        builtin_func_indices.insert(Builtin::PromiseCreate, 116);
+        builtin_func_indices.insert(Builtin::PromiseInstanceResolve, 117);
+        builtin_func_indices.insert(Builtin::PromiseInstanceReject, 118);
+        builtin_func_indices.insert(Builtin::PromiseThen, 119);
+        builtin_func_indices.insert(Builtin::PromiseCatch, 120);
+        builtin_func_indices.insert(Builtin::PromiseFinally, 121);
+        builtin_func_indices.insert(Builtin::PromiseAll, 122);
+        builtin_func_indices.insert(Builtin::PromiseRace, 123);
+        builtin_func_indices.insert(Builtin::PromiseAllSettled, 124);
+        builtin_func_indices.insert(Builtin::PromiseAny, 125);
+        builtin_func_indices.insert(Builtin::PromiseResolveStatic, 126);
+        builtin_func_indices.insert(Builtin::PromiseRejectStatic, 127);
+        builtin_func_indices.insert(Builtin::IsPromise, 128);
+        builtin_func_indices.insert(Builtin::QueueMicrotask, 129);
+        builtin_func_indices.insert(Builtin::DrainMicrotasks, 130);
+        builtin_func_indices.insert(Builtin::AsyncFunctionStart, 131);
+        builtin_func_indices.insert(Builtin::AsyncFunctionResume, 132);
+        builtin_func_indices.insert(Builtin::AsyncFunctionSuspend, 133);
+        builtin_func_indices.insert(Builtin::ContinuationCreate, 134);
+        builtin_func_indices.insert(Builtin::ContinuationSaveVar, 135);
+        builtin_func_indices.insert(Builtin::ContinuationLoadVar, 136);
+        builtin_func_indices.insert(Builtin::AsyncGeneratorStart, 137);
+        builtin_func_indices.insert(Builtin::AsyncGeneratorNext, 138);
+        builtin_func_indices.insert(Builtin::AsyncGeneratorReturn, 139);
+        builtin_func_indices.insert(Builtin::AsyncGeneratorThrow, 140);
 
         let functions = FunctionSection::new();
 
@@ -680,7 +758,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 116, // 116 imports (0-115)
+            _next_import_func: 141, // 141 imports (0-140)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -2779,7 +2857,7 @@ impl Compiler {
                     idx += 1;
                 }
                 Terminator::Unreachable => {
-                    // 死代码块 — 跳过
+                    self.emit(WasmInstruction::Unreachable);
                     idx += 1;
                 }
                 Terminator::Jump { target } => {
@@ -2854,15 +2932,19 @@ impl Compiler {
                     // 编译 true 分支；若 true 直接通向 merge，也必须在该路径执行 Phi move。
                     if true_is_merge {
                         self.emit_phi_moves(blocks, idx, true_idx);
+                    } else if self.compiled_blocks.contains(&true_idx) {
+                        self.emit(WasmInstruction::Unreachable);
                     } else {
                         self.compiled_blocks.insert(true_idx);
                         self.compile_branch_body(module, blocks, true_idx)?;
                     }
 
-                    // 编译 false 分支；false 直达 merge 时用 else 分支承载 Phi move。
                     if false_is_merge {
                         self.emit(WasmInstruction::Else);
                         self.emit_phi_moves(blocks, idx, false_idx);
+                    } else if self.compiled_blocks.contains(&false_idx) {
+                        self.emit(WasmInstruction::Else);
+                        self.emit(WasmInstruction::Unreachable);
                     } else {
                         self.emit(WasmInstruction::Else);
                         self.compiled_blocks.insert(false_idx);
@@ -2999,6 +3081,8 @@ impl Compiler {
             self.emit(WasmInstruction::End); // block end
         }
 
+        self.emit(WasmInstruction::Unreachable);
+
         Ok(())
     }
 
@@ -3058,6 +3142,7 @@ impl Compiler {
                     break;
                 }
                 Terminator::Unreachable => {
+                    self.emit(WasmInstruction::Unreachable);
                     break;
                 }
                 Terminator::Jump { target } => {
@@ -3323,13 +3408,14 @@ impl Compiler {
                     self.emit_phi_moves(blocks, idx, target_idx);
                 }
             }
-            Terminator::Unreachable => {}
+            Terminator::Unreachable => {
+                self.emit(WasmInstruction::Unreachable);
+            }
             Terminator::Branch {
                 condition,
                 true_block,
                 false_block,
             } => {
-                // 分支体内嵌套的 if/else
                 let true_idx = true_block.0 as usize;
                 let false_idx = false_block.0 as usize;
 
@@ -3343,6 +3429,8 @@ impl Compiler {
                 if true_is_merge {
                     self.emit_phi_moves(blocks, idx, true_idx);
                     self.emit(WasmInstruction::Nop);
+                } else if self.compiled_blocks.contains(&true_idx) {
+                    self.emit(WasmInstruction::Unreachable);
                 } else {
                     self.compiled_blocks.insert(true_idx);
                     self.compile_branch_body(module, blocks, true_idx)?;
@@ -3352,6 +3440,8 @@ impl Compiler {
                 if false_is_merge {
                     self.emit_phi_moves(blocks, idx, false_idx);
                     self.emit(WasmInstruction::Nop);
+                } else if self.compiled_blocks.contains(&false_idx) {
+                    self.emit(WasmInstruction::Unreachable);
                 } else {
                     self.compiled_blocks.insert(false_idx);
                     self.compile_branch_body(module, blocks, false_idx)?;
@@ -4007,6 +4097,35 @@ impl Compiler {
 			Instruction::GetSuperBase { dest } => {
 				self.compile_get_super_base(dest)
 			}
+            Instruction::NewPromise { dest } => {
+                let func_idx = self.builtin_func_indices[&Builtin::PromiseCreate];
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                Ok(())
+            }
+            Instruction::PromiseResolve { promise, value } => {
+                let func_idx = self.builtin_func_indices[&Builtin::PromiseInstanceResolve];
+                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                self.emit(WasmInstruction::Call(func_idx));
+                Ok(())
+            }
+            Instruction::PromiseReject { promise, reason } => {
+                let func_idx = self.builtin_func_indices[&Builtin::PromiseInstanceReject];
+                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(reason.0)));
+                self.emit(WasmInstruction::Call(func_idx));
+                Ok(())
+            }
+            Instruction::Suspend { promise, continuation, state } => {
+                let func_idx = self.builtin_func_indices[&Builtin::AsyncFunctionSuspend];
+                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(continuation.0)));
+                self.emit(WasmInstruction::I32Const(*state as i32));
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::Unreachable);
+                Ok(())
+            }
         }
     }
 
@@ -5009,11 +5128,204 @@ impl Compiler {
                 }
                 Ok(())
             }
+            Builtin::PromiseCreate => {
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::I64Const(0));
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PromiseInstanceResolve | Builtin::PromiseInstanceReject => {
+                let a = args.first().context("PromiseInstanceResolve/Reject expects 2 args")?;
+                let b = args.get(1).context("PromiseInstanceResolve/Reject expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PromiseThen => {
+                let a = args.first().context("PromiseThen expects 3 args")?;
+                let b = args.get(1).context("PromiseThen expects 3 args")?;
+                let c = args.get(2).context("PromiseThen expects 3 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(c.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PromiseCatch | Builtin::PromiseFinally => {
+                let a = args.first().context("PromiseCatch/Finally expects 2 args")?;
+                let b = args.get(1).context("PromiseCatch/Finally expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PromiseAll
+            | Builtin::PromiseRace
+            | Builtin::PromiseAllSettled
+            | Builtin::PromiseAny
+            | Builtin::PromiseResolveStatic
+            | Builtin::PromiseRejectStatic
+            | Builtin::IsPromise
+            | Builtin::AsyncGeneratorStart => {
+                let a = args.first().context("Promise/AsyncGenerator 1-arg builtin expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::QueueMicrotask => {
+                let a = args.first().context("QueueMicrotask expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::DrainMicrotasks => {
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::AsyncFunctionStart => {
+                let fn_ref = args.first().context("AsyncFunctionStart expects 2 args")?;
+                let cont = args.get(1).context("AsyncFunctionStart expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(fn_ref.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(cont.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::AsyncFunctionResume => {
+                let a = args.first().context("AsyncFunctionResume expects 5 args")?;
+                let b = args.get(1).context("AsyncFunctionResume expects 5 args")?;
+                let c = args.get(2).context("AsyncFunctionResume expects 5 args")?;
+                let d_arg = args.get(3).context("AsyncFunctionResume expects 5 args")?;
+                let e = args.get(4).context("AsyncFunctionResume expects 5 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(c.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(d_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(e.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                Ok(())
+            }
+            Builtin::AsyncFunctionSuspend => {
+                let a = args.first().context("AsyncFunctionSuspend expects 3 args")?;
+                let b = args.get(1).context("AsyncFunctionSuspend expects 3 args")?;
+                let c = args.get(2).context("AsyncFunctionSuspend expects 3 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(c.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                Ok(())
+            }
+            Builtin::ContinuationCreate => {
+                let fn_ref = args.first().context("ContinuationCreate expects 4 args")?;
+                let promise = args.get(1).context("ContinuationCreate expects 4 args")?;
+                let env = args.get(2).context("ContinuationCreate expects 4 args")?;
+                let this_val = args.get(3).context("ContinuationCreate expects 4 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(fn_ref.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(env.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::ContinuationSaveVar => {
+                let a = args.first().context("ContinuationSaveVar expects 3 args")?;
+                let b = args.get(1).context("ContinuationSaveVar expects 3 args")?;
+                let c = args.get(2).context("ContinuationSaveVar expects 3 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(c.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                Ok(())
+            }
+            Builtin::ContinuationLoadVar => {
+                let a = args.first().context("ContinuationLoadVar expects 2 args")?;
+                let b = args.get(1).context("ContinuationLoadVar expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::AsyncGeneratorNext
+            | Builtin::AsyncGeneratorReturn
+            | Builtin::AsyncGeneratorThrow => {
+                let a = args.first().context("AsyncGenerator 2-arg builtin expects 2 args")?;
+                let b = args.get(1).context("AsyncGenerator 2-arg builtin expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
         }
     }
-
-
-    // ── Constant encoding ────────────────────────────────────────────────────
 
     fn encode_constant(&mut self, constant: &Constant, _module: &IrModule) -> Result<i64> {
         match constant {
@@ -5424,6 +5736,10 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
         }
         Instruction::ObjectSpread { dest, source } => dest.0.max(source.0),
         Instruction::GetSuperBase { dest } => dest.0,
+        Instruction::NewPromise { dest } => dest.0,
+        Instruction::PromiseResolve { promise, value } => promise.0.max(value.0),
+        Instruction::PromiseReject { promise, reason } => promise.0.max(reason.0),
+        Instruction::Suspend { promise, continuation, .. } => promise.0.max(continuation.0),
     }
 }
 

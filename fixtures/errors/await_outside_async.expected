@@ -1,0 +1,4 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: semantic lowering error [27..32]: await is only valid in async functions

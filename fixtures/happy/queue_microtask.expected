@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+sync
+sync2
+micro
+--- stderr ---
