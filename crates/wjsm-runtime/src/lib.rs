@@ -18,7 +18,12 @@ pub fn execute(wasm_bytes: &[u8]) -> Result<()> {
 
 pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> {
     let engine = Engine::default();
-    let module = Module::new(&engine, wasm_bytes)?;
+    let module = match Module::new(&engine, wasm_bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            return Err(anyhow::anyhow!("WASM validation failed: {:?}", e));
+        }
+    };
     let output = Arc::new(Mutex::new(Vec::new()));
 
     // Iterator/enumerator side tables
@@ -5425,7 +5430,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── Drain microtasks after main() ────────────────────────────────────
     if main_result.is_ok() {
         if let Some(Extern::Table(func_table)) = instance.get_export(&mut store, "__table") {
-            drain_microtasks_from_store(&mut store, &func_table);
+            if let (Some(Extern::Memory(memory)), Some(Extern::Global(shadow_sp_global))) =
+                (instance.get_export(&mut store, "memory"), instance.get_export(&mut store, "__shadow_sp"))
+            {
+                drain_microtasks_from_store(&mut store, &func_table, &memory, &shadow_sp_global);
+            }
         }
     }
 
@@ -5495,7 +5504,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         }
                     }
                     // Drain microtasks after timer callback
-                    drain_microtasks_from_store(&mut store, &tbl);
+                    if let (Some(Extern::Memory(mem)), Some(Extern::Global(sp_global))) =
+                        (instance.get_export(&mut store, "memory"), instance.get_export(&mut store, "__shadow_sp"))
+                    {
+                        drain_microtasks_from_store(&mut store, &tbl, &mem, &sp_global);
+                    }
                 }
 
                 // Re-schedule if repeating
@@ -7025,6 +7038,8 @@ fn drain_microtasks_from_caller(
 fn drain_microtasks_from_store(
     store: &mut Store<RuntimeState>,
     func_table: &Table,
+    memory: &Memory,
+    shadow_sp_global: &Global,
 ) {
     loop {
         let task = {
@@ -7034,11 +7049,11 @@ fn drain_microtasks_from_store(
         match task {
             Some(Microtask::PromiseReaction { handler, argument, .. }) => {
                 if !value::is_undefined(handler) {
-                    call_host_function_from_store(store, func_table, handler, argument);
+                    call_host_function_from_store(store, func_table, memory, shadow_sp_global, handler, argument);
                 }
             }
             Some(Microtask::MicrotaskCallback { callback }) => {
-                call_host_function_from_store(store, func_table, callback, value::encode_undefined());
+                call_host_function_from_store(store, func_table, memory, shadow_sp_global, callback, value::encode_undefined());
             }
             Some(Microtask::AsyncResume { fn_table_idx, continuation, state, resume_val, is_rejected }) => {
                 resume_async_function_from_store(store, func_table, fn_table_idx, continuation, state, resume_val, is_rejected);
@@ -7070,11 +7085,37 @@ fn call_host_function_from_caller(
         return;
     };
 
+    let shadow_sp_global = caller.get_export("__shadow_sp")
+        .and_then(|e| e.into_global());
+    let saved_sp = shadow_sp_global.as_ref().and_then(|g| g.get(&mut *caller).i32()).unwrap_or(0);
+
+    if let Some(sp_global) = &shadow_sp_global {
+        let sp = saved_sp;
+        let new_sp = sp + 8;
+        if let Some(Extern::Memory(memory)) = caller.get_export("memory") {
+            let data = memory.data_mut(&mut *caller);
+            let offset = sp as usize;
+            if offset + 8 <= data.len() {
+                data[offset..offset + 8].copy_from_slice(&argument.to_le_bytes());
+            }
+        }
+        let _ = sp_global.set(&mut *caller, Val::I32(new_sp));
+    }
+
     let func_ref = func_table.get(&mut *caller, func_idx as u64);
     let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
-    let Some(func) = func else { return };
+    let Some(func) = func else {
+        if let Some(sp_global) = &shadow_sp_global {
+            let _ = sp_global.set(&mut *caller, Val::I32(saved_sp));
+        }
+        return;
+    };
     let mut results = [Val::I64(0)];
-    let _ = func.call(&mut *caller, &[Val::I64(env_obj), Val::I64(argument), Val::I32(0), Val::I32(0)], &mut results);
+    let _ = func.call(&mut *caller, &[Val::I64(env_obj), Val::I64(value::encode_undefined()), Val::I32(saved_sp), Val::I32(1)], &mut results);
+
+    if let Some(sp_global) = &shadow_sp_global {
+        let _ = sp_global.set(&mut *caller, Val::I32(saved_sp));
+    }
 }
 
 fn nanbox_to_usize(val: i64) -> usize {
@@ -7131,6 +7172,8 @@ fn resume_async_function_from_caller(
 fn call_host_function_from_store(
     store: &mut Store<RuntimeState>,
     func_table: &Table,
+    memory: &Memory,
+    shadow_sp_global: &Global,
     handler: i64,
     argument: i64,
 ) {
@@ -7150,11 +7193,27 @@ fn call_host_function_from_store(
         return;
     };
 
+    let saved_sp = shadow_sp_global.get(&mut *store).i32().unwrap_or(0);
+    {
+        let data = memory.data_mut(&mut *store);
+        let offset = saved_sp as usize;
+        if offset + 8 <= data.len() {
+            data[offset..offset + 8].copy_from_slice(&argument.to_le_bytes());
+        }
+    }
+    let new_sp = saved_sp + 8;
+    let _ = shadow_sp_global.set(&mut *store, Val::I32(new_sp));
+
     let func_ref = func_table.get(&mut *store, func_idx as u64);
     let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
-    let Some(func) = func else { return };
+    let Some(func) = func else {
+        let _ = shadow_sp_global.set(&mut *store, Val::I32(saved_sp));
+        return;
+    };
     let mut results = [Val::I64(0)];
-    let _ = func.call(&mut *store, &[Val::I64(env_obj), Val::I64(argument), Val::I32(0), Val::I32(0)], &mut results);
+    let _ = func.call(&mut *store, &[Val::I64(env_obj), Val::I64(value::encode_undefined()), Val::I32(saved_sp), Val::I32(1)], &mut results);
+
+    let _ = shadow_sp_global.set(&mut *store, Val::I32(saved_sp));
 }
 
 fn resume_async_function_from_store(

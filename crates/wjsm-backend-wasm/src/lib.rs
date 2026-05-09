@@ -2867,9 +2867,17 @@ impl Compiler {
 
             let block = &blocks[idx];
 
-            // 编译指令
+            let mut suspended = false;
             for instruction in block.instructions() {
-                self.compile_instruction(module, instruction)?;
+                if self.compile_instruction(module, instruction)? {
+                    suspended = true;
+                    break;
+                }
+            }
+
+            if suspended {
+                idx += 1;
+                continue;
             }
 
             match block.terminator() {
@@ -2997,73 +3005,43 @@ impl Compiler {
                     default_block,
                     exit_block,
                 } => {
-                    // 构建 switch entry 列表（含 default），按 block index 排序以还原源码顺序
-                    // 这样 fallthrough（如 default → 下一个 case）可以正确工作
                     let exit_idx = exit_block.0 as usize;
                     self.compiled_blocks.insert(idx);
+                    let default_target_idx = default_block.0 as usize;
+                    let num_cases = cases.len();
 
-                    struct SwitchEntry {
-                        is_default: bool,
-                        constant_idx: Option<u32>,
-                        target_idx: usize,
-                    }
+                    let mut sorted_cases: Vec<&wjsm_ir::SwitchCaseTarget> = cases.iter().collect();
+                    sorted_cases.sort_by_key(|case| case.target.0);
 
-                    let mut entries: Vec<SwitchEntry> = Vec::new();
-                    for case in cases.iter() {
-                        entries.push(SwitchEntry {
-                            is_default: false,
-                            constant_idx: Some(case.constant.0),
-                            target_idx: case.target.0 as usize,
-                        });
-                    }
-                    let default_idx = default_block.0 as usize;
-                    entries.push(SwitchEntry {
-                        is_default: true,
-                        constant_idx: None,
-                        target_idx: default_idx,
-                    });
+                    self.compiled_blocks.insert(default_target_idx);
 
-                    // 按 target block index 排序，还原源码中的声明顺序
-                    entries.sort_by_key(|e| e.target_idx);
-
-                    let num_entries = entries.len();
-                    let default_pos = entries.iter().position(|e| e.is_default).unwrap();
-
-                    // 发射 switch exit block（最外层）
                     self.emit(WasmInstruction::Block(BlockType::Empty));
-
-                    // 发射 entry blocks（反序嵌套，entries[0] 最内层）
-                    for _ in 0..num_entries {
+                    self.emit(WasmInstruction::Block(BlockType::Empty));
+                    for _ in 0..num_cases {
                         self.emit(WasmInstruction::Block(BlockType::Empty));
                     }
 
-                    // 发射比较链（跳过 default entry）
-                    for (i, entry) in entries.iter().enumerate() {
-                        if entry.is_default {
-                            continue;
-                        }
+                    for (i, case) in sorted_cases.iter().enumerate() {
                         self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                         let const_val = self.encode_constant(
-                            &module.constants()[entry.constant_idx.unwrap() as usize],
+                            &module.constants()[case.constant.0 as usize],
                             module,
                         )?;
                         self.emit(WasmInstruction::I64Const(const_val));
                         self.emit(WasmInstruction::I64Eq);
                         self.emit(WasmInstruction::BrIf(i as u32));
                     }
-                    // br 到 default（fallback）
-                    self.emit(WasmInstruction::Br(default_pos as u32));
+                    self.emit(WasmInstruction::Br(num_cases as u32));
 
-                    // 按嵌套顺序编译 case body（从内到外 = 源码顺序）
-                    for i in 0..num_entries {
-                        self.emit(WasmInstruction::End); // 关闭 entry block
-                        let entry_target = entries[i].target_idx;
-                        let switch_break_depth = (num_entries - i - 1) as u32;
-                        let extra_depth = (num_entries - i) as u32;
+                    for (i, case) in sorted_cases.iter().enumerate() {
+                        self.emit(WasmInstruction::End);
+                        let case_target = case.target.0 as usize;
+                        let switch_break_depth = (num_cases - i) as u32;
+                        let extra_depth = (num_cases - i + 1) as u32;
                         self.compile_switch_case(
                             module,
                             blocks,
-                            entry_target,
+                            case_target,
                             exit_idx,
                             switch_break_depth,
                             extra_depth,
@@ -3071,7 +3049,18 @@ impl Compiler {
                         )?;
                     }
 
-                    // 关闭 exit block
+                    self.emit(WasmInstruction::End);
+                    self.compiled_blocks.remove(&default_target_idx);
+                    self.compile_switch_case(
+                        module,
+                        blocks,
+                        default_target_idx,
+                        exit_idx,
+                        0,
+                        1,
+                        &loops,
+                    )?;
+
                     self.emit(WasmInstruction::End);
                     self.compiled_blocks.insert(exit_idx);
 
@@ -3146,9 +3135,16 @@ impl Compiler {
 
             let block = &blocks[idx];
 
-            // 编译指令
+            let mut suspended = false;
             for instruction in block.instructions() {
-                self.compile_instruction(module, instruction)?;
+                if self.compile_instruction(module, instruction)? {
+                    suspended = true;
+                    break;
+                }
+            }
+
+            if suspended {
+                break;
             }
 
             match block.terminator() {
@@ -3399,8 +3395,16 @@ impl Compiler {
         }
         let block = &blocks[idx];
 
+        let mut suspended = false;
         for instruction in block.instructions() {
-            self.compile_instruction(module, instruction)?;
+            if self.compile_instruction(module, instruction)? {
+                suspended = true;
+                break;
+            }
+        }
+
+        if suspended {
+            return Ok(());
         }
 
         match block.terminator() {
@@ -3553,7 +3557,7 @@ impl Compiler {
 
     // ── Instruction compilation ─────────────────────────────────────────────
 
-    fn compile_instruction(&mut self, module: &IrModule, instruction: &Instruction) -> Result<()> {
+    fn compile_instruction(&mut self, module: &IrModule, instruction: &Instruction) -> Result<bool> {
         match instruction {
             Instruction::Const { dest, constant } => {
                 let constant = module
@@ -3595,7 +3599,7 @@ impl Compiler {
                     self.emit(WasmInstruction::I64Const(encoded));
                     self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 }
-                Ok(())
+                Ok(false)
             }
             Instruction::Binary { dest, op, lhs, rhs } => {
                 match op {
@@ -3690,7 +3694,7 @@ impl Compiler {
                         bail!("Mod/Exp should be lowered to CallBuiltin, not Binary op");
                     }
                 }
-                Ok(())
+                Ok(false)
             }
             Instruction::Unary { dest, op, value } => {
                 match op {
@@ -3811,10 +3815,10 @@ impl Compiler {
                         );
                     }
                 }
-                Ok(())
+                Ok(false)
             }
             Instruction::Compare { dest, op, lhs, rhs } => {
-                self.compile_compare(*dest, *op, *lhs, *rhs)
+                self.compile_compare(*dest, *op, *lhs, *rhs).map(|_| false)
             }
             Instruction::Phi { dest, .. } => {
                 let phi_local = self
@@ -3824,13 +3828,13 @@ impl Compiler {
                     .with_context(|| format!("phi {dest} has no assigned WASM local"))?;
                 self.emit(WasmInstruction::LocalGet(phi_local));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
             Instruction::CallBuiltin {
                 dest,
                 builtin,
                 args,
-            } => self.compile_builtin_call(*dest, builtin, args),
+            } => self.compile_builtin_call(*dest, builtin, args).map(|_| false),
             Instruction::LoadVar { dest, name } => {
                 let local_idx = self
                     .var_locals
@@ -3838,7 +3842,7 @@ impl Compiler {
                     .with_context(|| format!("variable `{name}` has no assigned WASM local"))?;
                 self.emit(WasmInstruction::LocalGet(*local_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
             Instruction::StoreVar { name, value } => {
                 let local_idx = *self
@@ -3847,7 +3851,7 @@ impl Compiler {
                     .with_context(|| format!("variable `{name}` has no assigned WASM local"))?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 self.emit(WasmInstruction::LocalSet(local_idx));
-                Ok(())
+                Ok(false)
             }
             Instruction::Call {
                 dest,
@@ -3937,7 +3941,7 @@ impl Compiler {
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
-                Ok(())
+                Ok(false)
             }
             Instruction::NewObject { dest, capacity } => {
                 // Call $obj_new(capacity)
@@ -3951,7 +3955,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(box_base | tag_object));
                 self.emit(WasmInstruction::I64Or);
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
             Instruction::GetProp { dest, object, key } => {
                 // Pass full boxed i64 value — helper resolves tag internally.
@@ -3962,7 +3966,7 @@ impl Compiler {
                 // Call $obj_get(boxed, name_id) -> i64
                 self.emit(WasmInstruction::Call(self.obj_get_func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
             Instruction::SetProp { object, key, value } => {
                 // Pass full boxed i64 value — helper resolves tag internally.
@@ -3974,7 +3978,7 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 // Call $obj_set(boxed, name_id, value)
                 self.emit(WasmInstruction::Call(self.obj_set_func_idx));
-                Ok(())
+                Ok(false)
             }
             Instruction::DeleteProp { dest, object, key } => {
                 // delete obj.prop -> bool (成功删除返回 true)
@@ -3985,7 +3989,7 @@ impl Compiler {
                 // Call $obj_delete(boxed, name_id) -> i64 (NaN-boxed bool)
                 self.emit(WasmInstruction::Call(self.obj_delete_func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
             Instruction::SetProto { object, value } => {
                 // 验证 value 是有效的对象/函数引用后再设置 __proto__
@@ -4050,7 +4054,7 @@ impl Compiler {
                     memory_index: 0,
                 }));
                 self.emit(WasmInstruction::End);
-                Ok(())
+                Ok(false)
             }
             Instruction::NewArray { dest, capacity } => {
                 // Call $arr_new(capacity) -> i32 (handle index)
@@ -4063,7 +4067,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(box_base | tag_array));
                 self.emit(WasmInstruction::I64Or);
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
 			Instruction::GetElem { dest, object, index } => {
 				// Call $to_int32(index) first (index is an f64), then $elem_get
@@ -4072,7 +4076,7 @@ impl Compiler {
 				self.emit(WasmInstruction::Call(self.to_int32_func_idx));
 				self.emit(WasmInstruction::Call(self.elem_get_func_idx));
 				self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-				Ok(())
+				Ok(false)
 			}
 			Instruction::SetElem { object, index, value } => {
 				// Call $to_int32(index) first, then $elem_set
@@ -4081,16 +4085,16 @@ impl Compiler {
 				self.emit(WasmInstruction::Call(self.to_int32_func_idx));
 				self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
 				self.emit(WasmInstruction::Call(self.elem_set_func_idx));
-				Ok(())
+				Ok(false)
 			}
 			Instruction::StringConcatVa { dest, parts } => {
-				self.compile_string_concat_va(dest, parts)
+				self.compile_string_concat_va(dest, parts).map(|_| false)
 			}
 			Instruction::OptionalGetProp { dest, object, key } => {
-				self.compile_optional_get(dest, object, true, Some(key), false)
+				self.compile_optional_get(dest, object, true, Some(key), false).map(|_| false)
 			}
 			Instruction::OptionalGetElem { dest, object, key } => {
-				self.compile_optional_get(dest, object, false, Some(key), false)
+				self.compile_optional_get(dest, object, false, Some(key), false).map(|_| false)
 			}
 			Instruction::OptionalCall {
 				dest,
@@ -4098,34 +4102,34 @@ impl Compiler {
 				this_val,
 				args,
 			} => {
-				self.compile_optional_call(dest, callee, this_val, args)
+				self.compile_optional_call(dest, callee, this_val, args).map(|_| false)
 			}
 			Instruction::ObjectSpread { dest, source } => {
-				self.compile_object_spread(dest, source)
+				self.compile_object_spread(dest, source).map(|_| false)
 			}
 			Instruction::GetSuperBase { dest } => {
-                self.compile_get_super_base(dest)
+                self.compile_get_super_base(dest).map(|_| false)
             }
             Instruction::NewPromise { dest } => {
                 let func_idx = self.builtin_func_indices[&Builtin::PromiseCreate];
                 self.emit(WasmInstruction::I64Const(0));
                 self.emit(WasmInstruction::Call(func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                Ok(())
+                Ok(false)
             }
             Instruction::PromiseResolve { promise, value } => {
                 let func_idx = self.builtin_func_indices[&Builtin::PromiseInstanceResolve];
                 self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 self.emit(WasmInstruction::Call(func_idx));
-                Ok(())
+                Ok(false)
             }
             Instruction::PromiseReject { promise, reason } => {
                 let func_idx = self.builtin_func_indices[&Builtin::PromiseInstanceReject];
                 self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(reason.0)));
                 self.emit(WasmInstruction::Call(func_idx));
-                Ok(())
+                Ok(false)
             }
             Instruction::Suspend { promise, state } => {
                 let func_idx = self.builtin_func_indices[&Builtin::AsyncFunctionSuspend];
@@ -4133,8 +4137,11 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
                 self.emit(WasmInstruction::I64Const(*state as i64));
                 self.emit(WasmInstruction::Call(func_idx));
+                if self.current_func_returns_value {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
                 self.emit(WasmInstruction::Return);
-                Ok(())
+                Ok(true)
             }
         }
     }
