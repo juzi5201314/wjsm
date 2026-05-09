@@ -13,10 +13,7 @@ use crate::read::{Harness, Negative, Phase, Test, TestSuite};
 #[derive(Debug, Clone)]
 pub enum TestResult {
     Passed,
-    Failed {
-        expected: String,
-        actual: String,
-    },
+    Failed { expected: String, actual: String },
     Ignored,
     Error(String),
 }
@@ -131,10 +128,7 @@ fn find_wjsm_binary() -> std::path::PathBuf {
     }
 
     // 尝试常见的构建输出路径
-    let candidates = [
-        "target/debug/wjsm",
-        "target/release/wjsm",
-    ];
+    let candidates = ["target/debug/wjsm", "target/release/wjsm"];
 
     for candidate in &candidates {
         let path = std::path::Path::new(candidate);
@@ -297,15 +291,8 @@ pub fn run_suite(
     }
 }
 
-fn add_by_feature(
-    by_feature: &mut HashMap<String, Statistics>,
-    test: &Test,
-    result: &TestResult,
-) {
+fn add_by_feature(by_feature: &mut HashMap<String, Statistics>, test: &Test, result: &TestResult) {
     for feature in &test.metadata.features {
-        by_feature
-            .entry(feature.clone())
-            .or_default()
-            .add(result);
+        by_feature.entry(feature.clone()).or_default().add(result);
     }
 }

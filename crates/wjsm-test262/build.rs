@@ -18,6 +18,8 @@ fn main() {
     let test262_dir = test262_directory();
 
     if !test262_dir.is_dir() {
-        println!("cargo::warning=test262 submodule not initialized. Run: git submodule update --init test262");
+        println!(
+            "cargo::warning=test262 submodule not initialized. Run: git submodule update --init test262"
+        );
     }
 }
