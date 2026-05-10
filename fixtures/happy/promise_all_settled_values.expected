@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+3
+fulfilled
+1
+rejected
+2
+fulfilled
+3
+--- stderr ---

@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+boom
+finally
+7
+--- stderr ---

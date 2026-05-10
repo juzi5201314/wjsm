@@ -2193,24 +2193,29 @@ impl Lowerer {
                 undef_val
             };
 
-            let store_block = self.resolve_store_block(block);
-            let promise_val = self.alloc_value();
-            self.current_function.append_instruction(
-                store_block,
-                Instruction::LoadVar {
-                    dest: promise_val,
-                    name: format!("${}.$promise", self.async_promise_scope_id),
-                },
-            );
-            self.current_function.append_instruction(
-                store_block,
-                Instruction::PromiseResolve {
-                    promise: promise_val,
-                    value,
-                },
-            );
-            self.current_function
-                .set_terminator(store_block, Terminator::Return { value: None });
+            let return_block = self.resolve_store_block(block);
+            match self.lower_pending_finalizers(return_block)? {
+                StmtFlow::Open(after_finally) => {
+                    let promise_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::LoadVar {
+                            dest: promise_val,
+                            name: format!("${}.$promise", self.async_promise_scope_id),
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::PromiseResolve {
+                            promise: promise_val,
+                            value,
+                        },
+                    );
+                    self.current_function
+                        .set_terminator(after_finally, Terminator::Return { value: None });
+                }
+                StmtFlow::Terminated => {}
+            }
             return Ok(StmtFlow::Terminated);
         }
 
@@ -8501,7 +8506,7 @@ impl Lowerer {
                     block,
                     Instruction::CallBuiltin {
                         dest: Some(resolve_fn),
-                        builtin: Builtin::PromiseInstanceResolve,
+                        builtin: Builtin::PromiseCreateResolveFunction,
                         args: vec![promise_val],
                     },
                 );
@@ -8511,7 +8516,7 @@ impl Lowerer {
                     block,
                     Instruction::CallBuiltin {
                         dest: Some(reject_fn),
-                        builtin: Builtin::PromiseInstanceReject,
+                        builtin: Builtin::PromiseCreateRejectFunction,
                         args: vec![promise_val],
                     },
                 );
@@ -8557,10 +8562,27 @@ impl Lowerer {
             ));
         }
 
-        let mut args = Vec::with_capacity(call.args.len());
+        let mut args = Vec::with_capacity(call.args.len().max(1));
         for arg in &call.args {
             let arg_val = self.lower_expr(&arg.expr, block)?;
             args.push(arg_val);
+        }
+        if args.is_empty()
+            && matches!(
+                builtin,
+                Builtin::PromiseResolveStatic | Builtin::PromiseRejectStatic
+            )
+        {
+            let undef_const = self.module.add_constant(Constant::Undefined);
+            let undef_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: undef_val,
+                    constant: undef_const,
+                },
+            );
+            args.push(undef_val);
         }
 
         let dest = self.alloc_value();
