@@ -39,7 +39,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let native_callables: Arc<Mutex<Vec<NativeCallable>>> = Arc::new(Mutex::new(Vec::new()));
 
     let bigint_table: Arc<Mutex<Vec<num_bigint::BigInt>>> = Arc::new(Mutex::new(Vec::new()));
-    let symbol_table: Arc<Mutex<Vec<SymbolEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let symbol_table: Arc<Mutex<Vec<SymbolEntry>>> = Arc::new(Mutex::new(vec![
+        // 预分配 well-known symbols（id=0..7，对应 ECMAScript § 6.1.5.1）
+        // 这些 symbol 不属于全局注册表（global_key = None），仅通过 Symbol.wellKnown 访问
+        SymbolEntry { description: Some("Symbol(Symbol.iterator)".into()),     global_key: None }, // 0 = @@iterator
+        SymbolEntry { description: Some("Symbol(Symbol.species)".into()),      global_key: None }, // 1 = @@species
+        SymbolEntry { description: Some("Symbol(Symbol.toStringTag)".into()),  global_key: None }, // 2 = @@toStringTag
+        SymbolEntry { description: Some("Symbol(Symbol.asyncIterator)".into()),global_key: None }, // 3 = @@asyncIterator
+        SymbolEntry { description: Some("Symbol(Symbol.hasInstance)".into()),  global_key: None }, // 4 = @@hasInstance
+        SymbolEntry { description: Some("Symbol(Symbol.toPrimitive)".into()),  global_key: None }, // 5 = @@toPrimitive
+        SymbolEntry { description: Some("Symbol(Symbol.dispose)".into()),      global_key: None }, // 6 = @@dispose
+        SymbolEntry { description: Some("Symbol(Symbol.match)".into()),        global_key: None }, // 7 = @@match
+    ]));
     let regex_table: Arc<Mutex<Vec<RegexEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
     let promise_table: Arc<Mutex<Vec<PromiseEntry>>> = Arc::new(Mutex::new(Vec::new()));
@@ -4189,6 +4200,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 store_runtime_string(&_caller, "[object Array]".to_string())
             } else if value::is_function(obj) || value::is_callable(obj) {
                 store_runtime_string(&_caller, "[object Function]".to_string())
+            } else if is_promise_value(_caller.data(), obj) {
+                store_runtime_string(&_caller, "[object Promise]".to_string())
             } else {
                 store_runtime_string(&_caller, "[object Object]".to_string())
             }
@@ -4564,12 +4577,24 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 108: symbol_well_known(i32) → i64 ──────────────────────
+    // ECMAScript § 6.1.5.1 Well-Known Symbols
+    // 返回预分配的 well-known symbol（id=0..7）
     let symbol_well_known_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _id: i32| -> i64 {
-            // 暂时返回 undefined，well-known symbols 后续实现
-            value::encode_undefined()
+        |caller: Caller<'_, RuntimeState>, id: i32| -> i64 {
+            if id < 0 || id > 7 {
+                return value::encode_undefined();
+            }
+            let table = caller
+                .data()
+                .symbol_table
+                .lock()
+                .expect("symbol_table mutex");
+            if (id as usize) < table.len() {
+                value::encode_symbol_handle(id as u32)
+            } else {
+                value::encode_undefined()
+            }
         },
     );
 
@@ -5498,11 +5523,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     .promise_table
                     .lock()
                     .expect("promise table mutex");
-                insert_promise_entry(&mut table, result_handle, PromiseEntry::pending());
+                // §27.2.5.1 — 读取原 promise 的构造器作为 species
+                let species_constructor = promise_entry(&table, handle)
+                    .and_then(|entry| entry.constructor_handle);
+                let mut result_entry = PromiseEntry::pending();
+                result_entry.constructor_handle = species_constructor;
+                insert_promise_entry(&mut table, result_handle, result_entry);
                 if let Some(entry) = promise_entry_mut(&mut table, handle) {
-                    if !value::is_undefined(on_rejected) {
-                        entry.handled = true;
-                    }
+                    // §27.2.5.3.1 step 10 — .then() 总是标记为已处理
+                    entry.handled = true;
                     match entry.state.clone() {
                         PromiseState::Pending => {
                             entry.fulfill_reactions.push(PromiseReaction::new(
@@ -5556,7 +5585,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     .promise_table
                     .lock()
                     .expect("promise table mutex");
-                insert_promise_entry(&mut table, result_handle, PromiseEntry::pending());
+                // §27.2.5.1 — species-aware: 读取原 promise 的构造器
+                let species_constructor = promise_entry(&table, handle)
+                    .and_then(|entry| entry.constructor_handle);
+                let mut result_entry = PromiseEntry::pending();
+                result_entry.constructor_handle = species_constructor;
+                insert_promise_entry(&mut table, result_handle, result_entry);
                 if let Some(entry) = promise_entry_mut(&mut table, handle) {
                     entry.handled = true;
                     match entry.state.clone() {
@@ -5612,7 +5646,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     .promise_table
                     .lock()
                     .expect("promise table mutex");
-                insert_promise_entry(&mut table, result_handle, PromiseEntry::pending());
+                // §27.2.5.1 — species-aware: 读取原 promise 的构造器
+                let species_constructor = promise_entry(&table, handle)
+                    .and_then(|entry| entry.constructor_handle);
+                let mut result_entry = PromiseEntry::pending();
+                result_entry.constructor_handle = species_constructor;
+                insert_promise_entry(&mut table, result_handle, result_entry);
                 if let Some(entry) = promise_entry_mut(&mut table, handle) {
                     entry.handled = true;
                     match entry.state.clone() {
@@ -5654,18 +5693,26 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 122: promise_all(i64) -> i64 ─────────────────────────────────
+    // ── Import 122: promise_all(i64, i64) -> i64 ─────────────────────────────────
     let promise_all_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                let mut entry = PromiseEntry::rejected(value::encode_undefined());
+                if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                    entry.constructor_handle = Some(constructor);
+                }
                 return alloc_promise(
                     &mut caller,
-                    PromiseEntry::rejected(value::encode_undefined()),
+                    entry,
                 );
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            let result_promise = alloc_promise(&mut caller, PromiseEntry::pending());
+            let mut entry = PromiseEntry::pending();
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            let result_promise = alloc_promise(&mut caller, entry);
 
             if len == 0 {
                 let empty_arr = alloc_array(&mut caller, 0);
@@ -5709,12 +5756,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         .expect("promise table mutex");
                     if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
                         known_promise = true;
+                        entry.handled = true; // §27.2.4.1.1 — 标记所有已知 promise 为已处理
                         match entry.state.clone() {
                             PromiseState::Fulfilled(value) => fulfilled = Some(value),
                             PromiseState::Rejected(reason) => rejected_elem = Some(reason),
                             PromiseState::Pending => {
                                 pending = true;
-                                entry.handled = true;
                                 let handler = create_combinator_reaction_handler(
                                     caller.data(),
                                     context,
@@ -5770,11 +5817,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 123: promise_race(i64) -> i64 ────────────────────────────────
+    // ── Import 123: promise_race(i64, i64) -> i64 ────────────────────────────────
     let promise_race_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
-            let result_promise = alloc_promise(&mut caller, PromiseEntry::pending());
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
+            let mut entry = PromiseEntry::pending();
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            let result_promise = alloc_promise(&mut caller, entry);
             let result_handle = raw_promise_handle(result_promise) as i64;
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 settle_promise(
@@ -5799,6 +5850,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             .lock()
                             .expect("promise table mutex");
                         if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
+                            entry.handled = true; // 标记所有已知 promise 为已处理
                             match entry.state.clone() {
                                 PromiseState::Fulfilled(value) => {
                                     immediate = Some(PromiseSettlement::Fulfill(value));
@@ -5807,7 +5859,6 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                                     immediate = Some(PromiseSettlement::Reject(reason));
                                 }
                                 PromiseState::Pending => {
-                                    entry.handled = true;
                                     entry.fulfill_reactions.push(PromiseReaction::new(
                                         value::encode_undefined(),
                                         result_handle,
@@ -5837,11 +5888,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 124: promise_all_settled(i64) -> i64 ─────────────────────────
+    // ── Import 124: promise_all_settled(i64, i64) -> i64 ─────────────────────────
     let promise_all_settled_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
-            let result_promise = alloc_promise(&mut caller, PromiseEntry::pending());
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
+            let mut entry = PromiseEntry::pending();
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            let result_promise = alloc_promise(&mut caller, entry);
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 settle_promise(
                     caller.data(),
@@ -5876,6 +5931,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         .lock()
                         .expect("promise table mutex");
                     if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
+                        entry.handled = true; // 标记所有已知 promise 为已处理
                         match entry.state.clone() {
                             PromiseState::Fulfilled(value) => {
                                 outcome = Some(("fulfilled", "value", value))
@@ -5886,7 +5942,6 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             PromiseState::Pending => {
                                 pending = true;
                                 outcome = None;
-                                entry.handled = true;
                                 let fulfill_handler = create_combinator_reaction_handler(
                                     caller.data(),
                                     context,
@@ -5941,11 +5996,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 125: promise_any(i64) -> i64 ─────────────────────────────────
+    // ── Import 125: promise_any(i64, i64) -> i64 ─────────────────────────────────
     let promise_any_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
-            let result_promise = alloc_promise(&mut caller, PromiseEntry::pending());
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
+            let mut entry = PromiseEntry::pending();
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            let result_promise = alloc_promise(&mut caller, entry);
             let result_handle = raw_promise_handle(result_promise) as i64;
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 settle_promise(
@@ -5993,12 +6052,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         .expect("promise table mutex");
                     if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
                         known_promise = true;
+                        entry.handled = true; // 标记所有已知 promise 为已处理
                         match entry.state.clone() {
                             PromiseState::Fulfilled(value) => fulfilled = Some(value),
                             PromiseState::Rejected(reason) => rejected_reason = Some(reason),
                             PromiseState::Pending => {
                                 pending = true;
-                                entry.handled = true;
                                 let reject_handler = create_combinator_reaction_handler(
                                     caller.data(),
                                     context,
@@ -6058,24 +6117,72 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 126: promise_resolve_static(i64) -> i64 ──────────────────────
+    // ── Import 126: promise_resolve_static(i64, i64) -> i64 ────────────
+    // §27.2.4.6 Promise.resolve(C, x) — species-aware
     let promise_resolve_static_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, val: i64| -> i64 {
+            // 若 x 是 promise，检查 SameValue(x.constructor, C)
             if is_promise_value(caller.data(), val) {
-                return val;
+                let handle = raw_promise_handle(val);
+                let table = caller
+                    .data()
+                    .promise_table
+                    .lock()
+                    .expect("promise table mutex");
+                if let Some(entry) = promise_entry(&table, handle) {
+                    let matches = match (&entry.constructor_handle, value::is_undefined(constructor)) {
+                        (None, true) => true,       // 都是内建 Promise
+                        (Some(_), true) => false,    // 子类 vs 内建
+                        (None, false) => false,      // 内建 vs 子类
+                        (Some(ctor), false) => *ctor == constructor, // 同一子类
+                    };
+                    drop(table);
+                    if matches {
+                        return val;
+                    }
+                } else {
+                    drop(table);
+                }
             }
-            let promise = alloc_promise(&mut caller, PromiseEntry::pending());
+            // NewPromiseCapability(C) + resolve(x)
+            let mut entry = PromiseEntry::pending();
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            let promise = alloc_promise_from_caller(&mut caller, entry);
             resolve_promise_from_caller(&mut caller, promise, val);
             promise
         },
     );
 
-    // ── Import 127: promise_reject_static(i64) -> i64 ───────────────────────
+    // ── Import 127: promise_reject_static(i64, i64) -> i64 ────────────
+    // §27.2.4.5 Promise.reject(C, r) — species-aware
     let promise_reject_static_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, reason: i64| -> i64 {
-            alloc_promise(&mut caller, PromiseEntry::rejected(reason))
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, reason: i64| -> i64 {
+            // NewPromiseCapability(C) + reject(r)
+            let mut entry = PromiseEntry::rejected(reason);
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            alloc_promise_from_caller(&mut caller, entry)
+        },
+    );
+
+    // ── Import 145: promise_with_resolvers(i64) -> i64 ────────────────
+    // §27.2.3.9 Promise.withResolvers(C) — ES2024
+    let promise_with_resolvers_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64| -> i64 {
+            let (promise, resolve, reject) =
+                new_promise_capability_from_caller(&mut caller, constructor);
+            // 创建 { promise, resolve, reject } 对象
+            let obj = alloc_host_object_from_caller(&mut caller, 3);
+            define_host_data_property_from_caller(&mut caller, obj, "promise", promise);
+            define_host_data_property_from_caller(&mut caller, obj, "resolve", resolve);
+            define_host_data_property_from_caller(&mut caller, obj, "reject", reject);
+            obj
         },
     );
 
@@ -6084,6 +6191,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             value::encode_bool(is_promise_value(caller.data(), val))
+        },
+    );
+
+    // ── Import 144: is_callable(i64) -> i64 ──────────────────────────────────
+    // ECMAScript §7.2.3 IsCallable(argument) → boolean
+    let is_callable_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            value::encode_bool(value::is_callable(val))
         },
     );
 
@@ -6245,6 +6361,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 .lock()
                 .expect("promise table mutex");
             if let Some(entry) = promise_entry_mut(&mut p_table, awaited_handle) {
+                // §15.8.1 — await 标记 promise 为已处理
+                entry.handled = true;
                 match &entry.state {
                     PromiseState::Pending => {
                         entry.fulfill_reactions.push(PromiseReaction::new_async(
@@ -6714,6 +6832,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         native_call_fn.into(),                     // 141
         promise_create_resolve_function_fn.into(), // 142
         promise_create_reject_function_fn.into(),  // 143
+        is_callable_fn.into(),                     // 144
+        promise_with_resolvers_fn.into(),          // 145
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -7042,6 +7162,8 @@ struct PromiseEntry {
     reject_reactions: Vec<PromiseReaction>,
     handled: bool,
     constructor_resolver: Option<Arc<Mutex<bool>>>,
+    /// 构造器引用（用于 species-aware 操作；None 表示内建 Promise）
+    constructor_handle: Option<i64>,
     is_promise: bool,
 }
 
@@ -7053,6 +7175,7 @@ impl PromiseEntry {
             reject_reactions: Vec::new(),
             handled: false,
             constructor_resolver: None,
+            constructor_handle: None,
             is_promise: true,
         }
     }
@@ -7064,6 +7187,7 @@ impl PromiseEntry {
             reject_reactions: Vec::new(),
             handled: false,
             constructor_resolver: None,
+            constructor_handle: None,
             is_promise: true,
         }
     }
@@ -7075,6 +7199,7 @@ impl PromiseEntry {
             reject_reactions: Vec::new(),
             handled: false,
             constructor_resolver: None,
+            constructor_handle: None,
             is_promise: false,
         }
     }
@@ -9341,6 +9466,47 @@ fn alloc_promise_from_caller(caller: &mut Caller<'_, RuntimeState>, entry: Promi
     promise
 }
 
+// ── §27.2.1.3 NewPromiseCapability(C) ─────────────────────────────────
+/// 创建 PromiseCapability = { [[Promise]], [[Resolve]], [[Reject]] }。
+/// 当 constructor 为 undefined/null 时使用内建 Promise 快速路径；
+/// 否则记录构造器引用（用于 species-aware 操作）。
+fn new_promise_capability_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    constructor: i64,
+) -> (i64, i64, i64) {
+    let mut entry = PromiseEntry::pending();
+    // 如果构造器不是 undefined/null，记录到 entry 中用于后续 species 查找
+    if !value::is_undefined(constructor) && !value::is_null(constructor) {
+        entry.constructor_handle = Some(constructor);
+    }
+    let promise = alloc_promise_from_caller(caller, entry);
+    let (resolve, reject) = create_promise_resolving_functions(caller.data(), promise);
+    (promise, resolve, reject)
+}
+
+// ── §27.2.1.6 SpeciesConstructor(O, defaultConstructor) ───────────────
+/// 从 PromiseEntry 读取构造器引用；若无则返回 default。
+/// 简化实现：不读 constructor[@@species]（需 symbol 属性支持），
+/// 直接使用 constructor_handle 作为 species。
+fn species_constructor_from_caller(
+    caller: &Caller<'_, RuntimeState>,
+    promise: i64,
+    default_constructor: i64,
+) -> i64 {
+    let handle = raw_promise_handle(promise);
+    let table = caller
+        .data()
+        .promise_table
+        .lock()
+        .expect("promise table mutex");
+    if let Some(entry) = promise_entry(&table, handle) {
+        if let Some(constructor) = entry.constructor_handle {
+            return constructor;
+        }
+    }
+    default_constructor
+}
+
 fn create_async_generator_method(
     state: &RuntimeState,
     generator: i64,
@@ -10062,7 +10228,14 @@ fn drain_microtasks_from_caller(caller: &mut Caller<'_, RuntimeState>, func_tabl
                     continue;
                 }
                 if value::is_callable(handler) {
-                    match call_host_function_from_caller(caller, func_table, handler, argument) {
+                    // §27.2.5.3 — finally 的 handler 应以零参数调用（不传 value/reason）
+                    let call_arg = match reaction_type {
+                        ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
+                            value::encode_undefined()
+                        }
+                        _ => argument,
+                    };
+                    match call_host_function_from_caller(caller, func_table, handler, call_arg) {
                         Some(result) => match reaction_type {
                             ReactionType::Fulfill | ReactionType::Reject => {
                                 resolve_promise_from_caller(caller, promise, result);
@@ -10137,6 +10310,22 @@ fn drain_microtasks_from_caller(caller: &mut Caller<'_, RuntimeState>, func_tabl
             None => break,
         }
     }
+    // ── §27.2.1.9 HostPromiseRejectionTracker ────────────────────────────
+    // 微任务队列排空后，扫描 promise table 检测未处理的 rejection 并输出警告
+    let unhandled: Vec<i64> = {
+        let table = caller.data().promise_table.lock().expect("promise table mutex");
+        table.iter()
+            .filter(|e| e.is_promise && !e.handled)
+            .filter_map(|e| match &e.state {
+                PromiseState::Rejected(reason) => Some(*reason),
+                _ => None,
+            })
+            .collect()
+    };
+    for reason in unhandled {
+        let msg = render_value(caller, reason).unwrap_or_else(|_| String::from("unknown"));
+        eprintln!("UnhandledPromiseRejectionWarning: {msg}");
+    }
 }
 
 fn drain_microtasks_from_store(
@@ -10176,13 +10365,20 @@ fn drain_microtasks_from_store(
                     continue;
                 }
                 if value::is_callable(handler) {
+                    // §27.2.5.3 — finally 的 handler 应以零参数调用（不传 value/reason）
+                    let call_arg = match reaction_type {
+                        ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
+                            value::encode_undefined()
+                        }
+                        _ => argument,
+                    };
                     match call_host_function_from_store(
                         store,
                         func_table,
                         memory,
                         shadow_sp_global,
                         handler,
-                        argument,
+                        call_arg,
                     ) {
                         Some(result) => match reaction_type {
                             ReactionType::Fulfill | ReactionType::Reject => {
@@ -10274,6 +10470,31 @@ fn drain_microtasks_from_store(
             }
             None => break,
         }
+    }
+    // ── §27.2.1.9 HostPromiseRejectionTracker ────────────────────────────
+    // 微任务队列排空后，扫描 promise table 检测未处理的 rejection 并输出警告
+    let unhandled: Vec<i64> = {
+        let table = store.data().promise_table.lock().expect("promise table mutex");
+        table.iter()
+            .filter(|e| e.is_promise && !e.handled)
+            .filter_map(|e| match &e.state {
+                PromiseState::Rejected(reason) => Some(*reason),
+                _ => None,
+            })
+            .collect()
+    };
+    for reason in unhandled {
+        // store 变体无法直接调用 render_value，使用简化格式
+        let msg = if value::is_string(reason) {
+            String::from("<string>")
+        } else if value::is_f64(reason) {
+            format!("{}", f64::from_bits(reason as u64))
+        } else if value::is_object(reason) {
+            String::from("Object")
+        } else {
+            format!("0x{:016x}", reason as u64)
+        };
+        eprintln!("UnhandledPromiseRejectionWarning: {msg}");
     }
 }
 
