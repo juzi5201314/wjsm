@@ -57,7 +57,6 @@ pub enum ExportEntry {
 
 /// 模块解析器
 pub struct ModuleResolver {
-    #[allow(dead_code)]
     root_path: PathBuf,
     next_id: u32,
     visited: HashMap<PathBuf, ModuleId>,
@@ -66,8 +65,11 @@ pub struct ModuleResolver {
 
 impl ModuleResolver {
     pub fn new(root_path: &Path) -> Self {
+        let root_path = root_path
+            .canonicalize()
+            .unwrap_or_else(|_| root_path.to_path_buf());
         Self {
-            root_path: root_path.to_path_buf(),
+            root_path,
             next_id: 0,
             visited: HashMap::new(),
             modules: HashMap::new(),
@@ -115,6 +117,14 @@ impl ModuleResolver {
     /// 解析模块（如果已解析过则返回缓存的 ID）
     pub fn resolve(&mut self, specifier: &str, parent: &Path) -> Result<ModuleId> {
         let path = Self::resolve_path(specifier, parent)?;
+        if !path.starts_with(&self.root_path) {
+            bail!(
+                "Module '{}' resolves outside root '{}': {}",
+                specifier,
+                self.root_path.display(),
+                path.display()
+            );
+        }
 
         // 检查缓存
         if let Some(&id) = self.visited.get(&path) {
@@ -547,6 +557,22 @@ mod tests {
     }
 
     #[test]
+    fn resolve_rejects_path_outside_root() {
+        let root = create_temp_project("outside_root");
+        let outside_name = format!("{}_sibling", root.file_name().unwrap().to_string_lossy());
+        let outside = root.parent().unwrap().join(&outside_name);
+        std::fs::create_dir_all(&outside).expect("outside dir should be created");
+        write_file(&outside, "dep.js", "export const x = 1;\n");
+        let parent = root.join("main.js");
+        let mut resolver = ModuleResolver::new(&root);
+
+        let result = resolver.resolve(&format!("../{outside_name}/dep.js"), &parent);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("outside root"));
+    }
+
+    #[test]
     fn resolve_returns_cached_id_on_second_call() {
         let root = create_temp_project("cache_test");
         write_file(&root, "dep.js", "export const x = 1;\n");
@@ -657,7 +683,9 @@ mod tests {
             .resolve("./dep.js", &parent)
             .expect("resolve should succeed");
         let before_count = resolver.get_module(id).unwrap().exports.len();
-        resolver.ensure_default_export_for(id);
+        resolver
+            .ensure_default_export_for(id)
+            .expect("ensure default export should succeed");
         let after_count = resolver.get_module(id).unwrap().exports.len();
         assert!(
             after_count > before_count,
@@ -675,7 +703,9 @@ mod tests {
             .resolve("./dep.js", &parent)
             .expect("resolve should succeed");
         let before_count = resolver.get_module(id).unwrap().exports.len();
-        resolver.ensure_default_export_for(id);
+        resolver
+            .ensure_default_export_for(id)
+            .expect("ensure default export should succeed");
         let after_count = resolver.get_module(id).unwrap().exports.len();
         assert_eq!(
             after_count, before_count,
@@ -694,7 +724,9 @@ mod tests {
             .expect("resolve should succeed");
         let before_count = resolver.get_module(id).unwrap().exports.len();
         assert_eq!(before_count, 0, "module should have no exports");
-        resolver.ensure_default_export_for(id);
+        resolver
+            .ensure_default_export_for(id)
+            .expect("ensure default export should succeed");
         let after_count = resolver.get_module(id).unwrap().exports.len();
         assert_eq!(
             after_count, 0,

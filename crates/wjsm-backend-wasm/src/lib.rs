@@ -463,17 +463,8 @@ impl Compiler {
             "abort_shadow_stack_overflow",
             EntityType::Function(18),
         );
-        // Type 21: (i64, i64, i64, i64, i64) -> (i64) — async_function_start
-        types.ty().function(
-            vec![
-                ValType::I64,
-                ValType::I64,
-                ValType::I64,
-                ValType::I64,
-                ValType::I64,
-            ],
-            vec![ValType::I64],
-        );
+        // Type 21: (i64) -> (i64) — async_function_start
+        types.ty().function(vec![ValType::I64], vec![ValType::I64]);
         // Type 22: (i64, i64, i64, i64, i64) -> () — async_function_resume
         types.ty().function(
             vec![
@@ -485,10 +476,10 @@ impl Compiler {
             ],
             vec![],
         );
-        // Type 23: (i64, i64, i32) -> () — async_function_suspend
+        // Type 23: (i64, i64, i64) -> () — async_function_suspend
         types
             .ty()
-            .function(vec![ValType::I64, ValType::I64, ValType::I32], vec![]);
+            .function(vec![ValType::I64, ValType::I64, ValType::I64], vec![]);
         // Type 24: (i64, i64, i64) -> (i64) — continuation_create
         types.ty().function(
             vec![ValType::I64, ValType::I64, ValType::I64],
@@ -608,11 +599,11 @@ impl Compiler {
         // Import index 130: drain_microtasks: () -> ()
         imports.import("env", "drain_microtasks", EntityType::Function(1));
         // Import index 131: async_function_start: (i64) -> i64
-        imports.import("env", "async_function_start", EntityType::Function(3));
+        imports.import("env", "async_function_start", EntityType::Function(21));
         // Import index 132: async_function_resume: (i64, i64, i64, i64, i64) -> ()
         imports.import("env", "async_function_resume", EntityType::Function(22));
         // Import index 133: async_function_suspend: (i64, i64, i64) -> ()
-        imports.import("env", "async_function_suspend", EntityType::Function(25));
+        imports.import("env", "async_function_suspend", EntityType::Function(23));
         // Import index 134: continuation_create: (i64, i64, i64) -> i64
         imports.import("env", "continuation_create", EntityType::Function(24));
         // Import index 135: continuation_save_var: (i64, i64, i64) -> ()
@@ -996,6 +987,33 @@ impl Compiler {
             (constants::PROP_DESC_SET_OFFSET, "set"),
         ];
         for &(offset, s) in prop_desc_strings {
+            let end = offset as usize + s.len() + 1;
+            if self.string_data.len() < end {
+                self.string_data.resize(end, 0);
+            }
+            self.string_data[offset as usize..offset as usize + s.len()]
+                .copy_from_slice(s.as_bytes());
+            self.string_data[offset as usize + s.len()] = 0;
+            self.string_ptr_cache.insert(s.to_string(), offset);
+        }
+
+        let promise_strings: &[(u32, &str)] = &[
+            (constants::PROMISE_STATE_PENDING_OFFSET, "pending"),
+            (constants::PROMISE_STATE_FULFILLED_OFFSET, "fulfilled"),
+            (constants::PROMISE_STATE_REJECTED_OFFSET, "rejected"),
+            (constants::PROMISE_THEN_OFFSET, "then"),
+            (constants::PROMISE_CATCH_OFFSET, "catch"),
+            (constants::PROMISE_FINALLY_OFFSET, "finally"),
+            (constants::PROMISE_RESOLVE_OFFSET, "resolve"),
+            (constants::PROMISE_REJECT_OFFSET, "reject"),
+            (constants::PROMISE_ALL_OFFSET, "all"),
+            (constants::PROMISE_RACE_OFFSET, "race"),
+            (constants::PROMISE_ALLSETTLED_OFFSET, "allSettled"),
+            (constants::PROMISE_ANY_OFFSET, "any"),
+            (constants::PROMISE_CONSTRUCTOR_OFFSET, "constructor"),
+            (constants::ASYNC_ITERATOR_OFFSET, "asyncIterator"),
+        ];
+        for &(offset, s) in promise_strings {
             let end = offset as usize + s.len() + 1;
             if self.string_data.len() < end {
                 self.string_data.resize(end, 0);

@@ -1685,6 +1685,13 @@ impl Lowerer {
         for_of: &swc_ast::ForOfStmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
+        if !self.is_async_fn {
+            return Err(self.error(
+                for_of.span(),
+                "for await...of is only valid in async functions",
+            ));
+        }
+
         let block = self.ensure_open(flow)?;
 
         let iterable = self.lower_expr(&for_of.right, block)?;
@@ -1751,10 +1758,11 @@ impl Lowerer {
         self.current_function
             .set_terminator(block, Terminator::Jump { target: header });
 
+        let next_call_result = self.alloc_value();
         self.current_function.append_instruction(
             header,
             Instruction::CallBuiltin {
-                dest: None,
+                dest: Some(next_call_result),
                 builtin: Builtin::IteratorNext,
                 args: vec![iter_handle],
             },
@@ -1766,7 +1774,7 @@ impl Lowerer {
             Instruction::CallBuiltin {
                 dest: Some(next_result),
                 builtin: Builtin::PromiseResolveStatic,
-                args: vec![iter_handle],
+                args: vec![next_call_result],
             },
         );
 
@@ -1775,6 +1783,8 @@ impl Lowerer {
 
         let resume_block = self.current_function.new_block();
         self.async_resume_blocks.push((next_state, resume_block));
+        let saved_bindings = self.async_visible_binding_names();
+        self.emit_save_async_bindings(header, &saved_bindings);
 
         self.current_function.append_instruction(
             header,
@@ -1792,12 +1802,13 @@ impl Lowerer {
             },
         );
 
+        self.emit_restore_async_bindings(resume_block, &saved_bindings);
         let resume_val = self.alloc_value();
         self.current_function.append_instruction(
             resume_block,
             Instruction::LoadVar {
                 dest: resume_val,
-                name: "$resume_val".to_string(),
+                name: format!("${}.$resume_val", self.async_resume_val_scope_id),
             },
         );
         let is_rejected = self.alloc_value();
@@ -1805,7 +1816,7 @@ impl Lowerer {
             resume_block,
             Instruction::LoadVar {
                 dest: is_rejected,
-                name: "$is_rejected".to_string(),
+                name: format!("${}.$is_rejected", self.async_is_rejected_scope_id),
             },
         );
         let throw_block = self.current_function.new_block();
@@ -1817,8 +1828,7 @@ impl Lowerer {
                 false_block: continue_after_await,
             },
         );
-        self.current_function
-            .set_terminator(throw_block, Terminator::Throw { value: resume_val });
+        self.emit_throw_value(throw_block, resume_val)?;
 
         let done_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -2348,14 +2358,31 @@ impl Lowerer {
 
     // ── throw ───────────────────────────────────────────────────────────────
 
-    fn lower_throw(
-        &mut self,
-        throw_stmt: &swc_ast::ThrowStmt,
-        flow: StmtFlow,
-    ) -> Result<StmtFlow, LoweringError> {
-        let block = self.ensure_open(flow)?;
-        let value = self.lower_expr(&throw_stmt.arg, block)?;
+    fn emit_async_reject(&mut self, block: BasicBlockId, reason: ValueId) {
+        let promise_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: promise_val,
+                name: format!("${}.$promise", self.async_promise_scope_id),
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::PromiseReject {
+                promise: promise_val,
+                reason,
+            },
+        );
+        self.current_function
+            .set_terminator(block, Terminator::Return { value: None });
+    }
 
+    fn emit_throw_value(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+    ) -> Result<StmtFlow, LoweringError> {
         if let Some(try_ctx) = self.try_contexts.last() {
             if let Some(catch_entry) = try_ctx.catch_entry {
                 let exc_var = try_ctx.exception_var.clone();
@@ -2379,12 +2406,26 @@ impl Lowerer {
         let throw_block = self.resolve_store_block(block);
         match self.lower_pending_finalizers(throw_block)? {
             StmtFlow::Open(after_finally) => {
-                self.current_function
-                    .set_terminator(after_finally, Terminator::Throw { value });
+                if self.is_async_fn {
+                    self.emit_async_reject(after_finally, value);
+                } else {
+                    self.current_function
+                        .set_terminator(after_finally, Terminator::Throw { value });
+                }
             }
             StmtFlow::Terminated => {}
         }
         Ok(StmtFlow::Terminated)
+    }
+
+    fn lower_throw(
+        &mut self,
+        throw_stmt: &swc_ast::ThrowStmt,
+        flow: StmtFlow,
+    ) -> Result<StmtFlow, LoweringError> {
+        let block = self.ensure_open(flow)?;
+        let value = self.lower_expr(&throw_stmt.arg, block)?;
+        self.emit_throw_value(block, value)
     }
 
     // ── try / catch / finally ───────────────────────────────────────────────
@@ -8217,24 +8258,7 @@ impl Lowerer {
             },
         );
 
-        let promise_val = self.alloc_value();
-        self.current_function.append_instruction(
-            reject_block,
-            Instruction::LoadVar {
-                dest: promise_val,
-                name: format!("${}.$promise", self.async_promise_scope_id),
-            },
-        );
-        self.current_function.append_instruction(
-            reject_block,
-            Instruction::PromiseReject {
-                promise: promise_val,
-                reason: resume_val,
-            },
-        );
-        self.current_function
-            .set_terminator(reject_block, Terminator::Return { value: None });
-
+        self.emit_throw_value(reject_block, resume_val)?;
         let result = self.alloc_value();
         self.current_function.append_instruction(
             continue_block,

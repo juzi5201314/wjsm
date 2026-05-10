@@ -5406,12 +5406,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         entry.fulfill_reactions.push(PromiseReaction::new(
                             on_finally,
                             result_handle as i64,
-                            ReactionType::Fulfill,
+                            ReactionType::FinallyFulfill,
                         ));
                         entry.reject_reactions.push(PromiseReaction::new(
                             on_finally,
                             result_handle as i64,
-                            ReactionType::Reject,
+                            ReactionType::FinallyReject,
                         ));
                     }
                     PromiseState::Fulfilled(val) => {
@@ -5424,7 +5424,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             .expect("microtask queue mutex");
                         queue.push_back(Microtask::PromiseReaction {
                             promise: result_handle as i64,
-                            reaction_type: ReactionType::Fulfill,
+                            reaction_type: ReactionType::FinallyFulfill,
                             handler: on_finally,
                             argument: val,
                         });
@@ -5440,7 +5440,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             .expect("microtask queue mutex");
                         queue.push_back(Microtask::PromiseReaction {
                             promise: result_handle as i64,
-                            reaction_type: ReactionType::Reject,
+                            reaction_type: ReactionType::FinallyReject,
                             handler: on_finally,
                             argument: reason,
                         });
@@ -6740,10 +6740,11 @@ impl PromiseReaction {
 }
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 enum ReactionType {
     Fulfill,
     Reject,
+    FinallyFulfill,
+    FinallyReject,
 }
 
 #[allow(dead_code)]
@@ -8237,6 +8238,108 @@ fn obj_spread_impl(_caller: &mut Caller<'_, RuntimeState>, _dest: i64, _source: 
     // 完整实现需要遍历 source 的 own properties 并复制到 dest
 }
 
+#[derive(Clone, Copy)]
+enum PromiseSettlement {
+    Fulfill(i64),
+    Reject(i64),
+}
+
+fn raw_promise_handle(promise: i64) -> usize {
+    if value::is_object(promise) {
+        value::decode_object_handle(promise) as usize
+    } else {
+        promise as usize
+    }
+}
+
+fn queue_promise_reactions(
+    state: &RuntimeState,
+    reactions: Vec<PromiseReaction>,
+    value: i64,
+    is_rejected: bool,
+) {
+    let mut queue = state.microtask_queue.lock().expect("microtask queue mutex");
+    for reaction in reactions {
+        if let Some(async_state) = reaction.async_resume_state {
+            queue.push_back(Microtask::AsyncResume {
+                fn_table_idx: reaction.handler as u32,
+                continuation: reaction.target_promise,
+                state: async_state as u32,
+                resume_val: value,
+                is_rejected,
+            });
+        } else {
+            queue.push_back(Microtask::PromiseReaction {
+                promise: reaction.target_promise,
+                reaction_type: reaction.reaction_type,
+                handler: reaction.handler,
+                argument: value,
+            });
+        }
+    }
+}
+
+fn settle_promise(state: &RuntimeState, promise: i64, settlement: PromiseSettlement) {
+    let handle = raw_promise_handle(promise);
+    let (reactions, value, is_rejected) = {
+        let mut table = state.promise_table.lock().expect("promise table mutex");
+        let Some(entry) = table.get_mut(handle) else {
+            return;
+        };
+        if !matches!(entry.state, PromiseState::Pending) {
+            return;
+        }
+        match settlement {
+            PromiseSettlement::Fulfill(value) => {
+                let reactions = std::mem::take(&mut entry.fulfill_reactions);
+                entry.state = PromiseState::Fulfilled(value);
+                (reactions, value, false)
+            }
+            PromiseSettlement::Reject(reason) => {
+                let reactions = std::mem::take(&mut entry.reject_reactions);
+                entry.state = PromiseState::Rejected(reason);
+                (reactions, reason, true)
+            }
+        }
+    };
+    queue_promise_reactions(state, reactions, value, is_rejected);
+}
+
+fn passive_reaction_settlement(reaction_type: ReactionType, argument: i64) -> PromiseSettlement {
+    match reaction_type {
+        ReactionType::Fulfill | ReactionType::FinallyFulfill => {
+            PromiseSettlement::Fulfill(argument)
+        }
+        ReactionType::Reject | ReactionType::FinallyReject => PromiseSettlement::Reject(argument),
+    }
+}
+
+fn fulfilled_reaction_settlement(
+    reaction_type: ReactionType,
+    argument: i64,
+    handler_result: i64,
+) -> PromiseSettlement {
+    match reaction_type {
+        ReactionType::Fulfill | ReactionType::Reject => PromiseSettlement::Fulfill(handler_result),
+        ReactionType::FinallyFulfill => PromiseSettlement::Fulfill(argument),
+        ReactionType::FinallyReject => PromiseSettlement::Reject(argument),
+    }
+}
+
+fn runtime_error_value(state: &RuntimeState, message: String) -> i64 {
+    let mut table = state.runtime_strings.lock().expect("runtime strings mutex");
+    let handle = table.len() as u32;
+    table.push(message);
+    value::encode_runtime_string_handle(handle)
+}
+
+fn set_runtime_error(state: &RuntimeState, message: String) {
+    let mut error_lock = state.runtime_error.lock().expect("runtime_error mutex");
+    if error_lock.is_none() {
+        *error_lock = Some(message);
+    }
+}
+
 fn drain_microtasks_from_caller(caller: &mut Caller<'_, RuntimeState>, func_table: &Table) {
     loop {
         let task = {
@@ -8249,19 +8352,35 @@ fn drain_microtasks_from_caller(caller: &mut Caller<'_, RuntimeState>, func_tabl
         };
         match task {
             Some(Microtask::PromiseReaction {
-                handler, argument, ..
+                promise,
+                reaction_type,
+                handler,
+                argument,
             }) => {
-                if !value::is_undefined(handler) {
-                    call_host_function_from_caller(caller, func_table, handler, argument);
-                }
+                let settlement = if value::is_callable(handler) {
+                    match call_host_function_from_caller(caller, func_table, handler, argument) {
+                        Some(result) => {
+                            fulfilled_reaction_settlement(reaction_type, argument, result)
+                        }
+                        None => PromiseSettlement::Reject(runtime_error_value(
+                            caller.data(),
+                            "TypeError: promise reaction handler failed".to_string(),
+                        )),
+                    }
+                } else {
+                    passive_reaction_settlement(reaction_type, argument)
+                };
+                settle_promise(caller.data(), promise, settlement);
             }
             Some(Microtask::MicrotaskCallback { callback }) => {
-                call_host_function_from_caller(
-                    caller,
-                    func_table,
-                    callback,
-                    value::encode_undefined(),
-                );
+                if value::is_callable(callback) {
+                    let _ = call_host_function_from_caller(
+                        caller,
+                        func_table,
+                        callback,
+                        value::encode_undefined(),
+                    );
+                }
             }
             Some(Microtask::AsyncResume {
                 fn_table_idx,
@@ -8302,28 +8421,44 @@ fn drain_microtasks_from_store(
         };
         match task {
             Some(Microtask::PromiseReaction {
-                handler, argument, ..
+                promise,
+                reaction_type,
+                handler,
+                argument,
             }) => {
-                if !value::is_undefined(handler) {
-                    call_host_function_from_store(
+                let settlement = if value::is_callable(handler) {
+                    match call_host_function_from_store(
                         store,
                         func_table,
                         memory,
                         shadow_sp_global,
                         handler,
                         argument,
-                    );
-                }
+                    ) {
+                        Some(result) => {
+                            fulfilled_reaction_settlement(reaction_type, argument, result)
+                        }
+                        None => PromiseSettlement::Reject(runtime_error_value(
+                            store.data(),
+                            "TypeError: promise reaction handler failed".to_string(),
+                        )),
+                    }
+                } else {
+                    passive_reaction_settlement(reaction_type, argument)
+                };
+                settle_promise(store.data(), promise, settlement);
             }
             Some(Microtask::MicrotaskCallback { callback }) => {
-                call_host_function_from_store(
-                    store,
-                    func_table,
-                    memory,
-                    shadow_sp_global,
-                    callback,
-                    value::encode_undefined(),
-                );
+                if value::is_callable(callback) {
+                    let _ = call_host_function_from_store(
+                        store,
+                        func_table,
+                        memory,
+                        shadow_sp_global,
+                        callback,
+                        value::encode_undefined(),
+                    );
+                }
             }
             Some(Microtask::AsyncResume {
                 fn_table_idx,
@@ -8342,9 +8477,7 @@ fn drain_microtasks_from_store(
                     is_rejected,
                 );
             }
-            None => {
-                break;
-            }
+            None => break,
         }
     }
 }
@@ -8354,7 +8487,7 @@ fn call_host_function_from_caller(
     func_table: &Table,
     handler: i64,
     argument: i64,
-) {
+) -> Option<i64> {
     let (func_idx, env_obj) = if value::is_closure(handler) {
         let idx = value::decode_closure_idx(handler);
         let closures = caller.data().closures.lock().unwrap();
@@ -8374,7 +8507,7 @@ fn call_host_function_from_caller(
             record.bound_this,
         )
     } else {
-        return;
+        return None;
     };
 
     let shadow_sp_global = caller
@@ -8404,10 +8537,10 @@ fn call_host_function_from_caller(
         if let Some(sp_global) = &shadow_sp_global {
             let _ = sp_global.set(&mut *caller, Val::I32(saved_sp));
         }
-        return;
+        return None;
     };
     let mut results = [Val::I64(0)];
-    let _ = func.call(
+    if let Err(err) = func.call(
         &mut *caller,
         &[
             Val::I64(env_obj),
@@ -8416,11 +8549,22 @@ fn call_host_function_from_caller(
             Val::I32(1),
         ],
         &mut results,
-    );
+    ) {
+        set_runtime_error(
+            caller.data(),
+            format!("promise reaction handler error: {err}"),
+        );
+        if let Some(sp_global) = &shadow_sp_global {
+            let _ = sp_global.set(&mut *caller, Val::I32(saved_sp));
+        }
+        return None;
+    }
 
     if let Some(sp_global) = &shadow_sp_global {
         let _ = sp_global.set(&mut *caller, Val::I32(saved_sp));
     }
+
+    results[0].i64()
 }
 
 fn nanbox_to_usize(val: i64) -> usize {
@@ -8490,7 +8634,7 @@ fn call_host_function_from_store(
     shadow_sp_global: &Global,
     handler: i64,
     argument: i64,
-) {
+) -> Option<i64> {
     let (func_idx, env_obj) = if value::is_closure(handler) {
         let idx = value::decode_closure_idx(handler);
         let closures = store.data().closures.lock().unwrap();
@@ -8510,7 +8654,7 @@ fn call_host_function_from_store(
             record.bound_this,
         )
     } else {
-        return;
+        return None;
     };
 
     let saved_sp = shadow_sp_global.get(&mut *store).i32().unwrap_or(0);
@@ -8528,10 +8672,10 @@ fn call_host_function_from_store(
     let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
     let Some(func) = func else {
         let _ = shadow_sp_global.set(&mut *store, Val::I32(saved_sp));
-        return;
+        return None;
     };
     let mut results = [Val::I64(0)];
-    let _ = func.call(
+    if let Err(err) = func.call(
         &mut *store,
         &[
             Val::I64(env_obj),
@@ -8540,9 +8684,18 @@ fn call_host_function_from_store(
             Val::I32(1),
         ],
         &mut results,
-    );
+    ) {
+        set_runtime_error(
+            store.data(),
+            format!("promise reaction handler error: {err}"),
+        );
+        let _ = shadow_sp_global.set(&mut *store, Val::I32(saved_sp));
+        return None;
+    }
 
     let _ = shadow_sp_global.set(&mut *store, Val::I32(saved_sp));
+
+    results[0].i64()
 }
 
 fn resume_async_function_from_store(
