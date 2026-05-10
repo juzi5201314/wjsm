@@ -199,13 +199,7 @@ fn read_harness_dir(
         let content = fs::read_to_string(&path)
             .with_context(|| format!("error reading harness file: {}", path.display()))?;
 
-        includes.insert(
-            key,
-            HarnessFile {
-                content,
-                path,
-            },
-        );
+        includes.insert(key, HarnessFile { content, path });
     }
 
     Ok(())
@@ -222,7 +216,9 @@ pub fn read_suite(path: &Path) -> Result<TestSuite> {
     let mut suites = Vec::new();
     let mut tests = Vec::new();
 
-    for entry in fs::read_dir(path).with_context(|| format!("could not read suite: {}", path.display()))? {
+    for entry in
+        fs::read_dir(path).with_context(|| format!("could not read suite: {}", path.display()))?
+    {
         let entry = entry?;
         let path = entry.path();
 
@@ -287,8 +283,7 @@ fn read_metadata(code: &str) -> Result<MetaData> {
 
     let metadata = metadata.replace('\r', "\n");
 
-    serde_yaml::from_str(&metadata)
-        .with_context(|| "failed to parse YAML frontmatter")
+    serde_yaml::from_str(&metadata).with_context(|| "failed to parse YAML frontmatter")
 }
 
 /// 扁平化测试套件中的所有测试。

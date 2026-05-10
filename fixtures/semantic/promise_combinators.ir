@@ -1,0 +1,144 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = undefined
+    c4 = undefined
+    c5 = number(1)
+    c6 = undefined
+    c7 = number(2)
+    c8 = undefined
+    c9 = number(3)
+    c10 = functionref(@0)
+    c11 = undefined
+    c12 = undefined
+    c13 = undefined
+    c14 = string("first")
+    c15 = undefined
+    c16 = string("second")
+    c17 = functionref(@1)
+    c18 = undefined
+    c19 = undefined
+    c20 = undefined
+    c21 = string("ok")
+    c22 = undefined
+    c23 = string("fail")
+    c24 = number(0)
+    c25 = string("status")
+    c26 = number(1)
+    c27 = string("status")
+    c28 = functionref(@2)
+    c29 = undefined
+    c30 = undefined
+    c31 = undefined
+    c32 = string("err")
+    c33 = undefined
+    c34 = string("win")
+    c35 = functionref(@3)
+    c36 = undefined
+
+  fn @anon_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
+    bb0:
+      %0 = load var $1.v
+      %1 = call builtin.console.log(%0)
+      return
+
+  fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
+    bb0:
+      %0 = load var $2.v
+      %1 = call builtin.console.log(%0)
+      return
+
+  fn @anon_2 [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
+    bb0:
+      %0 = load var $3.v
+      %1 = const c24
+      %2 = get_elem %0, %1
+      %3 = const c25
+      %4 = get_prop %2, %3
+      %5 = call builtin.console.log(%4)
+      %6 = load var $3.v
+      %7 = const c26
+      %8 = get_elem %6, %7
+      %9 = const c27
+      %10 = get_prop %8, %9
+      %11 = call builtin.console.log(%10)
+      return
+
+  fn @anon_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
+    bb0:
+      %0 = load var $4.v
+      %1 = call builtin.console.log(%0)
+      return
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      %4 = new_array(capacity=4)
+      %5 = const c4
+      %6 = const c5
+      %7 = call builtin.promise.resolve_static(%5, %6)
+      call builtin.array.push(%4, %7)
+      %8 = const c6
+      %9 = const c7
+      %10 = call builtin.promise.resolve_static(%8, %9)
+      call builtin.array.push(%4, %10)
+      %11 = const c8
+      %12 = const c9
+      %13 = call builtin.promise.resolve_static(%11, %12)
+      call builtin.array.push(%4, %13)
+      %14 = call builtin.promise.all(%3, %4)
+      %15 = const c10
+      %16 = const c11
+      %17 = call builtin.promise.then(%14, %15, %16)
+      %18 = const c12
+      %19 = new_array(capacity=4)
+      %20 = const c13
+      %21 = const c14
+      %22 = call builtin.promise.resolve_static(%20, %21)
+      call builtin.array.push(%19, %22)
+      %23 = const c15
+      %24 = const c16
+      %25 = call builtin.promise.resolve_static(%23, %24)
+      call builtin.array.push(%19, %25)
+      %26 = call builtin.promise.race(%18, %19)
+      %27 = const c17
+      %28 = const c18
+      %29 = call builtin.promise.then(%26, %27, %28)
+      %30 = const c19
+      %31 = new_array(capacity=4)
+      %32 = const c20
+      %33 = const c21
+      %34 = call builtin.promise.resolve_static(%32, %33)
+      call builtin.array.push(%31, %34)
+      %35 = const c22
+      %36 = const c23
+      %37 = call builtin.promise.reject_static(%35, %36)
+      call builtin.array.push(%31, %37)
+      %38 = call builtin.promise.all_settled(%30, %31)
+      %39 = const c28
+      %40 = const c29
+      %41 = call builtin.promise.then(%38, %39, %40)
+      %42 = const c30
+      %43 = new_array(capacity=4)
+      %44 = const c31
+      %45 = const c32
+      %46 = call builtin.promise.reject_static(%44, %45)
+      call builtin.array.push(%43, %46)
+      %47 = const c33
+      %48 = const c34
+      %49 = call builtin.promise.resolve_static(%47, %48)
+      call builtin.array.push(%43, %49)
+      %50 = call builtin.promise.any(%42, %43)
+      %51 = const c35
+      %52 = const c36
+      %53 = call builtin.promise.then(%50, %51, %52)
+      return
+}

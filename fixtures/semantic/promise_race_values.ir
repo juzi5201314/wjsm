@@ -1,0 +1,65 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = undefined
+    c4 = number(7)
+    c5 = undefined
+    c6 = number(9)
+    c7 = functionref(@0)
+    c8 = undefined
+    c9 = undefined
+    c10 = undefined
+    c11 = number(4)
+    c12 = undefined
+    c13 = number(9)
+    c14 = functionref(@1)
+
+  fn @arrow_0 [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
+    bb0:
+      %0 = load var $1.value
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @arrow_1 [params: $2.$env, $2.$this, $2.reason] [entry=bb0]:
+    bb0:
+      %0 = load var $2.reason
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      %4 = new_array(capacity=4)
+      %5 = const c4
+      call builtin.array.push(%4, %5)
+      %6 = const c5
+      %7 = const c6
+      %8 = call builtin.promise.resolve_static(%6, %7)
+      call builtin.array.push(%4, %8)
+      %9 = call builtin.promise.race(%3, %4)
+      %10 = const c7
+      %11 = const c8
+      %12 = call builtin.promise.then(%9, %10, %11)
+      %13 = const c9
+      %14 = new_array(capacity=4)
+      %15 = const c10
+      %16 = const c11
+      %17 = call builtin.promise.reject_static(%15, %16)
+      call builtin.array.push(%14, %17)
+      %18 = const c12
+      %19 = const c13
+      %20 = call builtin.promise.resolve_static(%18, %19)
+      call builtin.array.push(%14, %20)
+      %21 = call builtin.promise.race(%13, %14)
+      %22 = const c14
+      %23 = call builtin.promise.catch(%21, %22)
+      return
+}

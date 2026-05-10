@@ -62,15 +62,17 @@ pub fn transform_with_prefix(module: &ast::Module, export_prefix: &str) -> ast::
                     ))),
                     is_type_only: false,
                 };
-                new_module.body.push(ast::ModuleItem::ModuleDecl(
-                    ast::ModuleDecl::ExportNamed(ast::NamedExport {
-                        span: DUMMY_SP,
-                        specifiers: vec![ast::ExportSpecifier::Named(export_spec)],
-                        src: None,
-                        type_only: false,
-                        with: None,
-                    }),
-                ));
+                new_module
+                    .body
+                    .push(ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportNamed(
+                        ast::NamedExport {
+                            span: DUMMY_SP,
+                            specifiers: vec![ast::ExportSpecifier::Named(export_spec)],
+                            src: None,
+                            type_only: false,
+                            with: None,
+                        },
+                    )));
             }
         } else {
             // 只有命名导出：生成合成默认导出
@@ -252,17 +254,22 @@ impl CjsTransformer {
                 for s in &block.stmts {
                     self.transform_stmt_into(s, &mut items);
                 }
-                let stmts = items.into_iter().map(|item| match item {
-                    ast::ModuleItem::Stmt(s) => s,
-                    ast::ModuleItem::ModuleDecl(decl) => match decl {
-                        ast::ModuleDecl::ExportDecl(e) => ast::Stmt::Decl(e.decl),
-                        ast::ModuleDecl::ExportDefaultExpr(e) => ast::Stmt::Expr(ast::ExprStmt {
-                            span: DUMMY_SP,
-                            expr: e.expr,
-                        }),
-                        _other => ast::Stmt::Empty(ast::EmptyStmt { span: DUMMY_SP }),
-                    },
-                }).collect();
+                let stmts = items
+                    .into_iter()
+                    .map(|item| match item {
+                        ast::ModuleItem::Stmt(s) => s,
+                        ast::ModuleItem::ModuleDecl(decl) => match decl {
+                            ast::ModuleDecl::ExportDecl(e) => ast::Stmt::Decl(e.decl),
+                            ast::ModuleDecl::ExportDefaultExpr(e) => {
+                                ast::Stmt::Expr(ast::ExprStmt {
+                                    span: DUMMY_SP,
+                                    expr: e.expr,
+                                })
+                            }
+                            _other => ast::Stmt::Empty(ast::EmptyStmt { span: DUMMY_SP }),
+                        },
+                    })
+                    .collect();
                 ast::Stmt::Block(ast::BlockStmt {
                     span: block.span,
                     ctxt: SyntaxContext::default(),
@@ -273,7 +280,10 @@ impl CjsTransformer {
                 span: if_stmt.span,
                 test: Box::new(self.transform_expr(&if_stmt.test)),
                 cons: Box::new(self.transform_stmt(&if_stmt.cons)),
-                alt: if_stmt.alt.as_ref().map(|a| Box::new(self.transform_stmt(a))),
+                alt: if_stmt
+                    .alt
+                    .as_ref()
+                    .map(|a| Box::new(self.transform_stmt(a))),
             }),
             ast::Stmt::While(w) => ast::Stmt::While(ast::WhileStmt {
                 span: w.span,
@@ -315,11 +325,15 @@ impl CjsTransformer {
             ast::Stmt::Switch(sw) => ast::Stmt::Switch(ast::SwitchStmt {
                 span: sw.span,
                 discriminant: Box::new(self.transform_expr(&sw.discriminant)),
-                cases: sw.cases.iter().map(|c| ast::SwitchCase {
-                    span: c.span,
-                    test: c.test.as_ref().map(|e| Box::new(self.transform_expr(e))),
-                    cons: c.cons.iter().map(|s| self.transform_stmt(s)).collect(),
-                }).collect(),
+                cases: sw
+                    .cases
+                    .iter()
+                    .map(|c| ast::SwitchCase {
+                        span: c.span,
+                        test: c.test.as_ref().map(|e| Box::new(self.transform_expr(e))),
+                        cons: c.cons.iter().map(|s| self.transform_stmt(s)).collect(),
+                    })
+                    .collect(),
             }),
             ast::Stmt::Try(tr) => ast::Stmt::Try(Box::new(ast::TryStmt {
                 span: tr.span,
@@ -358,17 +372,20 @@ impl CjsTransformer {
         for s in &block.stmts {
             self.transform_stmt_into(s, &mut items);
         }
-        let stmts = items.into_iter().map(|item| match item {
-            ast::ModuleItem::Stmt(s) => s,
-            ast::ModuleItem::ModuleDecl(decl) => match decl {
-                ast::ModuleDecl::ExportDecl(e) => ast::Stmt::Decl(e.decl),
-                ast::ModuleDecl::ExportDefaultExpr(e) => ast::Stmt::Expr(ast::ExprStmt {
-                    span: DUMMY_SP,
-                    expr: e.expr,
-                }),
-                _ => ast::Stmt::Empty(ast::EmptyStmt { span: DUMMY_SP }),
-            },
-        }).collect();
+        let stmts = items
+            .into_iter()
+            .map(|item| match item {
+                ast::ModuleItem::Stmt(s) => s,
+                ast::ModuleItem::ModuleDecl(decl) => match decl {
+                    ast::ModuleDecl::ExportDecl(e) => ast::Stmt::Decl(e.decl),
+                    ast::ModuleDecl::ExportDefaultExpr(e) => ast::Stmt::Expr(ast::ExprStmt {
+                        span: DUMMY_SP,
+                        expr: e.expr,
+                    }),
+                    _ => ast::Stmt::Empty(ast::EmptyStmt { span: DUMMY_SP }),
+                },
+            })
+            .collect();
         ast::BlockStmt {
             span: block.span,
             ctxt: SyntaxContext::default(),
@@ -449,14 +466,19 @@ impl CjsTransformer {
         }
     }
 
-
     fn try_transform_expr_stmt(&mut self, expr: &ast::Expr) -> Option<Vec<ast::ModuleItem>> {
-        let ast::Expr::Assign(assign) = expr else { return None };
+        let ast::Expr::Assign(assign) = expr else {
+            return None;
+        };
         if assign.op != ast::AssignOp::Assign {
             return None;
         }
-        let ast::AssignTarget::Simple(simple) = &assign.left else { return None };
-        let ast::SimpleAssignTarget::Member(member) = simple else { return None };
+        let ast::AssignTarget::Simple(simple) = &assign.left else {
+            return None;
+        };
+        let ast::SimpleAssignTarget::Member(member) = simple else {
+            return None;
+        };
 
         // module.exports = value → export default value
         if is_module_exports_member_no_prop(&member.obj, &member.prop) {
@@ -590,15 +612,13 @@ impl CjsTransformer {
             ast::Expr::Assign(assign) => {
                 let new_left = match &assign.left {
                     ast::AssignTarget::Simple(simple) => match simple {
-                        ast::SimpleAssignTarget::Member(m) => {
-                            ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(
-                                ast::MemberExpr {
-                                    span: m.span,
-                                    obj: Box::new(self.transform_expr(&m.obj)),
-                                    prop: m.prop.clone(),
-                                },
-                            ))
-                        }
+                        ast::SimpleAssignTarget::Member(m) => ast::AssignTarget::Simple(
+                            ast::SimpleAssignTarget::Member(ast::MemberExpr {
+                                span: m.span,
+                                obj: Box::new(self.transform_expr(&m.obj)),
+                                prop: m.prop.clone(),
+                            }),
+                        ),
                         other => ast::AssignTarget::Simple(other.clone()),
                     },
                     ast::AssignTarget::Pat(pat) => ast::AssignTarget::Pat(pat.clone()),
@@ -618,39 +638,53 @@ impl CjsTransformer {
             }),
             ast::Expr::Seq(seq) => ast::Expr::Seq(ast::SeqExpr {
                 span: seq.span,
-                exprs: seq.exprs.iter().map(|e| Box::new(self.transform_expr(e))).collect(),
+                exprs: seq
+                    .exprs
+                    .iter()
+                    .map(|e| Box::new(self.transform_expr(e)))
+                    .collect(),
             }),
             ast::Expr::Array(arr) => ast::Expr::Array(ast::ArrayLit {
                 span: arr.span,
-                elems: arr.elems.iter().map(|elem| {
-                    elem.as_ref().map(|e| ast::ExprOrSpread {
-                        spread: e.spread,
-                        expr: Box::new(self.transform_expr(&e.expr)),
+                elems: arr
+                    .elems
+                    .iter()
+                    .map(|elem| {
+                        elem.as_ref().map(|e| ast::ExprOrSpread {
+                            spread: e.spread,
+                            expr: Box::new(self.transform_expr(&e.expr)),
+                        })
                     })
-                }).collect(),
+                    .collect(),
             }),
             ast::Expr::Object(obj) => ast::Expr::Object(ast::ObjectLit {
                 span: obj.span,
-                props: obj.props.iter().map(|prop| match prop {
-                    ast::PropOrSpread::Prop(prop) => {
-                        ast::PropOrSpread::Prop(Box::new(match prop.as_ref() {
-                            ast::Prop::KeyValue(kv) => ast::Prop::KeyValue(ast::KeyValueProp {
-                                key: kv.key.clone(),
-                                value: Box::new(self.transform_expr(&kv.value)),
-                            }),
-                            ast::Prop::Assign(a) => ast::Prop::Assign(ast::AssignProp {
-                                span: a.span,
-                                key: a.key.clone(),
-                                value: Box::new(self.transform_expr(&a.value)),
-                            }),
-                            other => other.clone(),
-                        }))
-                    }
-                    ast::PropOrSpread::Spread(s) => ast::PropOrSpread::Spread(ast::SpreadElement {
-                        dot3_token: s.dot3_token,
-                        expr: Box::new(self.transform_expr(&s.expr)),
-                    }),
-                }).collect(),
+                props: obj
+                    .props
+                    .iter()
+                    .map(|prop| match prop {
+                        ast::PropOrSpread::Prop(prop) => {
+                            ast::PropOrSpread::Prop(Box::new(match prop.as_ref() {
+                                ast::Prop::KeyValue(kv) => ast::Prop::KeyValue(ast::KeyValueProp {
+                                    key: kv.key.clone(),
+                                    value: Box::new(self.transform_expr(&kv.value)),
+                                }),
+                                ast::Prop::Assign(a) => ast::Prop::Assign(ast::AssignProp {
+                                    span: a.span,
+                                    key: a.key.clone(),
+                                    value: Box::new(self.transform_expr(&a.value)),
+                                }),
+                                other => other.clone(),
+                            }))
+                        }
+                        ast::PropOrSpread::Spread(s) => {
+                            ast::PropOrSpread::Spread(ast::SpreadElement {
+                                dot3_token: s.dot3_token,
+                                expr: Box::new(self.transform_expr(&s.expr)),
+                            })
+                        }
+                    })
+                    .collect(),
             }),
             ast::Expr::Arrow(arrow) => ast::Expr::Arrow(ast::ArrowExpr {
                 span: arrow.span,
@@ -660,9 +694,9 @@ impl CjsTransformer {
                     ast::BlockStmtOrExpr::BlockStmt(block) => {
                         Box::new(ast::BlockStmtOrExpr::BlockStmt(self.transform_block(block)))
                     }
-                    ast::BlockStmtOrExpr::Expr(expr) => {
-                        Box::new(ast::BlockStmtOrExpr::Expr(Box::new(self.transform_expr(expr))))
-                    }
+                    ast::BlockStmtOrExpr::Expr(expr) => Box::new(ast::BlockStmtOrExpr::Expr(
+                        Box::new(self.transform_expr(expr)),
+                    )),
                 },
                 is_async: arrow.is_async,
                 is_generator: arrow.is_generator,
@@ -675,7 +709,11 @@ impl CjsTransformer {
             }),
             ast::Expr::Tpl(tpl) => ast::Expr::Tpl(ast::Tpl {
                 span: tpl.span,
-                exprs: tpl.exprs.iter().map(|e| Box::new(self.transform_expr(e))).collect(),
+                exprs: tpl
+                    .exprs
+                    .iter()
+                    .map(|e| Box::new(self.transform_expr(e)))
+                    .collect(),
                 quasis: tpl.quasis.clone(),
             }),
             ast::Expr::OptChain(oc) => ast::Expr::OptChain(ast::OptChainExpr {
@@ -691,10 +729,14 @@ impl CjsTransformer {
                         span: c.span,
                         ctxt: SyntaxContext::default(),
                         callee: Box::new(self.transform_expr(&c.callee)),
-                        args: c.args.iter().map(|a| ast::ExprOrSpread {
-                            spread: a.spread,
-                            expr: Box::new(self.transform_expr(&a.expr)),
-                        }).collect(),
+                        args: c
+                            .args
+                            .iter()
+                            .map(|a| ast::ExprOrSpread {
+                                spread: a.spread,
+                                expr: Box::new(self.transform_expr(&a.expr)),
+                            })
+                            .collect(),
                         type_args: c.type_args.clone(),
                     }),
                 }),
@@ -704,10 +746,12 @@ impl CjsTransformer {
                 ctxt: SyntaxContext::default(),
                 callee: Box::new(self.transform_expr(&ne.callee)),
                 args: ne.args.as_ref().map(|args| {
-                    args.iter().map(|a| ast::ExprOrSpread {
-                        spread: a.spread,
-                        expr: Box::new(self.transform_expr(&a.expr)),
-                    }).collect()
+                    args.iter()
+                        .map(|a| ast::ExprOrSpread {
+                            spread: a.spread,
+                            expr: Box::new(self.transform_expr(&a.expr)),
+                        })
+                        .collect()
                 }),
                 type_args: ne.type_args.clone(),
             }),
@@ -739,7 +783,12 @@ impl CjsTransformer {
                 tag: Box::new(self.transform_expr(&t.tag)),
                 tpl: Box::new(ast::Tpl {
                     span: t.tpl.span,
-                    exprs: t.tpl.exprs.iter().map(|e| Box::new(self.transform_expr(e))).collect(),
+                    exprs: t
+                        .tpl
+                        .exprs
+                        .iter()
+                        .map(|e| Box::new(self.transform_expr(e)))
+                        .collect(),
                     quasis: t.tpl.quasis.clone(),
                 }),
                 type_params: t.type_params.clone(),
@@ -962,37 +1011,58 @@ mod tests {
     fn transforms_require() {
         let module = parse(r#"const foo = require('./foo'); console.log(foo);"#);
         let transformed = transform(&module);
-        assert!(has_import_decl(&transformed), "transformed module should have default import decl");
+        assert!(
+            has_import_decl(&transformed),
+            "transformed module should have default import decl"
+        );
     }
 
     #[test]
     fn transforms_module_exports() {
         let module = parse(r#"module.exports.foo = 42;"#);
         let transformed = transform(&module);
-        assert!(has_let_decl(&transformed), "transformed module should have let decl");
-        assert!(has_default_export(&transformed), "transformed module should have synthetic default export");
+        assert!(
+            has_let_decl(&transformed),
+            "transformed module should have let decl"
+        );
+        assert!(
+            has_default_export(&transformed),
+            "transformed module should have synthetic default export"
+        );
     }
 
     #[test]
     fn transforms_exports_alias() {
         let module = parse(r#"exports.bar = 42;"#);
         let transformed = transform(&module);
-        assert!(has_let_decl(&transformed), "transformed module should have let decl");
-        assert!(has_default_export(&transformed), "transformed module should have synthetic default export");
+        assert!(
+            has_let_decl(&transformed),
+            "transformed module should have let decl"
+        );
+        assert!(
+            has_default_export(&transformed),
+            "transformed module should have synthetic default export"
+        );
     }
 
     #[test]
     fn transforms_module_exports_default() {
         let module = parse(r#"module.exports = { foo: 1 };"#);
         let transformed = transform(&module);
-        assert!(has_default_export(&transformed), "transformed module should have default export");
+        assert!(
+            has_default_export(&transformed),
+            "transformed module should have default export"
+        );
     }
 
     #[test]
     fn require_direct_import_uses_user_var_name() {
         let module = parse(r#"const lib = require('./lib'); console.log(lib);"#);
         let transformed = transform(&module);
-        assert!(has_import_with_local(&transformed, "lib"), "import should use user variable name 'lib'");
+        assert!(
+            has_import_with_local(&transformed, "lib"),
+            "import should use user variable name 'lib'"
+        );
         let has_const_lib = transformed.body.iter().any(|item| {
             if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
                 var.decls.iter().any(|d| {
@@ -1006,7 +1076,10 @@ mod tests {
                 false
             }
         });
-        assert!(!has_const_lib, "should not have const lib = ... declaration");
+        assert!(
+            !has_const_lib,
+            "should not have const lib = ... declaration"
+        );
     }
 
     #[test]
@@ -1046,27 +1119,51 @@ mod tests {
                 false
             }
         });
-        assert!(has_prefixed_var, "should have prefixed variable name _1___cjs_foo");
+        assert!(
+            has_prefixed_var,
+            "should have prefixed variable name _1___cjs_foo"
+        );
     }
 
     #[test]
     fn transform_skips_synthetic_default_when_has_default() {
         let module = parse(r#"module.exports = { foo: 1 }; module.exports.bar = 2;"#);
         let transformed = transform(&module);
-        let default_export_count = transformed.body.iter().filter(|item| {
-            matches!(item, ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(_)))
-        }).count();
-        assert_eq!(default_export_count, 1, "should have exactly one default export");
+        let default_export_count = transformed
+            .body
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(_))
+                )
+            })
+            .count();
+        assert_eq!(
+            default_export_count, 1,
+            "should have exactly one default export"
+        );
     }
 
     #[test]
     fn multiple_require_same_specifier_uses_first() {
-        let module = parse(r#"const a = require('./foo'); const b = require('./foo'); console.log(a, b);"#);
+        let module =
+            parse(r#"const a = require('./foo'); const b = require('./foo'); console.log(a, b);"#);
         let transformed = transform(&module);
-        let import_count = transformed.body.iter().filter(|item| {
-            matches!(item, ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(_)))
-        }).count();
-        assert_eq!(import_count, 1, "same specifier should produce only one import");
+        let import_count = transformed
+            .body
+            .iter()
+            .filter(|item| {
+                matches!(
+                    item,
+                    ast::ModuleItem::ModuleDecl(ast::ModuleDecl::Import(_))
+                )
+            })
+            .count();
+        assert_eq!(
+            import_count, 1,
+            "same specifier should produce only one import"
+        );
     }
 
     #[test]
@@ -1086,59 +1183,85 @@ mod tests {
                 false
             }
         });
-        assert!(has_auto_import, "non-var require should generate __cjs_req_N import");
+        assert!(
+            has_auto_import,
+            "non-var require should generate __cjs_req_N import"
+        );
     }
 
     #[test]
     fn non_assign_expr_stmt_not_transformed() {
         let module = parse(r#"console.log(1);"#);
         let transformed = transform(&module);
-        let has_expr_stmt = transformed.body.iter().any(|item| {
-            matches!(item, ast::ModuleItem::Stmt(ast::Stmt::Expr(_)))
-        });
-        assert!(has_expr_stmt, "non-assign expression statement should be preserved");
+        let has_expr_stmt = transformed
+            .body
+            .iter()
+            .any(|item| matches!(item, ast::ModuleItem::Stmt(ast::Stmt::Expr(_))));
+        assert!(
+            has_expr_stmt,
+            "non-assign expression statement should be preserved"
+        );
     }
 
     #[test]
     fn compound_assign_not_transformed() {
         let module = parse(r#"let x = 1; x += 2;"#);
         let transformed = transform(&module);
-        assert!(!has_default_export(&transformed), "compound assignment should not produce default export");
+        assert!(
+            !has_default_export(&transformed),
+            "compound assignment should not produce default export"
+        );
     }
 
     #[test]
     fn non_member_assign_not_transformed() {
         let module = parse(r#"let x = 1; x = 2;"#);
         let transformed = transform(&module);
-        assert!(!has_default_export(&transformed), "simple assignment should not produce default export");
+        assert!(
+            !has_default_export(&transformed),
+            "simple assignment should not produce default export"
+        );
     }
 
     #[test]
     fn computed_string_property_exports() {
         let module = parse(r#"exports['foo'] = 42;"#);
         let transformed = transform(&module);
-        assert!(has_let_decl(&transformed), "computed string property should produce let decl");
-        assert!(has_default_export(&transformed), "computed string property should produce synthetic default export");
+        assert!(
+            has_let_decl(&transformed),
+            "computed string property should produce let decl"
+        );
+        assert!(
+            has_default_export(&transformed),
+            "computed string property should produce synthetic default export"
+        );
     }
 
     #[test]
     fn computed_non_string_property_not_transformed() {
         let module = parse(r#"let key = 'foo'; exports[key] = 42;"#);
         let transformed = transform(&module);
-        let cjs_let_count = transformed.body.iter().filter(|item| {
-            if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
-                var.decls.iter().any(|d| {
-                    if let ast::Pat::Ident(b) = &d.name {
-                        b.id.sym.as_ref().starts_with("__cjs_")
-                    } else {
-                        false
-                    }
-                })
-            } else {
-                false
-            }
-        }).count();
-        assert_eq!(cjs_let_count, 0, "non-string computed property should not produce __cjs_ let decl");
+        let cjs_let_count = transformed
+            .body
+            .iter()
+            .filter(|item| {
+                if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
+                    var.decls.iter().any(|d| {
+                        if let ast::Pat::Ident(b) = &d.name {
+                            b.id.sym.as_ref().starts_with("__cjs_")
+                        } else {
+                            false
+                        }
+                    })
+                } else {
+                    false
+                }
+            })
+            .count();
+        assert_eq!(
+            cjs_let_count, 0,
+            "non-string computed property should not produce __cjs_ let decl"
+        );
     }
 
     #[test]
@@ -1160,7 +1283,10 @@ mod tests {
         let module = parse(r#"let x = 1; x++; console.log(x);"#);
         let transformed = transform(&module);
         let has_var = transformed.body.iter().any(|item| {
-            matches!(item, ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(_))))
+            matches!(
+                item,
+                ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(_)))
+            )
         });
         assert!(has_var);
     }
@@ -1265,7 +1391,9 @@ mod tests {
 
     #[test]
     fn transform_expr_handles_tagged_template() {
-        let module = parse(r#"const x = require('./foo'); function tag(t, v) { return v; } console.log(tag`${x}`);"#);
+        let module = parse(
+            r#"const x = require('./foo'); function tag(t, v) { return v; } console.log(tag`${x}`);"#,
+        );
         let transformed = transform(&module);
         assert!(has_import_decl(&transformed));
     }
@@ -1286,7 +1414,9 @@ mod tests {
 
     #[test]
     fn transform_stmt_handles_if_with_else() {
-        let module = parse(r#"const x = require('./foo'); if (true) { console.log(x); } else { console.log(x); }"#);
+        let module = parse(
+            r#"const x = require('./foo'); if (true) { console.log(x); } else { console.log(x); }"#,
+        );
         let transformed = transform(&module);
         assert!(has_import_decl(&transformed));
     }
@@ -1300,28 +1430,34 @@ mod tests {
 
     #[test]
     fn transform_stmt_handles_for() {
-        let module = parse(r#"const x = require('./foo'); for (let i = 0; i < 1; i++) { console.log(x); }"#);
+        let module =
+            parse(r#"const x = require('./foo'); for (let i = 0; i < 1; i++) { console.log(x); }"#);
         let transformed = transform(&module);
         assert!(has_import_decl(&transformed));
     }
 
     #[test]
     fn transform_stmt_handles_switch() {
-        let module = parse(r#"const x = require('./foo'); switch (1) { case 1: console.log(x); break; }"#);
+        let module =
+            parse(r#"const x = require('./foo'); switch (1) { case 1: console.log(x); break; }"#);
         let transformed = transform(&module);
         assert!(has_import_decl(&transformed));
     }
 
     #[test]
     fn transform_stmt_handles_try_catch() {
-        let module = parse(r#"const x = require('./foo'); try { console.log(x); } catch (e) { console.log(e); }"#);
+        let module = parse(
+            r#"const x = require('./foo'); try { console.log(x); } catch (e) { console.log(e); }"#,
+        );
         let transformed = transform(&module);
         assert!(has_import_decl(&transformed));
     }
 
     #[test]
     fn transform_stmt_handles_try_finally() {
-        let module = parse(r#"const x = require('./foo'); try { console.log(x); } finally { console.log(x); }"#);
+        let module = parse(
+            r#"const x = require('./foo'); try { console.log(x); } finally { console.log(x); }"#,
+        );
         let transformed = transform(&module);
         assert!(has_import_decl(&transformed));
     }
@@ -1369,25 +1505,29 @@ mod tests {
 
     #[test]
     fn is_module_exports_member_returns_false_for_non_member() {
-        assert!(!is_module_exports_member(&ast::Expr::Ident(ast::Ident::new(
-            "module".into(), DUMMY_SP, SyntaxContext::default(),
-        ))));
+        assert!(!is_module_exports_member(&ast::Expr::Ident(
+            ast::Ident::new("module".into(), DUMMY_SP, SyntaxContext::default(),)
+        )));
     }
 
     #[test]
     fn is_exports_member_returns_false_for_non_member() {
         assert!(!is_exports_member(&ast::Expr::Ident(ast::Ident::new(
-            "exports".into(), DUMMY_SP, SyntaxContext::default(),
+            "exports".into(),
+            DUMMY_SP,
+            SyntaxContext::default(),
         ))));
     }
 
     #[test]
     fn is_exports_ident_returns_false_for_non_ident() {
-        assert!(!is_exports_ident(&ast::Expr::Lit(ast::Lit::Num(ast::Number {
-            span: DUMMY_SP,
-            value: 1.0,
-            raw: None,
-        }))));
+        assert!(!is_exports_ident(&ast::Expr::Lit(ast::Lit::Num(
+            ast::Number {
+                span: DUMMY_SP,
+                value: 1.0,
+                raw: None,
+            }
+        ))));
     }
 
     #[test]
@@ -1399,7 +1539,11 @@ mod tests {
 
     #[test]
     fn is_module_exports_member_no_prop_returns_false_for_non_ident_prop() {
-        let obj = ast::Expr::Ident(ast::Ident::new("module".into(), DUMMY_SP, SyntaxContext::default()));
+        let obj = ast::Expr::Ident(ast::Ident::new(
+            "module".into(),
+            DUMMY_SP,
+            SyntaxContext::default(),
+        ));
         let prop = ast::MemberProp::Computed(ast::ComputedPropName {
             span: DUMMY_SP,
             expr: Box::new(ast::Expr::Lit(ast::Lit::Str(ast::Str {
@@ -1427,9 +1571,10 @@ mod tests {
     fn transform_expr_handles_assign_pat_target() {
         let module = parse(r#"let x; ({x} = {x: 1}); console.log(x);"#);
         let transformed = transform(&module);
-        let has_expr = transformed.body.iter().any(|item| {
-            matches!(item, ast::ModuleItem::Stmt(ast::Stmt::Expr(_)))
-        });
+        let has_expr = transformed
+            .body
+            .iter()
+            .any(|item| matches!(item, ast::ModuleItem::Stmt(ast::Stmt::Expr(_))));
         assert!(has_expr);
     }
 
@@ -1445,7 +1590,10 @@ mod tests {
         let module = parse(r#"function foo() {} module.exports.bar = 1;"#);
         let transformed = transform(&module);
         let has_fn_decl = transformed.body.iter().any(|item| {
-            matches!(item, ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(_))))
+            matches!(
+                item,
+                ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(_)))
+            )
         });
         assert!(has_fn_decl, "function declaration should be preserved");
     }
@@ -1532,7 +1680,10 @@ mod tests {
         let module = parse(r#"class A { constructor() { super(); } }"#);
         let transformed = transform(&module);
         let has_class = transformed.body.iter().any(|item| {
-            matches!(item, ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(_))))
+            matches!(
+                item,
+                ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(_)))
+            )
         });
         assert!(has_class);
     }
@@ -1543,17 +1694,22 @@ mod tests {
     /// 预期行为：const x = require('./foo') 被移除，x 引用导入的标识符
     #[test]
     fn require_in_fn_expr_body_is_transformed() {
-        let module = parse(r#"
+        let module = parse(
+            r#"
             const fn = function() {
                 const x = require('./foo');
                 return x;
             };
-        "#);
+        "#,
+        );
         let transformed = transform(&module);
-        
+
         // 应该有 import 声明
-        assert!(has_import_decl(&transformed), "should have import declaration");
-        
+        assert!(
+            has_import_decl(&transformed),
+            "should have import declaration"
+        );
+
         // 验证函数体内没有 require() 调用（var decl 被移除或转换）
         let fn_body_ok = transformed.body.iter().any(|item| {
             if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
@@ -1570,9 +1726,15 @@ mod tests {
                                                     if b.id.sym == "x" {
                                                         // 如果有 const x = ...，检查初始化器不是 require()
                                                         if let Some(init) = &d.init {
-                                                            if let ast::Expr::Call(call) = init.as_ref() {
-                                                                if let ast::Callee::Expr(callee) = &call.callee {
-                                                                    if let ast::Expr::Ident(id) = callee.as_ref() {
+                                                            if let ast::Expr::Call(call) =
+                                                                init.as_ref()
+                                                            {
+                                                                if let ast::Callee::Expr(callee) =
+                                                                    &call.callee
+                                                                {
+                                                                    if let ast::Expr::Ident(id) =
+                                                                        callee.as_ref()
+                                                                    {
                                                                         if id.sym == "require" {
                                                                             return false; // require() 未被转换
                                                                         }
@@ -1594,22 +1756,30 @@ mod tests {
             }
             false
         });
-        assert!(fn_body_ok, "require() in function expression body should be transformed");
+        assert!(
+            fn_body_ok,
+            "require() in function expression body should be transformed"
+        );
     }
 
     /// 测试 require() 在函数声明体内被正确处理
     /// 预期行为：const x = require('./foo') 被移除，x 引用导入的标识符
     #[test]
     fn require_in_fn_decl_body_is_transformed() {
-        let module = parse(r#"
+        let module = parse(
+            r#"
             function fn() {
                 const x = require('./foo');
                 return x;
             }
-        "#);
+        "#,
+        );
         let transformed = transform(&module);
-        assert!(has_import_decl(&transformed), "should have import declaration");
-        
+        assert!(
+            has_import_decl(&transformed),
+            "should have import declaration"
+        );
+
         // 验证函数声明体内没有 require() 调用
         let fn_body_ok = transformed.body.iter().any(|item| {
             if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(fn_decl))) = item {
@@ -1622,8 +1792,11 @@ mod tests {
                                         if b.id.sym == "x" {
                                             if let Some(init) = &d.init {
                                                 if let ast::Expr::Call(call) = init.as_ref() {
-                                                    if let ast::Callee::Expr(callee) = &call.callee {
-                                                        if let ast::Expr::Ident(id) = callee.as_ref() {
+                                                    if let ast::Callee::Expr(callee) = &call.callee
+                                                    {
+                                                        if let ast::Expr::Ident(id) =
+                                                            callee.as_ref()
+                                                        {
                                                             if id.sym == "require" {
                                                                 return false;
                                                             }
@@ -1642,24 +1815,32 @@ mod tests {
             }
             false
         });
-        assert!(fn_body_ok, "require() in function declaration body should be transformed");
+        assert!(
+            fn_body_ok,
+            "require() in function declaration body should be transformed"
+        );
     }
 
     /// 测试 require() 在类方法体内被正确处理
     /// 预期行为：const x = require('./foo') 被移除，x 引用导入的标识符
     #[test]
     fn require_in_class_method_body_is_transformed() {
-        let module = parse(r#"
+        let module = parse(
+            r#"
             class MyClass {
                 method() {
                     const x = require('./foo');
                     return x;
                 }
             }
-        "#);
+        "#,
+        );
         let transformed = transform(&module);
-        assert!(has_import_decl(&transformed), "should have import declaration");
-        
+        assert!(
+            has_import_decl(&transformed),
+            "should have import declaration"
+        );
+
         // 验证类方法体内没有 require() 调用
         let method_body_ok = transformed.body.iter().any(|item| {
             if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(class_decl))) = item {
@@ -1673,9 +1854,14 @@ mod tests {
                                             if let ast::Pat::Ident(b) = &d.name {
                                                 if b.id.sym == "x" {
                                                     if let Some(init) = &d.init {
-                                                        if let ast::Expr::Call(call) = init.as_ref() {
-                                                            if let ast::Callee::Expr(callee) = &call.callee {
-                                                                if let ast::Expr::Ident(id) = callee.as_ref() {
+                                                        if let ast::Expr::Call(call) = init.as_ref()
+                                                        {
+                                                            if let ast::Callee::Expr(callee) =
+                                                                &call.callee
+                                                            {
+                                                                if let ast::Expr::Ident(id) =
+                                                                    callee.as_ref()
+                                                                {
                                                                     if id.sym == "require" {
                                                                         return false;
                                                                     }
@@ -1696,47 +1882,70 @@ mod tests {
             }
             false
         });
-        assert!(method_body_ok, "require() in class method body should be transformed");
+        assert!(
+            method_body_ok,
+            "require() in class method body should be transformed"
+        );
     }
 
     /// 测试 module.exports = X 后 module.exports.y = Z 同时导出两者
     #[test]
     fn module_exports_default_and_named_both_exported() {
-        let module = parse(r#"
+        let module = parse(
+            r#"
             module.exports = function() { return 42; };
             module.exports.VERSION = '1.0';
-        "#);
+        "#,
+        );
         let transformed = transform(&module);
-        
+
         // 应该有默认导出
         let has_default = transformed.body.iter().any(|item| {
-            matches!(item, ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(_)))
+            matches!(
+                item,
+                ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDefaultExpr(_))
+            )
         });
         assert!(has_default, "should have default export");
-        
+
         // 应该有命名导出（VERSION）
         let has_named = transformed.body.iter().any(|item| {
             if let ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportNamed(named)) = item {
                 named.specifiers.iter().any(|s| {
                     if let ast::ExportSpecifier::Named(n) = s {
-                        n.exported.as_ref().map(|e| {
-                            if let ast::ModuleExportName::Ident(id) = e { id.sym == "VERSION" } else { false }
-                        }).unwrap_or(false)
-                    } else { false }
+                        n.exported
+                            .as_ref()
+                            .map(|e| {
+                                if let ast::ModuleExportName::Ident(id) = e {
+                                    id.sym == "VERSION"
+                                } else {
+                                    false
+                                }
+                            })
+                            .unwrap_or(false)
+                    } else {
+                        false
+                    }
                 })
-            } else { false }
+            } else {
+                false
+            }
         });
         assert!(has_named, "should have named export for VERSION");
-        
+
         // VERSION 变量应该存在
         let has_version_var = transformed.body.iter().any(|item| {
             if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
                 var.decls.iter().any(|d| {
                     if let ast::Pat::Ident(b) = &d.name {
                         b.id.sym.contains("VERSION")
-                    } else { false }
+                    } else {
+                        false
+                    }
                 })
-            } else { false }
+            } else {
+                false
+            }
         });
         assert!(has_version_var, "VERSION variable should exist");
     }

@@ -23,6 +23,34 @@ pub fn parse_module(source: &str) -> Result<swc_ast::Module> {
         .parse_module()
         .map_err(|error| anyhow::anyhow!("Parse error: {:?}", error))
 }
+/// 以 Script 模式解析源码并转换为 Module。
+/// Script 模式下 `await` 在非 async 上下文中是合法标识符，
+/// 适用于 test262 等需要严格 ECMAScript 合规性的场景。
+pub fn parse_script_as_module(source: &str) -> Result<swc_ast::Module> {
+    let cm: Lrc<SourceMap> = Default::default();
+    let fm = cm.new_source_file(
+        FileName::Custom("input.js".into()).into(),
+        source.to_string(),
+    );
+
+    let lexer = Lexer::new(
+        Syntax::Es(Default::default()),
+        Default::default(),
+        StringInput::from(&*fm),
+        None,
+    );
+
+    let mut parser = Parser::new_from(lexer);
+    let script = parser
+        .parse_script()
+        .map_err(|error| anyhow::anyhow!("Parse error: {:?}", error))?;
+
+    Ok(swc_ast::Module {
+        span: script.span,
+        body: script.body.into_iter().map(swc_ast::ModuleItem::Stmt).collect(),
+        shebang: script.shebang,
+    })
+}
 
 #[cfg(test)]
 mod tests {

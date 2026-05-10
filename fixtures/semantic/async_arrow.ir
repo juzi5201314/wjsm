@@ -1,0 +1,111 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(0)
+    c4 = number(1)
+    c5 = number(2)
+    c6 = number(3)
+    c7 = number(4)
+    c8 = number(5)
+    c9 = functionref(@0)
+    c10 = number(6)
+    c11 = number(2)
+    c12 = number(3)
+    c13 = undefined
+    c14 = number(4)
+    c15 = number(5)
+    c16 = number(0)
+    c17 = undefined
+    c18 = bool(false)
+    c19 = functionref(@1)
+    c20 = undefined
+    c21 = number(10)
+    c22 = number(20)
+    c23 = functionref(@2)
+    c24 = undefined
+
+  fn @arrow_0$async [params: $1.$env, $1.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $1.$env
+      %1 = const c3
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $1.$state, %2
+      %3 = const c4
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $1.$is_rejected, %4
+      %5 = load var $1.$this
+      store var $1.$resume_val, %5
+      %6 = const c5
+      %7 = call builtin.continuation.load_var(%0, %6)
+      store var $1.$promise, %7
+      %8 = const c6
+      %9 = call builtin.continuation.load_var(%0, %8)
+      store var $1.$closure_env, %9
+      %10 = const c7
+      %11 = call builtin.continuation.load_var(%0, %10)
+      store var $1.a, %11
+      %12 = const c8
+      %13 = call builtin.continuation.load_var(%0, %12)
+      store var $1.b, %13
+      jump bb1
+    bb1:
+      jump bb2
+    bb2:
+      %14 = load var $1.a
+      %15 = load var $1.b
+      %16 = add %14, %15
+      %17 = load var $1.$promise
+      promise_resolve %17, %16
+      return
+
+  fn @arrow_0 [params: $2.$env, $2.$this, $2.a, $2.b] [entry=bb0]:
+    bb0:
+      %0 = new_promise
+      %1 = const c9
+      %2 = const c10
+      %3 = call builtin.continuation.create(%1, %0, %2)
+      %4 = const c11
+      call builtin.continuation.save_var(%3, %4, %0)
+      %5 = const c12
+      %6 = const c13
+      call builtin.continuation.save_var(%3, %5, %6)
+      %7 = load var $2.a
+      %8 = const c14
+      call builtin.continuation.save_var(%3, %8, %7)
+      %9 = load var $2.b
+      %10 = const c15
+      call builtin.continuation.save_var(%3, %10, %9)
+      %11 = const c16
+      %12 = const c17
+      %13 = const c18
+      call builtin.async_function.resume(%1, %3, %11, %12, %13)
+      return %0
+
+  fn @arrow_2 [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
+    bb0:
+      %0 = load var $3.v
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c19
+      store var $0.add, %3
+      %4 = const c20
+      %5 = load var $0.add
+      %6 = const c21
+      %7 = const c22
+      %8 = call %5, this=%4, args=[%6, %7]
+      %9 = const c23
+      %10 = const c24
+      %11 = call builtin.promise.then(%8, %9, %10)
+      return
+}

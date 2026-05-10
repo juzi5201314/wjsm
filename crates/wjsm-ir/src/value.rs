@@ -23,6 +23,7 @@ pub const TAG_CLOSURE: u64 = 0xA;
 
 pub const TAG_ARRAY: u64 = 0xB;
 pub const TAG_BOUND: u64 = 0xC;
+pub const TAG_NATIVE_CALLABLE: u64 = 0x0;
 
 // ── BigInt value ─────────────────────────────────────────────────────
 
@@ -75,7 +76,6 @@ pub fn is_symbol(val: i64) -> bool {
 pub fn decode_symbol_handle(val: i64) -> u32 {
     (val as u64 & 0xFFFF_FFFF) as u32
 }
-
 
 pub fn is_array(val: i64) -> bool {
     let uval = val as u64;
@@ -306,9 +306,9 @@ pub fn decode_closure_idx(val: i64) -> u32 {
     (val as u64 & 0xFFFF_FFFF) as u32
 }
 
-/// 闭包或函数值均可调用，统一判断
+/// 闭包、函数、绑定函数或运行时原生函数均可调用，统一判断。
 pub fn is_callable(val: i64) -> bool {
-    is_function(val) || is_closure(val) || is_bound(val)
+    is_function(val) || is_closure(val) || is_bound(val) || is_native_callable(val)
 }
 
 // ── Bound function ────────────────────────────────────────────────────
@@ -324,5 +324,20 @@ pub fn is_bound(val: i64) -> bool {
 }
 
 pub fn decode_bound_idx(val: i64) -> u32 {
+    (val as u64 & 0xFFFF_FFFF) as u32
+}
+
+// ── Native callable ───────────────────────────────────────────────────
+
+pub fn encode_native_callable_idx(idx: u32) -> i64 {
+    encode_handle(TAG_NATIVE_CALLABLE, idx)
+}
+
+pub fn is_native_callable(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_NATIVE_CALLABLE
+}
+
+pub fn decode_native_callable_idx(val: i64) -> u32 {
     (val as u64 & 0xFFFF_FFFF) as u32
 }

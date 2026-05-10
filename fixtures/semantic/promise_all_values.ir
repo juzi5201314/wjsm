@@ -1,0 +1,56 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = undefined
+    c4 = number(1)
+    c5 = undefined
+    c6 = number(2)
+    c7 = number(3)
+    c8 = number(0)
+    c9 = number(1)
+    c10 = number(2)
+    c11 = functionref(@0)
+    c12 = undefined
+
+  fn @arrow_0 [params: $1.$env, $1.$this, $1.values] [entry=bb0]:
+    bb0:
+      %0 = load var $1.values
+      %1 = const c8
+      %2 = get_elem %0, %1
+      %3 = load var $1.values
+      %4 = const c9
+      %5 = get_elem %3, %4
+      %6 = add %2, %5
+      %7 = load var $1.values
+      %8 = const c10
+      %9 = get_elem %7, %8
+      %10 = add %6, %9
+      %11 = call builtin.console.log(%10)
+      return %11
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      %4 = new_array(capacity=4)
+      %5 = const c4
+      call builtin.array.push(%4, %5)
+      %6 = const c5
+      %7 = const c6
+      %8 = call builtin.promise.resolve_static(%6, %7)
+      call builtin.array.push(%4, %8)
+      %9 = const c7
+      call builtin.array.push(%4, %9)
+      %10 = call builtin.promise.all(%3, %4)
+      %11 = const c11
+      %12 = const c12
+      %13 = call builtin.promise.then(%10, %11, %12)
+      return
+}

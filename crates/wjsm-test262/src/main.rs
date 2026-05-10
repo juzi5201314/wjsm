@@ -63,9 +63,7 @@ fn main() -> Result<()> {
             plain,
             no_parallel,
             verbose,
-        } => {
-            run_test262(suite, all, json, plain, !no_parallel, verbose)
-        }
+        } => run_test262(suite, all, json, plain, !no_parallel, verbose),
     }
 }
 
@@ -122,7 +120,9 @@ fn run_test262(
         println!("Running tests...");
     }
 
-    let results = exec::run_suite(&suite, &harness, parallel, &|test| should_run_test(test, all));
+    let results = exec::run_suite(&suite, &harness, parallel, &|test| {
+        should_run_test(test, all)
+    });
 
     // 输出结果
     if let Some(json_path) = json_output {
@@ -164,10 +164,7 @@ fn print_plain_results(results: &SuiteResults) {
     println!("  Failed:  {}", stats.failed.to_string().red());
     println!("  Ignored: {}", stats.ignored.to_string().yellow());
     println!("  Errors:  {}", stats.errors.to_string().red().bold());
-    println!(
-        "  Rate:    {:.2}%",
-        stats.conformance_rate()
-    );
+    println!("  Rate:    {:.2}%", stats.conformance_rate());
     println!("  Time:    {:.2}s", results.duration.as_secs_f64());
 
     if !results.failures.is_empty() {
@@ -190,12 +187,27 @@ fn print_table_results(results: &SuiteResults) {
     table.load_preset(UTF8_HORIZONTAL_ONLY);
     table.set_header(vec!["Metric", "Value"]);
     table.add_row(vec!["Total Tests", &stats.total.to_string()]);
-    table.add_row(vec!["Passed", &stats.passed.to_string().green().to_string()]);
+    table.add_row(vec![
+        "Passed",
+        &stats.passed.to_string().green().to_string(),
+    ]);
     table.add_row(vec!["Failed", &stats.failed.to_string().red().to_string()]);
-    table.add_row(vec!["Ignored", &stats.ignored.to_string().yellow().to_string()]);
-    table.add_row(vec!["Errors", &stats.errors.to_string().red().bold().to_string()]);
-    table.add_row(vec!["Conformance", &format!("{:.2}%", stats.conformance_rate())]);
-    table.add_row(vec!["Duration", &format!("{:.2}s", results.duration.as_secs_f64())]);
+    table.add_row(vec![
+        "Ignored",
+        &stats.ignored.to_string().yellow().to_string(),
+    ]);
+    table.add_row(vec![
+        "Errors",
+        &stats.errors.to_string().red().bold().to_string(),
+    ]);
+    table.add_row(vec![
+        "Conformance",
+        &format!("{:.2}%", stats.conformance_rate()),
+    ]);
+    table.add_row(vec![
+        "Duration",
+        &format!("{:.2}s", results.duration.as_secs_f64()),
+    ]);
     println!("{table}");
 
     // 按 feature 统计

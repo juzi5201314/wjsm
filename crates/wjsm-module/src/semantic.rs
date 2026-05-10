@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::collections::{BTreeSet, HashMap};
 
 use crate::graph::ModuleGraph;
@@ -71,7 +71,10 @@ pub fn analyze_module_links(graph: &ModuleGraph) -> Result<ModuleLinkResult> {
                 }
                 ExportEntry::Default { .. } => {
                     if !collected.names.insert("default".to_string()) {
-                        bail!("Duplicate export 'default' in module '{}'", node.path.display());
+                        bail!(
+                            "Duplicate export 'default' in module '{}'",
+                            node.path.display()
+                        );
                     }
                 }
                 ExportEntry::All { .. } => {
@@ -227,7 +230,10 @@ mod tests {
             .get(&entry_id)
             .expect("entry module should have import bindings");
         assert_eq!(imports.len(), 1);
-        assert_eq!(imports[0].names, vec![("localValue".to_string(), "value".to_string())]);
+        assert_eq!(
+            imports[0].names,
+            vec![("localValue".to_string(), "value".to_string())]
+        );
 
         let dep_id = graph
             .all_module_ids()
@@ -275,7 +281,10 @@ mod tests {
 
         let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
         let result = analyze_module_links(&graph);
-        assert!(result.is_ok(), "wildcard re-export should allow any import name");
+        assert!(
+            result.is_ok(),
+            "wildcard re-export should allow any import name"
+        );
     }
 
     #[test]
@@ -290,7 +299,10 @@ mod tests {
 
         let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
         let result = analyze_module_links(&graph);
-        assert!(result.is_ok(), "namespace import should skip missing export check");
+        assert!(
+            result.is_ok(),
+            "namespace import should skip missing export check"
+        );
     }
 
     #[test]
@@ -304,7 +316,8 @@ mod tests {
         write_file(&root, "dep.js", "export default 1;\nexport default 2;\n");
 
         let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
-        let error = analyze_module_links(&graph).expect_err("should report duplicate default export");
+        let error =
+            analyze_module_links(&graph).expect_err("should report duplicate default export");
         let message = error.to_string();
         assert!(message.contains("Duplicate export 'default'"));
     }
@@ -317,7 +330,11 @@ mod tests {
             "main.js",
             "import { x, y } from './dep.js';\nconsole.log(x, y);\n",
         );
-        write_file(&root, "dep.js", "export const x = 1;\nexport const y = 2;\n");
+        write_file(
+            &root,
+            "dep.js",
+            "export const x = 1;\nexport const y = 2;\n",
+        );
 
         let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
         let link = analyze_module_links(&graph).expect("linking should succeed");
@@ -326,7 +343,10 @@ mod tests {
             .all_module_ids()
             .find(|id| *id != graph.entry_id())
             .expect("dep module id should exist");
-        let exports = link.export_names.get(&dep_id).expect("dep exports should exist");
+        let exports = link
+            .export_names
+            .get(&dep_id)
+            .expect("dep exports should exist");
         assert!(exports.contains("x"));
         assert!(exports.contains("y"));
     }
@@ -338,6 +358,9 @@ mod tests {
 
         let graph = ModuleGraph::build("./main.js", &root).expect("graph should build");
         let result = analyze_module_links(&graph);
-        assert!(result.is_ok(), "module with no imports/exports should link successfully");
+        assert!(
+            result.is_ok(),
+            "module with no imports/exports should link successfully"
+        );
     }
 }
