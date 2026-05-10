@@ -784,6 +784,8 @@ pub enum Builtin {
     AsyncGeneratorNext,
     AsyncGeneratorReturn,
     AsyncGeneratorThrow,
+    PromiseWithResolvers,
+    IsCallable,
 }
 
 impl fmt::Display for Builtin {
@@ -918,6 +920,8 @@ impl fmt::Display for Builtin {
             Self::AsyncGeneratorStart => "async_generator.start",
             Self::AsyncGeneratorNext => "async_generator.next",
             Self::AsyncGeneratorReturn => "async_generator.return",
+            Self::PromiseWithResolvers => "promise.with_resolvers",
+            Self::IsCallable => "is_callable",
             Self::AsyncGeneratorThrow => "async_generator.throw",
         })
     }

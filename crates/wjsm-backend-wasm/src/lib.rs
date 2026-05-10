@@ -582,18 +582,18 @@ impl Compiler {
         imports.import("env", "promise_catch", EntityType::Function(2));
         // Import index 121: promise_finally: (i64, i64) -> i64
         imports.import("env", "promise_finally", EntityType::Function(2));
-        // Import index 122: promise_all: (i64) -> i64
-        imports.import("env", "promise_all", EntityType::Function(3));
-        // Import index 123: promise_race: (i64) -> i64
-        imports.import("env", "promise_race", EntityType::Function(3));
-        // Import index 124: promise_all_settled: (i64) -> i64
-        imports.import("env", "promise_all_settled", EntityType::Function(3));
-        // Import index 125: promise_any: (i64) -> i64
-        imports.import("env", "promise_any", EntityType::Function(3));
-        // Import index 126: promise_resolve_static: (i64) -> i64
-        imports.import("env", "promise_resolve_static", EntityType::Function(3));
-        // Import index 127: promise_reject_static: (i64) -> i64
-        imports.import("env", "promise_reject_static", EntityType::Function(3));
+        // Import index 122: promise_all: (i64, i64) -> i64
+        imports.import("env", "promise_all", EntityType::Function(2));
+        // Import index 123: promise_race: (i64, i64) -> i64
+        imports.import("env", "promise_race", EntityType::Function(2));
+        // Import index 124: promise_all_settled: (i64, i64) -> i64
+        imports.import("env", "promise_all_settled", EntityType::Function(2));
+        // Import index 125: promise_any: (i64, i64) -> i64
+        imports.import("env", "promise_any", EntityType::Function(2));
+        // Import index 126: promise_resolve_static: (i64, i64) -> i64
+        imports.import("env", "promise_resolve_static", EntityType::Function(2));
+        // Import index 127: promise_reject_static: (i64, i64) -> i64
+        imports.import("env", "promise_reject_static", EntityType::Function(2));
         // Import index 128: is_promise: (i64) -> i64
         imports.import("env", "is_promise", EntityType::Function(3));
         // Import index 129: queue_microtask: (i64) -> ()
@@ -634,6 +634,10 @@ impl Compiler {
             "promise_create_reject_function",
             EntityType::Function(3),
         );
+        // Import index 144: is_callable: (i64) -> i64
+        imports.import("env", "is_callable", EntityType::Function(3));
+        // Import index 145: promise_with_resolvers: (i64) -> i64
+        imports.import("env", "promise_with_resolvers", EntityType::Function(3));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -767,6 +771,8 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::AsyncGeneratorNext, 138);
         builtin_func_indices.insert(Builtin::AsyncGeneratorReturn, 139);
         builtin_func_indices.insert(Builtin::AsyncGeneratorThrow, 140);
+        builtin_func_indices.insert(Builtin::PromiseWithResolvers, 145);
+        builtin_func_indices.insert(Builtin::IsCallable, 144);
 
         let functions = FunctionSection::new();
 
@@ -803,7 +809,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 144, // 144 imports (0-143)
+            _next_import_func: 146, // 146 imports (0-145)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -5450,7 +5456,10 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Builtin::PromiseCatch | Builtin::PromiseFinally => {
+            Builtin::PromiseCatch | Builtin::PromiseFinally
+            | Builtin::PromiseResolveStatic | Builtin::PromiseRejectStatic
+            | Builtin::PromiseAll | Builtin::PromiseRace
+            | Builtin::PromiseAllSettled | Builtin::PromiseAny => {
                 let promise = args
                     .first()
                     .context("promise catch/finally expects 2 args")?;
@@ -5470,14 +5479,10 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Builtin::PromiseAll
-            | Builtin::PromiseRace
-            | Builtin::PromiseAllSettled
-            | Builtin::PromiseAny
-            | Builtin::PromiseResolveStatic
-            | Builtin::PromiseRejectStatic
+            | Builtin::PromiseWithResolvers
             | Builtin::PromiseCreateResolveFunction
             | Builtin::PromiseCreateRejectFunction
+            | Builtin::IsCallable
             | Builtin::IsPromise
             | Builtin::AsyncGeneratorStart => {
                 let val = args.first().context("expects 1 arg")?;
@@ -6170,12 +6175,12 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::PromiseThen => ("promise.then", 3),
         Builtin::PromiseCatch => ("promise.catch", 2),
         Builtin::PromiseFinally => ("promise.finally", 2),
-        Builtin::PromiseAll => ("promise.all", 1),
-        Builtin::PromiseRace => ("promise.race", 1),
-        Builtin::PromiseAllSettled => ("promise.all_settled", 1),
-        Builtin::PromiseAny => ("promise.any", 1),
-        Builtin::PromiseResolveStatic => ("promise.resolve_static", 1),
-        Builtin::PromiseRejectStatic => ("promise.reject_static", 1),
+        Builtin::PromiseAll => ("promise.all", 2),
+        Builtin::PromiseRace => ("promise.race", 2),
+        Builtin::PromiseAllSettled => ("promise.all_settled", 2),
+        Builtin::PromiseAny => ("promise.any", 2),
+        Builtin::PromiseResolveStatic => ("promise.resolve_static", 2),
+        Builtin::PromiseRejectStatic => ("promise.reject_static", 2),
         Builtin::IsPromise => ("is_promise", 1),
         Builtin::QueueMicrotask => ("queue_microtask", 1),
         Builtin::DrainMicrotasks => ("drain_microtasks", 0),
@@ -6188,6 +6193,8 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::AsyncGeneratorStart => ("async_generator.start", 1),
         Builtin::AsyncGeneratorNext => ("async_generator.next", 2),
         Builtin::AsyncGeneratorReturn => ("async_generator.return", 2),
+        Builtin::PromiseWithResolvers => ("promise.with_resolvers", 1),
+        Builtin::IsCallable => ("is_callable", 1),
         Builtin::AsyncGeneratorThrow => ("async_generator.throw", 2),
     }
 }

@@ -1834,14 +1834,22 @@ impl Lowerer {
         );
 
         let next_result = self.alloc_value();
-        self.current_function.append_instruction(
-            header,
-            Instruction::CallBuiltin {
-                dest: Some(next_result),
-                builtin: Builtin::PromiseResolveStatic,
-                args: vec![next_call_result],
-            },
-        );
+        {
+            let undef_const = self.module.add_constant(Constant::Undefined);
+            let undef_val = self.alloc_value();
+            self.current_function.append_instruction(
+                header,
+                Instruction::Const { dest: undef_val, constant: undef_const },
+            );
+            self.current_function.append_instruction(
+                header,
+                Instruction::CallBuiltin {
+                    dest: Some(next_result),
+                    builtin: Builtin::PromiseResolveStatic,
+                    args: vec![undef_val, next_call_result],
+                },
+            );
+        }
 
         let next_state = self.async_state_counter;
         self.async_state_counter += 1;
@@ -8313,14 +8321,22 @@ impl Lowerer {
         let value = self.lower_expr(&await_expr.arg, block)?;
 
         let promised = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::CallBuiltin {
-                dest: Some(promised),
-                builtin: Builtin::PromiseResolveStatic,
-                args: vec![value],
-            },
-        );
+        {
+            let undef_const = self.module.add_constant(Constant::Undefined);
+            let undef_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const { dest: undef_val, constant: undef_const },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(promised),
+                    builtin: Builtin::PromiseResolveStatic,
+                    args: vec![undef_val, value],
+                },
+            );
+        }
 
         let next_state = self.async_state_counter;
         self.async_state_counter += 1;
@@ -8675,23 +8691,6 @@ impl Lowerer {
             let arg_val = self.lower_expr(&arg.expr, block)?;
             args.push(arg_val);
         }
-        if args.is_empty()
-            && matches!(
-                builtin,
-                Builtin::PromiseResolveStatic | Builtin::PromiseRejectStatic
-            )
-        {
-            let undef_const = self.module.add_constant(Constant::Undefined);
-            let undef_val = self.alloc_value();
-            self.current_function.append_instruction(
-                block,
-                Instruction::Const {
-                    dest: undef_val,
-                    constant: undef_const,
-                },
-            );
-            args.push(undef_val);
-        }
 
         let dest = self.alloc_value();
         let call_block = self.resolve_store_block(block);
@@ -8733,6 +8732,37 @@ impl Lowerer {
                                 builtin_from_static_member(&obj_ident.sym, &prop_ident.sym)
                             {
                                 if self.scopes.lookup(&obj_ident.sym).is_err() {
+                                    // Promise 静态方法需要传递构造器作为第一个参数（species-aware）
+                                    if matches!(builtin, Builtin::PromiseResolveStatic | Builtin::PromiseRejectStatic
+                                        | Builtin::PromiseAll | Builtin::PromiseRace
+                                        | Builtin::PromiseAllSettled | Builtin::PromiseAny
+                                        | Builtin::PromiseWithResolvers) {
+                                        let undef_const = self.module.add_constant(Constant::Undefined);
+                                        let constructor_val = self.alloc_value();
+                                        self.current_function.append_instruction(
+                                            block,
+                                            Instruction::Const { dest: constructor_val, constant: undef_const },
+                                        );
+                                        let mut args = vec![constructor_val];
+                                        for arg in &call.args {
+                                            args.push(self.lower_expr(&arg.expr, block)?);
+                                        }
+                                        // 无参数时补 undefined
+                                        if args.len() == 1 {
+                                            let undef_val = self.alloc_value();
+                                            self.current_function.append_instruction(
+                                                block,
+                                                Instruction::Const { dest: undef_val, constant: undef_const },
+                                            );
+                                            args.push(undef_val);
+                                        }
+                                        let dest = self.alloc_value();
+                                        self.current_function.append_instruction(
+                                            block,
+                                            Instruction::CallBuiltin { dest: Some(dest), builtin, args },
+                                        );
+                                        return Ok(dest);
+                                    }
                                     return self.lower_host_builtin_call_expr(call, block, builtin);
                                 }
                             }
@@ -10821,6 +10851,7 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
             "race" => Some(Builtin::PromiseRace),
             "allSettled" => Some(Builtin::PromiseAllSettled),
             "any" => Some(Builtin::PromiseAny),
+            "withResolvers" => Some(Builtin::PromiseWithResolvers),
             _ => None,
         },
         _ => None,
