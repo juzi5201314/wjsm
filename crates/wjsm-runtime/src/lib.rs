@@ -47,6 +47,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let continuation_table: Arc<Mutex<Vec<ContinuationEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>> =
         Arc::new(Mutex::new(Vec::new()));
+    let combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>> = Arc::new(Mutex::new(Vec::new()));
 
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
@@ -76,6 +77,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             microtask_queue: Arc::clone(&microtask_queue),
             continuation_table: Arc::clone(&continuation_table),
             async_generator_table: Arc::clone(&async_generator_table),
+            combinator_contexts: Arc::clone(&combinator_contexts),
         },
     );
 
@@ -169,40 +171,132 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     data: string_data,
                     byte_pos: 0,
                 });
-                value::encode_handle(value::TAG_ITERATOR, handle)
-            } else {
-                // Non-iterable: store an error state
-                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                let handle = iters.len() as u32;
-                iters.push(IteratorState::Error);
-                value::encode_handle(value::TAG_ITERATOR, handle)
+                return value::encode_handle(value::TAG_ITERATOR, handle);
             }
+
+            if value::is_object(val) || value::is_function(val) {
+                if let Some(ptr) = resolve_handle(&mut caller, val) {
+                    if let Some(next) = read_object_property_by_name(&mut caller, ptr, "next") {
+                        if value::is_callable(next) {
+                            let return_method =
+                                read_object_property_by_name(&mut caller, ptr, "return")
+                                    .filter(|candidate| value::is_callable(*candidate));
+                            let mut iters =
+                                caller.data().iterators.lock().expect("iterators mutex");
+                            let handle = iters.len() as u32;
+                            iters.push(IteratorState::ObjectIter {
+                                next,
+                                return_method,
+                                current_value: value::encode_undefined(),
+                                has_current: false,
+                                done: false,
+                            });
+                            return value::encode_handle(value::TAG_ITERATOR, handle);
+                        }
+                    }
+                }
+            }
+
+            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+            let handle = iters.len() as u32;
+            iters.push(IteratorState::Error);
+            value::encode_handle(value::TAG_ITERATOR, handle)
         },
     );
 
     // ── Import 5: iterator_next(i64) → i64 ──────────────────────────────
     let iterator_next = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-            if let Some(iter) = iters.get_mut(handle_idx) {
+            let table = caller.get_export("__table").and_then(|e| e.into_table());
+            let Some(func_table) = table else {
+                return value::encode_undefined();
+            };
+            let next = {
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                let Some(iter) = iters.get_mut(handle_idx) else {
+                    return value::encode_undefined();
+                };
                 match iter {
                     IteratorState::StringIter { byte_pos, .. } => {
                         *byte_pos += 1;
+                        return value::encode_undefined();
                     }
-                    IteratorState::Error => {}
+                    IteratorState::ObjectIter { next, .. } => *next,
+                    IteratorState::Error => return value::encode_undefined(),
                 }
+            };
+            let (result, current_value, done, has_current) =
+                advance_object_iterator_from_caller(&mut caller, &func_table, next);
+            if let Some(IteratorState::ObjectIter {
+                current_value: stored_value,
+                done: stored_done,
+                has_current: stored_has_current,
+                ..
+            }) = caller
+                .data()
+                .iterators
+                .lock()
+                .expect("iterators mutex")
+                .get_mut(handle_idx)
+            {
+                *stored_value = current_value;
+                *stored_done = done;
+                *stored_has_current = has_current;
             }
-            value::encode_undefined()
+            result
         },
     );
 
     // ── Import 6: iterator_close(i64) → () ──────────────────────────────
     let iterator_close = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _handle: i64| {
-            // Iterator close is a no-op for strings
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| {
+            let handle_idx = value::decode_handle(handle) as usize;
+            let return_method = {
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                match iters.get_mut(handle_idx) {
+                    Some(IteratorState::ObjectIter {
+                        return_method,
+                        done,
+                        ..
+                    }) if !*done => *return_method,
+                    _ => None,
+                }
+            };
+
+            let Some(return_method) = return_method else {
+                return;
+            };
+            let table = caller.get_export("__table").and_then(|e| e.into_table());
+            let Some(func_table) = table else { return };
+            let result = call_host_function_from_caller(
+                &mut caller,
+                &func_table,
+                return_method,
+                value::encode_undefined(),
+            );
+            if let Some(result) = result {
+                if !(value::is_object(result)
+                    || value::is_function(result)
+                    || value::is_array(result))
+                {
+                    set_runtime_error(
+                        caller.data(),
+                        "TypeError: iterator return must return an object".to_string(),
+                    );
+                }
+            }
+            if let Some(IteratorState::ObjectIter { done, .. }) = caller
+                .data()
+                .iterators
+                .lock()
+                .expect("iterators mutex")
+                .get_mut(handle_idx)
+            {
+                *done = true;
+            }
         },
     );
 
@@ -222,6 +316,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             value::encode_undefined()
                         }
                     }
+                    IteratorState::ObjectIter { current_value, .. } => *current_value,
                     IteratorState::Error => {
                         *caller
                             .data()
@@ -241,26 +336,64 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── Import 8: iterator_done(i64) → i64 ──────────────────────────────
     let iterator_done = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-            let done = if let Some(iter) = iters.get_mut(handle_idx) {
+            let next = {
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                let Some(iter) = iters.get_mut(handle_idx) else {
+                    return value::encode_bool(true);
+                };
                 match iter {
-                    IteratorState::StringIter { data, byte_pos } => *byte_pos >= data.len(),
+                    IteratorState::StringIter { data, byte_pos } => {
+                        return value::encode_bool(*byte_pos >= data.len());
+                    }
+                    IteratorState::ObjectIter {
+                        next,
+                        done,
+                        has_current,
+                        ..
+                    } => {
+                        if *done {
+                            return value::encode_bool(true);
+                        }
+                        if *has_current {
+                            return value::encode_bool(*done);
+                        }
+                        *next
+                    }
                     IteratorState::Error => {
-                        *caller
-                            .data()
-                            .runtime_error
-                            .lock()
-                            .expect("runtime error mutex") =
-                            Some("TypeError: value is not iterable".to_string());
-                        true
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: value is not iterable".to_string(),
+                        );
+                        return value::encode_bool(true);
                     }
                 }
-            } else {
-                true
             };
-            value::encode_bool(done)
+
+            let table = caller.get_export("__table").and_then(|e| e.into_table());
+            let Some(func_table) = table else {
+                return value::encode_bool(true);
+            };
+            let (_, next_value, next_done, has_current) =
+                advance_object_iterator_from_caller(&mut caller, &func_table, next);
+            if let Some(IteratorState::ObjectIter {
+                current_value,
+                done,
+                has_current: stored_has_current,
+                ..
+            }) = caller
+                .data()
+                .iterators
+                .lock()
+                .expect("iterators mutex")
+                .get_mut(handle_idx)
+            {
+                *current_value = next_value;
+                *done = next_done;
+                *stored_has_current = has_current;
+            }
+            value::encode_bool(next_done)
         },
     );
 
@@ -2247,6 +2380,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             store_runtime_string(caller, status.to_string()),
         );
         let _ = define_host_data_property(caller, obj, value_name, value);
+        obj
+    }
+
+    fn alloc_aggregate_error(caller: &mut Caller<'_, RuntimeState>, errors: i64) -> i64 {
+        let obj = alloc_object(caller, 3);
+        let name = store_runtime_string(caller, "AggregateError".to_string());
+        let message = store_runtime_string(caller, "All promises were rejected".to_string());
+        let _ = define_host_data_property(caller, obj, "name", name);
+        let _ = define_host_data_property(caller, obj, "message", message);
+        let _ = define_host_data_property(caller, obj, "errors", errors);
         obj
     }
     // ── 辅助函数：收集属性名/值 ──────────────────────────────────────────
@@ -5515,8 +5658,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let promise_all_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
-            let arr_ptr = resolve_array_ptr(&mut caller, arr);
-            let Some(ptr) = arr_ptr else {
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return alloc_promise(
                     &mut caller,
                     PromiseEntry::rejected(value::encode_undefined()),
@@ -5538,58 +5680,89 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return result_promise;
             }
 
-            let mut result_vals = vec![value::encode_undefined(); len as usize];
+            let result_array = alloc_array(&mut caller, len);
+            if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_array) {
+                write_array_length(&mut caller, result_ptr, len);
+            }
+            let context = create_combinator_context(caller.data(), result_promise, result_array);
+            let result_handle = raw_promise_handle(result_promise) as i64;
             let elems: Vec<i64> = (0..len)
                 .map(|i| {
                     read_array_elem(&mut caller, ptr, i).unwrap_or_else(value::encode_undefined)
                 })
                 .collect();
+            let mut remaining = 0usize;
             let mut rejected = None;
-            let mut pending = false;
-            {
-                let table = caller
-                    .data()
-                    .promise_table
-                    .lock()
-                    .expect("promise table mutex");
-                for (i, elem) in elems.iter().copied().enumerate() {
-                    if value::is_object(elem) {
-                        let elem_handle = value::decode_object_handle(elem) as usize;
-                        if let Some(entry) = promise_entry(&table, elem_handle) {
-                            match entry.state.clone() {
-                                PromiseState::Fulfilled(value) => result_vals[i] = value,
-                                PromiseState::Rejected(reason) => {
-                                    rejected.get_or_insert(reason);
-                                }
-                                PromiseState::Pending => pending = true,
+
+            for (index, elem) in elems.iter().copied().enumerate() {
+                let mut fulfilled = None;
+                let mut rejected_elem = None;
+                let mut pending = false;
+                let mut known_promise = false;
+
+                if value::is_object(elem) {
+                    let elem_handle = value::decode_object_handle(elem) as usize;
+                    let mut table = caller
+                        .data()
+                        .promise_table
+                        .lock()
+                        .expect("promise table mutex");
+                    if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
+                        known_promise = true;
+                        match entry.state.clone() {
+                            PromiseState::Fulfilled(value) => fulfilled = Some(value),
+                            PromiseState::Rejected(reason) => rejected_elem = Some(reason),
+                            PromiseState::Pending => {
+                                pending = true;
+                                entry.handled = true;
+                                let handler = create_combinator_reaction_handler(
+                                    caller.data(),
+                                    context,
+                                    index,
+                                    PromiseCombinatorReactionKind::AllFulfill,
+                                );
+                                entry.fulfill_reactions.push(PromiseReaction::new(
+                                    handler,
+                                    result_handle,
+                                    ReactionType::Fulfill,
+                                ));
+                                entry.reject_reactions.push(PromiseReaction::new(
+                                    value::encode_undefined(),
+                                    result_handle,
+                                    ReactionType::Reject,
+                                ));
                             }
-                        } else {
-                            result_vals[i] = elem;
                         }
-                    } else {
-                        result_vals[i] = elem;
                     }
+                }
+
+                if pending {
+                    remaining += 1;
+                } else if let Some(reason) = rejected_elem {
+                    rejected.get_or_insert(reason);
+                } else {
+                    let value = fulfilled.unwrap_or(elem);
+                    if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_array) {
+                        write_array_elem(&mut caller, result_ptr, index as u32, value);
+                    }
+                    let _ = known_promise;
                 }
             }
 
+            set_combinator_remaining(caller.data(), context, remaining);
             if let Some(reason) = rejected {
+                mark_combinator_settled(caller.data(), context);
                 settle_promise(
                     caller.data(),
                     result_promise,
                     PromiseSettlement::Reject(reason),
                 );
-            } else if !pending {
-                let res_arr = alloc_array(&mut caller, len);
-                if let Some(res_ptr) = resolve_array_ptr(&mut caller, res_arr) {
-                    for (j, v) in result_vals.iter().enumerate() {
-                        write_array_elem(&mut caller, res_ptr, j as u32, *v);
-                    }
-                    write_array_length(&mut caller, res_ptr, len);
-                }
+            } else if remaining == 0 {
+                mark_combinator_settled(caller.data(), context);
                 settle_promise(
                     caller.data(),
                     result_promise,
-                    PromiseSettlement::Fulfill(res_arr),
+                    PromiseSettlement::Fulfill(result_array),
                 );
             }
 
@@ -5634,6 +5807,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                                     immediate = Some(PromiseSettlement::Reject(reason));
                                 }
                                 PromiseState::Pending => {
+                                    entry.handled = true;
                                     entry.fulfill_reactions.push(PromiseReaction::new(
                                         value::encode_undefined(),
                                         result_handle,
@@ -5677,63 +5851,90 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return result_promise;
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-
+            let result_array = alloc_array(&mut caller, len);
+            if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_array) {
+                write_array_length(&mut caller, result_ptr, len);
+            }
+            let context = create_combinator_context(caller.data(), result_promise, result_array);
+            let result_handle = raw_promise_handle(result_promise) as i64;
             let elems: Vec<i64> = (0..len)
                 .map(|i| {
                     read_array_elem(&mut caller, ptr, i).unwrap_or_else(value::encode_undefined)
                 })
                 .collect();
-            let mut outcomes: Vec<Option<(&'static str, &'static str, i64)>> =
-                vec![None; len as usize];
-            let mut pending = false;
-            {
-                let table = caller
-                    .data()
-                    .promise_table
-                    .lock()
-                    .expect("promise table mutex");
-                for (index, elem) in elems.iter().copied().enumerate() {
-                    if value::is_object(elem) {
-                        let elem_handle = value::decode_object_handle(elem) as usize;
-                        if let Some(entry) = promise_entry(&table, elem_handle) {
-                            match entry.state.clone() {
-                                PromiseState::Fulfilled(value) => {
-                                    outcomes[index] = Some(("fulfilled", "value", value));
-                                }
-                                PromiseState::Rejected(reason) => {
-                                    outcomes[index] = Some(("rejected", "reason", reason));
-                                }
-                                PromiseState::Pending => pending = true,
+            let mut remaining = 0usize;
+
+            for (index, elem) in elems.iter().copied().enumerate() {
+                let mut outcome = Some(("fulfilled", "value", elem));
+                let mut pending = false;
+
+                if value::is_object(elem) {
+                    let elem_handle = value::decode_object_handle(elem) as usize;
+                    let mut table = caller
+                        .data()
+                        .promise_table
+                        .lock()
+                        .expect("promise table mutex");
+                    if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
+                        match entry.state.clone() {
+                            PromiseState::Fulfilled(value) => {
+                                outcome = Some(("fulfilled", "value", value))
                             }
-                        } else {
-                            outcomes[index] = Some(("fulfilled", "value", elem));
+                            PromiseState::Rejected(reason) => {
+                                outcome = Some(("rejected", "reason", reason))
+                            }
+                            PromiseState::Pending => {
+                                pending = true;
+                                outcome = None;
+                                entry.handled = true;
+                                let fulfill_handler = create_combinator_reaction_handler(
+                                    caller.data(),
+                                    context,
+                                    index,
+                                    PromiseCombinatorReactionKind::AllSettledFulfill,
+                                );
+                                let reject_handler = create_combinator_reaction_handler(
+                                    caller.data(),
+                                    context,
+                                    index,
+                                    PromiseCombinatorReactionKind::AllSettledReject,
+                                );
+                                entry.fulfill_reactions.push(PromiseReaction::new(
+                                    fulfill_handler,
+                                    result_handle,
+                                    ReactionType::Fulfill,
+                                ));
+                                entry.reject_reactions.push(PromiseReaction::new(
+                                    reject_handler,
+                                    result_handle,
+                                    ReactionType::Reject,
+                                ));
+                            }
                         }
-                    } else {
-                        outcomes[index] = Some(("fulfilled", "value", elem));
+                    }
+                }
+
+                if pending {
+                    remaining += 1;
+                    continue;
+                }
+
+                if let Some((status, value_name, value)) = outcome {
+                    let record =
+                        alloc_promise_all_settled_result(&mut caller, status, value_name, value);
+                    if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_array) {
+                        write_array_elem(&mut caller, result_ptr, index as u32, record);
                     }
                 }
             }
 
-            if !pending {
-                let res_arr = alloc_array(&mut caller, len);
-                if let Some(res_ptr) = resolve_array_ptr(&mut caller, res_arr) {
-                    for (index, outcome) in outcomes.iter().enumerate() {
-                        if let Some((status, value_name, value)) = outcome {
-                            let record = alloc_promise_all_settled_result(
-                                &mut caller,
-                                status,
-                                value_name,
-                                *value,
-                            );
-                            write_array_elem(&mut caller, res_ptr, index as u32, record);
-                        }
-                    }
-                    write_array_length(&mut caller, res_ptr, len);
-                }
+            set_combinator_remaining(caller.data(), context, remaining);
+            if remaining == 0 {
+                mark_combinator_settled(caller.data(), context);
                 settle_promise(
                     caller.data(),
                     result_promise,
-                    PromiseSettlement::Fulfill(res_arr),
+                    PromiseSettlement::Fulfill(result_array),
                 );
             }
             result_promise
@@ -5755,72 +5956,102 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return result_promise;
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let errors_array = alloc_array(&mut caller, len);
+            if let Some(errors_ptr) = resolve_array_ptr(&mut caller, errors_array) {
+                write_array_length(&mut caller, errors_ptr, len);
+            }
             if len == 0 {
+                let aggregate = alloc_aggregate_error(&mut caller, errors_array);
                 settle_promise(
                     caller.data(),
                     result_promise,
-                    PromiseSettlement::Reject(value::encode_undefined()),
+                    PromiseSettlement::Reject(aggregate),
                 );
                 return result_promise;
             }
 
+            let context = create_combinator_context(caller.data(), result_promise, errors_array);
             let elems: Vec<i64> = (0..len)
                 .map(|i| {
                     read_array_elem(&mut caller, ptr, i).unwrap_or_else(value::encode_undefined)
                 })
                 .collect();
-            let mut immediate = None;
-            let mut pending = false;
-            let mut reject_count = 0;
-            {
-                let mut table = caller
-                    .data()
-                    .promise_table
-                    .lock()
-                    .expect("promise table mutex");
-                for elem in elems {
-                    if value::is_object(elem) {
-                        let elem_handle = value::decode_object_handle(elem) as usize;
-                        if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
-                            match entry.state.clone() {
-                                PromiseState::Fulfilled(value) => {
-                                    immediate = Some(value);
-                                    break;
-                                }
-                                PromiseState::Rejected(_) => {
-                                    reject_count += 1;
-                                }
-                                PromiseState::Pending => {
-                                    pending = true;
-                                    entry.fulfill_reactions.push(PromiseReaction::new(
-                                        value::encode_undefined(),
-                                        result_handle,
-                                        ReactionType::Fulfill,
-                                    ));
-                                }
+            let mut remaining = len as usize;
+            let mut fulfilled = None;
+
+            for (index, elem) in elems.iter().copied().enumerate() {
+                let mut rejected_reason = None;
+                let mut pending = false;
+                let mut known_promise = false;
+
+                if value::is_object(elem) {
+                    let elem_handle = value::decode_object_handle(elem) as usize;
+                    let mut table = caller
+                        .data()
+                        .promise_table
+                        .lock()
+                        .expect("promise table mutex");
+                    if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
+                        known_promise = true;
+                        match entry.state.clone() {
+                            PromiseState::Fulfilled(value) => fulfilled = Some(value),
+                            PromiseState::Rejected(reason) => rejected_reason = Some(reason),
+                            PromiseState::Pending => {
+                                pending = true;
+                                entry.handled = true;
+                                let reject_handler = create_combinator_reaction_handler(
+                                    caller.data(),
+                                    context,
+                                    index,
+                                    PromiseCombinatorReactionKind::AnyReject,
+                                );
+                                entry.fulfill_reactions.push(PromiseReaction::new(
+                                    value::encode_undefined(),
+                                    result_handle,
+                                    ReactionType::Fulfill,
+                                ));
+                                entry.reject_reactions.push(PromiseReaction::new(
+                                    reject_handler,
+                                    result_handle,
+                                    ReactionType::Reject,
+                                ));
                             }
-                        } else {
-                            immediate = Some(elem);
-                            break;
                         }
-                    } else {
-                        immediate = Some(elem);
-                        break;
                     }
+                }
+
+                if fulfilled.is_some() {
+                    break;
+                }
+                if pending {
+                    continue;
+                }
+                if let Some(reason) = rejected_reason {
+                    if let Some(errors_ptr) = resolve_array_ptr(&mut caller, errors_array) {
+                        write_array_elem(&mut caller, errors_ptr, index as u32, reason);
+                    }
+                    remaining = remaining.saturating_sub(1);
+                } else if !known_promise {
+                    fulfilled = Some(elem);
+                    break;
                 }
             }
 
-            if let Some(value) = immediate {
+            set_combinator_remaining(caller.data(), context, remaining);
+            if let Some(value) = fulfilled {
+                mark_combinator_settled(caller.data(), context);
                 settle_promise(
                     caller.data(),
                     result_promise,
                     PromiseSettlement::Fulfill(value),
                 );
-            } else if !pending && reject_count == len {
+            } else if remaining == 0 {
+                mark_combinator_settled(caller.data(), context);
+                let aggregate = alloc_aggregate_error(&mut caller, errors_array);
                 settle_promise(
                     caller.data(),
                     result_promise,
-                    PromiseSettlement::Reject(value::encode_undefined()),
+                    PromiseSettlement::Reject(aggregate),
                 );
             }
             result_promise
@@ -6147,80 +6378,133 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── Import 137: async_generator_start(i64) -> i64 ───────────────────────
     let async_generator_start_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, _fn_table_idx: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, continuation: i64| -> i64 {
+            let generator = alloc_object(&mut caller, 4);
+            if !value::is_object(generator) {
+                return value::encode_undefined();
+            }
+            let next = create_async_generator_method(
+                caller.data(),
+                generator,
+                AsyncGeneratorCompletionType::Next,
+            );
+            let ret = create_async_generator_method(
+                caller.data(),
+                generator,
+                AsyncGeneratorCompletionType::Return,
+            );
+            let throw = create_async_generator_method(
+                caller.data(),
+                generator,
+                AsyncGeneratorCompletionType::Throw,
+            );
+            let _ = define_host_data_property_from_caller(&mut caller, generator, "next", next);
+            let _ = define_host_data_property_from_caller(&mut caller, generator, "return", ret);
+            let _ = define_host_data_property_from_caller(&mut caller, generator, "throw", throw);
+            let async_iter = create_async_generator_identity(caller.data(), generator);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                generator,
+                "Symbol.asyncIterator",
+                async_iter,
+            );
+
+            let handle = value::decode_object_handle(generator) as usize;
             let mut table = caller
                 .data()
                 .async_generator_table
                 .lock()
                 .expect("async generator table mutex");
-            let handle = table.len() as u32;
-            table.push(AsyncGeneratorEntry {
+            if table.len() <= handle {
+                table.resize_with(handle + 1, || AsyncGeneratorEntry {
+                    state: AsyncGeneratorState::Completed,
+                    continuation: value::encode_undefined(),
+                    active_request: None,
+                    waiting_resume_promise: None,
+                    queue: Vec::new(),
+                });
+            }
+            table[handle] = AsyncGeneratorEntry {
                 state: AsyncGeneratorState::SuspendedStart,
+                continuation,
+                active_request: None,
+                waiting_resume_promise: None,
                 queue: Vec::new(),
-            });
-            value::encode_object_handle(handle)
+            };
+            generator
         },
     );
 
     // ── Import 138: async_generator_next(i64, i64) -> i64 ───────────────────
     let async_generator_next_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
-            let handle = value::decode_object_handle(generator) as usize;
-            let mut p_table = caller
-                .data()
-                .promise_table
-                .lock()
-                .expect("promise table mutex");
-            let result_handle = p_table.len() as u32;
-            p_table.push(PromiseEntry::pending());
-            let result_promise = value::encode_object_handle(result_handle);
-            drop(p_table);
-
-            let mut g_table = caller
-                .data()
-                .async_generator_table
-                .lock()
-                .expect("async generator table mutex");
-            if let Some(entry) = g_table.get_mut(handle) {
-                entry.queue.push(AsyncGeneratorRequest {
-                    completion_type: AsyncGeneratorCompletionType::Next,
-                    value,
-                    promise: result_handle as i64,
-                });
+        |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
+            let resume_promise = alloc_promise(&mut caller, PromiseEntry::pending());
+            let request_to_fulfill = {
+                let mut table = caller
+                    .data()
+                    .async_generator_table
+                    .lock()
+                    .expect("async generator table mutex");
+                let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
+                else {
+                    return resume_promise;
+                };
+                entry.state = AsyncGeneratorState::SuspendedYield;
+                entry.waiting_resume_promise = Some(resume_promise);
+                let active = entry.active_request.take();
+                active
+            };
+            if let Some(request) = request_to_fulfill {
+                let result = alloc_iterator_result_from_caller(&mut caller, value, false);
+                resolve_promise_from_caller(&mut caller, request.promise, result);
             }
-            result_promise
+            pump_async_generator_from_caller(&mut caller, generator);
+            resume_promise
         },
     );
 
     // ── Import 139: async_generator_return(i64, i64) -> i64 ─────────────────
     let async_generator_return_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
-            let handle = value::decode_object_handle(generator) as usize;
-            let mut p_table = caller
-                .data()
-                .promise_table
-                .lock()
-                .expect("promise table mutex");
-            let result_handle = p_table.len() as u32;
-            p_table.push(PromiseEntry::pending());
-            let result_promise = value::encode_object_handle(result_handle);
-            drop(p_table);
-
-            let mut g_table = caller
-                .data()
-                .async_generator_table
-                .lock()
-                .expect("async generator table mutex");
-            if let Some(entry) = g_table.get_mut(handle) {
-                entry.queue.push(AsyncGeneratorRequest {
-                    completion_type: AsyncGeneratorCompletionType::Return,
-                    value,
-                    promise: result_handle as i64,
-                });
+        |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
+            let (active, queued) = {
+                let mut table = caller
+                    .data()
+                    .async_generator_table
+                    .lock()
+                    .expect("async generator table mutex");
+                let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
+                else {
+                    return value::encode_undefined();
+                };
+                entry.state = AsyncGeneratorState::Completed;
+                let active = entry.active_request.take();
+                let queued = std::mem::take(&mut entry.queue);
+                (active, queued)
+            };
+            if let Some(request) = active {
+                let result = alloc_iterator_result_from_caller(&mut caller, value, true);
+                resolve_promise_from_caller(&mut caller, request.promise, result);
             }
-            result_promise
+            for request in queued {
+                match request.completion_type {
+                    AsyncGeneratorCompletionType::Throw => settle_promise(
+                        caller.data(),
+                        request.promise,
+                        PromiseSettlement::Reject(request.value),
+                    ),
+                    _ => {
+                        let result = alloc_iterator_result_from_caller(
+                            &mut caller,
+                            value::encode_undefined(),
+                            true,
+                        );
+                        resolve_promise_from_caller(&mut caller, request.promise, result);
+                    }
+                }
+            }
+            value::encode_undefined()
         },
     );
 
@@ -6228,30 +6512,36 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let async_generator_throw_fn = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
-            let handle = value::decode_object_handle(generator) as usize;
-            let mut p_table = caller
-                .data()
-                .promise_table
-                .lock()
-                .expect("promise table mutex");
-            let result_handle = p_table.len() as u32;
-            p_table.push(PromiseEntry::pending());
-            let result_promise = value::encode_object_handle(result_handle);
-            drop(p_table);
-
-            let mut g_table = caller
-                .data()
-                .async_generator_table
-                .lock()
-                .expect("async generator table mutex");
-            if let Some(entry) = g_table.get_mut(handle) {
-                entry.queue.push(AsyncGeneratorRequest {
-                    completion_type: AsyncGeneratorCompletionType::Throw,
-                    value,
-                    promise: result_handle as i64,
-                });
+            let (active, queued) = {
+                let mut table = caller
+                    .data()
+                    .async_generator_table
+                    .lock()
+                    .expect("async generator table mutex");
+                let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
+                else {
+                    return value::encode_undefined();
+                };
+                entry.state = AsyncGeneratorState::Completed;
+                let active = entry.active_request.take();
+                let queued = std::mem::take(&mut entry.queue);
+                (active, queued)
+            };
+            if let Some(request) = active {
+                settle_promise(
+                    caller.data(),
+                    request.promise,
+                    PromiseSettlement::Reject(value),
+                );
             }
-            result_promise
+            for request in queued {
+                settle_promise(
+                    caller.data(),
+                    request.promise,
+                    PromiseSettlement::Reject(value),
+                );
+            }
+            value::encode_undefined()
         },
     );
 
@@ -6264,53 +6554,13 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
          args_base: i32,
          args_count: i32|
          -> i64 {
-            if !value::is_native_callable(callable) {
-                return value::encode_undefined();
-            }
-            let idx = value::decode_native_callable_idx(callable) as usize;
-            let record = {
-                let table = caller
-                    .data()
-                    .native_callables
-                    .lock()
-                    .expect("native callable table mutex");
-                table.get(idx).cloned()
+            let argument = if args_count > 0 {
+                Some(read_shadow_arg(&mut caller, args_base, 0))
+            } else {
+                None
             };
-            let Some(record) = record else {
-                return value::encode_undefined();
-            };
-            match record {
-                NativeCallable::PromiseResolvingFunction {
-                    promise,
-                    already_resolved,
-                    kind,
-                } => {
-                    let mut already = already_resolved.lock().expect("promise resolver mutex");
-                    if *already {
-                        return value::encode_undefined();
-                    }
-                    *already = true;
-                    drop(already);
-                    let argument = if args_count > 0 {
-                        read_shadow_arg(&mut caller, args_base, 0)
-                    } else {
-                        value::encode_undefined()
-                    };
-                    match kind {
-                        PromiseResolvingKind::Fulfill => {
-                            resolve_promise_from_caller(&mut caller, promise, argument);
-                        }
-                        PromiseResolvingKind::Reject => {
-                            settle_promise(
-                                caller.data(),
-                                promise,
-                                PromiseSettlement::Reject(argument),
-                            );
-                        }
-                    }
-                    value::encode_undefined()
-                }
-            }
+            call_native_callable_from_caller(&mut caller, callable, argument)
+                .unwrap_or_else(value::encode_undefined)
         },
     );
 
@@ -6474,11 +6724,28 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── Drain microtasks after main() ────────────────────────────────────
     if main_result.is_ok() {
         if let Some(Extern::Table(func_table)) = instance.get_export(&mut store, "__table") {
-            if let (Some(Extern::Memory(memory)), Some(Extern::Global(shadow_sp_global))) = (
+            if let (
+                Some(Extern::Memory(memory)),
+                Some(Extern::Global(shadow_sp_global)),
+                Some(Extern::Global(heap_ptr_global)),
+                Some(Extern::Global(obj_table_ptr_global)),
+                Some(Extern::Global(obj_table_count_global)),
+            ) = (
                 instance.get_export(&mut store, "memory"),
                 instance.get_export(&mut store, "__shadow_sp"),
+                instance.get_export(&mut store, "__heap_ptr"),
+                instance.get_export(&mut store, "__obj_table_ptr"),
+                instance.get_export(&mut store, "__obj_table_count"),
             ) {
-                drain_microtasks_from_store(&mut store, &func_table, &memory, &shadow_sp_global);
+                drain_microtasks_from_store(
+                    &mut store,
+                    &func_table,
+                    &memory,
+                    &shadow_sp_global,
+                    &heap_ptr_global,
+                    &obj_table_ptr_global,
+                    &obj_table_count_global,
+                );
             }
         }
     }
@@ -6549,11 +6816,28 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         }
                     }
                     // Drain microtasks after timer callback
-                    if let (Some(Extern::Memory(mem)), Some(Extern::Global(sp_global))) = (
+                    if let (
+                        Some(Extern::Memory(mem)),
+                        Some(Extern::Global(sp_global)),
+                        Some(Extern::Global(heap_ptr_global)),
+                        Some(Extern::Global(obj_table_ptr_global)),
+                        Some(Extern::Global(obj_table_count_global)),
+                    ) = (
                         instance.get_export(&mut store, "memory"),
                         instance.get_export(&mut store, "__shadow_sp"),
+                        instance.get_export(&mut store, "__heap_ptr"),
+                        instance.get_export(&mut store, "__obj_table_ptr"),
+                        instance.get_export(&mut store, "__obj_table_count"),
                     ) {
-                        drain_microtasks_from_store(&mut store, &tbl, &mem, &sp_global);
+                        drain_microtasks_from_store(
+                            &mut store,
+                            &tbl,
+                            &mem,
+                            &sp_global,
+                            &heap_ptr_global,
+                            &obj_table_ptr_global,
+                            &obj_table_count_global,
+                        );
                     }
                 }
 
@@ -6635,6 +6919,8 @@ struct RuntimeState {
     continuation_table: Arc<Mutex<Vec<ContinuationEntry>>>,
     /// AsyncGenerator 侧表：存储异步生成器状态
     async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>>,
+    /// Promise combinator 侧表：pending 元素的 reaction 通过索引回写共享结果。
+    combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>>,
 }
 
 /// 绑定函数记录
@@ -6672,6 +6958,33 @@ enum NativeCallable {
         already_resolved: Arc<Mutex<bool>>,
         kind: PromiseResolvingKind,
     },
+    PromiseCombinatorReaction {
+        context: usize,
+        index: usize,
+        kind: PromiseCombinatorReactionKind,
+    },
+    AsyncGeneratorMethod {
+        generator: i64,
+        kind: AsyncGeneratorCompletionType,
+    },
+    AsyncGeneratorIdentity {
+        generator: i64,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum PromiseCombinatorReactionKind {
+    AllFulfill,
+    AllSettledFulfill,
+    AllSettledReject,
+    AnyReject,
+}
+
+struct CombinatorContext {
+    result_promise: i64,
+    result_array: i64,
+    remaining: usize,
+    settled: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -6689,7 +7002,17 @@ struct TimerEntry {
 }
 
 enum IteratorState {
-    StringIter { data: Vec<u8>, byte_pos: usize },
+    StringIter {
+        data: Vec<u8>,
+        byte_pos: usize,
+    },
+    ObjectIter {
+        next: i64,
+        return_method: Option<i64>,
+        current_value: i64,
+        done: bool,
+        has_current: bool,
+    },
     Error,
 }
 
@@ -6832,6 +7155,9 @@ struct ContinuationEntry {
 #[allow(dead_code)]
 struct AsyncGeneratorEntry {
     state: AsyncGeneratorState,
+    continuation: i64,
+    active_request: Option<AsyncGeneratorRequest>,
+    waiting_resume_promise: Option<i64>,
     queue: Vec<AsyncGeneratorRequest>,
 }
 
@@ -6843,7 +7169,7 @@ enum AsyncGeneratorState {
     Executing,
     Completed,
 }
-
+#[derive(Clone, Copy)]
 #[allow(dead_code)]
 struct AsyncGeneratorRequest {
     completion_type: AsyncGeneratorCompletionType,
@@ -6851,7 +7177,7 @@ struct AsyncGeneratorRequest {
     promise: i64,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum AsyncGeneratorCompletionType {
     Next,
     Return,
@@ -7126,6 +7452,509 @@ fn store_runtime_string(caller: &Caller<'_, RuntimeState>, string: String) -> i6
     let handle = strings.len() as u32;
     strings.push(string);
     value::encode_runtime_string_handle(handle)
+}
+
+fn store_runtime_string_in_state(state: &RuntimeState, string: String) -> i64 {
+    let mut strings = state.runtime_strings.lock().expect("runtime strings mutex");
+    let handle = strings.len() as u32;
+    strings.push(string);
+    value::encode_runtime_string_handle(handle)
+}
+
+fn find_memory_c_string_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
+    let mut needle = Vec::with_capacity(name.len() + 1);
+    needle.extend_from_slice(name.as_bytes());
+    needle.push(0);
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return None;
+    };
+    memory
+        .data(&*caller)
+        .windows(needle.len())
+        .position(|window| window == needle.as_slice())
+        .map(|offset| offset as u32)
+}
+
+fn alloc_heap_c_string_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
+    let heap_ptr = caller
+        .get_export("__heap_ptr")
+        .and_then(|e| e.into_global())?
+        .get(&mut *caller)
+        .i32()
+        .unwrap_or(0) as usize;
+    let bytes = name.as_bytes();
+    let end = heap_ptr.checked_add(bytes.len() + 1)?;
+    let aligned_end = (end + 7) & !7;
+    {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data_mut(&mut *caller);
+        if aligned_end > data.len() {
+            return None;
+        }
+        data[heap_ptr..heap_ptr + bytes.len()].copy_from_slice(bytes);
+        data[heap_ptr + bytes.len()] = 0;
+        data[end..aligned_end].fill(0);
+    }
+    if let Some(Extern::Global(global)) = caller.get_export("__heap_ptr") {
+        let _ = global.set(&mut *caller, Val::I32(aligned_end as i32));
+    }
+    Some(heap_ptr as u32)
+}
+
+fn alloc_host_object_from_caller(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
+    let heap_ptr = caller
+        .get_export("__heap_ptr")
+        .and_then(|e| e.into_global())
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    let obj_table_count = caller
+        .get_export("__obj_table_count")
+        .and_then(|e| e.into_global())
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    let obj_table_ptr = caller
+        .get_export("__obj_table_ptr")
+        .and_then(|e| e.into_global())
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    let size = 16 + capacity * 32;
+    let new_heap_ptr = heap_ptr.saturating_add(size);
+    {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return value::encode_undefined();
+        };
+        let data = memory.data_mut(&mut *caller);
+        let ptr = heap_ptr as usize;
+        if new_heap_ptr as usize > data.len() {
+            return value::encode_undefined();
+        }
+        data[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+        data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
+        data[ptr + 5..ptr + 8].fill(0);
+        data[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes());
+        data[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+        let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+        if slot_addr + 4 <= data.len() {
+            data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+        }
+    }
+    if let Some(Extern::Global(global)) = caller.get_export("__heap_ptr") {
+        let _ = global.set(&mut *caller, Val::I32(new_heap_ptr as i32));
+    }
+    if let Some(Extern::Global(global)) = caller.get_export("__obj_table_count") {
+        let _ = global.set(&mut *caller, Val::I32((obj_table_count + 1) as i32));
+    }
+    value::encode_object_handle(obj_table_count)
+}
+
+fn define_host_data_property_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+    val: i64,
+) -> Option<()> {
+    let name_id = find_memory_c_string_global(caller, name)
+        .or_else(|| alloc_heap_c_string_global(caller, name))?;
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize)?;
+    let (capacity, num_props) = {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data(&*caller);
+        if obj_ptr + 16 > data.len() {
+            return None;
+        }
+        let capacity = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]);
+        let num_props = u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]);
+        (capacity, num_props)
+    };
+    if num_props >= capacity {
+        return None;
+    }
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return None;
+    };
+    let data = memory.data_mut(&mut *caller);
+    let slot_offset = obj_ptr + 16 + num_props as usize * 32;
+    if slot_offset + 32 > data.len() {
+        return None;
+    }
+    let flags =
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
+    let undef = value::encode_undefined();
+    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
+    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
+    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
+    Some(())
+}
+
+fn alloc_all_settled_result_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    status: &str,
+    value_name: &str,
+    val: i64,
+) -> i64 {
+    let obj = alloc_host_object_from_caller(caller, 2);
+    let status_value = store_runtime_string(caller, status.to_string());
+    let _ = define_host_data_property_from_caller(caller, obj, "status", status_value);
+    let _ = define_host_data_property_from_caller(caller, obj, value_name, val);
+    obj
+}
+
+fn alloc_aggregate_error_from_caller(caller: &mut Caller<'_, RuntimeState>, errors: i64) -> i64 {
+    let obj = alloc_host_object_from_caller(caller, 3);
+    let name = store_runtime_string(caller, "AggregateError".to_string());
+    let message = store_runtime_string(caller, "All promises were rejected".to_string());
+    let _ = define_host_data_property_from_caller(caller, obj, "name", name);
+    let _ = define_host_data_property_from_caller(caller, obj, "message", message);
+    let _ = define_host_data_property_from_caller(caller, obj, "errors", errors);
+    obj
+}
+
+fn read_string_bytes_from_store(store: &Store<RuntimeState>, memory: &Memory, ptr: u32) -> Vec<u8> {
+    let data = memory.data(store);
+    let start = ptr as usize;
+    if start >= data.len() {
+        return Vec::new();
+    }
+    let end = data[start..]
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(data.len(), |offset| start + offset);
+    data[start..end].to_vec()
+}
+
+fn find_memory_c_string_from_store(
+    store: &Store<RuntimeState>,
+    memory: &Memory,
+    name: &str,
+) -> Option<u32> {
+    let mut needle = Vec::with_capacity(name.len() + 1);
+    needle.extend_from_slice(name.as_bytes());
+    needle.push(0);
+    memory
+        .data(store)
+        .windows(needle.len())
+        .position(|window| window == needle.as_slice())
+        .map(|offset| offset as u32)
+}
+
+fn alloc_heap_c_string_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    name: &str,
+) -> Option<u32> {
+    let heap_ptr = heap_ptr_global.get(&mut *store).i32().unwrap_or(0) as usize;
+    let bytes = name.as_bytes();
+    let end = heap_ptr.checked_add(bytes.len() + 1)?;
+    let aligned_end = (end + 7) & !7;
+    {
+        let data = memory.data_mut(&mut *store);
+        if aligned_end > data.len() {
+            return None;
+        }
+        data[heap_ptr..heap_ptr + bytes.len()].copy_from_slice(bytes);
+        data[heap_ptr + bytes.len()] = 0;
+        data[end..aligned_end].fill(0);
+    }
+    let _ = heap_ptr_global.set(&mut *store, Val::I32(aligned_end as i32));
+    Some(heap_ptr as u32)
+}
+
+fn resolve_handle_idx_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    obj_table_ptr_global: &Global,
+    handle_idx: usize,
+) -> Option<usize> {
+    let obj_table_ptr = obj_table_ptr_global.get(&mut *store).i32().unwrap_or(0) as usize;
+    let slot_addr = obj_table_ptr + handle_idx * 4;
+    let data = memory.data(&mut *store);
+    if slot_addr + 4 > data.len() {
+        return None;
+    }
+    let ptr = u32::from_le_bytes([
+        data[slot_addr],
+        data[slot_addr + 1],
+        data[slot_addr + 2],
+        data[slot_addr + 3],
+    ]) as usize;
+    if ptr == 0 { None } else { Some(ptr) }
+}
+
+fn resolve_handle_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    obj_table_ptr_global: &Global,
+    val: i64,
+) -> Option<usize> {
+    let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    resolve_handle_idx_from_store(store, memory, obj_table_ptr_global, handle_idx)
+}
+
+fn read_object_property_by_name_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    obj_ptr: usize,
+    prop_name: &str,
+) -> Option<i64> {
+    let num_props = {
+        let data = memory.data(&mut *store);
+        if obj_ptr + 16 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]) as usize
+    };
+    let mut name_ids = Vec::with_capacity(num_props);
+    {
+        let data = memory.data(&mut *store);
+        for i in 0..num_props {
+            let slot_offset = obj_ptr + 16 + i * 32;
+            if slot_offset + 4 > data.len() {
+                break;
+            }
+            name_ids.push(u32::from_le_bytes([
+                data[slot_offset],
+                data[slot_offset + 1],
+                data[slot_offset + 2],
+                data[slot_offset + 3],
+            ]));
+        }
+    }
+    for (index, name_id) in name_ids.iter().enumerate() {
+        if read_string_bytes_from_store(store, memory, *name_id) == prop_name.as_bytes() {
+            let data = memory.data(&mut *store);
+            let slot_offset = obj_ptr + 16 + index * 32;
+            if slot_offset + 16 > data.len() {
+                return None;
+            }
+            return Some(i64::from_le_bytes([
+                data[slot_offset + 8],
+                data[slot_offset + 9],
+                data[slot_offset + 10],
+                data[slot_offset + 11],
+                data[slot_offset + 12],
+                data[slot_offset + 13],
+                data[slot_offset + 14],
+                data[slot_offset + 15],
+            ]));
+        }
+    }
+    None
+}
+
+fn alloc_host_object_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj_table_count_global: &Global,
+    capacity: u32,
+) -> i64 {
+    let heap_ptr = heap_ptr_global.get(&mut *store).i32().unwrap_or(0) as u32;
+    let obj_table_count = obj_table_count_global.get(&mut *store).i32().unwrap_or(0) as u32;
+    let obj_table_ptr = obj_table_ptr_global.get(&mut *store).i32().unwrap_or(0) as u32;
+    let size = 16 + capacity * 32;
+    let new_heap_ptr = heap_ptr.saturating_add(size);
+    {
+        let data = memory.data_mut(&mut *store);
+        let ptr = heap_ptr as usize;
+        if new_heap_ptr as usize > data.len() {
+            return value::encode_undefined();
+        }
+        data[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+        data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
+        data[ptr + 5..ptr + 8].fill(0);
+        data[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes());
+        data[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+        let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+        if slot_addr + 4 <= data.len() {
+            data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+        }
+    }
+    let _ = heap_ptr_global.set(&mut *store, Val::I32(new_heap_ptr as i32));
+    let _ = obj_table_count_global.set(&mut *store, Val::I32((obj_table_count + 1) as i32));
+    value::encode_object_handle(obj_table_count)
+}
+
+fn write_array_elem_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    ptr: usize,
+    index: u32,
+    val: i64,
+) {
+    let data = memory.data_mut(&mut *store);
+    let elem_offset = ptr + 16 + index as usize * 8;
+    if elem_offset + 8 <= data.len() {
+        data[elem_offset..elem_offset + 8].copy_from_slice(&val.to_le_bytes());
+    }
+}
+
+fn define_host_data_property_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj: i64,
+    name: &str,
+    val: i64,
+) -> Option<()> {
+    let name_id = find_memory_c_string_from_store(store, memory, name)
+        .or_else(|| alloc_heap_c_string_from_store(store, memory, heap_ptr_global, name))?;
+    let obj_ptr = resolve_handle_idx_from_store(
+        store,
+        memory,
+        obj_table_ptr_global,
+        value::decode_object_handle(obj) as usize,
+    )?;
+    let (capacity, num_props) = {
+        let data = memory.data(&mut *store);
+        if obj_ptr + 16 > data.len() {
+            return None;
+        }
+        let capacity = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]);
+        let num_props = u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]);
+        (capacity, num_props)
+    };
+    if num_props >= capacity {
+        return None;
+    }
+    let data = memory.data_mut(&mut *store);
+    let slot_offset = obj_ptr + 16 + num_props as usize * 32;
+    if slot_offset + 32 > data.len() {
+        return None;
+    }
+    let flags =
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
+    let undef = value::encode_undefined();
+    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
+    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
+    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
+    Some(())
+}
+
+fn alloc_all_settled_result_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj_table_count_global: &Global,
+    status: &str,
+    value_name: &str,
+    val: i64,
+) -> i64 {
+    let obj = alloc_host_object_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj_table_count_global,
+        2,
+    );
+    let status_value = store_runtime_string_in_state(store.data(), status.to_string());
+    let _ = define_host_data_property_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj,
+        "status",
+        status_value,
+    );
+    let _ = define_host_data_property_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj,
+        value_name,
+        val,
+    );
+    obj
+}
+
+fn alloc_aggregate_error_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj_table_count_global: &Global,
+    errors: i64,
+) -> i64 {
+    let obj = alloc_host_object_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj_table_count_global,
+        3,
+    );
+    let name = store_runtime_string_in_state(store.data(), "AggregateError".to_string());
+    let message =
+        store_runtime_string_in_state(store.data(), "All promises were rejected".to_string());
+    let _ = define_host_data_property_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj,
+        "name",
+        name,
+    );
+    let _ = define_host_data_property_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj,
+        "message",
+        message,
+    );
+    let _ = define_host_data_property_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj,
+        "errors",
+        errors,
+    );
+    obj
 }
 
 /// GC 标记阶段：递归标记对象及其所有可达对象。
@@ -7672,22 +8501,23 @@ fn find_property_slot_by_name_id(
             data[obj_ptr + 15],
         ]) as usize
     };
+    let target_name_bytes = read_string_bytes(caller, name_id);
     for i in 0..num_props {
         let slot_offset = obj_ptr + 16 + i * 32;
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(&*caller);
-        if slot_offset + 32 > data.len() {
-            break;
-        }
-        let slot_name_id = u32::from_le_bytes([
-            data[slot_offset],
-            data[slot_offset + 1],
-            data[slot_offset + 2],
-            data[slot_offset + 3],
-        ]);
-        if slot_name_id == name_id {
+        let (slot_name_id, flags, val) = {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return None;
+            };
+            let data = memory.data(&*caller);
+            if slot_offset + 32 > data.len() {
+                break;
+            }
+            let slot_name_id = u32::from_le_bytes([
+                data[slot_offset],
+                data[slot_offset + 1],
+                data[slot_offset + 2],
+                data[slot_offset + 3],
+            ]);
             let flags = i32::from_le_bytes([
                 data[slot_offset + 4],
                 data[slot_offset + 5],
@@ -7704,6 +8534,12 @@ fn find_property_slot_by_name_id(
                 data[slot_offset + 14],
                 data[slot_offset + 15],
             ]);
+            (slot_name_id, flags, val)
+        };
+        let same_name = slot_name_id == name_id
+            || (!target_name_bytes.is_empty()
+                && read_string_bytes(caller, slot_name_id) == target_name_bytes);
+        if same_name {
             return Some((slot_offset, flags, val));
         }
     }
@@ -8314,6 +9150,130 @@ fn insert_promise_entry(table: &mut Vec<PromiseEntry>, handle: usize, entry: Pro
     table[handle] = entry;
 }
 
+fn advance_object_iterator_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_table: &Table,
+    next: i64,
+) -> (i64, i64, bool, bool) {
+    let result =
+        call_host_function_from_caller(caller, func_table, next, value::encode_undefined())
+            .unwrap_or_else(value::encode_undefined);
+    if value::is_object(result) || value::is_function(result) || value::is_array(result) {
+        if let Some(ptr) = resolve_handle(caller, result) {
+            let done = read_object_property_by_name(caller, ptr, "done")
+                .map(nanbox_to_bool)
+                .unwrap_or(false);
+            let current_value = read_object_property_by_name(caller, ptr, "value")
+                .unwrap_or_else(value::encode_undefined);
+            return (result, current_value, done, true);
+        }
+    }
+    if !value::is_undefined(result) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: iterator next must return an object".to_string(),
+        );
+    }
+    (result, value::encode_undefined(), true, true)
+}
+
+fn create_async_generator_identity(state: &RuntimeState, generator: i64) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::AsyncGeneratorIdentity { generator });
+    value::encode_native_callable_idx(handle)
+}
+
+fn call_native_callable_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    callable: i64,
+    argument: Option<i64>,
+) -> Option<i64> {
+    if !value::is_native_callable(callable) {
+        return None;
+    }
+
+    let idx = value::decode_native_callable_idx(callable) as usize;
+    let record = {
+        let table = caller
+            .data()
+            .native_callables
+            .lock()
+            .expect("native callable table mutex");
+        table.get(idx).cloned()
+    }?;
+    let argument = argument.unwrap_or_else(value::encode_undefined);
+
+    match record {
+        NativeCallable::PromiseResolvingFunction {
+            promise,
+            already_resolved,
+            kind,
+        } => {
+            let mut already = already_resolved.lock().expect("promise resolver mutex");
+            if *already {
+                return Some(value::encode_undefined());
+            }
+            *already = true;
+            drop(already);
+            match kind {
+                PromiseResolvingKind::Fulfill => {
+                    resolve_promise_from_caller(caller, promise, argument);
+                }
+                PromiseResolvingKind::Reject => {
+                    settle_promise(caller.data(), promise, PromiseSettlement::Reject(argument));
+                }
+            }
+            Some(value::encode_undefined())
+        }
+        NativeCallable::PromiseCombinatorReaction { .. } => Some(value::encode_undefined()),
+        NativeCallable::AsyncGeneratorIdentity { generator } => Some(generator),
+        NativeCallable::AsyncGeneratorMethod { generator, kind } => {
+            let result_promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+            let request = AsyncGeneratorRequest {
+                completion_type: kind,
+                value: argument,
+                promise: result_promise,
+            };
+            let completed = {
+                let mut table = caller
+                    .data()
+                    .async_generator_table
+                    .lock()
+                    .expect("async generator table mutex");
+                let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
+                else {
+                    return Some(result_promise);
+                };
+                if matches!(entry.state, AsyncGeneratorState::Completed) {
+                    true
+                } else {
+                    entry.queue.push(request);
+                    false
+                }
+            };
+            if completed {
+                match kind {
+                    AsyncGeneratorCompletionType::Throw => settle_promise(
+                        caller.data(),
+                        result_promise,
+                        PromiseSettlement::Reject(argument),
+                    ),
+                    _ => {
+                        let result = alloc_iterator_result_from_caller(caller, argument, true);
+                        resolve_promise_from_caller(caller, result_promise, result);
+                    }
+                }
+            } else {
+                pump_async_generator_from_caller(caller, generator);
+            }
+            Some(result_promise)
+        }
+    }
+}
 fn promise_entry_mut(table: &mut [PromiseEntry], handle: usize) -> Option<&mut PromiseEntry> {
     table.get_mut(handle).filter(|entry| entry.is_promise)
 }
@@ -8365,6 +9325,499 @@ fn create_promise_resolving_functions(state: &RuntimeState, promise: i64) -> (i6
         PromiseResolvingKind::Reject,
     );
     (resolve, reject)
+}
+
+fn alloc_promise_from_caller(caller: &mut Caller<'_, RuntimeState>, entry: PromiseEntry) -> i64 {
+    let promise = alloc_host_object_from_caller(caller, 0);
+    if value::is_object(promise) {
+        let handle = value::decode_object_handle(promise) as usize;
+        let mut table = caller
+            .data()
+            .promise_table
+            .lock()
+            .expect("promise table mutex");
+        insert_promise_entry(&mut table, handle, entry);
+    }
+    promise
+}
+
+fn create_async_generator_method(
+    state: &RuntimeState,
+    generator: i64,
+    kind: AsyncGeneratorCompletionType,
+) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::AsyncGeneratorMethod { generator, kind });
+    value::encode_native_callable_idx(handle)
+}
+
+fn alloc_iterator_result_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+    done: bool,
+) -> i64 {
+    let obj = alloc_host_object_from_caller(caller, 2);
+    let _ = define_host_data_property_from_caller(caller, obj, "value", val);
+    let _ = define_host_data_property_from_caller(caller, obj, "done", value::encode_bool(done));
+    obj
+}
+
+fn enqueue_async_resume_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    continuation: i64,
+    state: u32,
+    resume_val: i64,
+    is_rejected: bool,
+) {
+    let cont_handle = value::decode_object_handle(continuation) as usize;
+    let fn_table_idx = {
+        let mut table = caller
+            .data()
+            .continuation_table
+            .lock()
+            .expect("continuation table mutex");
+        let Some(entry) = table.get_mut(cont_handle) else {
+            return;
+        };
+        while entry.captured_vars.len() < 2 {
+            entry.captured_vars.push(value::encode_undefined());
+        }
+        entry.captured_vars[0] = value::encode_f64(state as f64);
+        entry.captured_vars[1] = value::encode_bool(is_rejected);
+        entry.fn_table_idx
+    };
+    caller
+        .data()
+        .microtask_queue
+        .lock()
+        .expect("microtask queue mutex")
+        .push_back(Microtask::AsyncResume {
+            fn_table_idx,
+            continuation,
+            state,
+            resume_val,
+            is_rejected,
+        });
+}
+
+enum AsyncGeneratorPumpAction {
+    Resume {
+        continuation: i64,
+        state: u32,
+        value: i64,
+        is_rejected: bool,
+    },
+    SettleResumePromise {
+        promise: i64,
+        value: i64,
+        is_rejected: bool,
+    },
+    Fulfill {
+        promise: i64,
+        value: i64,
+        done: bool,
+    },
+    Reject {
+        promise: i64,
+        reason: i64,
+    },
+}
+
+fn pump_async_generator_from_caller(caller: &mut Caller<'_, RuntimeState>, generator: i64) {
+    let handle = value::decode_object_handle(generator) as usize;
+    let action = {
+        let mut table = caller
+            .data()
+            .async_generator_table
+            .lock()
+            .expect("async generator table mutex");
+        let Some(entry) = table.get_mut(handle) else {
+            return;
+        };
+        match entry.state {
+            AsyncGeneratorState::Executing | AsyncGeneratorState::Completed => None,
+            AsyncGeneratorState::SuspendedYield => {
+                let Some(resume_promise) = entry.waiting_resume_promise.take() else {
+                    return;
+                };
+                if entry.queue.is_empty() {
+                    entry.waiting_resume_promise = Some(resume_promise);
+                    None
+                } else {
+                    let request = entry.queue.remove(0);
+                    entry.active_request = Some(request);
+                    entry.state = AsyncGeneratorState::Executing;
+                    match request.completion_type {
+                        AsyncGeneratorCompletionType::Next => {
+                            Some(AsyncGeneratorPumpAction::SettleResumePromise {
+                                promise: resume_promise,
+                                value: request.value,
+                                is_rejected: false,
+                            })
+                        }
+                        AsyncGeneratorCompletionType::Throw => {
+                            Some(AsyncGeneratorPumpAction::SettleResumePromise {
+                                promise: resume_promise,
+                                value: request.value,
+                                is_rejected: true,
+                            })
+                        }
+                        AsyncGeneratorCompletionType::Return => {
+                            Some(AsyncGeneratorPumpAction::Fulfill {
+                                promise: request.promise,
+                                value: request.value,
+                                done: true,
+                            })
+                        }
+                    }
+                }
+            }
+            AsyncGeneratorState::SuspendedStart => {
+                if entry.queue.is_empty() {
+                    None
+                } else {
+                    let request = entry.queue.remove(0);
+                    match request.completion_type {
+                        AsyncGeneratorCompletionType::Next => {
+                            entry.active_request = Some(request);
+                            entry.state = AsyncGeneratorState::Executing;
+                            Some(AsyncGeneratorPumpAction::Resume {
+                                continuation: entry.continuation,
+                                state: 0,
+                                value: request.value,
+                                is_rejected: false,
+                            })
+                        }
+                        AsyncGeneratorCompletionType::Return => {
+                            entry.state = AsyncGeneratorState::Completed;
+                            Some(AsyncGeneratorPumpAction::Fulfill {
+                                promise: request.promise,
+                                value: request.value,
+                                done: true,
+                            })
+                        }
+                        AsyncGeneratorCompletionType::Throw => {
+                            entry.state = AsyncGeneratorState::Completed;
+                            Some(AsyncGeneratorPumpAction::Reject {
+                                promise: request.promise,
+                                reason: request.value,
+                            })
+                        }
+                    }
+                }
+            }
+        }
+    };
+    match action {
+        Some(AsyncGeneratorPumpAction::Resume {
+            continuation,
+            state,
+            value,
+            is_rejected,
+        }) => enqueue_async_resume_from_caller(caller, continuation, state, value, is_rejected),
+        Some(AsyncGeneratorPumpAction::SettleResumePromise {
+            promise,
+            value,
+            is_rejected,
+        }) => {
+            if is_rejected {
+                settle_promise(caller.data(), promise, PromiseSettlement::Reject(value));
+            } else {
+                resolve_promise_from_caller(caller, promise, value);
+            }
+        }
+        Some(AsyncGeneratorPumpAction::Fulfill {
+            promise,
+            value,
+            done,
+        }) => {
+            let result = alloc_iterator_result_from_caller(caller, value, done);
+            resolve_promise_from_caller(caller, promise, result);
+        }
+        Some(AsyncGeneratorPumpAction::Reject { promise, reason }) => {
+            settle_promise(caller.data(), promise, PromiseSettlement::Reject(reason));
+        }
+        None => {}
+    }
+}
+
+fn create_combinator_context(
+    state: &RuntimeState,
+    result_promise: i64,
+    result_array: i64,
+) -> usize {
+    let mut contexts = state
+        .combinator_contexts
+        .lock()
+        .expect("combinator context mutex");
+    let idx = contexts.len();
+    contexts.push(CombinatorContext {
+        result_promise,
+        result_array,
+        remaining: 0,
+        settled: false,
+    });
+    idx
+}
+
+fn set_combinator_remaining(state: &RuntimeState, context: usize, remaining: usize) {
+    if let Some(entry) = state
+        .combinator_contexts
+        .lock()
+        .expect("combinator context mutex")
+        .get_mut(context)
+    {
+        entry.remaining = remaining;
+    }
+}
+
+fn mark_combinator_settled(state: &RuntimeState, context: usize) {
+    if let Some(entry) = state
+        .combinator_contexts
+        .lock()
+        .expect("combinator context mutex")
+        .get_mut(context)
+    {
+        entry.settled = true;
+    }
+}
+
+fn create_combinator_reaction_handler(
+    state: &RuntimeState,
+    context: usize,
+    index: usize,
+    kind: PromiseCombinatorReactionKind,
+) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::PromiseCombinatorReaction {
+        context,
+        index,
+        kind,
+    });
+    value::encode_native_callable_idx(handle)
+}
+
+fn combinator_reaction_record(
+    state: &RuntimeState,
+    handler: i64,
+) -> Option<(usize, usize, PromiseCombinatorReactionKind)> {
+    if !value::is_native_callable(handler) {
+        return None;
+    }
+    let idx = value::decode_native_callable_idx(handler) as usize;
+    let record = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex")
+        .get(idx)
+        .cloned()?;
+    match record {
+        NativeCallable::PromiseCombinatorReaction {
+            context,
+            index,
+            kind,
+        } => Some((context, index, kind)),
+        _ => None,
+    }
+}
+
+fn open_combinator_context(state: &RuntimeState, context: usize) -> Option<(i64, i64)> {
+    let contexts = state
+        .combinator_contexts
+        .lock()
+        .expect("combinator context mutex");
+    let entry = contexts.get(context)?;
+    if entry.settled {
+        None
+    } else {
+        Some((entry.result_promise, entry.result_array))
+    }
+}
+
+fn decrement_combinator_remaining(state: &RuntimeState, context: usize) -> Option<(i64, i64)> {
+    let mut contexts = state
+        .combinator_contexts
+        .lock()
+        .expect("combinator context mutex");
+    let entry = contexts.get_mut(context)?;
+    if entry.settled {
+        return None;
+    }
+    entry.remaining = entry.remaining.saturating_sub(1);
+    if entry.remaining == 0 {
+        entry.settled = true;
+        Some((entry.result_promise, entry.result_array))
+    } else {
+        None
+    }
+}
+
+fn handle_combinator_reaction_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    handler: i64,
+    argument: i64,
+) -> bool {
+    let Some((context, index, kind)) = combinator_reaction_record(caller.data(), handler) else {
+        return false;
+    };
+    let Some((_, result_array)) = open_combinator_context(caller.data(), context) else {
+        return true;
+    };
+
+    match kind {
+        PromiseCombinatorReactionKind::AllFulfill => {
+            if let Some(result_ptr) = resolve_array_ptr(caller, result_array) {
+                write_array_elem(caller, result_ptr, index as u32, argument);
+            }
+            if let Some((result_promise, result_array)) =
+                decrement_combinator_remaining(caller.data(), context)
+            {
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(result_array),
+                );
+            }
+        }
+        PromiseCombinatorReactionKind::AllSettledFulfill
+        | PromiseCombinatorReactionKind::AllSettledReject => {
+            let (status, value_name) = match kind {
+                PromiseCombinatorReactionKind::AllSettledFulfill => ("fulfilled", "value"),
+                PromiseCombinatorReactionKind::AllSettledReject => ("rejected", "reason"),
+                _ => unreachable!(),
+            };
+            let record = alloc_all_settled_result_from_caller(caller, status, value_name, argument);
+            if let Some(result_ptr) = resolve_array_ptr(caller, result_array) {
+                write_array_elem(caller, result_ptr, index as u32, record);
+            }
+            if let Some((result_promise, result_array)) =
+                decrement_combinator_remaining(caller.data(), context)
+            {
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(result_array),
+                );
+            }
+        }
+        PromiseCombinatorReactionKind::AnyReject => {
+            if let Some(errors_ptr) = resolve_array_ptr(caller, result_array) {
+                write_array_elem(caller, errors_ptr, index as u32, argument);
+            }
+            if let Some((result_promise, errors_array)) =
+                decrement_combinator_remaining(caller.data(), context)
+            {
+                let aggregate = alloc_aggregate_error_from_caller(caller, errors_array);
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Reject(aggregate),
+                );
+            }
+        }
+    }
+    true
+}
+
+fn handle_combinator_reaction_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj_table_count_global: &Global,
+    handler: i64,
+    argument: i64,
+) -> bool {
+    let Some((context, index, kind)) = combinator_reaction_record(store.data(), handler) else {
+        return false;
+    };
+    let Some((_, result_array)) = open_combinator_context(store.data(), context) else {
+        return true;
+    };
+
+    match kind {
+        PromiseCombinatorReactionKind::AllFulfill => {
+            if let Some(result_ptr) =
+                resolve_handle_from_store(store, memory, obj_table_ptr_global, result_array)
+            {
+                write_array_elem_from_store(store, memory, result_ptr, index as u32, argument);
+            }
+            if let Some((result_promise, result_array)) =
+                decrement_combinator_remaining(store.data(), context)
+            {
+                settle_promise(
+                    store.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(result_array),
+                );
+            }
+        }
+        PromiseCombinatorReactionKind::AllSettledFulfill
+        | PromiseCombinatorReactionKind::AllSettledReject => {
+            let (status, value_name) = match kind {
+                PromiseCombinatorReactionKind::AllSettledFulfill => ("fulfilled", "value"),
+                PromiseCombinatorReactionKind::AllSettledReject => ("rejected", "reason"),
+                _ => unreachable!(),
+            };
+            let record = alloc_all_settled_result_from_store(
+                store,
+                memory,
+                heap_ptr_global,
+                obj_table_ptr_global,
+                obj_table_count_global,
+                status,
+                value_name,
+                argument,
+            );
+            if let Some(result_ptr) =
+                resolve_handle_from_store(store, memory, obj_table_ptr_global, result_array)
+            {
+                write_array_elem_from_store(store, memory, result_ptr, index as u32, record);
+            }
+            if let Some((result_promise, result_array)) =
+                decrement_combinator_remaining(store.data(), context)
+            {
+                settle_promise(
+                    store.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(result_array),
+                );
+            }
+        }
+        PromiseCombinatorReactionKind::AnyReject => {
+            if let Some(errors_ptr) =
+                resolve_handle_from_store(store, memory, obj_table_ptr_global, result_array)
+            {
+                write_array_elem_from_store(store, memory, errors_ptr, index as u32, argument);
+            }
+            if let Some((result_promise, errors_array)) =
+                decrement_combinator_remaining(store.data(), context)
+            {
+                let aggregate = alloc_aggregate_error_from_store(
+                    store,
+                    memory,
+                    heap_ptr_global,
+                    obj_table_ptr_global,
+                    obj_table_count_global,
+                    errors_array,
+                );
+                settle_promise(
+                    store.data(),
+                    result_promise,
+                    PromiseSettlement::Reject(aggregate),
+                );
+            }
+        }
+    }
+    true
 }
 
 fn queue_promise_reactions(
@@ -8511,18 +9964,58 @@ fn resolve_promise_from_caller(
     );
 }
 
-fn resolve_promise_from_store(state: &RuntimeState, promise: i64, resolution: i64) {
+fn resolve_promise_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    obj_table_ptr_global: &Global,
+    promise: i64,
+    resolution: i64,
+) {
     if promise == resolution {
         let reason = runtime_error_value(
-            state,
+            store.data(),
             "TypeError: cannot resolve promise with itself".to_string(),
         );
-        settle_promise(state, promise, PromiseSettlement::Reject(reason));
-    } else if is_promise_value(state, resolution) {
-        adopt_promise(state, promise, resolution);
-    } else {
-        settle_promise(state, promise, PromiseSettlement::Fulfill(resolution));
+        settle_promise(store.data(), promise, PromiseSettlement::Reject(reason));
+        return;
     }
+
+    if is_promise_value(store.data(), resolution) {
+        adopt_promise(store.data(), promise, resolution);
+        return;
+    }
+
+    if value::is_object(resolution)
+        || value::is_function(resolution)
+        || value::is_callable(resolution)
+    {
+        if let Some(ptr) =
+            resolve_handle_from_store(store, memory, obj_table_ptr_global, resolution)
+        {
+            if let Some(then) = read_object_property_by_name_from_store(store, memory, ptr, "then")
+            {
+                if value::is_callable(then) {
+                    let mut queue = store
+                        .data()
+                        .microtask_queue
+                        .lock()
+                        .expect("microtask queue mutex");
+                    queue.push_back(Microtask::PromiseResolveThenable {
+                        promise,
+                        thenable: resolution,
+                        then,
+                    });
+                    return;
+                }
+            }
+        }
+    }
+
+    settle_promise(
+        store.data(),
+        promise,
+        PromiseSettlement::Fulfill(resolution),
+    );
 }
 
 fn passive_reaction_settlement(reaction_type: ReactionType, argument: i64) -> PromiseSettlement {
@@ -8565,6 +10058,9 @@ fn drain_microtasks_from_caller(caller: &mut Caller<'_, RuntimeState>, func_tabl
                 handler,
                 argument,
             }) => {
+                if handle_combinator_reaction_from_caller(caller, handler, argument) {
+                    continue;
+                }
                 if value::is_callable(handler) {
                     match call_host_function_from_caller(caller, func_table, handler, argument) {
                         Some(result) => match reaction_type {
@@ -8648,6 +10144,9 @@ fn drain_microtasks_from_store(
     func_table: &Table,
     memory: &Memory,
     shadow_sp_global: &Global,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj_table_count_global: &Global,
 ) {
     loop {
         let task = {
@@ -8665,6 +10164,17 @@ fn drain_microtasks_from_store(
                 handler,
                 argument,
             }) => {
+                if handle_combinator_reaction_from_store(
+                    store,
+                    memory,
+                    heap_ptr_global,
+                    obj_table_ptr_global,
+                    obj_table_count_global,
+                    handler,
+                    argument,
+                ) {
+                    continue;
+                }
                 if value::is_callable(handler) {
                     match call_host_function_from_store(
                         store,
@@ -8676,7 +10186,13 @@ fn drain_microtasks_from_store(
                     ) {
                         Some(result) => match reaction_type {
                             ReactionType::Fulfill | ReactionType::Reject => {
-                                resolve_promise_from_store(store.data(), promise, result);
+                                resolve_promise_from_store(
+                                    store,
+                                    memory,
+                                    obj_table_ptr_global,
+                                    promise,
+                                    result,
+                                );
                             }
                             ReactionType::FinallyFulfill => {
                                 settle_promise(
@@ -8767,6 +10283,10 @@ fn call_host_function_from_caller(
     handler: i64,
     argument: i64,
 ) -> Option<i64> {
+    if value::is_native_callable(handler) {
+        return call_native_callable_from_caller(caller, handler, Some(argument));
+    }
+
     let (func_idx, env_obj) = if value::is_closure(handler) {
         let idx = value::decode_closure_idx(handler);
         let closures = caller.data().closures.lock().unwrap();

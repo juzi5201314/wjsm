@@ -3582,6 +3582,11 @@ impl Compiler {
                     // 跳到循环出口：break
                     self.emit_phi_moves(blocks, idx, target_idx);
                     self.emit(WasmInstruction::Br(depth));
+                } else if target_idx < idx && block_has_suspend(&blocks[target_idx]) {
+                    // async 状态机的循环头可能位于另一个 switch case 中，不能用当前 case 的 label 回跳；
+                    // 这里内联到下一个 suspend，让循环体能够调度下一轮 resume。
+                    self.emit_phi_moves(blocks, idx, target_idx);
+                    self.compile_branch_body(module, blocks, target_idx)?;
                 } else {
                     // 普通 merge 跳转
                     self.emit_phi_moves(blocks, idx, target_idx);
@@ -5918,6 +5923,12 @@ impl Compiler {
 }
 
 // ── Value ID collection ─────────────────────────────────────────────────
+fn block_has_suspend(block: &BasicBlock) -> bool {
+    block
+        .instructions()
+        .iter()
+        .any(|instruction| matches!(instruction, Instruction::Suspend { .. }))
+}
 
 /// 检测 CFG 中的循环（通过 back-edge 识别）。
 /// 返回按 header_idx 排序的 LoopInfo 列表。

@@ -363,6 +363,7 @@ struct FinallyContext {
 struct TryContext {
     catch_entry: Option<BasicBlockId>,
     exception_var: String,
+    label_depth: usize,
 }
 
 /// The flow state after lowering a statement.
@@ -716,6 +717,7 @@ struct Lowerer {
     function_hoisted_stack: Vec<(Vec<HoistedVar>, std::collections::HashSet<(usize, String)>)>,
     function_next_value_stack: Vec<u32>,
     function_next_temp_stack: Vec<u32>,
+    async_context_stack: Vec<AsyncContextState>,
     // ── 闭包捕获相关 ──────────────────────────────────────────────────
     /// 每层函数的捕获绑定列表，push_function_context 时压入空 Vec。
     captured_names_stack: Vec<Vec<CapturedBinding>>,
@@ -737,6 +739,7 @@ struct Lowerer {
     /// 用于 `import { x as y }` 和 `import x from './dep'` 等场景
     import_aliases: std::collections::HashMap<String, String>,
     is_async_fn: bool,
+    is_async_generator_fn: bool,
     async_state_counter: u32,
     captured_var_slots: std::collections::HashMap<String, u32>,
     async_next_continuation_slot: u32,
@@ -747,6 +750,25 @@ struct Lowerer {
     async_state_scope_id: usize,
     async_resume_val_scope_id: usize,
     async_is_rejected_scope_id: usize,
+    async_generator_scope_id: usize,
+    async_closure_env_ir_name: Option<String>,
+}
+
+#[derive(Clone)]
+struct AsyncContextState {
+    is_async_fn: bool,
+    is_async_generator_fn: bool,
+    async_state_counter: u32,
+    captured_var_slots: std::collections::HashMap<String, u32>,
+    async_next_continuation_slot: u32,
+    async_resume_blocks: Vec<(u32, BasicBlockId)>,
+    async_promise_scope_id: usize,
+    async_dispatch_block: Option<BasicBlockId>,
+    async_env_scope_id: usize,
+    async_state_scope_id: usize,
+    async_resume_val_scope_id: usize,
+    async_is_rejected_scope_id: usize,
+    async_generator_scope_id: usize,
     async_closure_env_ir_name: Option<String>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -821,6 +843,7 @@ impl Lowerer {
             function_hoisted_stack: Vec::new(),
             function_next_value_stack: Vec::new(),
             function_next_temp_stack: Vec::new(),
+            async_context_stack: Vec::new(),
             captured_names_stack: Vec::new(),
             function_scope_id_stack: Vec::new(),
             is_arrow_fn_stack: Vec::new(),
@@ -830,6 +853,7 @@ impl Lowerer {
             export_map: std::collections::HashMap::new(),
             import_aliases: std::collections::HashMap::new(),
             is_async_fn: false,
+            is_async_generator_fn: false,
             async_state_counter: 0,
             captured_var_slots: std::collections::HashMap::new(),
             async_next_continuation_slot: 0,
@@ -840,11 +864,68 @@ impl Lowerer {
             async_state_scope_id: 0,
             async_resume_val_scope_id: 0,
             async_is_rejected_scope_id: 0,
+            async_generator_scope_id: 0,
             async_closure_env_ir_name: None,
         }
     }
 
+    fn capture_async_context(&self) -> AsyncContextState {
+        AsyncContextState {
+            is_async_fn: self.is_async_fn,
+            is_async_generator_fn: self.is_async_generator_fn,
+            async_state_counter: self.async_state_counter,
+            captured_var_slots: self.captured_var_slots.clone(),
+            async_next_continuation_slot: self.async_next_continuation_slot,
+            async_resume_blocks: self.async_resume_blocks.clone(),
+            async_promise_scope_id: self.async_promise_scope_id,
+            async_dispatch_block: self.async_dispatch_block,
+            async_env_scope_id: self.async_env_scope_id,
+            async_state_scope_id: self.async_state_scope_id,
+            async_resume_val_scope_id: self.async_resume_val_scope_id,
+            async_is_rejected_scope_id: self.async_is_rejected_scope_id,
+            async_generator_scope_id: self.async_generator_scope_id,
+            async_closure_env_ir_name: self.async_closure_env_ir_name.clone(),
+        }
+    }
+
+    fn restore_async_context(&mut self, context: AsyncContextState) {
+        self.is_async_fn = context.is_async_fn;
+        self.is_async_generator_fn = context.is_async_generator_fn;
+        self.async_state_counter = context.async_state_counter;
+        self.captured_var_slots = context.captured_var_slots;
+        self.async_next_continuation_slot = context.async_next_continuation_slot;
+        self.async_resume_blocks = context.async_resume_blocks;
+        self.async_promise_scope_id = context.async_promise_scope_id;
+        self.async_dispatch_block = context.async_dispatch_block;
+        self.async_env_scope_id = context.async_env_scope_id;
+        self.async_state_scope_id = context.async_state_scope_id;
+        self.async_resume_val_scope_id = context.async_resume_val_scope_id;
+        self.async_is_rejected_scope_id = context.async_is_rejected_scope_id;
+        self.async_generator_scope_id = context.async_generator_scope_id;
+        self.async_closure_env_ir_name = context.async_closure_env_ir_name;
+    }
+
+    fn reset_async_context(&mut self) {
+        self.restore_async_context(AsyncContextState {
+            is_async_fn: false,
+            is_async_generator_fn: false,
+            async_state_counter: 0,
+            captured_var_slots: std::collections::HashMap::new(),
+            async_next_continuation_slot: 0,
+            async_resume_blocks: Vec::new(),
+            async_promise_scope_id: 0,
+            async_dispatch_block: None,
+            async_env_scope_id: 0,
+            async_state_scope_id: 0,
+            async_resume_val_scope_id: 0,
+            async_is_rejected_scope_id: 0,
+            async_generator_scope_id: 0,
+            async_closure_env_ir_name: None,
+        });
+    }
+
     fn push_function_context(&mut self, name: impl Into<String>, entry: BasicBlockId) {
+        self.async_context_stack.push(self.capture_async_context());
         self.function_stack.push(std::mem::replace(
             &mut self.current_function,
             FunctionBuilder::new(name, entry),
@@ -870,6 +951,7 @@ impl Lowerer {
         self.try_contexts.clear();
         self.active_finalizers.clear();
         self.pending_loop_label = None;
+        self.reset_async_context();
     }
 
     fn pop_function_context(&mut self) {
@@ -894,6 +976,11 @@ impl Lowerer {
             .function_next_temp_stack
             .pop()
             .expect("next temp stack underflow");
+        let async_context = self
+            .async_context_stack
+            .pop()
+            .expect("async context stack underflow");
+        self.restore_async_context(async_context);
     }
 
     fn current_function_scope_id(&self) -> usize {
@@ -1696,75 +1783,53 @@ impl Lowerer {
 
         let iterable = self.lower_expr(&for_of.right, block)?;
 
-        let async_iter_key_const = self
-            .module
-            .add_constant(Constant::String("Symbol.asyncIterator".to_string()));
-        let async_iter_key = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: async_iter_key,
-                constant: async_iter_key_const,
-            },
-        );
-
-        let async_iter_method = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::GetProp {
-                dest: async_iter_method,
-                object: iterable,
-                key: async_iter_key,
-            },
-        );
-
-        let undef_const = self.module.add_constant(Constant::Undefined);
-        let undef_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: undef_val,
-                constant: undef_const,
-            },
-        );
-
-        let iter_call_result = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Call {
-                dest: Some(iter_call_result),
-                callee: async_iter_method,
-                this_val: iterable,
-                args: vec![],
-            },
-        );
-
         let iter_handle = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::CallBuiltin {
                 dest: Some(iter_handle),
                 builtin: Builtin::IteratorFrom,
-                args: vec![iter_call_result],
+                args: vec![iterable],
+            },
+        );
+        let iter_binding = format!("$for_await_iter.{}", self.next_temp);
+        self.next_temp += 1;
+        let iter_scope_id = self
+            .scopes
+            .declare(&iter_binding, VarKind::Let, true)
+            .map_err(|msg| self.error(for_of.span(), msg))?;
+        let iter_ir_name = format!("${iter_scope_id}.{iter_binding}");
+        self.current_function.append_instruction(
+            block,
+            Instruction::StoreVar {
+                name: iter_ir_name.clone(),
+                value: iter_handle,
             },
         );
 
         let header = self.current_function.new_block();
         let body_block = self.current_function.new_block();
-        let next_block = self.current_function.new_block();
         let close = self.current_function.new_block();
         let exit = self.current_function.new_block();
 
         self.current_function
             .set_terminator(block, Terminator::Jump { target: header });
 
+        let iter_for_next = self.alloc_value();
+        self.current_function.append_instruction(
+            header,
+            Instruction::LoadVar {
+                dest: iter_for_next,
+                name: iter_ir_name.clone(),
+            },
+        );
         let next_call_result = self.alloc_value();
         self.current_function.append_instruction(
             header,
             Instruction::CallBuiltin {
                 dest: Some(next_call_result),
                 builtin: Builtin::IteratorNext,
-                args: vec![iter_handle],
+                args: vec![iter_for_next],
             },
         );
 
@@ -1830,13 +1895,32 @@ impl Lowerer {
         );
         self.emit_throw_value(throw_block, resume_val)?;
 
+        let awaited_result = self.alloc_value();
+        self.current_function.append_instruction(
+            continue_after_await,
+            Instruction::LoadVar {
+                dest: awaited_result,
+                name: format!("${}.$resume_val", self.async_resume_val_scope_id),
+            },
+        );
+        let done_key_const = self
+            .module
+            .add_constant(Constant::String("done".to_string()));
+        let done_key = self.alloc_value();
+        self.current_function.append_instruction(
+            continue_after_await,
+            Instruction::Const {
+                dest: done_key,
+                constant: done_key_const,
+            },
+        );
         let done_val = self.alloc_value();
         self.current_function.append_instruction(
             continue_after_await,
-            Instruction::CallBuiltin {
-                dest: Some(done_val),
-                builtin: Builtin::IteratorDone,
-                args: vec![iter_handle],
+            Instruction::GetProp {
+                dest: done_val,
+                object: awaited_result,
+                key: done_key,
             },
         );
         let not_done = self.alloc_value();
@@ -1857,21 +1941,48 @@ impl Lowerer {
             },
         );
 
+        let iter_for_body_close = self.alloc_value();
+        self.current_function.append_instruction(
+            body_block,
+            Instruction::LoadVar {
+                dest: iter_for_body_close,
+                name: iter_ir_name.clone(),
+            },
+        );
         self.label_stack.push(LabelContext {
             label: self.pending_loop_label.take(),
             kind: LabelKind::Loop,
             break_target: close,
-            continue_target: Some(next_block),
-            iterator_to_close: Some(iter_handle),
+            continue_target: Some(header),
+            iterator_to_close: Some(iter_for_body_close),
         });
 
+        let awaited_result_for_value = self.alloc_value();
+        self.current_function.append_instruction(
+            body_block,
+            Instruction::LoadVar {
+                dest: awaited_result_for_value,
+                name: format!("${}.$resume_val", self.async_resume_val_scope_id),
+            },
+        );
+        let value_key_const = self
+            .module
+            .add_constant(Constant::String("value".to_string()));
+        let value_key = self.alloc_value();
+        self.current_function.append_instruction(
+            body_block,
+            Instruction::Const {
+                dest: value_key,
+                constant: value_key_const,
+            },
+        );
         let value_val = self.alloc_value();
         self.current_function.append_instruction(
             body_block,
-            Instruction::CallBuiltin {
-                dest: Some(value_val),
-                builtin: Builtin::IteratorValue,
-                args: vec![iter_handle],
+            Instruction::GetProp {
+                dest: value_val,
+                object: awaited_result_for_value,
+                key: value_key,
             },
         );
 
@@ -1880,23 +1991,28 @@ impl Lowerer {
         let body_flow = self.lower_stmt(&for_of.body, StmtFlow::Open(body_block))?;
         let _ = self
             .current_function
-            .ensure_jump_or_terminated(body_flow, next_block);
+            .ensure_jump_or_terminated(body_flow, header);
 
         self.label_stack.pop();
 
+        let iter_for_close = self.alloc_value();
+        self.current_function.append_instruction(
+            close,
+            Instruction::LoadVar {
+                dest: iter_for_close,
+                name: iter_ir_name,
+            },
+        );
         self.current_function.append_instruction(
             close,
             Instruction::CallBuiltin {
                 dest: None,
                 builtin: Builtin::IteratorClose,
-                args: vec![iter_handle],
+                args: vec![iter_for_close],
             },
         );
         self.current_function
             .set_terminator(close, Terminator::Jump { target: exit });
-
-        self.current_function
-            .set_terminator(next_block, Terminator::Jump { target: header });
 
         Ok(StmtFlow::Open(exit))
     }
@@ -2099,6 +2215,21 @@ impl Lowerer {
         iterators
     }
 
+    fn iterator_cleanups_from_depth(&self, depth: usize) -> Vec<ValueId> {
+        let mut iterators = self
+            .label_stack
+            .iter()
+            .skip(depth)
+            .filter_map(|ctx| ctx.iterator_to_close)
+            .collect::<Vec<_>>();
+        iterators.reverse();
+        iterators
+    }
+
+    fn active_iterator_cleanups(&self) -> Vec<ValueId> {
+        self.iterator_cleanups_from_depth(0)
+    }
+
     fn emit_iterator_closes(&mut self, block: BasicBlockId, iterators: &[ValueId]) {
         for iterator in iterators {
             self.current_function.append_instruction(
@@ -2176,6 +2307,7 @@ impl Lowerer {
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
+        let iterator_cleanups = self.active_iterator_cleanups();
 
         if self.is_async_fn {
             let value = if let Some(arg) = &return_stmt.arg {
@@ -2196,21 +2328,41 @@ impl Lowerer {
             let return_block = self.resolve_store_block(block);
             match self.lower_pending_finalizers(return_block)? {
                 StmtFlow::Open(after_finally) => {
-                    let promise_val = self.alloc_value();
-                    self.current_function.append_instruction(
-                        after_finally,
-                        Instruction::LoadVar {
-                            dest: promise_val,
-                            name: format!("${}.$promise", self.async_promise_scope_id),
-                        },
-                    );
-                    self.current_function.append_instruction(
-                        after_finally,
-                        Instruction::PromiseResolve {
-                            promise: promise_val,
-                            value,
-                        },
-                    );
+                    self.emit_iterator_closes(after_finally, &iterator_cleanups);
+                    if self.is_async_generator_fn {
+                        let gen_val = self.alloc_value();
+                        self.current_function.append_instruction(
+                            after_finally,
+                            Instruction::LoadVar {
+                                dest: gen_val,
+                                name: format!("${}.$generator", self.async_generator_scope_id),
+                            },
+                        );
+                        self.current_function.append_instruction(
+                            after_finally,
+                            Instruction::CallBuiltin {
+                                dest: None,
+                                builtin: Builtin::AsyncGeneratorReturn,
+                                args: vec![gen_val, value],
+                            },
+                        );
+                    } else {
+                        let promise_val = self.alloc_value();
+                        self.current_function.append_instruction(
+                            after_finally,
+                            Instruction::LoadVar {
+                                dest: promise_val,
+                                name: format!("${}.$promise", self.async_promise_scope_id),
+                            },
+                        );
+                        self.current_function.append_instruction(
+                            after_finally,
+                            Instruction::PromiseResolve {
+                                promise: promise_val,
+                                value,
+                            },
+                        );
+                    }
                     self.current_function
                         .set_terminator(after_finally, Terminator::Return { value: None });
                 }
@@ -2228,6 +2380,7 @@ impl Lowerer {
         let return_block = self.resolve_store_block(block);
         match self.lower_pending_finalizers(return_block)? {
             StmtFlow::Open(after_finally) => {
+                self.emit_iterator_closes(after_finally, &iterator_cleanups);
                 self.current_function
                     .set_terminator(after_finally, Terminator::Return { value });
             }
@@ -2391,6 +2544,7 @@ impl Lowerer {
         if let Some(try_ctx) = self.try_contexts.last() {
             if let Some(catch_entry) = try_ctx.catch_entry {
                 let exc_var = try_ctx.exception_var.clone();
+                let iterator_cleanups = self.iterator_cleanups_from_depth(try_ctx.label_depth);
                 self.current_function.append_instruction(
                     block,
                     Instruction::StoreVar {
@@ -2398,6 +2552,7 @@ impl Lowerer {
                         value,
                     },
                 );
+                self.emit_iterator_closes(block, &iterator_cleanups);
                 self.current_function.set_terminator(
                     block,
                     Terminator::Jump {
@@ -2411,7 +2566,28 @@ impl Lowerer {
         let throw_block = self.resolve_store_block(block);
         match self.lower_pending_finalizers(throw_block)? {
             StmtFlow::Open(after_finally) => {
-                if self.is_async_fn {
+                let iterator_cleanups = self.active_iterator_cleanups();
+                self.emit_iterator_closes(after_finally, &iterator_cleanups);
+                if self.is_async_generator_fn {
+                    let gen_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::LoadVar {
+                            dest: gen_val,
+                            name: format!("${}.$generator", self.async_generator_scope_id),
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        after_finally,
+                        Instruction::CallBuiltin {
+                            dest: None,
+                            builtin: Builtin::AsyncGeneratorThrow,
+                            args: vec![gen_val, value],
+                        },
+                    );
+                    self.current_function
+                        .set_terminator(after_finally, Terminator::Return { value: None });
+                } else if self.is_async_fn {
                     self.emit_async_reject(after_finally, value);
                 } else {
                     self.current_function
@@ -2459,6 +2635,7 @@ impl Lowerer {
         self.try_contexts.push(TryContext {
             catch_entry: if has_catch { Some(catch_entry) } else { None },
             exception_var: exc_var,
+            label_depth: self.label_stack.len(),
         });
 
         if let Some(finally) = &try_stmt.finalizer {
@@ -3478,6 +3655,7 @@ impl Lowerer {
 
         self.push_function_context(&async_gen_name, BasicBlockId(0));
         self.is_async_fn = true;
+        self.is_async_generator_fn = true;
         self.async_state_counter = 1;
         self.captured_var_slots.clear();
         self.async_resume_blocks.clear();
@@ -3521,10 +3699,12 @@ impl Lowerer {
         self.async_resume_val_scope_id = resume_val_scope_id;
         self.async_is_rejected_scope_id = is_rejected_scope_id;
         self.async_promise_scope_id = promise_scope_id;
+        self.async_generator_scope_id = gen_scope_id;
         self.async_closure_env_ir_name = Some(format!("${closure_env_scope_id}.$closure_env"));
 
         let user_param_ir_names =
             self.build_param_ir_names(&fn_decl.function.params, env_scope_id, this_scope_id)?;
+        self.init_async_continuation_slots(&user_param_ir_names, 4);
 
         let param_ir_names = vec![
             format!("${env_scope_id}.$env"),
@@ -3624,11 +3804,11 @@ impl Lowerer {
                 constant: slot2_const,
             },
         );
-        let promise_from_cont = self.alloc_value();
+        let gen_from_cont = self.alloc_value();
         self.current_function.append_instruction(
             entry,
             Instruction::CallBuiltin {
-                dest: Some(promise_from_cont),
+                dest: Some(gen_from_cont),
                 builtin: Builtin::ContinuationLoadVar,
                 args: vec![cont_val, slot2_val],
             },
@@ -3636,8 +3816,8 @@ impl Lowerer {
         self.current_function.append_instruction(
             entry,
             Instruction::StoreVar {
-                name: format!("${promise_scope_id}.$promise"),
-                value: promise_from_cont,
+                name: format!("${gen_scope_id}.$generator"),
+                value: gen_from_cont,
             },
         );
 
@@ -3667,34 +3847,8 @@ impl Lowerer {
             },
         );
 
-        let slot4_const = self.module.add_constant(Constant::Number(4.0));
-        let slot4_val = self.alloc_value();
-        self.current_function.append_instruction(
-            entry,
-            Instruction::Const {
-                dest: slot4_val,
-                constant: slot4_const,
-            },
-        );
-        let gen_from_cont = self.alloc_value();
-        self.current_function.append_instruction(
-            entry,
-            Instruction::CallBuiltin {
-                dest: Some(gen_from_cont),
-                builtin: Builtin::ContinuationLoadVar,
-                args: vec![cont_val, slot4_val],
-            },
-        );
-        self.current_function.append_instruction(
-            entry,
-            Instruction::StoreVar {
-                name: format!("${gen_scope_id}.$generator"),
-                value: gen_from_cont,
-            },
-        );
-
         for (i, _param) in fn_decl.function.params.iter().enumerate() {
-            let slot_const = self.module.add_constant(Constant::Number((5 + i) as f64));
+            let slot_const = self.module.add_constant(Constant::Number((4 + i) as f64));
             let slot_val = self.alloc_value();
             self.current_function.append_instruction(
                 entry,
@@ -3737,23 +3891,6 @@ impl Lowerer {
         );
         self.current_function
             .set_terminator(dispatch_block, Terminator::Unreachable);
-
-        let gen_val = self.alloc_value();
-        self.current_function.append_instruction(
-            body_entry,
-            Instruction::LoadVar {
-                dest: gen_val,
-                name: format!("${gen_scope_id}.$generator"),
-            },
-        );
-        self.current_function.append_instruction(
-            body_entry,
-            Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::AsyncGeneratorStart,
-                args: vec![gen_val],
-            },
-        );
 
         let mut inner_flow = StmtFlow::Open(body_entry);
         if let Some(body) = &fn_decl.function.body {
@@ -3855,44 +3992,55 @@ impl Lowerer {
         let async_gen_fn_id = self.module.push_function(ir_function);
 
         self.pop_function_context();
-        self.is_async_fn = false;
-        self.async_state_counter = 0;
-        self.captured_var_slots.clear();
-        self.async_resume_blocks.clear();
-        self.async_dispatch_block = None;
-        self.async_closure_env_ir_name = None;
 
-        let outer_block = self.ensure_open(flow)?;
+        self.push_function_context(&name, BasicBlockId(0));
 
-        let gen_val = self.alloc_value();
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::CallBuiltin {
-                dest: Some(gen_val),
-                builtin: Builtin::AsyncGeneratorStart,
-                args: vec![],
-            },
-        );
+        let wrapper_env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+        let wrapper_this_scope_id = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| self.error(fn_decl.span(), msg))?;
+        let wrapper_user_param_ir_names = self.build_param_ir_names(
+            &fn_decl.function.params,
+            wrapper_env_scope_id,
+            wrapper_this_scope_id,
+        )?;
+        let wrapper_entry = BasicBlockId(0);
+        self.emit_hoisted_var_initializers(wrapper_entry);
+        let wrapper_after_inits = self.emit_param_inits(
+            &fn_decl.function.params,
+            &wrapper_user_param_ir_names,
+            wrapper_entry,
+        )?;
 
         let func_ref_const = self
             .module
             .add_constant(Constant::FunctionRef(async_gen_fn_id));
         let func_ref_val = self.alloc_value();
         self.current_function.append_instruction(
-            outer_block,
+            wrapper_after_inits,
             Instruction::Const {
                 dest: func_ref_val,
                 constant: func_ref_const,
             },
         );
-
         let (callee_val, env_val_opt) = if captured.is_empty() {
             (func_ref_val, None)
         } else {
-            let env_val = self.ensure_shared_env(outer_block, &captured, fn_decl.span())?;
+            let env_val = self.alloc_value();
+            self.current_function.append_instruction(
+                wrapper_after_inits,
+                Instruction::LoadVar {
+                    dest: env_val,
+                    name: format!("${wrapper_env_scope_id}.$env"),
+                },
+            );
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
-                outer_block,
+                wrapper_after_inits,
                 Instruction::CallBuiltin {
                     dest: Some(closure_val),
                     builtin: Builtin::CreateClosure,
@@ -3902,178 +4050,164 @@ impl Lowerer {
             (closure_val, Some(env_val))
         };
 
-        let num_user_params = fn_decl.function.params.len();
-        let count_val_num = 3 + num_user_params;
+        let count_val_num = 4 + fn_decl.function.params.len();
         let count_const = self
             .module
             .add_constant(Constant::Number(count_val_num as f64));
         let count_val = self.alloc_value();
         self.current_function.append_instruction(
-            outer_block,
+            wrapper_after_inits,
             Instruction::Const {
                 dest: count_val,
                 constant: count_const,
             },
         );
-
-        let undef_const_for_promise = self.module.add_constant(Constant::Undefined);
-        let undef_for_promise = self.alloc_value();
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::Const {
-                dest: undef_for_promise,
-                constant: undef_const_for_promise,
-            },
-        );
-
-        let cont_val = self.alloc_value();
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::CallBuiltin {
-                dest: Some(cont_val),
-                builtin: Builtin::ContinuationCreate,
-                args: vec![callee_val, undef_for_promise, count_val],
-            },
-        );
-
-        let save_slot0_const = self.module.add_constant(Constant::Number(0.0));
-        let save_slot0_val = self.alloc_value();
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::Const {
-                dest: save_slot0_val,
-                constant: save_slot0_const,
-            },
-        );
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::ContinuationSaveVar,
-                args: vec![cont_val, save_slot0_val, undef_for_promise],
-            },
-        );
-
-        let save_slot1_const = self.module.add_constant(Constant::Number(1.0));
-        let save_slot1_val = self.alloc_value();
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::Const {
-                dest: save_slot1_val,
-                constant: save_slot1_const,
-            },
-        );
-        let env_for_slot = if let Some(ev) = env_val_opt {
-            ev
-        } else {
-            let ud_const = self.module.add_constant(Constant::Undefined);
-            let ud_val = self.alloc_value();
-            self.current_function.append_instruction(
-                outer_block,
-                Instruction::Const {
-                    dest: ud_val,
-                    constant: ud_const,
-                },
-            );
-            ud_val
-        };
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::ContinuationSaveVar,
-                args: vec![cont_val, save_slot1_val, env_for_slot],
-            },
-        );
-
-        let save_slot2_const = self.module.add_constant(Constant::Number(2.0));
-        let save_slot2_val = self.alloc_value();
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::Const {
-                dest: save_slot2_val,
-                constant: save_slot2_const,
-            },
-        );
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::ContinuationSaveVar,
-                args: vec![cont_val, save_slot2_val, gen_val],
-            },
-        );
-
-        for (i, arg) in fn_decl.function.params.iter().enumerate() {
-            if let swc_ast::Pat::Ident(binding) = &arg.pat {
-                let (scope_id, _) = self
-                    .scopes
-                    .lookup(&binding.id.sym)
-                    .map_err(|msg| self.error(fn_decl.span(), msg))?;
-                let arg_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    outer_block,
-                    Instruction::LoadVar {
-                        dest: arg_val,
-                        name: format!("${scope_id}.{}", binding.id.sym),
-                    },
-                );
-                let save_slot_const = self.module.add_constant(Constant::Number((3 + i) as f64));
-                let save_slot_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    outer_block,
-                    Instruction::Const {
-                        dest: save_slot_val,
-                        constant: save_slot_const,
-                    },
-                );
-                self.current_function.append_instruction(
-                    outer_block,
-                    Instruction::CallBuiltin {
-                        dest: None,
-                        builtin: Builtin::ContinuationSaveVar,
-                        args: vec![cont_val, save_slot_val, arg_val],
-                    },
-                );
-            }
-        }
-
-        let zero_const = self.module.add_constant(Constant::Number(0.0));
-        let zero_val = self.alloc_value();
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::Const {
-                dest: zero_val,
-                constant: zero_const,
-            },
-        );
         let undef_const = self.module.add_constant(Constant::Undefined);
         let undef_val = self.alloc_value();
         self.current_function.append_instruction(
-            outer_block,
+            wrapper_after_inits,
             Instruction::Const {
                 dest: undef_val,
                 constant: undef_const,
             },
         );
-        let false_const = self.module.add_constant(Constant::Bool(false));
-        let false_val = self.alloc_value();
+        let cont_val = self.alloc_value();
         self.current_function.append_instruction(
-            outer_block,
-            Instruction::Const {
-                dest: false_val,
-                constant: false_const,
+            wrapper_after_inits,
+            Instruction::CallBuiltin {
+                dest: Some(cont_val),
+                builtin: Builtin::ContinuationCreate,
+                args: vec![callee_val, undef_val, count_val],
             },
         );
+        let gen_val = self.alloc_value();
         self.current_function.append_instruction(
-            outer_block,
+            wrapper_after_inits,
             Instruction::CallBuiltin {
-                dest: None,
-                builtin: Builtin::AsyncFunctionResume,
-                args: vec![callee_val, cont_val, zero_val, undef_val, false_val],
+                dest: Some(gen_val),
+                builtin: Builtin::AsyncGeneratorStart,
+                args: vec![cont_val],
             },
         );
 
+        let slot2_const = self.module.add_constant(Constant::Number(2.0));
+        let slot2_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_after_inits,
+            Instruction::Const {
+                dest: slot2_val,
+                constant: slot2_const,
+            },
+        );
+        self.current_function.append_instruction(
+            wrapper_after_inits,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ContinuationSaveVar,
+                args: vec![cont_val, slot2_val, gen_val],
+            },
+        );
+
+        let slot3_const = self.module.add_constant(Constant::Number(3.0));
+        let slot3_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_after_inits,
+            Instruction::Const {
+                dest: slot3_val,
+                constant: slot3_const,
+            },
+        );
+        let env_for_slot = if let Some(env_val) = env_val_opt {
+            env_val
+        } else {
+            undef_val
+        };
+        self.current_function.append_instruction(
+            wrapper_after_inits,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ContinuationSaveVar,
+                args: vec![cont_val, slot3_val, env_for_slot],
+            },
+        );
+
+        for (i, _arg) in fn_decl.function.params.iter().enumerate() {
+            let param_ir_name = &wrapper_user_param_ir_names[2 + i];
+            let arg_val = self.alloc_value();
+            self.current_function.append_instruction(
+                wrapper_after_inits,
+                Instruction::LoadVar {
+                    dest: arg_val,
+                    name: param_ir_name.clone(),
+                },
+            );
+            let save_slot_const = self.module.add_constant(Constant::Number((4 + i) as f64));
+            let save_slot_val = self.alloc_value();
+            self.current_function.append_instruction(
+                wrapper_after_inits,
+                Instruction::Const {
+                    dest: save_slot_val,
+                    constant: save_slot_const,
+                },
+            );
+            self.current_function.append_instruction(
+                wrapper_after_inits,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ContinuationSaveVar,
+                    args: vec![cont_val, save_slot_val, arg_val],
+                },
+            );
+        }
+
+        self.current_function.set_terminator(
+            wrapper_after_inits,
+            Terminator::Return {
+                value: Some(gen_val),
+            },
+        );
+
+        let old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let blocks = old_fn.into_blocks();
+        let mut wrapper_ir_function = Function::new(&name, BasicBlockId(0));
+        wrapper_ir_function.set_params(wrapper_user_param_ir_names.clone());
+        wrapper_ir_function.set_captured_names(Self::captured_display_names(&captured));
+        for b in blocks {
+            wrapper_ir_function.push_block(b);
+        }
+        let wrapper_fn_id = self.module.push_function(wrapper_ir_function);
+        self.pop_function_context();
+
+        let outer_block = self.ensure_open(flow)?;
+        let wrapper_ref_const = self
+            .module
+            .add_constant(Constant::FunctionRef(wrapper_fn_id));
+        let wrapper_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            outer_block,
+            Instruction::Const {
+                dest: wrapper_ref_val,
+                constant: wrapper_ref_const,
+            },
+        );
+        let callee_val = if captured.is_empty() {
+            wrapper_ref_val
+        } else {
+            let env_val = self.ensure_shared_env(outer_block, &captured, fn_decl.span())?;
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                outer_block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![wrapper_ref_val, env_val],
+                },
+            );
+            closure_val
+        };
         let (scope_id, _) = self
             .scopes
             .lookup(&name)
@@ -4083,7 +4217,7 @@ impl Lowerer {
             outer_block,
             Instruction::StoreVar {
                 name: ir_name,
-                value: gen_val,
+                value: callee_val,
             },
         );
 
@@ -4438,13 +4572,6 @@ impl Lowerer {
         let async_fn_id = self.module.push_function(ir_function);
 
         self.pop_function_context();
-        self.is_async_fn = false;
-        self.async_state_counter = 0;
-        self.captured_var_slots.clear();
-        self.async_next_continuation_slot = 0;
-        self.async_resume_blocks.clear();
-        self.async_dispatch_block = None;
-        self.async_closure_env_ir_name = None;
 
         self.push_function_context(&name, BasicBlockId(0));
 
@@ -5189,13 +5316,6 @@ impl Lowerer {
         let async_fn_id = self.module.push_function(ir_function);
 
         self.pop_function_context();
-        self.is_async_fn = false;
-        self.async_state_counter = 0;
-        self.captured_var_slots.clear();
-        self.async_next_continuation_slot = 0;
-        self.async_resume_blocks.clear();
-        self.async_dispatch_block = None;
-        self.async_closure_env_ir_name = None;
 
         self.push_function_context(&name, BasicBlockId(0));
 
@@ -5935,13 +6055,6 @@ impl Lowerer {
         let async_fn_id = self.module.push_function(ir_function);
 
         self.pop_function_context();
-        self.is_async_fn = false;
-        self.async_state_counter = 0;
-        self.captured_var_slots.clear();
-        self.async_next_continuation_slot = 0;
-        self.async_resume_blocks.clear();
-        self.async_dispatch_block = None;
-        self.async_closure_env_ir_name = None;
 
         self.push_function_context(&name, BasicBlockId(0));
 
@@ -8301,7 +8414,7 @@ impl Lowerer {
             block,
             Instruction::LoadVar {
                 dest: gen_val,
-                name: "$generator".to_string(),
+                name: format!("${}.$generator", self.async_generator_scope_id),
             },
         );
 
@@ -8314,23 +8427,16 @@ impl Lowerer {
             let continue_block = self.current_function.new_block();
 
             self.async_resume_blocks.push((next_state, resume_block));
-
-            self.current_function.append_instruction(
-                block,
-                Instruction::CallBuiltin {
-                    dest: None,
-                    builtin: Builtin::AsyncGeneratorNext,
-                    args: vec![gen_val, value],
-                },
-            );
+            let saved_bindings = self.async_visible_binding_names();
+            self.emit_save_async_bindings(block, &saved_bindings);
 
             let promised = self.alloc_value();
             self.current_function.append_instruction(
                 block,
                 Instruction::CallBuiltin {
                     dest: Some(promised),
-                    builtin: Builtin::PromiseResolveStatic,
-                    args: vec![gen_val],
+                    builtin: Builtin::AsyncGeneratorNext,
+                    args: vec![gen_val, value],
                 },
             );
 
@@ -8349,6 +8455,7 @@ impl Lowerer {
                 },
             );
 
+            self.emit_restore_async_bindings(resume_block, &saved_bindings);
             let resume_val = self.alloc_value();
             self.current_function.append_instruction(
                 resume_block,
@@ -8375,19 +8482,20 @@ impl Lowerer {
                 },
             );
 
-            let promise_val = self.alloc_value();
+            let gen_for_throw = self.alloc_value();
             self.current_function.append_instruction(
                 reject_block,
                 Instruction::LoadVar {
-                    dest: promise_val,
-                    name: format!("${}.$promise", self.async_promise_scope_id),
+                    dest: gen_for_throw,
+                    name: format!("${}.$generator", self.async_generator_scope_id),
                 },
             );
             self.current_function.append_instruction(
                 reject_block,
-                Instruction::PromiseReject {
-                    promise: promise_val,
-                    reason: resume_val,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::AsyncGeneratorThrow,
+                    args: vec![gen_for_throw, resume_val],
                 },
             );
             self.current_function
