@@ -1,0 +1,130 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(0)
+    c4 = number(1)
+    c5 = number(2)
+    c6 = number(3)
+    c7 = undefined
+    c8 = string("boom")
+    c9 = undefined
+    c10 = string("caught")
+    c11 = undefined
+    c12 = number(0)
+    c13 = number(1)
+    c14 = functionref(@0)
+    c15 = number(4)
+    c16 = number(2)
+    c17 = number(3)
+    c18 = undefined
+    c19 = number(0)
+    c20 = undefined
+    c21 = bool(false)
+    c22 = functionref(@1)
+    c23 = undefined
+    c24 = functionref(@2)
+    c25 = undefined
+
+  fn @recover$async [params: $1.$env, $1.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $1.$env
+      %1 = const c3
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $1.$state, %2
+      %3 = const c4
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $1.$is_rejected, %4
+      %5 = load var $1.$this
+      store var $1.$resume_val, %5
+      %6 = const c5
+      %7 = call builtin.continuation.load_var(%0, %6)
+      store var $1.$promise, %7
+      %8 = const c6
+      %9 = call builtin.continuation.load_var(%0, %8)
+      store var $1.$closure_env, %9
+      jump bb1
+    bb1:
+      %23 = load var $1.$state
+      switch %23 [case c12 -> bb2, case c13 -> bb7], default bb10, exit bb11
+    bb2:
+      jump bb3
+    bb3:
+      %10 = const c7
+      %11 = const c8
+      %12 = call builtin.promise.reject_static(%10, %11)
+      %14 = const c9
+      %13 = call builtin.promise.resolve_static(%14, %12)
+      suspend %13, state=1
+      jump bb9
+    bb4:
+      %18 = load var $tmp.0
+      store var $3.e, %18
+      %19 = const c10
+      %20 = load var $1.$promise
+      promise_resolve %20, %19
+      return
+    bb5:
+      unreachable
+    bb6:
+      %21 = const c11
+      %22 = load var $1.$promise
+      promise_resolve %22, %21
+      return
+    bb7:
+      %15 = load var $1.$resume_val
+      %16 = load var $1.$is_rejected
+      branch %16, bb8, bb9
+    bb8:
+      store var $tmp.0, %15
+      jump bb4
+    bb9:
+      %17 = load var $1.$resume_val
+      jump bb6
+    bb10:
+      return
+    bb11:
+      unreachable
+
+  fn @recover [params: $5.$env, $5.$this] [entry=bb0]:
+    bb0:
+      %0 = new_promise
+      %1 = const c14
+      %2 = const c15
+      %3 = call builtin.continuation.create(%1, %0, %2)
+      %4 = const c16
+      call builtin.continuation.save_var(%3, %4, %0)
+      %5 = const c17
+      %6 = const c18
+      call builtin.continuation.save_var(%3, %5, %6)
+      %7 = const c19
+      %8 = const c20
+      %9 = const c21
+      call builtin.async_function.resume(%1, %3, %7, %8, %9)
+      return %0
+
+  fn @arrow_2 [params: $6.$env, $6.$this, $6.v] [entry=bb0]:
+    bb0:
+      %0 = load var $6.v
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c22
+      store var $0.recover, %3
+      %4 = const c23
+      %5 = load var $0.recover
+      %6 = call %5, this=%4
+      %7 = const c24
+      %8 = const c25
+      %9 = call builtin.promise.then(%6, %7, %8)
+      return
+}

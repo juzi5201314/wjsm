@@ -1,0 +1,95 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = undefined
+    c4 = number(42)
+    c5 = functionref(@0)
+    c6 = undefined
+    c7 = undefined
+    c8 = string("hello")
+    c9 = functionref(@1)
+    c10 = undefined
+    c11 = undefined
+    c12 = bool(true)
+    c13 = functionref(@2)
+    c14 = undefined
+    c15 = undefined
+    c16 = null
+    c17 = functionref(@3)
+    c18 = undefined
+    c19 = undefined
+    c20 = functionref(@4)
+    c21 = undefined
+
+  fn @arrow_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
+    bb0:
+      %0 = load var $1.v
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @arrow_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
+    bb0:
+      %0 = load var $2.v
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @arrow_2 [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
+    bb0:
+      %0 = load var $3.v
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @arrow_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
+    bb0:
+      %0 = load var $4.v
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @arrow_4 [params: $5.$env, $5.$this, $5.v] [entry=bb0]:
+    bb0:
+      %0 = load var $5.v
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      %4 = const c4
+      %5 = call builtin.promise.resolve_static(%3, %4)
+      %6 = const c5
+      %7 = const c6
+      %8 = call builtin.promise.then(%5, %6, %7)
+      %9 = const c7
+      %10 = const c8
+      %11 = call builtin.promise.resolve_static(%9, %10)
+      %12 = const c9
+      %13 = const c10
+      %14 = call builtin.promise.then(%11, %12, %13)
+      %15 = const c11
+      %16 = const c12
+      %17 = call builtin.promise.resolve_static(%15, %16)
+      %18 = const c13
+      %19 = const c14
+      %20 = call builtin.promise.then(%17, %18, %19)
+      %21 = const c15
+      %22 = const c16
+      %23 = call builtin.promise.resolve_static(%21, %22)
+      %24 = const c17
+      %25 = const c18
+      %26 = call builtin.promise.then(%23, %24, %25)
+      %27 = const c19
+      %28 = load var $0.undefined
+      %29 = call builtin.promise.resolve_static(%27, %28)
+      %30 = const c20
+      %31 = const c21
+      %32 = call builtin.promise.then(%29, %30, %31)
+      return
+}

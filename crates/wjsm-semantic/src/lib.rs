@@ -377,6 +377,143 @@ enum StmtFlow {
 
 // ── Public API ──────────────────────────────────────────────────────────
 
+/// 检测模块体是否包含 top-level `await`（不递归进入函数/类体边界）
+fn has_top_level_await(module: &swc_ast::Module) -> bool {
+    fn expr_has_await(expr: &swc_ast::Expr) -> bool {
+        match expr {
+            swc_ast::Expr::Await(_) => true,
+            // 边界：不递归进入函数/类体
+            swc_ast::Expr::Fn(_) | swc_ast::Expr::Arrow(_) | swc_ast::Expr::Class(_) => false,
+            // 递归检查子表达式
+            swc_ast::Expr::Array(a) => a
+                .elems
+                .iter()
+                .any(|e| e.as_ref().map_or(false, |e| expr_has_await(&e.expr))),
+            swc_ast::Expr::Object(o) => o.props.iter().any(|p| match p {
+                swc_ast::PropOrSpread::Spread(s) => expr_has_await(&s.expr),
+                swc_ast::PropOrSpread::Prop(p) => match &**p {
+                    swc_ast::Prop::KeyValue(kv) => expr_has_await(&kv.value),
+                    swc_ast::Prop::Assign(a) => expr_has_await(&a.value),
+                    _ => false,
+                },
+            }),
+            swc_ast::Expr::Unary(u) => expr_has_await(&u.arg),
+            swc_ast::Expr::Update(u) => expr_has_await(&u.arg),
+            swc_ast::Expr::Bin(b) => expr_has_await(&b.left) || expr_has_await(&b.right),
+            swc_ast::Expr::Assign(a) => expr_has_await(&a.right),
+            swc_ast::Expr::Member(m) => {
+                expr_has_await(&m.obj)
+                    || matches!(&m.prop, swc_ast::MemberProp::Computed(c) if expr_has_await(&c.expr))
+            }
+            swc_ast::Expr::Cond(c) => {
+                expr_has_await(&c.test) || expr_has_await(&c.cons) || expr_has_await(&c.alt)
+            }
+            swc_ast::Expr::Call(c) => {
+                (match &c.callee {
+                    swc_ast::Callee::Expr(e) => expr_has_await(e),
+                    _ => false,
+                }) || c.args.iter().any(|a| expr_has_await(&a.expr))
+            }
+            swc_ast::Expr::New(n) => {
+                expr_has_await(&n.callee)
+                    || n.args
+                        .as_ref()
+                        .map_or(false, |a| a.iter().any(|a| expr_has_await(&a.expr)))
+            }
+            swc_ast::Expr::Seq(s) => s.exprs.iter().any(|e| expr_has_await(e)),
+            swc_ast::Expr::Tpl(t) => t.exprs.iter().any(|e| expr_has_await(e)),
+            swc_ast::Expr::TaggedTpl(t) => {
+                expr_has_await(&t.tag) || t.tpl.exprs.iter().any(|e| expr_has_await(e))
+            }
+            swc_ast::Expr::Yield(y) => y.arg.as_ref().map_or(false, |a| expr_has_await(a)),
+            swc_ast::Expr::Paren(p) => expr_has_await(&p.expr),
+            _ => false,
+        }
+    }
+
+    fn decl_has_await(decl: &swc_ast::Decl) -> bool {
+        match decl {
+            swc_ast::Decl::Var(v) => v
+                .decls
+                .iter()
+                .any(|d| d.init.as_ref().map_or(false, |i| expr_has_await(i))),
+            swc_ast::Decl::Fn(_) | swc_ast::Decl::Class(_) => false,
+            _ => false,
+        }
+    }
+
+    fn stmt_has_await(stmt: &swc_ast::Stmt) -> bool {
+        match stmt {
+            swc_ast::Stmt::Expr(e) => expr_has_await(&e.expr),
+            swc_ast::Stmt::Decl(d) => decl_has_await(d),
+            swc_ast::Stmt::Block(b) => b.stmts.iter().any(stmt_has_await),
+            swc_ast::Stmt::If(i) => {
+                expr_has_await(&i.test)
+                    || stmt_has_await(&i.cons)
+                    || i.alt.as_ref().map_or(false, |a| stmt_has_await(a))
+            }
+            swc_ast::Stmt::While(w) => expr_has_await(&w.test) || stmt_has_await(&w.body),
+            swc_ast::Stmt::DoWhile(d) => expr_has_await(&d.test) || stmt_has_await(&d.body),
+            swc_ast::Stmt::For(f) => {
+                f.init.as_ref().map_or(false, |init| match init {
+                    swc_ast::VarDeclOrExpr::VarDecl(v) => v
+                        .decls
+                        .iter()
+                        .any(|d| d.init.as_ref().map_or(false, |i| expr_has_await(i))),
+                    swc_ast::VarDeclOrExpr::Expr(e) => expr_has_await(e),
+                }) || f.test.as_ref().map_or(false, |t| expr_has_await(t))
+                    || f.update.as_ref().map_or(false, |u| expr_has_await(u))
+                    || stmt_has_await(&f.body)
+            }
+            swc_ast::Stmt::ForIn(f) => expr_has_await(&f.right) || stmt_has_await(&f.body),
+            swc_ast::Stmt::ForOf(f) => {
+                f.is_await || expr_has_await(&f.right) || stmt_has_await(&f.body)
+            }
+            swc_ast::Stmt::Return(r) => r.arg.as_ref().map_or(false, |a| expr_has_await(a)),
+            swc_ast::Stmt::Throw(t) => expr_has_await(&t.arg),
+            swc_ast::Stmt::Try(t) => {
+                t.block.stmts.iter().any(stmt_has_await)
+                    || t.handler.as_ref().map_or(false, |h| h.body.stmts.iter().any(stmt_has_await))
+                    || t.finalizer.as_ref().map_or(false, |f| f.stmts.iter().any(stmt_has_await))
+            }
+            swc_ast::Stmt::Switch(s) => {
+                expr_has_await(&s.discriminant)
+                    || s.cases.iter().any(|c| {
+                        c.test.as_ref().map_or(false, |t| expr_has_await(t))
+                            || c.cons.iter().any(stmt_has_await)
+                    })
+            }
+            swc_ast::Stmt::Labeled(l) => stmt_has_await(&l.body),
+            swc_ast::Stmt::With(w) => expr_has_await(&w.obj) || stmt_has_await(&w.body),
+            _ => false,
+        }
+    }
+
+    for item in &module.body {
+        match item {
+            swc_ast::ModuleItem::Stmt(stmt) => {
+                if stmt_has_await(stmt) {
+                    return true;
+                }
+            }
+            swc_ast::ModuleItem::ModuleDecl(decl) => match decl {
+                swc_ast::ModuleDecl::ExportDecl(e) => {
+                    if decl_has_await(&e.decl) {
+                        return true;
+                    }
+                }
+                swc_ast::ModuleDecl::ExportDefaultExpr(e) => {
+                    if expr_has_await(&e.expr) {
+                        return true;
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+    false
+}
+
 pub fn lower_module(module: swc_ast::Module) -> Result<Program, LoweringError> {
     Lowerer::new().lower_module(&module)
 }
@@ -477,7 +614,14 @@ pub fn lower_modules(
 
     // 初始化全局内置变量（undefined, NaN, Infinity）
     // 这些变量在顶层作用域中，不需要模块前缀
-    let entry = BasicBlockId(0);
+    let has_tla = modules.iter().any(|(_, m)| has_top_level_await(m));
+    let entry = if has_tla {
+        // 取第一个模块的 span 用于错误报告
+        let first_span = modules.first().map(|(_, m)| m.span).unwrap_or(swc_core::common::DUMMY_SP);
+        lowerer.init_async_main_context(first_span)?
+    } else {
+        BasicBlockId(0)
+    };
 
     // 初始化提升的 var 变量为 undefined
     lowerer.emit_hoisted_var_initializers(entry);
@@ -677,19 +821,54 @@ pub fn lower_modules(
     // 完成：构建 main 函数
     match flow {
         StmtFlow::Open(block) => {
-            lowerer
-                .current_function
-                .set_terminator(block, Terminator::Return { value: None });
+            if has_tla {
+                // TLA：resolve promise 然后 return
+                let undef_const = lowerer.module.add_constant(Constant::Undefined);
+                let undef_val = lowerer.alloc_value();
+                lowerer.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: undef_val,
+                        constant: undef_const,
+                    },
+                );
+                let promise_val = lowerer.alloc_value();
+                lowerer.current_function.append_instruction(
+                    block,
+                    Instruction::LoadVar {
+                        dest: promise_val,
+                        name: format!("${}.$promise", lowerer.async_promise_scope_id),
+                    },
+                );
+                lowerer.current_function.append_instruction(
+                    block,
+                    Instruction::PromiseResolve {
+                        promise: promise_val,
+                        value: undef_val,
+                    },
+                );
+                lowerer
+                    .current_function
+                    .set_terminator(block, Terminator::Return { value: None });
+            } else {
+                lowerer
+                    .current_function
+                    .set_terminator(block, Terminator::Return { value: None });
+            }
         }
         StmtFlow::Terminated => {}
     }
 
-    let blocks = lowerer.current_function.into_blocks();
-    let mut function = Function::new("main", BasicBlockId(0));
-    for block in blocks {
-        function.push_block(block);
+    if has_tla {
+        lowerer.finalize_async_main()?;
+    } else {
+        let blocks = lowerer.current_function.into_blocks();
+        let mut function = Function::new("main", BasicBlockId(0));
+        for block in blocks {
+            function.push_block(block);
+        }
+        lowerer.module.push_function(function);
     }
-    lowerer.module.push_function(function);
 
     Ok(lowerer.module)
 }
@@ -746,6 +925,8 @@ struct Lowerer {
     async_resume_blocks: Vec<(u32, BasicBlockId)>,
     async_promise_scope_id: usize,
     async_dispatch_block: Option<BasicBlockId>,
+    async_main_body_entry: Option<BasicBlockId>,
+    async_main_param_ir_names: Vec<String>,
     async_env_scope_id: usize,
     async_state_scope_id: usize,
     async_resume_val_scope_id: usize,
@@ -860,6 +1041,8 @@ impl Lowerer {
             async_resume_blocks: Vec::new(),
             async_promise_scope_id: 0,
             async_dispatch_block: None,
+            async_main_body_entry: None,
+            async_main_param_ir_names: Vec::new(),
             async_env_scope_id: 0,
             async_state_scope_id: 0,
             async_resume_val_scope_id: 0,
@@ -1069,7 +1252,12 @@ impl Lowerer {
         // Pre-scan: hoist variable declarations so let/const are in TDZ.
         self.predeclare_stmts(&module.body)?;
 
-        let entry = BasicBlockId(0);
+        let has_tla = has_top_level_await(module);
+        let entry = if has_tla {
+            self.init_async_main_context(module.span)?
+        } else {
+            BasicBlockId(0)
+        };
         self.emit_hoisted_var_initializers(entry);
 
         // 初始化全局内置变量：undefined, NaN, Infinity
@@ -1202,29 +1390,62 @@ impl Lowerer {
             }
         }
 
-        // If the last block is still open and hasn't been terminated, give it a Return.
+        // If the last block is still open and hasn't been terminated, finalize it.
         match flow {
             StmtFlow::Open(block) => {
-                // 性能优化：使用 matches! 直接匹配引用，避免克隆整个 Terminator。
-                // Terminator 可能包含 Vec（Switch 变体），克隆有内存分配开销。
-                let is_unreachable = self
-                    .current_function
-                    .block(block)
-                    .map_or(false, |b| matches!(b.terminator(), Terminator::Unreachable));
-                if is_unreachable {
+                if has_tla {
+                    // TLA：resolve promise 然后 return
+                    let undef_const = self.module.add_constant(Constant::Undefined);
+                    let undef_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: undef_val,
+                            constant: undef_const,
+                        },
+                    );
+                    let promise_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::LoadVar {
+                            dest: promise_val,
+                            name: format!("${}.$promise", self.async_promise_scope_id),
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::PromiseResolve {
+                            promise: promise_val,
+                            value: undef_val,
+                        },
+                    );
                     self.current_function
                         .set_terminator(block, Terminator::Return { value: None });
+                } else {
+                    // 非 TLA：检查 unreachable 并设置 Return
+                    let is_unreachable = self
+                        .current_function
+                        .block(block)
+                        .map_or(false, |b| matches!(b.terminator(), Terminator::Unreachable));
+                    if is_unreachable {
+                        self.current_function
+                            .set_terminator(block, Terminator::Return { value: None });
+                    }
                 }
             }
             StmtFlow::Terminated => {}
         }
 
-        let blocks = self.current_function.into_blocks();
-        let mut function = Function::new("main", BasicBlockId(0));
-        for block in blocks {
-            function.push_block(block);
+        if has_tla {
+            self.finalize_async_main()?;
+        } else {
+            let blocks = self.current_function.into_blocks();
+            let mut function = Function::new("main", BasicBlockId(0));
+            for block in blocks {
+                function.push_block(block);
+            }
+            self.module.push_function(function);
         }
-        self.module.push_function(function);
         Ok(self.module)
     }
 
@@ -8160,6 +8381,425 @@ impl Lowerer {
         self.async_next_continuation_slot =
             first_param_slot + param_ir_names.len().saturating_sub(2) as u32;
     }
+    /// 为包含 top-level await 的模块设置 async main 上下文。
+    /// 在 entry block (block 0) 中 emit 从 continuation 加载状态的指令，
+    /// 创建 dispatch block 和 body entry block，返回 body_entry。
+    /// 调用者应使用返回的 body_entry 作为后续 emit 的起始 block。
+    fn init_async_main_context(
+        &mut self,
+        span: swc_core::common::Span,
+    ) -> Result<BasicBlockId, LoweringError> {
+        self.is_async_fn = true;
+        self.async_state_counter = 1;
+        self.captured_var_slots.clear();
+        self.async_resume_blocks.clear();
+        // 为 main 函数设置函数上下文栈（async_visible_binding_names 依赖此栈）
+        let fn_scope_id = self.scopes.current_scope_id();
+        self.function_scope_id_stack.push(fn_scope_id);
+        self.captured_names_stack.push(Vec::new());
+        self.is_arrow_fn_stack.push(false);
+
+        let entry = BasicBlockId(0);
+
+        // 声明 async 内部变量
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(span, msg))?;
+        let this_scope_id = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| self.error(span, msg))?;
+        let state_scope_id = self
+            .scopes
+            .declare("$state", VarKind::Let, true)
+            .map_err(|msg| self.error(span, msg))?;
+        let resume_val_scope_id = self
+            .scopes
+            .declare("$resume_val", VarKind::Let, true)
+            .map_err(|msg| self.error(span, msg))?;
+        let is_rejected_scope_id = self
+            .scopes
+            .declare("$is_rejected", VarKind::Let, true)
+            .map_err(|msg| self.error(span, msg))?;
+        let promise_scope_id = self
+            .scopes
+            .declare("$promise", VarKind::Let, true)
+            .map_err(|msg| self.error(span, msg))?;
+        let closure_env_scope_id = self
+            .scopes
+            .declare("$closure_env", VarKind::Let, true)
+            .map_err(|msg| self.error(span, msg))?;
+
+        self.async_env_scope_id = env_scope_id;
+        self.async_state_scope_id = state_scope_id;
+        self.async_resume_val_scope_id = resume_val_scope_id;
+        self.async_is_rejected_scope_id = is_rejected_scope_id;
+        self.async_promise_scope_id = promise_scope_id;
+        self.async_closure_env_ir_name = Some(format!("${closure_env_scope_id}.$closure_env"));
+
+        // 无用户参数，continuation slots 从 4 开始
+        self.init_async_continuation_slots(&[], 4);
+
+        let param_ir_names = vec![
+            format!("${env_scope_id}.$env"),
+            format!("${this_scope_id}.$this"),
+        ];
+        self.async_main_param_ir_names = param_ir_names;
+
+        // ── entry block: 从 continuation 加载状态 ──
+
+        let cont_val = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::LoadVar {
+                dest: cont_val,
+                name: format!("${env_scope_id}.$env"),
+            },
+        );
+
+        // continuation slot 0 → $state
+        let slot0_const = self.module.add_constant(Constant::Number(0.0));
+        let slot0_val = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::Const { dest: slot0_val, constant: slot0_const },
+        );
+        let state_from_cont = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::CallBuiltin {
+                dest: Some(state_from_cont),
+                builtin: Builtin::ContinuationLoadVar,
+                args: vec![cont_val, slot0_val],
+            },
+        );
+        self.current_function.append_instruction(
+            entry,
+            Instruction::StoreVar {
+                name: format!("${state_scope_id}.$state"),
+                value: state_from_cont,
+            },
+        );
+
+        // continuation slot 1 → $is_rejected
+        let slot1_const = self.module.add_constant(Constant::Number(1.0));
+        let slot1_val = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::Const { dest: slot1_val, constant: slot1_const },
+        );
+        let is_rejected_from_cont = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::CallBuiltin {
+                dest: Some(is_rejected_from_cont),
+                builtin: Builtin::ContinuationLoadVar,
+                args: vec![cont_val, slot1_val],
+            },
+        );
+        self.current_function.append_instruction(
+            entry,
+            Instruction::StoreVar {
+                name: format!("${is_rejected_scope_id}.$is_rejected"),
+                value: is_rejected_from_cont,
+            },
+        );
+
+        // $this → $resume_val
+        let resume_val_from_this = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::LoadVar {
+                dest: resume_val_from_this,
+                name: format!("${this_scope_id}.$this"),
+            },
+        );
+        self.current_function.append_instruction(
+            entry,
+            Instruction::StoreVar {
+                name: format!("${resume_val_scope_id}.$resume_val"),
+                value: resume_val_from_this,
+            },
+        );
+
+        // continuation slot 2 → $promise
+        let slot2_const = self.module.add_constant(Constant::Number(2.0));
+        let slot2_val = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::Const { dest: slot2_val, constant: slot2_const },
+        );
+        let promise_from_cont = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::CallBuiltin {
+                dest: Some(promise_from_cont),
+                builtin: Builtin::ContinuationLoadVar,
+                args: vec![cont_val, slot2_val],
+            },
+        );
+        self.current_function.append_instruction(
+            entry,
+            Instruction::StoreVar {
+                name: format!("${promise_scope_id}.$promise"),
+                value: promise_from_cont,
+            },
+        );
+
+        // continuation slot 3 → $closure_env
+        let slot3_const = self.module.add_constant(Constant::Number(3.0));
+        let slot3_val = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::Const { dest: slot3_val, constant: slot3_const },
+        );
+        let env_from_cont = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::CallBuiltin {
+                dest: Some(env_from_cont),
+                builtin: Builtin::ContinuationLoadVar,
+                args: vec![cont_val, slot3_val],
+            },
+        );
+        self.current_function.append_instruction(
+            entry,
+            Instruction::StoreVar {
+                name: format!("${closure_env_scope_id}.$closure_env"),
+                value: env_from_cont,
+            },
+        );
+
+        // 创建 dispatch block 和 body entry
+        let dispatch_block = self.current_function.new_block();
+        let body_entry = self.current_function.new_block();
+        self.async_dispatch_block = Some(dispatch_block);
+        self.async_main_body_entry = Some(body_entry);
+
+        self.current_function
+            .set_terminator(entry, Terminator::Jump { target: dispatch_block });
+        self.current_function
+            .set_terminator(dispatch_block, Terminator::Unreachable);
+
+        Ok(body_entry)
+    }
+
+    /// 生成 dispatch block，保存 main$async 函数，创建 wrapper main 函数。
+    /// 调用前需要确保：
+    /// - 模块体的最后一个 block 已正确终止（open block 需要 emit PromiseResolve + Return）
+    /// - async_resume_blocks 已填充
+    fn finalize_async_main(&mut self) -> Result<(), LoweringError> {
+        let dispatch_block = self
+            .async_dispatch_block
+            .expect("async_dispatch_block not set");
+        let body_entry = self
+            .async_main_body_entry
+            .expect("async_main_body_entry not set");
+
+        // ── 1. 生成 dispatch block（状态机 switch）──
+        let resume_blocks = std::mem::take(&mut self.async_resume_blocks);
+        if !resume_blocks.is_empty() {
+            let state_val = self.alloc_value();
+            self.current_function.append_instruction(
+                dispatch_block,
+                Instruction::LoadVar {
+                    dest: state_val,
+                    name: format!("${}.$state", self.async_state_scope_id),
+                },
+            );
+
+            let zero_const_id = self.module.add_constant(Constant::Number(0.0));
+            let mut switch_cases = vec![SwitchCaseTarget {
+                constant: zero_const_id,
+                target: body_entry,
+            }];
+
+            for (state_num, target_block) in &resume_blocks {
+                let case_const_id = self
+                    .module
+                    .add_constant(Constant::Number(*state_num as f64));
+                switch_cases.push(SwitchCaseTarget {
+                    constant: case_const_id,
+                    target: *target_block,
+                });
+            }
+
+            let default_block = self.current_function.new_block();
+            let exit_block = self.current_function.new_block();
+            self.current_function
+                .set_terminator(default_block, Terminator::Return { value: None });
+            self.current_function
+                .set_terminator(exit_block, Terminator::Unreachable);
+
+            self.current_function.set_terminator(
+                dispatch_block,
+                Terminator::Switch {
+                    value: state_val,
+                    cases: switch_cases,
+                    default_block,
+                    exit_block,
+                },
+            );
+        } else {
+            self.current_function
+                .set_terminator(dispatch_block, Terminator::Jump { target: body_entry });
+        }
+
+        // ── 2. 提取 main$async 函数 ──
+        let continuation_slot_count = self.async_next_continuation_slot;
+        let old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let blocks = old_fn.into_blocks();
+        let mut async_fn = Function::new("main$async", BasicBlockId(0));
+        async_fn.set_params(self.async_main_param_ir_names.clone());
+        for b in blocks {
+            async_fn.push_block(b);
+        }
+        let async_fn_id = self.module.push_function(async_fn);
+
+        // ── 3. 创建 wrapper main 函数 ──
+        self.next_value = 0;
+        self.next_temp = 0;
+
+        let wrapper_entry = BasicBlockId(0);
+
+        // NewPromise
+        let promise_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::NewPromise { dest: promise_val },
+        );
+
+        // FunctionRef for main$async
+        let func_ref_const = self.module.add_constant(Constant::FunctionRef(async_fn_id));
+        let func_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: func_ref_val,
+                constant: func_ref_const,
+            },
+        );
+
+        // ContinuationCreate(func_ref, promise, slot_count)
+        let count_const = self
+            .module
+            .add_constant(Constant::Number(continuation_slot_count as f64));
+        let count_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: count_val,
+                constant: count_const,
+            },
+        );
+        let cont_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: Some(cont_val),
+                builtin: Builtin::ContinuationCreate,
+                args: vec![func_ref_val, promise_val, count_val],
+            },
+        );
+
+        // ContinuationSaveVar slot 2 = promise
+        let save_slot2_const = self.module.add_constant(Constant::Number(2.0));
+        let save_slot2_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: save_slot2_val,
+                constant: save_slot2_const,
+            },
+        );
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ContinuationSaveVar,
+                args: vec![cont_val, save_slot2_val, promise_val],
+            },
+        );
+
+        // ContinuationSaveVar slot 3 = undefined (no closure env)
+        let save_slot3_const = self.module.add_constant(Constant::Number(3.0));
+        let save_slot3_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: save_slot3_val,
+                constant: save_slot3_const,
+            },
+        );
+        let undef_const = self.module.add_constant(Constant::Undefined);
+        let undef_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: undef_val,
+                constant: undef_const,
+            },
+        );
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ContinuationSaveVar,
+                args: vec![cont_val, save_slot3_val, undef_val],
+            },
+        );
+
+        // AsyncFunctionResume(func_ref, continuation, state=0, resume_val=undefined, is_rejected=false)
+        let zero_const = self.module.add_constant(Constant::Number(0.0));
+        let zero_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: zero_val,
+                constant: zero_const,
+            },
+        );
+        let false_const = self.module.add_constant(Constant::Bool(false));
+        let false_val = self.alloc_value();
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::Const {
+                dest: false_val,
+                constant: false_const,
+            },
+        );
+        self.current_function.append_instruction(
+            wrapper_entry,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::AsyncFunctionResume,
+                args: vec![func_ref_val, cont_val, zero_val, undef_val, false_val],
+            },
+        );
+
+        self.current_function
+            .set_terminator(wrapper_entry, Terminator::Return { value: None });
+
+        // 提取 wrapper blocks，推入模块
+        let wrapper_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let wrapper_blocks = wrapper_fn.into_blocks();
+        let mut wrapper_ir = Function::new("main", BasicBlockId(0));
+        wrapper_ir.set_params(self.async_main_param_ir_names.clone());
+        for b in wrapper_blocks {
+            wrapper_ir.push_block(b);
+        }
+        self.module.push_function(wrapper_ir);
+
+        Ok(())
+    }
+
 
     fn is_async_internal_binding(name: &str) -> bool {
         matches!(

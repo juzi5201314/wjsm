@@ -72,11 +72,11 @@ pub fn run_test(test: &Test, harness: &Harness) -> TestResult {
 
     let mut cmd = if wjsm_binary.file_name() == Some(std::ffi::OsStr::new("cargo")) {
         let mut c = Command::new("cargo");
-        c.args(["run", "--bin", "wjsm", "--", "run", "-"]);
+        c.args(["run", "--bin", "wjsm", "--", "run", "-", "--script"]);
         c
     } else {
         let mut c = Command::new(&wjsm_binary);
-        c.args(["run", "-"]);
+        c.args(["run", "-", "--script"]);
         c
     };
 
@@ -102,6 +102,7 @@ pub fn run_test(test: &Test, harness: &Harness) -> TestResult {
     };
 
     let exit_code = output.status.code().unwrap_or(-1);
+    let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
     // 判断是否预期失败
@@ -109,8 +110,29 @@ pub fn run_test(test: &Test, harness: &Harness) -> TestResult {
         return check_negative_result(exit_code, &stderr, negative);
     }
 
-    // 正常测试：预期通过（exit code 0）
-    if exit_code == 0 {
+    // async 测试：检查 $DONE 输出标记
+    if test.is_async() {
+        if stdout.contains("Test262:AsyncTestComplete") {
+            TestResult::Passed
+        } else if stdout.contains("Test262:AsyncTestFailure") {
+            TestResult::Failed {
+                expected: "Test262:AsyncTestComplete".to_string(),
+                actual: format!("stdout={}", stdout.trim()),
+            }
+        } else {
+            // 没有 $DONE 标记，可能是挂起或报错
+            TestResult::Failed {
+                expected: "Test262:AsyncTestComplete".to_string(),
+                actual: format!(
+                    "exit_code={}, stdout={}, stderr={}",
+                    exit_code,
+                    stdout.trim(),
+                    stderr.trim()
+                ),
+            }
+        }
+    } else if exit_code == 0 {
+        // 同步测试：预期通过（exit code 0）
         TestResult::Passed
     } else {
         TestResult::Failed {
@@ -190,6 +212,8 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
     source.push_str("var undefined = void 0;\n");
     source.push_str("var NaN = 0 / 0;\n");
     source.push_str("var Infinity = 1 / 0;\n");
+    // print() 是 test262 harness 使用的全局函数，wjsm 没有原生支持
+    source.push_str("function print(msg) { console.log(msg); }\n");
     source.push('\n');
 
     // raw 模式：只添加 workaround 和测试主体
@@ -210,7 +234,15 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
     source.push_str(&harness.assert.content);
     source.push('\n');
 
-    // 3. 添加 includes 中指定的文件
+    // 3. async 测试注入 asyncHelpers.js（提供 asyncTest 和 assert.throwsAsync）
+    if test.is_async() {
+        if let Some(file) = harness.includes.get("asyncHelpers.js") {
+            source.push_str(&file.content);
+            source.push('\n');
+        }
+    }
+
+    // 4. 添加 includes 中指定的文件
     for include in &test.metadata.includes {
         if let Some(file) = harness.includes.get(include) {
             source.push_str(&file.content);
@@ -218,16 +250,16 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
         }
     }
 
-    // 4. 处理 flags
+    // 5. 处理 flags
     if test.is_strict() {
         source.push_str("\"use strict\";\n");
     }
 
-    // 5. 添加测试主体
+    // 6. 添加测试主体
     source.push_str(&test.source);
     source.push('\n');
 
-    // 6. 添加 doneprintHandle
+    // 7. 添加 doneprintHandle
     source.push_str(&harness.doneprint_handle.content);
     source.push('\n');
 

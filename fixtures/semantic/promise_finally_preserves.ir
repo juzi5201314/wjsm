@@ -1,0 +1,68 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = undefined
+    c4 = number(42)
+    c5 = functionref(@0)
+    c6 = functionref(@1)
+    c7 = undefined
+    c8 = undefined
+    c9 = string("err")
+    c10 = functionref(@2)
+    c11 = functionref(@3)
+    c12 = functionref(@4)
+
+  fn @anon_0 [params: $1.$env, $1.$this] [entry=bb0]:
+    bb0:
+      return
+
+  fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
+    bb0:
+      %0 = load var $2.v
+      %1 = call builtin.console.log(%0)
+      return
+
+  fn @anon_2 [params: $3.$env, $3.$this] [entry=bb0]:
+    bb0:
+      return
+
+  fn @anon_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
+    bb0:
+      %0 = load var $4.v
+      %1 = call builtin.console.log(%0)
+      return
+
+  fn @anon_4 [params: $5.$env, $5.$this, $5.e] [entry=bb0]:
+    bb0:
+      %0 = load var $5.e
+      %1 = call builtin.console.log(%0)
+      return
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      %4 = const c4
+      %5 = call builtin.promise.resolve_static(%3, %4)
+      %6 = const c5
+      %7 = call builtin.promise.finally(%5, %6)
+      %8 = const c6
+      %9 = const c7
+      %10 = call builtin.promise.then(%7, %8, %9)
+      %11 = const c8
+      %12 = const c9
+      %13 = call builtin.promise.reject_static(%11, %12)
+      %14 = const c10
+      %15 = call builtin.promise.finally(%13, %14)
+      %16 = const c11
+      %17 = const c12
+      %18 = call builtin.promise.then(%15, %16, %17)
+      return
+}

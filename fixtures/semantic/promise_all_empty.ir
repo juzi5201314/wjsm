@@ -1,0 +1,34 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = undefined
+    c4 = string("length")
+    c5 = functionref(@0)
+    c6 = undefined
+
+  fn @arrow_0 [params: $1.$env, $1.$this, $1.values] [entry=bb0]:
+    bb0:
+      %0 = load var $1.values
+      %1 = const c4
+      %2 = get_prop %0, %1
+      %3 = call builtin.console.log(%2)
+      return %3
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      %4 = new_array(capacity=4)
+      %5 = call builtin.promise.all(%3, %4)
+      %6 = const c5
+      %7 = const c6
+      %8 = call builtin.promise.then(%5, %6, %7)
+      return
+}

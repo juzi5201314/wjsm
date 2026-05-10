@@ -1,0 +1,122 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = undefined
+    c4 = undefined
+    c5 = string("$0.resolveA")
+    c6 = functionref(@0)
+    c7 = string("$0.resolveA")
+    c8 = undefined
+    c9 = string("$0.resolveB")
+    c10 = functionref(@1)
+    c11 = string("$0.resolveB")
+    c12 = undefined
+    c13 = undefined
+    c14 = functionref(@2)
+    c15 = undefined
+    c16 = undefined
+    c17 = string("$0.resolveB")
+    c18 = number(2)
+    c19 = functionref(@3)
+    c20 = undefined
+    c21 = string("$0.resolveA")
+    c22 = number(1)
+    c23 = functionref(@4)
+
+  fn @arrow_0 [captures: $0.resolveA] [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
+    bb0:
+      %0 = load var $env
+      %1 = const c5
+      %2 = load var $1.resolve
+      set_prop %0, %1, %2
+      return
+
+  fn @arrow_1 [captures: $0.resolveB] [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
+    bb0:
+      %0 = load var $env
+      %1 = const c9
+      %2 = load var $2.resolve
+      set_prop %0, %1, %2
+      return
+
+  fn @arrow_2 [params: $3.$env, $3.$this, $3.value] [entry=bb0]:
+    bb0:
+      %0 = load var $3.value
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @arrow_3 [captures: $0.resolveB] [params: $4.$env, $4.$this] [entry=bb0]:
+    bb0:
+      %0 = const c16
+      %1 = load var $env
+      %2 = const c17
+      %3 = get_prop %1, %2
+      %4 = const c18
+      %5 = call %3, this=%0, args=[%4]
+      return %5
+
+  fn @arrow_4 [captures: $0.resolveA] [params: $5.$env, $5.$this] [entry=bb0]:
+    bb0:
+      %0 = const c20
+      %1 = load var $env
+      %2 = const c21
+      %3 = get_prop %1, %2
+      %4 = const c22
+      %5 = call %3, this=%0, args=[%4]
+      return %5
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.resolveA, %3
+      %4 = const c4
+      store var $0.resolveB, %4
+      %5 = new_promise
+      %6 = const c6
+      %7 = new_object(capacity=1)
+      %8 = load var $0.resolveA
+      %9 = const c7
+      set_prop %7, %9, %8
+      %10 = call builtin.create_closure(%6, %7)
+      %11 = call builtin.promise.create_resolve_function(%5)
+      %12 = call builtin.promise.create_reject_function(%5)
+      %13 = const c8
+      call %10, this=%13, args=[%11, %12]
+      store var $0.p1, %5
+      %14 = new_promise
+      %15 = const c10
+      %16 = load var $0.resolveB
+      %17 = const c11
+      set_prop %7, %17, %16
+      %18 = call builtin.create_closure(%15, %7)
+      %19 = call builtin.promise.create_resolve_function(%14)
+      %20 = call builtin.promise.create_reject_function(%14)
+      %21 = const c12
+      call %18, this=%21, args=[%19, %20]
+      store var $0.p2, %14
+      %22 = const c13
+      %23 = new_array(capacity=4)
+      %24 = load var $0.p1
+      call builtin.array.push(%23, %24)
+      %25 = load var $0.p2
+      call builtin.array.push(%23, %25)
+      %26 = call builtin.promise.race(%22, %23)
+      %27 = const c14
+      %28 = const c15
+      %29 = call builtin.promise.then(%26, %27, %28)
+      %30 = const c19
+      %31 = call builtin.create_closure(%30, %7)
+      %32 = call builtin.queue_microtask(%31)
+      %33 = const c23
+      %34 = call builtin.create_closure(%33, %7)
+      %35 = call builtin.queue_microtask(%34)
+      return
+}

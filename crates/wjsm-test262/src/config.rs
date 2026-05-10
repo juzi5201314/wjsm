@@ -46,6 +46,10 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     "string-literals",
     "boolean-literals",
     "null-literal",
+    // Promise / async
+    "Promise",
+    "async-functions",
+    "async-iteration",
     // 运算符
     "arithmetic",
     "comparison",
@@ -59,7 +63,7 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
 ];
 
 /// 需要忽略的 flags（当前 wjsm 不支持）。
-pub const IGNORED_FLAGS: &[TestFlag] = &[TestFlag::Async, TestFlag::Module];
+pub const IGNORED_FLAGS: &[TestFlag] = &[TestFlag::Module];
 
 /// 检查是否应该运行某个测试。
 ///
