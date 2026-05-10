@@ -351,6 +351,220 @@ fn tagged_template_fixture_matches_ir_snapshot() {
     assert_snapshot("tagged_template");
 }
 
+// ── async function ──────────────────────────────────────────────────────
+
+#[test]
+fn async_basic_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_basic");
+}
+
+#[test]
+fn async_expr_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_expr");
+}
+
+#[test]
+fn async_arrow_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_arrow");
+}
+
+#[test]
+fn async_await_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_await");
+}
+
+#[test]
+fn async_catch_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_catch");
+}
+
+#[test]
+fn async_error_propagation_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_error_propagation");
+}
+
+#[test]
+fn async_multi_await_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_multi_await");
+}
+
+#[test]
+fn async_nested_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_nested");
+}
+
+#[test]
+fn async_params_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_params");
+}
+
+#[test]
+fn async_return_thenable_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_return_thenable");
+}
+
+#[test]
+fn async_side_effect_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_side_effect");
+}
+
+#[test]
+fn async_await_try_finally_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_await_try_finally");
+}
+
+// ── async generator ────────────────────────────────────────────────────
+
+#[test]
+fn async_generator_basic_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_generator_basic");
+}
+
+#[test]
+fn async_generator_await_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_generator_await");
+}
+
+#[test]
+fn async_generator_return_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_generator_return");
+}
+
+#[test]
+fn for_await_async_generator_fixture_matches_ir_snapshot() {
+    assert_snapshot("for_await_async_generator");
+}
+
+// ── Promise ────────────────────────────────────────────────────────────
+
+#[test]
+fn promise_chain_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_chain");
+}
+
+#[test]
+fn promise_combinators_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_combinators");
+}
+
+#[test]
+fn promise_all_values_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_all_values");
+}
+
+#[test]
+fn promise_all_empty_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_all_empty");
+}
+
+#[test]
+fn promise_all_pending_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_all_pending");
+}
+
+#[test]
+fn promise_all_pending_reject_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_all_pending_reject");
+}
+
+#[test]
+fn promise_all_settled_values_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_all_settled_values");
+}
+
+#[test]
+fn promise_all_settled_pending_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_all_settled_pending");
+}
+
+#[test]
+fn promise_any_values_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_any_values");
+}
+
+#[test]
+fn promise_any_pending_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_any_pending");
+}
+
+#[test]
+fn promise_race_values_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_race_values");
+}
+
+#[test]
+fn promise_race_pending_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_race_pending");
+}
+
+#[test]
+fn promise_constructor_resolver_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_constructor_resolver");
+}
+
+#[test]
+fn promise_resolve_identity_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_resolve_identity");
+}
+
+#[test]
+fn promise_resolve_thenable_microtask_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_resolve_thenable_microtask");
+}
+
+#[test]
+fn promise_resolver_idempotence_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_resolver_idempotence");
+}
+
+#[test]
+fn promise_thenable_assimilation_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_thenable_assimilation");
+}
+
+#[test]
+fn promise_microtask_order_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_microtask_order");
+}
+
+#[test]
+fn promise_finally_preserves_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_finally_preserves");
+}
+
+#[test]
+fn promise_with_resolvers_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_with_resolvers");
+}
+
+// ── async edge cases ───────────────────────────────────────────────────
+
+#[test]
+fn async_nested_chain_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_nested_chain");
+}
+
+#[test]
+fn await_conditional_fixture_matches_ir_snapshot() {
+    assert_snapshot("await_conditional");
+}
+
+#[test]
+fn promise_value_coercion_fixture_matches_ir_snapshot() {
+    assert_snapshot("promise_value_coercion");
+}
+
+#[test]
+fn async_as_callback_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_as_callback");
+}
+
+#[test]
+fn async_closure_capture_fixture_matches_ir_snapshot() {
+    assert_snapshot("async_closure_capture");
+}
+
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
     let source_path = root.join("fixtures/happy").join(format!("{name}.js"));

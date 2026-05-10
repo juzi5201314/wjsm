@@ -1,10 +1,10 @@
 use anyhow::Result;
-use std::collections::HashSet;
+use num_traits::cast::ToPrimitive;
+use std::collections::{HashSet, VecDeque};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use wasmtime::*;
-use num_traits::cast::ToPrimitive;
 /// 影子栈大小（必须与后端保持一致）
 const SHADOW_STACK_SIZE: u32 = 65536;
 
@@ -18,7 +18,12 @@ pub fn execute(wasm_bytes: &[u8]) -> Result<()> {
 
 pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> {
     let engine = Engine::default();
-    let module = Module::new(&engine, wasm_bytes)?;
+    let module = match Module::new(&engine, wasm_bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            return Err(anyhow::anyhow!("WASM validation failed: {:?}", e));
+        }
+    };
     let output = Arc::new(Mutex::new(Vec::new()));
 
     // Iterator/enumerator side tables
@@ -31,10 +36,29 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let next_timer_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
     let closures: Arc<Mutex<Vec<ClosureEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let bound_objects: Arc<Mutex<Vec<BoundRecord>>> = Arc::new(Mutex::new(Vec::new()));
+    let native_callables: Arc<Mutex<Vec<NativeCallable>>> = Arc::new(Mutex::new(Vec::new()));
 
     let bigint_table: Arc<Mutex<Vec<num_bigint::BigInt>>> = Arc::new(Mutex::new(Vec::new()));
-    let symbol_table: Arc<Mutex<Vec<SymbolEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let symbol_table: Arc<Mutex<Vec<SymbolEntry>>> = Arc::new(Mutex::new(vec![
+        // 预分配 well-known symbols（id=0..7，对应 ECMAScript § 6.1.5.1）
+        // 这些 symbol 不属于全局注册表（global_key = None），仅通过 Symbol.wellKnown 访问
+        SymbolEntry { description: Some("Symbol(Symbol.iterator)".into()),     global_key: None }, // 0 = @@iterator
+        SymbolEntry { description: Some("Symbol(Symbol.species)".into()),      global_key: None }, // 1 = @@species
+        SymbolEntry { description: Some("Symbol(Symbol.toStringTag)".into()),  global_key: None }, // 2 = @@toStringTag
+        SymbolEntry { description: Some("Symbol(Symbol.asyncIterator)".into()),global_key: None }, // 3 = @@asyncIterator
+        SymbolEntry { description: Some("Symbol(Symbol.hasInstance)".into()),  global_key: None }, // 4 = @@hasInstance
+        SymbolEntry { description: Some("Symbol(Symbol.toPrimitive)".into()),  global_key: None }, // 5 = @@toPrimitive
+        SymbolEntry { description: Some("Symbol(Symbol.dispose)".into()),      global_key: None }, // 6 = @@dispose
+        SymbolEntry { description: Some("Symbol(Symbol.match)".into()),        global_key: None }, // 7 = @@match
+    ]));
     let regex_table: Arc<Mutex<Vec<RegexEntry>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let promise_table: Arc<Mutex<Vec<PromiseEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let microtask_queue: Arc<Mutex<VecDeque<Microtask>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let continuation_table: Arc<Mutex<Vec<ContinuationEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>> = Arc::new(Mutex::new(Vec::new()));
 
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
@@ -56,9 +80,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             gc_threshold: GC_THRESHOLD,
             closures: Arc::clone(&closures),
             bound_objects: Arc::clone(&bound_objects),
+            native_callables: Arc::clone(&native_callables),
             bigint_table: Arc::clone(&bigint_table),
             symbol_table: Arc::clone(&symbol_table),
             regex_table: Arc::clone(&regex_table),
+            promise_table: Arc::clone(&promise_table),
+            microtask_queue: Arc::clone(&microtask_queue),
+            continuation_table: Arc::clone(&continuation_table),
+            async_generator_table: Arc::clone(&async_generator_table),
+            combinator_contexts: Arc::clone(&combinator_contexts),
         },
     );
 
@@ -152,40 +182,132 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     data: string_data,
                     byte_pos: 0,
                 });
-                value::encode_handle(value::TAG_ITERATOR, handle)
-            } else {
-                // Non-iterable: store an error state
-                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                let handle = iters.len() as u32;
-                iters.push(IteratorState::Error);
-                value::encode_handle(value::TAG_ITERATOR, handle)
+                return value::encode_handle(value::TAG_ITERATOR, handle);
             }
+
+            if value::is_object(val) || value::is_function(val) {
+                if let Some(ptr) = resolve_handle(&mut caller, val) {
+                    if let Some(next) = read_object_property_by_name(&mut caller, ptr, "next") {
+                        if value::is_callable(next) {
+                            let return_method =
+                                read_object_property_by_name(&mut caller, ptr, "return")
+                                    .filter(|candidate| value::is_callable(*candidate));
+                            let mut iters =
+                                caller.data().iterators.lock().expect("iterators mutex");
+                            let handle = iters.len() as u32;
+                            iters.push(IteratorState::ObjectIter {
+                                next,
+                                return_method,
+                                current_value: value::encode_undefined(),
+                                has_current: false,
+                                done: false,
+                            });
+                            return value::encode_handle(value::TAG_ITERATOR, handle);
+                        }
+                    }
+                }
+            }
+
+            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+            let handle = iters.len() as u32;
+            iters.push(IteratorState::Error);
+            value::encode_handle(value::TAG_ITERATOR, handle)
         },
     );
 
     // ── Import 5: iterator_next(i64) → i64 ──────────────────────────────
     let iterator_next = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-            if let Some(iter) = iters.get_mut(handle_idx) {
+            let table = caller.get_export("__table").and_then(|e| e.into_table());
+            let Some(func_table) = table else {
+                return value::encode_undefined();
+            };
+            let next = {
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                let Some(iter) = iters.get_mut(handle_idx) else {
+                    return value::encode_undefined();
+                };
                 match iter {
                     IteratorState::StringIter { byte_pos, .. } => {
                         *byte_pos += 1;
+                        return value::encode_undefined();
                     }
-                    IteratorState::Error => {}
+                    IteratorState::ObjectIter { next, .. } => *next,
+                    IteratorState::Error => return value::encode_undefined(),
                 }
+            };
+            let (result, current_value, done, has_current) =
+                advance_object_iterator_from_caller(&mut caller, &func_table, next);
+            if let Some(IteratorState::ObjectIter {
+                current_value: stored_value,
+                done: stored_done,
+                has_current: stored_has_current,
+                ..
+            }) = caller
+                .data()
+                .iterators
+                .lock()
+                .expect("iterators mutex")
+                .get_mut(handle_idx)
+            {
+                *stored_value = current_value;
+                *stored_done = done;
+                *stored_has_current = has_current;
             }
-            value::encode_undefined()
+            result
         },
     );
 
     // ── Import 6: iterator_close(i64) → () ──────────────────────────────
     let iterator_close = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _handle: i64| {
-            // Iterator close is a no-op for strings
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| {
+            let handle_idx = value::decode_handle(handle) as usize;
+            let return_method = {
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                match iters.get_mut(handle_idx) {
+                    Some(IteratorState::ObjectIter {
+                        return_method,
+                        done,
+                        ..
+                    }) if !*done => *return_method,
+                    _ => None,
+                }
+            };
+
+            let Some(return_method) = return_method else {
+                return;
+            };
+            let table = caller.get_export("__table").and_then(|e| e.into_table());
+            let Some(func_table) = table else { return };
+            let result = call_host_function_from_caller(
+                &mut caller,
+                &func_table,
+                return_method,
+                value::encode_undefined(),
+            );
+            if let Some(result) = result {
+                if !(value::is_object(result)
+                    || value::is_function(result)
+                    || value::is_array(result))
+                {
+                    set_runtime_error(
+                        caller.data(),
+                        "TypeError: iterator return must return an object".to_string(),
+                    );
+                }
+            }
+            if let Some(IteratorState::ObjectIter { done, .. }) = caller
+                .data()
+                .iterators
+                .lock()
+                .expect("iterators mutex")
+                .get_mut(handle_idx)
+            {
+                *done = true;
+            }
         },
     );
 
@@ -205,6 +327,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             value::encode_undefined()
                         }
                     }
+                    IteratorState::ObjectIter { current_value, .. } => *current_value,
                     IteratorState::Error => {
                         *caller
                             .data()
@@ -224,26 +347,64 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── Import 8: iterator_done(i64) → i64 ──────────────────────────────
     let iterator_done = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-            let done = if let Some(iter) = iters.get_mut(handle_idx) {
+            let next = {
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                let Some(iter) = iters.get_mut(handle_idx) else {
+                    return value::encode_bool(true);
+                };
                 match iter {
-                    IteratorState::StringIter { data, byte_pos } => *byte_pos >= data.len(),
+                    IteratorState::StringIter { data, byte_pos } => {
+                        return value::encode_bool(*byte_pos >= data.len());
+                    }
+                    IteratorState::ObjectIter {
+                        next,
+                        done,
+                        has_current,
+                        ..
+                    } => {
+                        if *done {
+                            return value::encode_bool(true);
+                        }
+                        if *has_current {
+                            return value::encode_bool(*done);
+                        }
+                        *next
+                    }
                     IteratorState::Error => {
-                        *caller
-                            .data()
-                            .runtime_error
-                            .lock()
-                            .expect("runtime error mutex") =
-                            Some("TypeError: value is not iterable".to_string());
-                        true
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: value is not iterable".to_string(),
+                        );
+                        return value::encode_bool(true);
                     }
                 }
-            } else {
-                true
             };
-            value::encode_bool(done)
+
+            let table = caller.get_export("__table").and_then(|e| e.into_table());
+            let Some(func_table) = table else {
+                return value::encode_bool(true);
+            };
+            let (_, next_value, next_done, has_current) =
+                advance_object_iterator_from_caller(&mut caller, &func_table, next);
+            if let Some(IteratorState::ObjectIter {
+                current_value,
+                done,
+                has_current: stored_has_current,
+                ..
+            }) = caller
+                .data()
+                .iterators
+                .lock()
+                .expect("iterators mutex")
+                .get_mut(handle_idx)
+            {
+                *current_value = next_value;
+                *done = next_done;
+                *stored_has_current = has_current;
+            }
+            value::encode_bool(next_done)
         },
     );
 
@@ -520,12 +681,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 let proto_handle =
                     u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
 
-                if proto_handle == 0xFFFF_FFFF {}
-                // 通过 handle 表解析 proto_handle → proto_ptr
-                let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
+                if proto_handle == 0xFFFF_FFFF {
                     return value::encode_bool(false);
-                };
-                ptr = proto_ptr;
+                }
+                if let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) {
+                    ptr = proto_ptr;
+                } else {
+                    return value::encode_bool(false);
+                }
             }
         },
     );
@@ -1078,7 +1241,6 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     continue;
                 }
 
-
                 // 10. BigInt == Number: 数学值比较 (ES §7.2.15)
                 if value::is_bigint(x) && value::is_f64(y) {
                     let a_handle = value::decode_bigint_handle(x) as usize;
@@ -1093,8 +1255,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     }
                     // 通过 f64 → BigInt 转换比较数学值
                     if let Some(bi_y) = num_traits::cast::FromPrimitive::from_f64(b_f64) {
-                        let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
-                        return value::encode_bool(table.get(a_handle).map(|bi| *bi == bi_y).unwrap_or(false));
+                        let table = caller
+                            .data()
+                            .bigint_table
+                            .lock()
+                            .expect("bigint_table mutex");
+                        return value::encode_bool(
+                            table.get(a_handle).map(|bi| *bi == bi_y).unwrap_or(false),
+                        );
                     }
                     return value::encode_bool(false);
                 }
@@ -1109,30 +1277,52 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         return value::encode_bool(false);
                     }
                     if let Some(bi_x) = num_traits::cast::FromPrimitive::from_f64(a_f64) {
-                        let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
-                        return value::encode_bool(table.get(b_handle).map(|bi| *bi == bi_x).unwrap_or(false));
+                        let table = caller
+                            .data()
+                            .bigint_table
+                            .lock()
+                            .expect("bigint_table mutex");
+                        return value::encode_bool(
+                            table.get(b_handle).map(|bi| *bi == bi_x).unwrap_or(false),
+                        );
                     }
                     return value::encode_bool(false);
                 }
                 // 12. BigInt == String / String == BigInt: StringToBigInt → 比较 (ES §7.2.15)
                 if value::is_bigint(x) && value::is_string(y) {
                     if let Some(bytes) = read_value_string_bytes(&mut caller, y) {
-                        let s = String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_string();
+                        let s = String::from_utf8_lossy(&bytes)
+                            .trim_end_matches('\0')
+                            .to_string();
                         if let Ok(bi_y) = s.parse::<num_bigint::BigInt>() {
                             let a_handle = value::decode_bigint_handle(x) as usize;
-                            let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
-                            return value::encode_bool(table.get(a_handle).map(|bi| *bi == bi_y).unwrap_or(false));
+                            let table = caller
+                                .data()
+                                .bigint_table
+                                .lock()
+                                .expect("bigint_table mutex");
+                            return value::encode_bool(
+                                table.get(a_handle).map(|bi| *bi == bi_y).unwrap_or(false),
+                            );
                         }
                     }
                     return value::encode_bool(false);
                 }
                 if value::is_string(x) && value::is_bigint(y) {
                     if let Some(bytes) = read_value_string_bytes(&mut caller, x) {
-                        let s = String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_string();
+                        let s = String::from_utf8_lossy(&bytes)
+                            .trim_end_matches('\0')
+                            .to_string();
                         if let Ok(bi_x) = s.parse::<num_bigint::BigInt>() {
                             let b_handle = value::decode_bigint_handle(y) as usize;
-                            let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
-                            return value::encode_bool(table.get(b_handle).map(|bi| *bi == bi_x).unwrap_or(false));
+                            let table = caller
+                                .data()
+                                .bigint_table
+                                .lock()
+                                .expect("bigint_table mutex");
+                            return value::encode_bool(
+                                table.get(b_handle).map(|bi| *bi == bi_x).unwrap_or(false),
+                            );
                         }
                     }
                     return value::encode_bool(false);
@@ -1737,9 +1927,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            if len == 0 { return value::encode_undefined(); }
+            if len == 0 {
+                return value::encode_undefined();
+            }
             let new_len = len - 1;
-            let val = read_array_elem(&mut caller, ptr, new_len).unwrap_or(value::encode_undefined());
+            let val =
+                read_array_elem(&mut caller, ptr, new_len).unwrap_or(value::encode_undefined());
             write_array_length(&mut caller, ptr, new_len);
             val
         },
@@ -1753,7 +1946,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
                 if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
-                    if elem == val { return value::encode_bool(true); }
+                    if elem == val {
+                        return value::encode_bool(true);
+                    }
                 }
             }
             value::encode_bool(false)
@@ -1768,7 +1963,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             let from_idx = if value::is_f64(from_val) {
                 f64::from_bits(from_val as u64) as i32
-            } else { 0 };
+            } else {
+                0
+            };
             let start = if from_idx >= 0 {
                 (from_idx as usize).min(len as usize)
             } else {
@@ -1776,7 +1973,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             };
             for i in start..len as usize {
                 if let Some(elem) = read_array_elem(&mut caller, ptr, i as u32) {
-                    if elem == val { return value::encode_f64(i as f64); }
+                    if elem == val {
+                        return value::encode_f64(i as f64);
+                    }
                 }
             }
             value::encode_f64(-1.0)
@@ -1789,8 +1988,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            let sep_str = render_value(&mut caller, sep_val)
-                .unwrap_or_else(|_| ",".to_string());
+            let sep_str = render_value(&mut caller, sep_val).unwrap_or_else(|_| ",".to_string());
             let mut parts = Vec::new();
             for i in 0..len {
                 if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
@@ -1836,7 +2034,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len / 2 {
                 let a = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
-                let b = read_array_elem(&mut caller, ptr, len - 1 - i).unwrap_or(value::encode_undefined());
+                let b = read_array_elem(&mut caller, ptr, len - 1 - i)
+                    .unwrap_or(value::encode_undefined());
                 write_array_elem(&mut caller, ptr, i, b);
                 write_array_elem(&mut caller, ptr, len - 1 - i, a);
             }
@@ -1874,16 +2073,20 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_f64(len as f64)
         },
     );
-    
+
     // ── 辅助函数：读取影子栈参数 ────────────────────────────────────
     fn read_shadow_arg(caller: &mut Caller<'_, RuntimeState>, args_base: i32, index: u32) -> i64 {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return value::encode_undefined(); };
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return value::encode_undefined();
+        };
         let data = memory.data(&*caller);
         let offset = args_base as usize + (index as usize) * 8;
-        if offset + 8 > data.len() { return value::encode_undefined(); }
+        if offset + 8 > data.len() {
+            return value::encode_undefined();
+        }
         i64::from_le_bytes(data[offset..offset + 8].try_into().unwrap())
     }
-    
+
     // ── 辅助函数：调用 WASM 回调函数 ────────────────────────────────
     fn call_wasm_callback(
         caller: &mut Caller<'_, RuntimeState>,
@@ -1891,10 +2094,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         this_val: i64,
         args: &[i64],
     ) -> anyhow::Result<i64> {
-        let shadow_sp_global = caller.get_export("__shadow_sp")
+        let shadow_sp_global = caller
+            .get_export("__shadow_sp")
             .and_then(|e| e.into_global())
             .ok_or_else(|| anyhow::anyhow!("no __shadow_sp"))?;
-        let shadow_sp = shadow_sp_global.get(&mut *caller).i32().ok_or_else(|| anyhow::anyhow!("shadow_sp not i32"))?;
+        let shadow_sp = shadow_sp_global
+            .get(&mut *caller)
+            .i32()
+            .ok_or_else(|| anyhow::anyhow!("shadow_sp not i32"))?;
         let new_shadow_sp = shadow_sp + (args.len() as i32) * 8;
         // 将参数写入影子栈
         {
@@ -1923,21 +2130,34 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return Err(anyhow::anyhow!("closure index out of range"));
             }
         } else if value::is_function(func_val) {
-            ((func_val as u64 & 0xFFFF_FFFF) as u32, value::encode_undefined())
+            (
+                (func_val as u64 & 0xFFFF_FFFF) as u32,
+                value::encode_undefined(),
+            )
         } else {
             return Err(anyhow::anyhow!("not callable"));
         };
         // 通过函数表调用
-        let table = caller.get_export("__table")
+        let table = caller
+            .get_export("__table")
             .and_then(|e| e.into_table())
             .ok_or_else(|| anyhow::anyhow!("no __table"))?;
-        let func_ref = table.get(&mut *caller, func_idx as u64)
+        let func_ref = table
+            .get(&mut *caller, func_idx as u64)
             .ok_or_else(|| anyhow::anyhow!("table get failed"))?;
-        let func = func_ref.as_func().flatten().ok_or_else(|| anyhow::anyhow!("table entry not a function"))?;
+        let func = func_ref
+            .as_func()
+            .flatten()
+            .ok_or_else(|| anyhow::anyhow!("table entry not a function"))?;
         let mut results = [Val::I64(0)];
         let call_result = func.call(
             &mut *caller,
-            &[Val::I64(env_obj), Val::I64(this_val), Val::I32(shadow_sp), Val::I32(args.len() as i32)],
+            &[
+                Val::I64(env_obj),
+                Val::I64(this_val),
+                Val::I32(shadow_sp),
+                Val::I32(args.len() as i32),
+            ],
             &mut results,
         );
         // 恢复 __shadow_sp（无论 call 成功与否）
@@ -1945,19 +2165,25 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         call_result?;
         Ok(results[0].unwrap_i64())
     }
-    
+
     // ── 辅助函数：分配新数组 ────────────────────────────────────────
     fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
         let heap_ptr = {
-            let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+            let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
+                return value::encode_undefined();
+            };
             g.get(&mut *caller).i32().unwrap_or(0) as u32
         };
         let obj_table_count = {
-            let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else {
+                return value::encode_undefined();
+            };
             g.get(&mut *caller).i32().unwrap_or(0) as u32
         };
         let obj_table_ptr = {
-            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
+                return value::encode_undefined();
+            };
             g.get(&mut *caller).i32().unwrap_or(0) as u32
         };
         let size = 16 + capacity * 8;
@@ -1965,10 +2191,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
             let _ = g.set(&mut *caller, Val::I32(new_heap_ptr as i32));
         }
-        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+            return value::encode_undefined();
+        };
         let d = mem.data_mut(&mut *caller);
         let ptr = heap_ptr as usize;
-        if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+        if (new_heap_ptr as usize) > d.len() {
+            return value::encode_undefined();
+        }
         d[ptr..ptr + 4].copy_from_slice(&(-1i32).to_le_bytes());
         d[ptr + 4] = 1u8;
         d[ptr + 5..ptr + 8].fill(0);
@@ -1988,15 +2218,21 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── 辅助函数：分配新对象 ────────────────────────────────────────────
     fn alloc_object(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
         let heap_ptr = {
-            let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return value::encode_undefined(); };
+            let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
+                return value::encode_undefined();
+            };
             g.get(&mut *caller).i32().unwrap_or(0) as u32
         };
         let obj_table_count = {
-            let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else { return value::encode_undefined(); };
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else {
+                return value::encode_undefined();
+            };
             g.get(&mut *caller).i32().unwrap_or(0) as u32
         };
         let obj_table_ptr = {
-            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return value::encode_undefined(); };
+            let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
+                return value::encode_undefined();
+            };
             g.get(&mut *caller).i32().unwrap_or(0) as u32
         };
         let size = 16 + capacity * 32;
@@ -2004,10 +2240,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
             let _ = g.set(&mut *caller, Val::I32(new_heap_ptr as i32));
         }
-        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+            return value::encode_undefined();
+        };
         let d = mem.data_mut(&mut *caller);
         let ptr = heap_ptr as usize;
-        if (new_heap_ptr as usize) > d.len() { return value::encode_undefined(); }
+        if (new_heap_ptr as usize) > d.len() {
+            return value::encode_undefined();
+        }
         d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes()); // proto = 0 (null)
         d[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
         d[ptr + 5..ptr + 8].fill(0);
@@ -2023,32 +2263,190 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         }
         value::encode_object_handle(obj_table_count)
     }
+
+    fn alloc_promise(caller: &mut Caller<'_, RuntimeState>, entry: PromiseEntry) -> i64 {
+        let promise = alloc_object(caller, 0);
+        if value::is_object(promise) {
+            let handle = value::decode_object_handle(promise) as usize;
+            let mut table = caller
+                .data()
+                .promise_table
+                .lock()
+                .expect("promise table mutex");
+            insert_promise_entry(&mut table, handle, entry);
+        }
+        promise
+    }
+
+    fn find_memory_c_string(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
+        let mut needle = Vec::with_capacity(name.len() + 1);
+        needle.extend_from_slice(name.as_bytes());
+        needle.push(0);
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        memory
+            .data(&*caller)
+            .windows(needle.len())
+            .position(|window| window == needle.as_slice())
+            .map(|offset| offset as u32)
+    }
+
+    fn alloc_heap_c_string(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
+        let heap_ptr = {
+            let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
+                return None;
+            };
+            g.get(&mut *caller).i32().unwrap_or(0) as usize
+        };
+        let bytes = name.as_bytes();
+        let end = heap_ptr.checked_add(bytes.len() + 1)?;
+        let aligned_end = (end + 7) & !7;
+        {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return None;
+            };
+            let data = memory.data_mut(&mut *caller);
+            if aligned_end > data.len() {
+                return None;
+            }
+            data[heap_ptr..heap_ptr + bytes.len()].copy_from_slice(bytes);
+            data[heap_ptr + bytes.len()] = 0;
+            data[end..aligned_end].fill(0);
+        }
+        if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+            let _ = g.set(&mut *caller, Val::I32(aligned_end as i32));
+        }
+        Some(heap_ptr as u32)
+    }
+
+    fn define_host_data_property(
+        caller: &mut Caller<'_, RuntimeState>,
+        obj: i64,
+        name: &str,
+        val: i64,
+    ) -> Option<()> {
+        let name_id =
+            find_memory_c_string(caller, name).or_else(|| alloc_heap_c_string(caller, name))?;
+        let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize)?;
+        let (capacity, num_props) = {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return None;
+            };
+            let data = memory.data(&*caller);
+            if obj_ptr + 16 > data.len() {
+                return None;
+            }
+            let capacity = u32::from_le_bytes([
+                data[obj_ptr + 8],
+                data[obj_ptr + 9],
+                data[obj_ptr + 10],
+                data[obj_ptr + 11],
+            ]);
+            let num_props = u32::from_le_bytes([
+                data[obj_ptr + 12],
+                data[obj_ptr + 13],
+                data[obj_ptr + 14],
+                data[obj_ptr + 15],
+            ]);
+            (capacity, num_props)
+        };
+        let actual_ptr = if num_props >= capacity {
+            let new_cap = capacity.saturating_mul(2).max(num_props + 1).max(1);
+            grow_object(caller, obj_ptr, obj, new_cap)?
+        } else {
+            obj_ptr
+        };
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data_mut(&mut *caller);
+        let slot_offset = actual_ptr + 16 + num_props as usize * 32;
+        if slot_offset + 32 > data.len() {
+            return None;
+        }
+        let flags =
+            constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
+        let undef = value::encode_undefined();
+        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+        data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
+        data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
+        data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
+        Some(())
+    }
+
+    fn alloc_promise_all_settled_result(
+        caller: &mut Caller<'_, RuntimeState>,
+        status: &str,
+        value_name: &str,
+        value: i64,
+    ) -> i64 {
+        let obj = alloc_object(caller, 2);
+        let _ = define_host_data_property(
+            caller,
+            obj,
+            "status",
+            store_runtime_string(caller, status.to_string()),
+        );
+        let _ = define_host_data_property(caller, obj, value_name, value);
+        obj
+    }
+
+    fn alloc_aggregate_error(caller: &mut Caller<'_, RuntimeState>, errors: i64) -> i64 {
+        let obj = alloc_object(caller, 3);
+        let name = store_runtime_string(caller, "AggregateError".to_string());
+        let message = store_runtime_string(caller, "All promises were rejected".to_string());
+        let _ = define_host_data_property(caller, obj, "name", name);
+        let _ = define_host_data_property(caller, obj, "message", message);
+        let _ = define_host_data_property(caller, obj, "errors", errors);
+        obj
+    }
     // ── 辅助函数：收集属性名/值 ──────────────────────────────────────────
-    fn collect_own_property_names(caller: &mut Caller<'_, RuntimeState>, obj_ptr: usize, enumerable_only: bool) -> Vec<String> {
-        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return vec![]; };
+    fn collect_own_property_names(
+        caller: &mut Caller<'_, RuntimeState>,
+        obj_ptr: usize,
+        enumerable_only: bool,
+    ) -> Vec<String> {
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+            return vec![];
+        };
         let data = mem.data(&*caller);
-        if obj_ptr + 16 > data.len() { return vec![]; }
+        if obj_ptr + 16 > data.len() {
+            return vec![];
+        }
         let num_props = u32::from_le_bytes([
-            data[obj_ptr + 12], data[obj_ptr + 13],
-            data[obj_ptr + 14], data[obj_ptr + 15],
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
         ]) as usize;
         let mut name_ids = Vec::new();
         for i in 0..num_props {
             let slot_offset = obj_ptr + 16 + i * 32;
-            if slot_offset + 32 > data.len() { break; }
+            if slot_offset + 32 > data.len() {
+                break;
+            }
             let flags = i32::from_le_bytes([
-                data[slot_offset + 4], data[slot_offset + 5],
-                data[slot_offset + 6], data[slot_offset + 7],
+                data[slot_offset + 4],
+                data[slot_offset + 5],
+                data[slot_offset + 6],
+                data[slot_offset + 7],
             ]);
-            if enumerable_only && (flags & 2) == 0 { continue; }
+            if enumerable_only && (flags & 2) == 0 {
+                continue;
+            }
             let name_id = u32::from_le_bytes([
-                data[slot_offset], data[slot_offset + 1],
-                data[slot_offset + 2], data[slot_offset + 3],
+                data[slot_offset],
+                data[slot_offset + 1],
+                data[slot_offset + 2],
+                data[slot_offset + 3],
             ]);
             name_ids.push(name_id);
         }
-        drop(data);
-        drop(mem);
+        let _ = data;
+        let _ = mem;
         let mut names = Vec::new();
         for name_id in name_ids {
             let name_bytes = read_string_bytes(caller, name_id);
@@ -2056,28 +2454,48 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         }
         names
     }
-    fn collect_own_property_values(caller: &mut Caller<'_, RuntimeState>, obj_ptr: usize, enumerable_only: bool) -> Vec<i64> {
-        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return vec![]; };
+    fn collect_own_property_values(
+        caller: &mut Caller<'_, RuntimeState>,
+        obj_ptr: usize,
+        enumerable_only: bool,
+    ) -> Vec<i64> {
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+            return vec![];
+        };
         let data = mem.data(&*caller);
-        if obj_ptr + 16 > data.len() { return vec![]; }
+        if obj_ptr + 16 > data.len() {
+            return vec![];
+        }
         let num_props = u32::from_le_bytes([
-            data[obj_ptr + 12], data[obj_ptr + 13],
-            data[obj_ptr + 14], data[obj_ptr + 15],
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
         ]) as usize;
         let mut values = Vec::new();
         for i in 0..num_props {
             let slot_offset = obj_ptr + 16 + i * 32;
-            if slot_offset + 32 > data.len() { break; }
+            if slot_offset + 32 > data.len() {
+                break;
+            }
             let flags = i32::from_le_bytes([
-                data[slot_offset + 4], data[slot_offset + 5],
-                data[slot_offset + 6], data[slot_offset + 7],
+                data[slot_offset + 4],
+                data[slot_offset + 5],
+                data[slot_offset + 6],
+                data[slot_offset + 7],
             ]);
-            if enumerable_only && (flags & 2) == 0 { continue; }
+            if enumerable_only && (flags & 2) == 0 {
+                continue;
+            }
             let val = i64::from_le_bytes([
-                data[slot_offset + 8], data[slot_offset + 9],
-                data[slot_offset + 10], data[slot_offset + 11],
-                data[slot_offset + 12], data[slot_offset + 13],
-                data[slot_offset + 14], data[slot_offset + 15],
+                data[slot_offset + 8],
+                data[slot_offset + 9],
+                data[slot_offset + 10],
+                data[slot_offset + 11],
+                data[slot_offset + 12],
+                data[slot_offset + 13],
+                data[slot_offset + 14],
+                data[slot_offset + 15],
             ]);
             values.push(val);
         }
@@ -2085,7 +2503,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     }
     let arr_proto_push_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
@@ -2110,27 +2533,40 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_f64((len + count) as f64)
         },
     );
-    
+
     // ── arr_proto_pop (#50) ───────────────────────────────────────────
     let arr_proto_pop_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, _args_base: i32, _args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         _args_base: i32,
+         _args_count: i32|
+         -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            if len == 0 { return value::encode_undefined(); }
+            if len == 0 {
+                return value::encode_undefined();
+            }
             let new_len = len - 1;
-            let val = read_array_elem(&mut caller, ptr, new_len).unwrap_or(value::encode_undefined());
+            let val =
+                read_array_elem(&mut caller, ptr, new_len).unwrap_or(value::encode_undefined());
             write_array_length(&mut caller, ptr, new_len);
             val
         },
     );
-    
+
     // ── arr_proto_includes (#51) ──────────────────────────────────────
     let arr_proto_includes_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         _args_count: i32|
+         -> i64 {
             let val = read_shadow_arg(&mut caller, args_base, 0);
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_bool(false);
@@ -2138,17 +2574,24 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
                 if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
-                    if elem == val { return value::encode_bool(true); }
+                    if elem == val {
+                        return value::encode_bool(true);
+                    }
                 }
             }
             value::encode_bool(false)
         },
     );
-    
+
     // ── arr_proto_index_of (#52) ──────────────────────────────────────
     let arr_proto_index_of_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         _args_count: i32|
+         -> i64 {
             let val = read_shadow_arg(&mut caller, args_base, 0);
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_f64(-1.0);
@@ -2156,22 +2599,33 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
                 if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
-                    if elem == val { return value::encode_f64(i as f64); }
+                    if elem == val {
+                        return value::encode_f64(i as f64);
+                    }
                 }
             }
             value::encode_f64(-1.0)
         },
     );
-    
+
     // ── arr_proto_join (#53) ─────────────────────────────────────────
     let arr_proto_join_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            let sep_val = if args_count > 0 { read_shadow_arg(&mut caller, args_base, 0) } else { value::encode_undefined() };
+            let sep_val = if args_count > 0 {
+                read_shadow_arg(&mut caller, args_base, 0)
+            } else {
+                value::encode_undefined()
+            };
             // 默认分隔符为 ","
             let sep_str = if value::is_undefined(sep_val) || value::is_null(sep_val) {
                 ",".to_string()
@@ -2189,11 +2643,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             store_runtime_string(&caller, parts.join(&sep_str))
         },
     );
-    
+
     // ── arr_proto_concat (#54) ────────────────────────────────────────
     let arr_proto_concat_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let Some(this_ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
@@ -2244,28 +2703,41 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             new_arr
         },
     );
-    
+
     // ── arr_proto_slice (#55) ─────────────────────────────────────────
     let arr_proto_slice_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             let start = if args_count > 0 {
                 let s_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
-                if s_f64.is_nan() { 0 }
-                else if s_f64 < 0.0 { (len + s_f64 as i32).max(0) }
-                else { (s_f64 as i32).min(len) }
+                if s_f64.is_nan() {
+                    0
+                } else if s_f64 < 0.0 {
+                    (len + s_f64 as i32).max(0)
+                } else {
+                    (s_f64 as i32).min(len)
+                }
             } else {
                 0
             };
             let end = if args_count > 1 {
                 let e_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
-                if e_f64.is_nan() { len }
-                else if e_f64 < 0.0 { (len + e_f64 as i32).max(0) }
-                else { (e_f64 as i32).min(len) }
+                if e_f64.is_nan() {
+                    len
+                } else if e_f64 < 0.0 {
+                    (len + e_f64 as i32).max(0)
+                } else {
+                    (e_f64 as i32).min(len)
+                }
             } else {
                 len
             };
@@ -2275,18 +2747,24 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return value::encode_undefined();
             };
             for i in 0..count {
-                let elem = read_array_elem(&mut caller, ptr, start as u32 + i).unwrap_or(value::encode_undefined());
+                let elem = read_array_elem(&mut caller, ptr, start as u32 + i)
+                    .unwrap_or(value::encode_undefined());
                 write_array_elem(&mut caller, new_ptr, i, elem);
             }
             write_array_length(&mut caller, new_ptr, count);
             new_arr
         },
     );
-    
+
     // ── arr_proto_fill (#56) ──────────────────────────────────────────
     let arr_proto_fill_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let val = read_shadow_arg(&mut caller, args_base, 0);
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return this_val;
@@ -2294,17 +2772,25 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             let start = if args_count > 1 {
                 let s_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
-                if s_f64.is_nan() { 0 }
-                else if s_f64 < 0.0 { (len + s_f64 as i32).max(0) }
-                else { (s_f64 as i32).min(len) }
+                if s_f64.is_nan() {
+                    0
+                } else if s_f64 < 0.0 {
+                    (len + s_f64 as i32).max(0)
+                } else {
+                    (s_f64 as i32).min(len)
+                }
             } else {
                 0
             };
             let end = if args_count > 2 {
                 let e_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 2) as u64);
-                if e_f64.is_nan() { len }
-                else if e_f64 < 0.0 { (len + e_f64 as i32).max(0) }
-                else { (e_f64 as i32).min(len) }
+                if e_f64.is_nan() {
+                    len
+                } else if e_f64 < 0.0 {
+                    (len + e_f64 as i32).max(0)
+                } else {
+                    (e_f64 as i32).min(len)
+                }
             } else {
                 len
             };
@@ -2314,42 +2800,63 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             this_val
         },
     );
-    
+
     // ── arr_proto_reverse (#57) ───────────────────────────────────────
     let arr_proto_reverse_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, _args_base: i32, _args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         _args_base: i32,
+         _args_count: i32|
+         -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return this_val;
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len / 2 {
                 let a = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
-                let b = read_array_elem(&mut caller, ptr, len - 1 - i).unwrap_or(value::encode_undefined());
+                let b = read_array_elem(&mut caller, ptr, len - 1 - i)
+                    .unwrap_or(value::encode_undefined());
                 write_array_elem(&mut caller, ptr, i, b);
                 write_array_elem(&mut caller, ptr, len - 1 - i, a);
             }
             this_val
         },
     );
-    
+
     // ── arr_proto_flat (#58) ──────────────────────────────────────────
     let arr_proto_flat_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             // 读取 depth 参数（默认 1）
             let depth = if args_count > 0 {
                 let d = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
                 if d.is_nan() { 0 } else { d as u32 }
-            } else { 1 };
+            } else {
+                1
+            };
             // 递归展平
-            fn flatten(caller: &mut Caller<'_, RuntimeState>, arr: i64, depth: u32, result: &mut Vec<i64>) {
+            fn flatten(
+                caller: &mut Caller<'_, RuntimeState>,
+                arr: i64,
+                depth: u32,
+                result: &mut Vec<i64>,
+            ) {
                 if depth == 0 {
                     // 不再展平，直接添加数组引用
                     result.push(arr);
                     return;
                 }
-                let Some(ptr) = resolve_array_ptr(caller, arr) else { result.push(arr); return; };
+                let Some(ptr) = resolve_array_ptr(caller, arr) else {
+                    result.push(arr);
+                    return;
+                };
                 let len = read_array_length(caller, ptr).unwrap_or(0);
                 for i in 0..len {
                     if let Some(elem) = read_array_elem(caller, ptr, i) {
@@ -2374,31 +2881,44 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             new_arr
         },
     );
-    
+
     // ── arr_proto_shift (#59) ─────────────────────────────────────────
     let arr_proto_shift_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, _args_base: i32, _args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         _args_base: i32,
+         _args_count: i32|
+         -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            if len == 0 { return value::encode_undefined(); }
+            if len == 0 {
+                return value::encode_undefined();
+            }
             let val = read_array_elem(&mut caller, ptr, 0).unwrap_or(value::encode_undefined());
             // 左移元素
             for i in 1..len {
-                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let elem =
+                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 write_array_elem(&mut caller, ptr, i - 1, elem);
             }
             write_array_length(&mut caller, ptr, len - 1);
             val
         },
     );
-    
+
     // ── arr_proto_unshift (#60) ───────────────────────────────────────
     let arr_proto_unshift_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
@@ -2417,7 +2937,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
             // 右移现有元素
             for i in (0..len).rev() {
-                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let elem =
+                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 write_array_elem(&mut caller, ptr, i + args_count as u32, elem);
             }
             // 在前面插入新元素
@@ -2429,32 +2950,47 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_f64(new_len as f64)
         },
     );
-    
+
     // ── arr_proto_sort (#61) ──────────────────────────────────────────
     let arr_proto_sort_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return this_val;
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as usize;
-            if len <= 1 { return this_val; }
+            if len <= 1 {
+                return this_val;
+            }
             // 读全部元素到 Vec
             let mut elems: Vec<i64> = (0..len)
-                .map(|i| read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined()))
+                .map(|i| {
+                    read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined())
+                })
                 .collect();
             if args_count > 0 && value::is_callable(read_shadow_arg(&mut caller, args_base, 0)) {
                 let cmp = read_shadow_arg(&mut caller, args_base, 0);
                 merge_sort_by(&mut elems, &mut |a, b| -> std::cmp::Ordering {
-                    let result = call_wasm_callback(&mut caller, cmp, value::encode_undefined(), &[*a, *b])
-                        .unwrap_or(value::encode_f64(0.0));
+                    let result =
+                        call_wasm_callback(&mut caller, cmp, value::encode_undefined(), &[*a, *b])
+                            .unwrap_or(value::encode_f64(0.0));
                     let v = f64::from_bits(result as u64);
-                    if v > 0.0 { std::cmp::Ordering::Greater }
-                    else if v < 0.0 { std::cmp::Ordering::Less }
-                    else { std::cmp::Ordering::Equal }
+                    if v > 0.0 {
+                        std::cmp::Ordering::Greater
+                    } else if v < 0.0 {
+                        std::cmp::Ordering::Less
+                    } else {
+                        std::cmp::Ordering::Equal
+                    }
                 });
             } else {
-                let keys: Vec<String> = elems.iter()
+                let keys: Vec<String> = elems
+                    .iter()
                     .map(|e| render_value(&mut caller, *e).unwrap_or_default())
                     .collect();
                 // 带原始 index 的稳定排序
@@ -2463,7 +2999,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     let ka = &keys[*ia];
                     let kb = &keys[*ib];
                     let cmp = ka.cmp(kb);
-                    if cmp == std::cmp::Ordering::Equal { ia.cmp(ib) } else { cmp }
+                    if cmp == std::cmp::Ordering::Equal {
+                        ia.cmp(ib)
+                    } else {
+                        cmp
+                    }
                 });
                 let sorted: Vec<i64> = indexed.iter().map(|(_, e)| **e).collect();
                 elems = sorted;
@@ -2475,19 +3015,30 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             this_val
         },
     );
-    
+
     // ── arr_proto_at (#62) ────────────────────────────────────────────
     let arr_proto_at_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             let idx = if args_count > 0 {
                 let i_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
-                if i_f64.is_nan() { return value::encode_undefined(); }
-                if i_f64 < 0.0 { len + i_f64 as i32 } else { i_f64 as i32 }
+                if i_f64.is_nan() {
+                    return value::encode_undefined();
+                }
+                if i_f64 < 0.0 {
+                    len + i_f64 as i32
+                } else {
+                    i_f64 as i32
+                }
             } else {
                 0
             };
@@ -2497,11 +3048,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             read_array_elem(&mut caller, ptr, idx as u32).unwrap_or(value::encode_undefined())
         },
     );
-    
+
     // ── arr_proto_copy_within (#63) ──────────────────────────────────
     let arr_proto_copy_within_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return this_val;
             };
@@ -2510,66 +3066,111 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let raw_target = if args_count > 0 {
                 let t = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
                 if t.is_nan() { 0 } else { t as i32 }
-            } else { 0 };
-            let target = if raw_target < 0 { (len + raw_target).max(0) } else { raw_target.min(len) };
+            } else {
+                0
+            };
+            let target = if raw_target < 0 {
+                (len + raw_target).max(0)
+            } else {
+                raw_target.min(len)
+            };
             // start
             let raw_start = if args_count > 1 {
                 let s = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
                 if s.is_nan() { 0 } else { s as i32 }
-            } else { 0 };
-            let start = if raw_start < 0 { (len + raw_start).max(0) } else { raw_start.min(len) };
+            } else {
+                0
+            };
+            let start = if raw_start < 0 {
+                (len + raw_start).max(0)
+            } else {
+                raw_start.min(len)
+            };
             // end
             let raw_end = if args_count > 2 {
                 let e = f64::from_bits(read_shadow_arg(&mut caller, args_base, 2) as u64);
                 if e.is_nan() { len } else { e as i32 }
-            } else { len };
-            let end = if raw_end < 0 { (len + raw_end).max(0) } else { raw_end.min(len) };
+            } else {
+                len
+            };
+            let end = if raw_end < 0 {
+                (len + raw_end).max(0)
+            } else {
+                raw_end.min(len)
+            };
             let count = (end - start).min(len - target).max(0) as u32;
             // 复制元素（处理重叠：从后往前复制）
             if target < start {
                 for i in 0..count {
-                    let elem = read_array_elem(&mut caller, ptr, (start as u32) + i).unwrap_or(value::encode_undefined());
+                    let elem = read_array_elem(&mut caller, ptr, (start as u32) + i)
+                        .unwrap_or(value::encode_undefined());
                     write_array_elem(&mut caller, ptr, (target as u32) + i, elem);
                 }
             } else {
                 for i in (0..count).rev() {
-                    let elem = read_array_elem(&mut caller, ptr, (start as u32) + i).unwrap_or(value::encode_undefined());
+                    let elem = read_array_elem(&mut caller, ptr, (start as u32) + i)
+                        .unwrap_or(value::encode_undefined());
                     write_array_elem(&mut caller, ptr, (target as u32) + i, elem);
                 }
             }
             this_val
         },
     );
-    
+
     // ── arr_proto_for_each (#64) ─────────────────────────────────────
     let arr_proto_for_each_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) { return value::encode_undefined(); }
-            let this_arg = if args_count > 1 { read_shadow_arg(&mut caller, args_base, 1) } else { value::encode_undefined() };
+            if !value::is_callable(cb) {
+                return value::encode_undefined();
+            }
+            let this_arg = if args_count > 1 {
+                read_shadow_arg(&mut caller, args_base, 1)
+            } else {
+                value::encode_undefined()
+            };
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
-                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let elem =
+                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                if call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]).is_err() {
+                if call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val])
+                    .is_err()
+                {
                     return value::encode_undefined();
                 }
             }
             value::encode_undefined()
         },
     );
-    
+
     // ── arr_proto_map (#65) ──────────────────────────────────────────
     let arr_proto_map_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) { return value::encode_undefined(); }
-            let this_arg = if args_count > 1 { read_shadow_arg(&mut caller, args_base, 1) } else { value::encode_undefined() };
+            if !value::is_callable(cb) {
+                return value::encode_undefined();
+            }
+            let this_arg = if args_count > 1 {
+                read_shadow_arg(&mut caller, args_base, 1)
+            } else {
+                value::encode_undefined()
+            };
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
@@ -2579,39 +3180,58 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return value::encode_undefined();
             };
             for i in 0..len {
-                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let elem =
+                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                let result = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
-                    Ok(r) => r,
-                    Err(_) => value::encode_undefined(),
-                };
+                let result =
+                    match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val])
+                    {
+                        Ok(r) => r,
+                        Err(_) => value::encode_undefined(),
+                    };
                 write_array_elem(&mut caller, new_ptr, i, result);
             }
             write_array_length(&mut caller, new_ptr, len);
             new_arr
         },
     );
-    
+
     // ── arr_proto_filter (#66) ───────────────────────────────────────
     let arr_proto_filter_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) { return value::encode_undefined(); }
-            let this_arg = if args_count > 1 { read_shadow_arg(&mut caller, args_base, 1) } else { value::encode_undefined() };
+            if !value::is_callable(cb) {
+                return value::encode_undefined();
+            }
+            let this_arg = if args_count > 1 {
+                read_shadow_arg(&mut caller, args_base, 1)
+            } else {
+                value::encode_undefined()
+            };
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             let mut passed: Vec<i64> = Vec::new();
             for i in 0..len {
-                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let elem =
+                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                let ok = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
-                    Ok(r) => value::is_truthy(r),
-                    Err(_) => false,
-                };
-                if ok { passed.push(elem); }
+                let ok =
+                    match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val])
+                    {
+                        Ok(r) => value::is_truthy(r),
+                        Err(_) => false,
+                    };
+                if ok {
+                    passed.push(elem);
+                }
             }
             let new_arr = alloc_array(&mut caller, passed.len() as u32);
             let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
@@ -2624,20 +3244,31 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             new_arr
         },
     );
-    
+
     // ── arr_proto_reduce (#67) ────────────────────────────────────────
     let arr_proto_reduce_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) { return value::encode_undefined(); }
+            if !value::is_callable(cb) {
+                return value::encode_undefined();
+            }
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as usize;
             if len == 0 {
                 if args_count < 2 {
-                    *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") =
                         Some("TypeError: Reduce of empty array with no initial value".to_string());
                     return value::encode_undefined();
                 }
@@ -2652,9 +3283,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 start_idx = 1;
             }
             for i in start_idx..len {
-                let elem = read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined());
+                let elem = read_array_elem(&mut caller, ptr, i as u32)
+                    .unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[acc, elem, idx_val, this_val]) {
+                match call_wasm_callback(
+                    &mut caller,
+                    cb,
+                    value::encode_undefined(),
+                    &[acc, elem, idx_val, this_val],
+                ) {
                     Ok(r) => acc = r,
                     Err(_) => return value::encode_undefined(),
                 }
@@ -2662,20 +3299,31 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             acc
         },
     );
-    
+
     // ── arr_proto_reduce_right (#68) ──────────────────────────────────
     let arr_proto_reduce_right_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) { return value::encode_undefined(); }
+            if !value::is_callable(cb) {
+                return value::encode_undefined();
+            }
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             if len == 0 {
                 if args_count < 2 {
-                    *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") =
                         Some("TypeError: Reduce of empty array with no initial value".to_string());
                     return value::encode_undefined();
                 }
@@ -2686,13 +3334,20 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             if args_count >= 2 {
                 acc = read_shadow_arg(&mut caller, args_base, 1);
             } else {
-                acc = read_array_elem(&mut caller, ptr, start_idx as u32).unwrap_or(value::encode_undefined());
+                acc = read_array_elem(&mut caller, ptr, start_idx as u32)
+                    .unwrap_or(value::encode_undefined());
                 start_idx = len - 2;
             }
             for i in (0..=start_idx as usize).rev() {
-                let elem = read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined());
+                let elem = read_array_elem(&mut caller, ptr, i as u32)
+                    .unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[acc, elem, idx_val, this_val]) {
+                match call_wasm_callback(
+                    &mut caller,
+                    cb,
+                    value::encode_undefined(),
+                    &[acc, elem, idx_val, this_val],
+                ) {
                     Ok(r) => acc = r,
                     Err(_) => return value::encode_undefined(),
                 }
@@ -2700,114 +3355,196 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             acc
         },
     );
-    
+
     // ── arr_proto_find (#69) ──────────────────────────────────────────
     let arr_proto_find_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         _args_count: i32|
+         -> i64 {
             let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) { return value::encode_undefined(); }
+            if !value::is_callable(cb) {
+                return value::encode_undefined();
+            }
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
-                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let elem =
+                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[elem, idx_val, this_val]) {
-                    Ok(r) => if value::is_truthy(r) { return elem; }
+                match call_wasm_callback(
+                    &mut caller,
+                    cb,
+                    value::encode_undefined(),
+                    &[elem, idx_val, this_val],
+                ) {
+                    Ok(r) => {
+                        if value::is_truthy(r) {
+                            return elem;
+                        }
+                    }
                     Err(_) => {}
                 }
             }
             value::encode_undefined()
         },
     );
-    
+
     // ── arr_proto_find_index (#70) ────────────────────────────────────
     let arr_proto_find_index_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         _args_count: i32|
+         -> i64 {
             let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) { return value::encode_f64(-1.0); }
+            if !value::is_callable(cb) {
+                return value::encode_f64(-1.0);
+            }
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_f64(-1.0);
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
-                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let elem =
+                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[elem, idx_val, this_val]) {
-                    Ok(r) => if value::is_truthy(r) { return value::encode_f64(i as f64); }
+                match call_wasm_callback(
+                    &mut caller,
+                    cb,
+                    value::encode_undefined(),
+                    &[elem, idx_val, this_val],
+                ) {
+                    Ok(r) => {
+                        if value::is_truthy(r) {
+                            return value::encode_f64(i as f64);
+                        }
+                    }
                     Err(_) => {}
                 }
             }
             value::encode_f64(-1.0)
         },
     );
-    
+
     // ── arr_proto_some (#71) ─────────────────────────────────────────
     let arr_proto_some_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         _args_count: i32|
+         -> i64 {
             let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) { return value::encode_bool(false); }
+            if !value::is_callable(cb) {
+                return value::encode_bool(false);
+            }
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_bool(false);
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
-                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let elem =
+                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[elem, idx_val, this_val]) {
-                    Ok(r) => if value::is_truthy(r) { return value::encode_bool(true); }
+                match call_wasm_callback(
+                    &mut caller,
+                    cb,
+                    value::encode_undefined(),
+                    &[elem, idx_val, this_val],
+                ) {
+                    Ok(r) => {
+                        if value::is_truthy(r) {
+                            return value::encode_bool(true);
+                        }
+                    }
                     Err(_) => {}
                 }
             }
             value::encode_bool(false)
         },
     );
-    
+
     // ── arr_proto_every (#72) ────────────────────────────────────────
     let arr_proto_every_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         _args_count: i32|
+         -> i64 {
             let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) { return value::encode_bool(false); }
+            if !value::is_callable(cb) {
+                return value::encode_bool(false);
+            }
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_bool(false);
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
-                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let elem =
+                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[elem, idx_val, this_val]) {
-                    Ok(r) => if !value::is_truthy(r) { return value::encode_bool(false); }
+                match call_wasm_callback(
+                    &mut caller,
+                    cb,
+                    value::encode_undefined(),
+                    &[elem, idx_val, this_val],
+                ) {
+                    Ok(r) => {
+                        if !value::is_truthy(r) {
+                            return value::encode_bool(false);
+                        }
+                    }
                     Err(_) => return value::encode_bool(false),
                 }
             }
             value::encode_bool(true)
         },
     );
-    
+
     // ── arr_proto_flat_map (#73) ─────────────────────────────────────
     let arr_proto_flat_map_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) { return value::encode_undefined(); }
-            let this_arg = if args_count > 1 { read_shadow_arg(&mut caller, args_base, 1) } else { value::encode_undefined() };
+            if !value::is_callable(cb) {
+                return value::encode_undefined();
+            }
+            let this_arg = if args_count > 1 {
+                read_shadow_arg(&mut caller, args_base, 1)
+            } else {
+                value::encode_undefined()
+            };
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             let mut elements: Vec<i64> = Vec::new();
             for i in 0..len {
-                let elem = read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
+                let elem =
+                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                let mapped = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
-                    Ok(r) => r,
-                    Err(_) => continue,
-                };
+                let mapped =
+                    match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val])
+                    {
+                        Ok(r) => r,
+                        Err(_) => continue,
+                    };
                 if value::is_array(mapped) {
                     // 展平一层
                     if let Some(mapped_ptr) = resolve_array_ptr(&mut caller, mapped) {
@@ -2833,11 +3570,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             new_arr
         },
     );
-    
+
     // ── arr_proto_splice (#74) ───────────────────────────────────────
     let arr_proto_splice_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
@@ -2846,8 +3588,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let raw_start = if args_count > 0 {
                 let s = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
                 if s.is_nan() { 0 } else { s as i32 }
-            } else { 0 };
-            let start_idx = if raw_start < 0 { (len + raw_start).max(0) } else { raw_start.min(len) };
+            } else {
+                0
+            };
+            let start_idx = if raw_start < 0 {
+                (len + raw_start).max(0)
+            } else {
+                raw_start.min(len)
+            };
             // 读取 deleteCount
             let delete_count = if args_count > 1 {
                 let d = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
@@ -2896,7 +3644,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         let src = i - insert_count + actual_delete;
                         let elem = read_array_elem(&mut caller, ptr, src as u32)
                             .unwrap_or(value::encode_undefined());
-                        write_array_elem(&mut caller, ptr, i as u32 + insert_count as u32 - actual_delete as u32, elem);
+                        write_array_elem(
+                            &mut caller,
+                            ptr,
+                            i as u32 + insert_count as u32 - actual_delete as u32,
+                            elem,
+                        );
                     }
                 }
             }
@@ -2909,16 +3662,21 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             deleted_arr
         },
     );
-    
+
     // ── arr_proto_is_array (#75) ──────────────────────────────────────
     let arr_proto_is_array_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, _this_val: i64, args_base: i32, _args_count: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         _this_val: i64,
+         args_base: i32,
+         _args_count: i32|
+         -> i64 {
             let val = read_shadow_arg(&mut caller, args_base, 0);
             value::encode_bool(value::is_array(val))
         },
     );
-    
+
     // ── abort_shadow_stack_overflow (#76) ─────────────────────────────
     let abort_shadow_stack_overflow_fn = Func::wrap(
         &mut store,
@@ -2936,8 +3694,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 .data()
                 .runtime_error
                 .lock()
-                .expect("runtime error mutex") =
-                Some(format!("shadow stack overflow: sp={shadow_sp} + {args_bytes} > end={stack_end}"));
+                .expect("runtime error mutex") = Some(format!(
+                "shadow stack overflow: sp={shadow_sp} + {args_bytes} > end={stack_end}"
+            ));
         },
     );
 
@@ -2950,19 +3709,13 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
          this_val: i64,
          args_base: i32,
          args_count: i32|
-         -> i64 {
-            resolve_and_call(&mut caller, func, this_val, args_base, args_count)
-        },
+         -> i64 { resolve_and_call(&mut caller, func, this_val, args_base, args_count) },
     );
 
     // ── func_apply (#79): Function.prototype.apply ──────────────────────────
     let func_apply_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         func: i64,
-         this_val: i64,
-         args_array: i64|
-         -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, func: i64, this_val: i64, args_array: i64| -> i64 {
             func_apply_impl(&mut caller, func, this_val, args_array)
         },
     );
@@ -2975,9 +3728,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
          this_val: i64,
          args_base: i32,
          args_count: i32|
-         -> i64 {
-            func_bind_impl(&mut caller, func, this_val, args_base, args_count)
-        },
+         -> i64 { func_bind_impl(&mut caller, func, this_val, args_base, args_count) },
     );
 
     // ── object_rest (#81): Exclude specified keys from object ───────────────
@@ -2988,7 +3739,6 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-
     // ── obj_spread (#82): Copy own enumerable properties ────────────────────
     let obj_spread_fn = Func::wrap(
         &mut store,
@@ -2996,17 +3746,23 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             obj_spread_impl(&mut caller, dest, source);
         },
     );
-    
+
     // ── Import 83: has_own_property(i64, i32) -> i64 ──────────────────────────
     let has_own_property_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_ptr: i32| -> i64 {
             if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
-                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
                     Some("TypeError: hasOwnProperty called on non-object".to_string());
                 return value::encode_undefined();
             }
-            let Some(ptr) = resolve_handle(&mut caller, obj) else { return value::encode_bool(false); };
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_bool(false);
+            };
             let found = find_property_slot_by_name_id(&mut caller, ptr, key_ptr as u32);
             value::encode_bool(found.is_some())
         },
@@ -3015,10 +3771,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let obj_keys_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else { return value::encode_undefined(); };
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_undefined();
+            };
             let names = collect_own_property_names(&mut caller, ptr, true);
             let arr = alloc_array(&mut caller, names.len() as u32);
-            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else { return value::encode_undefined(); };
+            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return value::encode_undefined();
+            };
             for (i, name) in names.iter().enumerate() {
                 let key_val = store_runtime_string(&caller, name.clone());
                 write_array_elem(&mut caller, arr_ptr, i as u32, key_val);
@@ -3031,10 +3791,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let obj_values_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else { return value::encode_undefined(); };
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_undefined();
+            };
             let values = collect_own_property_values(&mut caller, ptr, true);
             let arr = alloc_array(&mut caller, values.len() as u32);
-            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else { return value::encode_undefined(); };
+            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return value::encode_undefined();
+            };
             for (i, val) in values.iter().enumerate() {
                 write_array_elem(&mut caller, arr_ptr, i as u32, *val);
             }
@@ -3046,16 +3810,22 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let obj_entries_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else { return value::encode_undefined(); };
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_undefined();
+            };
             let names = collect_own_property_names(&mut caller, ptr, true);
             let values = collect_own_property_values(&mut caller, ptr, true);
             let len = names.len().min(values.len());
             let arr = alloc_array(&mut caller, len as u32);
-            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else { return value::encode_undefined(); };
+            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return value::encode_undefined();
+            };
             for i in 0..len {
                 // 每个元素是一个 [key, value] 子数组
                 let sub_arr = alloc_array(&mut caller, 2);
-                let Some(sub_ptr) = resolve_array_ptr(&mut caller, sub_arr) else { continue; };
+                let Some(sub_ptr) = resolve_array_ptr(&mut caller, sub_arr) else {
+                    continue;
+                };
                 let key_val = store_runtime_string(&caller, names[i].clone());
                 write_array_elem(&mut caller, sub_ptr, 0, key_val);
                 write_array_elem(&mut caller, sub_ptr, 1, values[i]);
@@ -3069,9 +3839,19 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── Import 87: obj_assign(i64, i64, i32, i32) -> i64 ──────────────────────
     let obj_assign_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env: i64, target: i64, args_base: i32, args_count: i32| -> i64 {
-            if !value::is_object(target) && !value::is_function(target) && !value::is_array(target) {
-                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+        |mut caller: Caller<'_, RuntimeState>,
+         _env: i64,
+         target: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            if !value::is_object(target) && !value::is_function(target) && !value::is_array(target)
+            {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
                     Some("TypeError: target is not an object".to_string());
                 return value::encode_undefined();
             }
@@ -3081,26 +3861,60 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             };
             for i in 0..args_count {
                 let source_val = read_shadow_arg(&mut caller, args_base, i as u32);
-                if !value::is_object(source_val) && !value::is_function(source_val) && !value::is_array(source_val) {
+                if !value::is_object(source_val)
+                    && !value::is_function(source_val)
+                    && !value::is_array(source_val)
+                {
                     continue;
                 }
-                let Some(source_ptr) = resolve_handle(&mut caller, source_val) else { continue; };
+                let Some(source_ptr) = resolve_handle(&mut caller, source_val) else {
+                    continue;
+                };
                 // 收集源对象的可枚举属性
                 let source_props: Vec<(u32, i32, i64)> = {
-                    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { continue; };
+                    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                        continue;
+                    };
                     let d = mem.data(&caller);
-                    if source_ptr + 16 > d.len() { continue; }
-                    let num_props = u32::from_le_bytes([d[source_ptr+12], d[source_ptr+13], d[source_ptr+14], d[source_ptr+15]]) as usize;
+                    if source_ptr + 16 > d.len() {
+                        continue;
+                    }
+                    let num_props = u32::from_le_bytes([
+                        d[source_ptr + 12],
+                        d[source_ptr + 13],
+                        d[source_ptr + 14],
+                        d[source_ptr + 15],
+                    ]) as usize;
                     let mut props = Vec::new();
                     for j in 0..num_props {
                         let slot_offset = source_ptr + 16 + j * 32;
-                        if slot_offset + 32 > d.len() { break; }
-                        let flags = i32::from_le_bytes([d[slot_offset+4], d[slot_offset+5], d[slot_offset+6], d[slot_offset+7]]);
-                        if (flags & 2) == 0 { continue; }
-                        let nid = u32::from_le_bytes([d[slot_offset], d[slot_offset+1], d[slot_offset+2], d[slot_offset+3]]);
+                        if slot_offset + 32 > d.len() {
+                            break;
+                        }
+                        let flags = i32::from_le_bytes([
+                            d[slot_offset + 4],
+                            d[slot_offset + 5],
+                            d[slot_offset + 6],
+                            d[slot_offset + 7],
+                        ]);
+                        if (flags & 2) == 0 {
+                            continue;
+                        }
+                        let nid = u32::from_le_bytes([
+                            d[slot_offset],
+                            d[slot_offset + 1],
+                            d[slot_offset + 2],
+                            d[slot_offset + 3],
+                        ]);
                         let vl = i64::from_le_bytes([
-                            d[slot_offset+8], d[slot_offset+9], d[slot_offset+10], d[slot_offset+11],
-                            d[slot_offset+12], d[slot_offset+13], d[slot_offset+14], d[slot_offset+15],
+                            d[slot_offset + 8],
+                            d[slot_offset + 9],
+                            d[slot_offset + 10],
+                            d[slot_offset + 11],
+                            d[slot_offset + 12],
+                            d[slot_offset + 13],
+                            d[slot_offset + 14],
+                            d[slot_offset + 15],
                         ]);
                         props.push((nid, flags, vl));
                     }
@@ -3117,22 +3931,47 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 // 2) 容量不足则扩容（capacity × 2 倍增）
                 if new_count > 0 {
                     let need_grow = {
-                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { continue; };
+                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                            continue;
+                        };
                         let d = mem.data(&caller);
-                        let num = u32::from_le_bytes([d[target_ptr+12], d[target_ptr+13], d[target_ptr+14], d[target_ptr+15]]) as usize;
-                        let cap = u32::from_le_bytes([d[target_ptr+8], d[target_ptr+9], d[target_ptr+10], d[target_ptr+11]]) as usize;
+                        let num = u32::from_le_bytes([
+                            d[target_ptr + 12],
+                            d[target_ptr + 13],
+                            d[target_ptr + 14],
+                            d[target_ptr + 15],
+                        ]) as usize;
+                        let cap = u32::from_le_bytes([
+                            d[target_ptr + 8],
+                            d[target_ptr + 9],
+                            d[target_ptr + 10],
+                            d[target_ptr + 11],
+                        ]) as usize;
                         num + new_count > cap
                     };
                     if need_grow {
                         let (num, cap) = {
-                            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { continue; };
+                            let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                                continue;
+                            };
                             let d = mem.data(&caller);
-                            let n = u32::from_le_bytes([d[target_ptr+12], d[target_ptr+13], d[target_ptr+14], d[target_ptr+15]]) as usize;
-                            let c = u32::from_le_bytes([d[target_ptr+8], d[target_ptr+9], d[target_ptr+10], d[target_ptr+11]]) as usize;
+                            let n = u32::from_le_bytes([
+                                d[target_ptr + 12],
+                                d[target_ptr + 13],
+                                d[target_ptr + 14],
+                                d[target_ptr + 15],
+                            ]) as usize;
+                            let c = u32::from_le_bytes([
+                                d[target_ptr + 8],
+                                d[target_ptr + 9],
+                                d[target_ptr + 10],
+                                d[target_ptr + 11],
+                            ]) as usize;
                             (n, c)
                         };
                         let new_cap = (cap * 2).max(num + new_count) as u32;
-                        if let Some(new_ptr) = grow_object(&mut caller, target_ptr, target, new_cap) {
+                        if let Some(new_ptr) = grow_object(&mut caller, target_ptr, target, new_cap)
+                        {
                             target_ptr = new_ptr;
                         }
                     }
@@ -3141,21 +3980,37 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 for (name_id, flags, val) in &source_props {
                     let existing = find_property_slot_by_name_id(&mut caller, target_ptr, *name_id);
                     if let Some((existing_offset, _, _)) = existing {
-                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { continue; };
+                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                            continue;
+                        };
                         let d = mem.data_mut(&mut caller);
-                        d[existing_offset + 8..existing_offset + 16].copy_from_slice(&val.to_le_bytes());
+                        d[existing_offset + 8..existing_offset + 16]
+                            .copy_from_slice(&val.to_le_bytes());
                     } else {
-                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { continue; };
+                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                            continue;
+                        };
                         let d = mem.data_mut(&mut caller);
-                        let target_num_props = u32::from_le_bytes([d[target_ptr+12], d[target_ptr+13], d[target_ptr+14], d[target_ptr+15]]) as usize;
+                        let target_num_props = u32::from_le_bytes([
+                            d[target_ptr + 12],
+                            d[target_ptr + 13],
+                            d[target_ptr + 14],
+                            d[target_ptr + 15],
+                        ]) as usize;
                         let new_slot_offset = target_ptr + 16 + target_num_props * 32;
-                        d[new_slot_offset..new_slot_offset+4].copy_from_slice(&name_id.to_le_bytes());
-                        d[new_slot_offset+4..new_slot_offset+8].copy_from_slice(&flags.to_le_bytes());
-                        d[new_slot_offset+8..new_slot_offset+16].copy_from_slice(&val.to_le_bytes());
+                        d[new_slot_offset..new_slot_offset + 4]
+                            .copy_from_slice(&name_id.to_le_bytes());
+                        d[new_slot_offset + 4..new_slot_offset + 8]
+                            .copy_from_slice(&flags.to_le_bytes());
+                        d[new_slot_offset + 8..new_slot_offset + 16]
+                            .copy_from_slice(&val.to_le_bytes());
                         let zero: u64 = 0;
-                        d[new_slot_offset+16..new_slot_offset+24].copy_from_slice(&zero.to_le_bytes());
-                        d[new_slot_offset+24..new_slot_offset+32].copy_from_slice(&zero.to_le_bytes());
-                        d[target_ptr+12..target_ptr+16].copy_from_slice(&((target_num_props+1) as u32).to_le_bytes());
+                        d[new_slot_offset + 16..new_slot_offset + 24]
+                            .copy_from_slice(&zero.to_le_bytes());
+                        d[new_slot_offset + 24..new_slot_offset + 32]
+                            .copy_from_slice(&zero.to_le_bytes());
+                        d[target_ptr + 12..target_ptr + 16]
+                            .copy_from_slice(&((target_num_props + 1) as u32).to_le_bytes());
                     }
                 }
             }
@@ -3169,8 +4024,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let obj_handle = alloc_object(&mut caller, 0);
             if !value::is_null(proto) && !value::is_undefined(proto) {
                 // 设置 __proto__：通过内存写 proto 槽位
-                let Some(ptr) = resolve_handle(&mut caller, obj_handle) else { return obj_handle; };
-                let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return obj_handle; };
+                let Some(ptr) = resolve_handle(&mut caller, obj_handle) else {
+                    return obj_handle;
+                };
+                let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                    return obj_handle;
+                };
                 let d = mem.data_mut(&mut caller);
                 if value::is_object(proto) || value::is_function(proto) || value::is_array(proto) {
                     let proto_handle = (proto as u64 & 0xFFFF_FFFF) as u32;
@@ -3187,16 +4046,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let Some(ptr) = resolve_handle(&mut caller, obj) else {
                 return value::encode_undefined();
             };
-            let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                return value::encode_undefined();
+            };
             let d = mem.data(&caller);
-            if ptr + 4 > d.len() { return value::encode_undefined(); }
-            let proto_handle = u32::from_le_bytes([
-                d[ptr], d[ptr + 1], d[ptr + 2], d[ptr + 3],
-            ]);
+            if ptr + 4 > d.len() {
+                return value::encode_undefined();
+            }
+            let proto_handle = u32::from_le_bytes([d[ptr], d[ptr + 1], d[ptr + 2], d[ptr + 3]]);
             if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
                 return value::encode_null();
             }
-            let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
+            let Some(_proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
                 return value::encode_null();
             };
             value::encode_object_handle(proto_handle)
@@ -3209,10 +4070,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
                 return obj; // primitive → no-op per spec
             }
-            let Some(ptr) = resolve_handle(&mut caller, obj) else { return obj; };
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return obj;
+            };
             if value::is_null(proto) || value::is_undefined(proto) {
                 // 设置为 null
-                let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return obj; };
+                let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                    return obj;
+                };
                 let d = mem.data_mut(&mut caller);
                 let null_handle: u32 = 0xFFFF_FFFF;
                 d[ptr..ptr + 4].copy_from_slice(&null_handle.to_le_bytes());
@@ -3225,22 +4090,44 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     let mut depth = 0;
                     const MAX_PROTO_DEPTH: u32 = 1000;
                     let obj_handle = (obj as u64 & 0xFFFF_FFFF) as u32;
-                    while current_handle != 0xFFFF_FFFF && current_handle != 0 && depth < MAX_PROTO_DEPTH {
+                    while current_handle != 0xFFFF_FFFF
+                        && current_handle != 0
+                        && depth < MAX_PROTO_DEPTH
+                    {
                         if current_handle == obj_handle {
-                            *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                            *caller
+                                .data()
+                                .runtime_error
+                                .lock()
+                                .expect("runtime error mutex") =
                                 Some("TypeError: Cyclic __proto__ value".to_string());
                             return obj;
                         }
-                        let Some(current_ptr) = resolve_handle_idx(&mut caller, current_handle as usize) else { break; };
-                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { break; };
+                        let Some(current_ptr) =
+                            resolve_handle_idx(&mut caller, current_handle as usize)
+                        else {
+                            break;
+                        };
+                        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                            break;
+                        };
                         let d = mem.data(&caller);
-                        if current_ptr + 4 > d.len() { break; }
-                        current_handle = u32::from_le_bytes([d[current_ptr], d[current_ptr+1], d[current_ptr+2], d[current_ptr+3]]);
+                        if current_ptr + 4 > d.len() {
+                            break;
+                        }
+                        current_handle = u32::from_le_bytes([
+                            d[current_ptr],
+                            d[current_ptr + 1],
+                            d[current_ptr + 2],
+                            d[current_ptr + 3],
+                        ]);
                         depth += 1;
                     }
                 }
                 let proto_handle = (proto as u64 & 0xFFFF_FFFF) as u32;
-                let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return obj; };
+                let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                    return obj;
+                };
                 let d = mem.data_mut(&mut caller);
                 d[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
             }
@@ -3251,10 +4138,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let obj_get_own_prop_names_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else { return value::encode_undefined(); };
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_undefined();
+            };
             let names = collect_own_property_names(&mut caller, ptr, false);
             let arr = alloc_array(&mut caller, names.len() as u32);
-            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else { return value::encode_undefined(); };
+            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return value::encode_undefined();
+            };
             for (i, name) in names.iter().enumerate() {
                 let key_val = store_runtime_string(&caller, name.clone());
                 write_array_elem(&mut caller, arr_ptr, i as u32, key_val);
@@ -3277,12 +4168,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             if is_f64_1 && is_f64_2 {
                 // 两者都是 IEEE 754 数值（含 signaling NaN）
                 // +0 != -0
-                if bits1 == 0 && bits2 == 0x8000_0000_0000_0000 { return value::encode_bool(false); }
-                if bits1 == 0x8000_0000_0000_0000 && bits2 == 0 { return value::encode_bool(false); }
+                if bits1 == 0 && bits2 == 0x8000_0000_0000_0000 {
+                    return value::encode_bool(false);
+                }
+                if bits1 == 0x8000_0000_0000_0000 && bits2 == 0 {
+                    return value::encode_bool(false);
+                }
                 // NaN == NaN (signaling NaN 区域)
                 let f1 = f64::from_bits(bits1);
                 let f2 = f64::from_bits(bits2);
-                if f1.is_nan() && f2.is_nan() { return value::encode_bool(true); }
+                if f1.is_nan() && f2.is_nan() {
+                    return value::encode_bool(true);
+                }
                 value::encode_bool(bits1 == bits2)
             } else {
                 // 至少一个是 NaN-boxed JS 值（或 canonical quiet NaN）
@@ -3303,6 +4200,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 store_runtime_string(&_caller, "[object Array]".to_string())
             } else if value::is_function(obj) || value::is_callable(obj) {
                 store_runtime_string(&_caller, "[object Function]".to_string())
+            } else if is_promise_value(_caller.data(), obj) {
+                store_runtime_string(&_caller, "[object Promise]".to_string())
             } else {
                 store_runtime_string(&_caller, "[object Object]".to_string())
             }
@@ -3311,9 +4210,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── Import 94: obj_proto_value_of(i64) -> i64 ─────────────────────────────
     let obj_proto_value_of_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            obj
-        },
+        |_caller: Caller<'_, RuntimeState>, obj: i64| -> i64 { obj },
     );
 
     // ═══════════════════════════════════════════════════════════════════
@@ -3328,7 +4225,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             // 去掉末尾可能存在的 nul 字符
             let trimmed = s.trim_end_matches('\0');
             if let Ok(bigint) = trimmed.parse::<num_bigint::BigInt>() {
-                let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                let mut table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .expect("bigint_table mutex");
                 let handle = table.len() as u32;
                 table.push(bigint);
                 value::encode_bigint_handle(handle)
@@ -3348,13 +4249,21 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         let a_handle = value::decode_bigint_handle(a) as usize;
         let b_handle = value::decode_bigint_handle(b) as usize;
         let (a_val, b_val) = {
-            let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+            let table = caller
+                .data()
+                .bigint_table
+                .lock()
+                .expect("bigint_table mutex");
             (table.get(a_handle).cloned(), table.get(b_handle).cloned())
         };
         match (a_val, b_val) {
             (Some(av), Some(bv)) => {
                 let result = op(&av, &bv);
-                let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                let mut table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .expect("bigint_table mutex");
                 let handle = table.len() as u32;
                 table.push(result);
                 value::encode_bigint_handle(handle)
@@ -3387,18 +4296,30 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
             let (av, bv) = {
-                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                let table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .expect("bigint_table mutex");
                 (table.get(a_handle).cloned(), table.get(b_handle).cloned())
             };
             match (av, bv) {
                 (Some(x), Some(y)) => {
                     if y == 0u32.into() {
-                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .expect("runtime error mutex") =
                             Some("RangeError: BigInt division by zero".to_string());
                         return value::encode_undefined();
                     }
                     let result = x / y;
-                    let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                    let mut table = caller
+                        .data()
+                        .bigint_table
+                        .lock()
+                        .expect("bigint_table mutex");
                     let handle = table.len() as u32;
                     table.push(result);
                     value::encode_bigint_handle(handle)
@@ -3413,18 +4334,30 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
             let (av, bv) = {
-                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                let table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .expect("bigint_table mutex");
                 (table.get(a_handle).cloned(), table.get(b_handle).cloned())
             };
             match (av, bv) {
                 (Some(x), Some(y)) => {
                     if y == 0u32.into() {
-                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .expect("runtime error mutex") =
                             Some("RangeError: BigInt division by zero".to_string());
                         return value::encode_undefined();
                     }
                     let result = x % y;
-                    let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                    let mut table = caller
+                        .data()
+                        .bigint_table
+                        .lock()
+                        .expect("bigint_table mutex");
                     let handle = table.len() as u32;
                     table.push(result);
                     value::encode_bigint_handle(handle)
@@ -3439,27 +4372,43 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
             let (av, bv) = {
-                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                let table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .expect("bigint_table mutex");
                 (table.get(a_handle).cloned(), table.get(b_handle).cloned())
             };
             match (av, bv) {
                 (Some(x), Some(y)) => {
                     // Per spec §6.1.6.1.9: negative exponent throws RangeError
                     if y.sign() == num_bigint::Sign::Minus {
-                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .expect("runtime error mutex") =
                             Some("RangeError: BigInt exponent must be non-negative".to_string());
                         return value::encode_undefined();
                     }
                     let exp = match y.to_u32() {
                         Some(e) => e,
                         None => {
-                            *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                            *caller
+                                .data()
+                                .runtime_error
+                                .lock()
+                                .expect("runtime error mutex") =
                                 Some("RangeError: BigInt exponent too large".to_string());
                             return value::encode_undefined();
                         }
                     };
                     let result = x.pow(exp);
-                    let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                    let mut table = caller
+                        .data()
+                        .bigint_table
+                        .lock()
+                        .expect("bigint_table mutex");
                     let handle = table.len() as u32;
                     table.push(result);
                     value::encode_bigint_handle(handle)
@@ -3473,12 +4422,20 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         |caller: Caller<'_, RuntimeState>, a: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let a_val = {
-                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                let table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .expect("bigint_table mutex");
                 table.get(a_handle).cloned()
             };
             if let Some(av) = a_val {
                 let result = -av;
-                let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                let mut table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .expect("bigint_table mutex");
                 let handle = table.len() as u32;
                 table.push(result);
                 value::encode_bigint_handle(handle)
@@ -3493,8 +4450,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
             let eq = {
-                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
-                table.get(a_handle).zip(table.get(b_handle)).map(|(x, y)| x == y).unwrap_or(false)
+                let table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .expect("bigint_table mutex");
+                table
+                    .get(a_handle)
+                    .zip(table.get(b_handle))
+                    .map(|(x, y)| x == y)
+                    .unwrap_or(false)
             };
             value::encode_bool(eq)
         },
@@ -3505,7 +4470,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
             let cmp = {
-                let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+                let table = caller
+                    .data()
+                    .bigint_table
+                    .lock()
+                    .expect("bigint_table mutex");
                 match (table.get(a_handle), table.get(b_handle)) {
                     (Some(x), Some(y)) => {
                         use std::cmp::Ordering;
@@ -3537,7 +4506,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 // 去掉符号描述可能有的额外引号
                 Some(s.trim_matches('"').to_string())
             };
-            let mut table = caller.data().symbol_table.lock().expect("symbol_table mutex");
+            let mut table = caller
+                .data()
+                .symbol_table
+                .lock()
+                .expect("symbol_table mutex");
             let handle = table.len() as u32;
             table.push(SymbolEntry {
                 description,
@@ -3554,12 +4527,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, key: i64| -> i64 {
             let key_str = if value::is_string(key) {
-                read_value_string_bytes(&mut caller, key).map(|b| String::from_utf8_lossy(&b).to_string())
+                read_value_string_bytes(&mut caller, key)
+                    .map(|b| String::from_utf8_lossy(&b).to_string())
             } else {
                 render_value(&mut caller, key).ok()
-            }.unwrap_or_default();
+            }
+            .unwrap_or_default();
             let key_str = key_str.trim_end_matches('\0').to_string();
-            let mut table = caller.data().symbol_table.lock().expect("symbol_table mutex");
+            let mut table = caller
+                .data()
+                .symbol_table
+                .lock()
+                .expect("symbol_table mutex");
             // 查找是否已有同 key 的 symbol
             for (idx, entry) in table.iter().enumerate() {
                 if entry.global_key.as_deref() == Some(&key_str) {
@@ -3584,7 +4563,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return value::encode_undefined();
             }
             let handle = value::decode_symbol_handle(sym) as usize;
-            let table = caller.data().symbol_table.lock().expect("symbol_table mutex");
+            let table = caller
+                .data()
+                .symbol_table
+                .lock()
+                .expect("symbol_table mutex");
             let key_to_return = table.get(handle).and_then(|entry| entry.global_key.clone());
             drop(table);
             if let Some(key) = key_to_return {
@@ -3594,35 +4577,68 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 108: symbol_well_known(i32) → i64 ──────────────────────
+    // ECMAScript § 6.1.5.1 Well-Known Symbols
+    // 返回预分配的 well-known symbol（id=0..7）
     let symbol_well_known_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _id: i32| -> i64 {
-            // 暂时返回 undefined，well-known symbols 后续实现
-            value::encode_undefined()
+        |caller: Caller<'_, RuntimeState>, id: i32| -> i64 {
+            if id < 0 || id > 7 {
+                return value::encode_undefined();
+            }
+            let table = caller
+                .data()
+                .symbol_table
+                .lock()
+                .expect("symbol_table mutex");
+            if (id as usize) < table.len() {
+                value::encode_symbol_handle(id as u32)
+            } else {
+                value::encode_undefined()
+            }
         },
     );
 
     // ── Import 109: regex_create(i32, i32, i32, i32) → i64 ──────────────────────
     let regex_create_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, pat_ptr: i32, pat_len: i32, flags_ptr: i32, flags_len: i32| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         pat_ptr: i32,
+         pat_len: i32,
+         flags_ptr: i32,
+         flags_len: i32|
+         -> i64 {
             // 从 WASM 内存读取 pattern 和 flags
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return value::encode_undefined(); };
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return value::encode_undefined();
+            };
             let data = memory.data(&caller);
-            
+
             let pat_start = pat_ptr as usize;
             let pat_end = (pat_ptr as usize).saturating_add(pat_len as usize);
-            if pat_end > data.len() { return value::encode_undefined(); }
+            if pat_end > data.len() {
+                return value::encode_undefined();
+            }
             let pat_bytes = &data[pat_start..pat_end];
             // 去掉 nul terminator
-            let pattern = String::from_utf8_lossy(if pat_bytes.ends_with(&[0]) { &pat_bytes[..pat_bytes.len()-1] } else { pat_bytes }).into_owned();
+            let pattern = String::from_utf8_lossy(if pat_bytes.ends_with(&[0]) {
+                &pat_bytes[..pat_bytes.len() - 1]
+            } else {
+                pat_bytes
+            })
+            .into_owned();
 
             let flags_start = flags_ptr as usize;
             let flags_end = (flags_ptr as usize).saturating_add(flags_len as usize);
-            if flags_end > data.len() { return value::encode_undefined(); }
+            if flags_end > data.len() {
+                return value::encode_undefined();
+            }
             let flags_bytes = &data[flags_start..flags_end];
-            let flags = String::from_utf8_lossy(if flags_bytes.ends_with(&[0]) { &flags_bytes[..flags_bytes.len()-1] } else { flags_bytes }).into_owned();
+            let flags = String::from_utf8_lossy(if flags_bytes.ends_with(&[0]) {
+                &flags_bytes[..flags_bytes.len() - 1]
+            } else {
+                flags_bytes
+            })
+            .into_owned();
 
             // 编译正则表达式
             match regress::Regex::with_flags(&pattern, flags.as_str()) {
@@ -3639,7 +4655,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 }
                 Err(e) => {
                     // 编译失败，抛出 SyntaxError
-                    *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") =
                         Some(format!("SyntaxError: Invalid regular expression: {}", e));
                     value::encode_undefined()
                 }
@@ -3667,7 +4687,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         let is_global = e.flags.contains('g');
                         let is_sticky = e.flags.contains('y');
                         // 全局或粘性模式从 lastIndex 开始，否则从 0 开始
-                        let start_pos = if is_global || is_sticky { e.last_index as usize } else { 0 };
+                        let start_pos = if is_global || is_sticky {
+                            e.last_index as usize
+                        } else {
+                            0
+                        };
                         (e.clone(), is_global, is_sticky, start_pos)
                     }
                     None => return value::encode_bool(false),
@@ -3847,7 +4871,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     }
                     Err(e) => {
                         // 创建 RegExp 失败，抛出 SyntaxError
-                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .expect("runtime error mutex") =
                             Some(format!("SyntaxError: Invalid regular expression: {}", e));
                         return value::encode_null();
                     }
@@ -4027,22 +5055,33 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 // 参数数量：matched + captures + offset + string
                 let capture_count = captures.len().saturating_sub(1); // 不包括 group 0（完整匹配）
                 let args_count = 1 + capture_count + 1 + 1; // matched + captures + offset + string
-                
+
                 // 获取 shadow_sp 和 memory
-                let shadow_sp_global = caller.get_export("__shadow_sp")
+                let shadow_sp_global = caller
+                    .get_export("__shadow_sp")
                     .and_then(|e| e.into_global())
                     .unwrap();
                 let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
-                let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
-                
+                let memory = caller
+                    .get_export("memory")
+                    .and_then(|e| e.into_memory())
+                    .unwrap();
+
                 // 写入参数到 shadow stack
                 let mut arg_idx = 0;
-                
+
                 // 1. matched substring
-                let matched_val = store_runtime_string(&*caller, s[match_start..match_end].to_string());
-                memory.write(&mut *caller, (shadow_sp + arg_idx * 8) as usize, &matched_val.to_le_bytes()).unwrap();
+                let matched_val =
+                    store_runtime_string(&*caller, s[match_start..match_end].to_string());
+                memory
+                    .write(
+                        &mut *caller,
+                        (shadow_sp + arg_idx * 8) as usize,
+                        &matched_val.to_le_bytes(),
+                    )
+                    .unwrap();
                 arg_idx += 1;
-                
+
                 // 2. capture groups (从 group 1 开始)
                 for i in 1..=capture_count {
                     let capture_val = if let Some(Some(range)) = captures.get(i) {
@@ -4050,22 +5089,46 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     } else {
                         value::encode_undefined()
                     };
-                    memory.write(&mut *caller, (shadow_sp + arg_idx * 8) as usize, &capture_val.to_le_bytes()).unwrap();
+                    memory
+                        .write(
+                            &mut *caller,
+                            (shadow_sp + arg_idx * 8) as usize,
+                            &capture_val.to_le_bytes(),
+                        )
+                        .unwrap();
                     arg_idx += 1;
                 }
-                
+
                 // 3. offset
                 let offset_val = value::encode_f64(match_start as f64);
-                memory.write(&mut *caller, (shadow_sp + arg_idx * 8) as usize, &offset_val.to_le_bytes()).unwrap();
+                memory
+                    .write(
+                        &mut *caller,
+                        (shadow_sp + arg_idx * 8) as usize,
+                        &offset_val.to_le_bytes(),
+                    )
+                    .unwrap();
                 arg_idx += 1;
-                
+
                 // 4. original string
                 let string_val = store_runtime_string(&*caller, s.to_string());
-                memory.write(&mut *caller, (shadow_sp + arg_idx * 8) as usize, &string_val.to_le_bytes()).unwrap();
-                
+                memory
+                    .write(
+                        &mut *caller,
+                        (shadow_sp + arg_idx * 8) as usize,
+                        &string_val.to_le_bytes(),
+                    )
+                    .unwrap();
+
                 // 调用函数
-                let result = resolve_and_call(caller, func, value::encode_undefined(), 0, args_count as i32);
-                
+                let result = resolve_and_call(
+                    caller,
+                    func,
+                    value::encode_undefined(),
+                    0,
+                    args_count as i32,
+                );
+
                 // 将返回值转换为字符串
                 get_string_value(caller, result)
             }
@@ -4088,11 +5151,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         // 添加匹配前的部分
                         result.push_str(&s[last_end..m.start()]);
                         // 收集捕获组
-                        let captures: Vec<Option<std::ops::Range<usize>>> = 
+                        let captures: Vec<Option<std::ops::Range<usize>>> =
                             (0..m.captures.len() + 1).map(|i| m.group(i)).collect();
                         // 根据是否为函数选择替换方式
                         let replaced = if is_func_replace {
-                            call_replace_func(&mut caller, replace, &s, m.start(), m.end(), &captures)
+                            call_replace_func(
+                                &mut caller,
+                                replace,
+                                &s,
+                                m.start(),
+                                m.end(),
+                                &captures,
+                            )
                         } else {
                             let replace_str = get_string_value(&mut caller, replace);
                             process_replacement(&replace_str, &s, m.start(), m.end(), &captures)
@@ -4106,10 +5176,17 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     // 单次替换
                     match entry.compiled.find(&s) {
                         Some(m) => {
-                            let captures: Vec<Option<std::ops::Range<usize>>> = 
+                            let captures: Vec<Option<std::ops::Range<usize>>> =
                                 (0..m.captures.len() + 1).map(|i| m.group(i)).collect();
                             let replaced = if is_func_replace {
-                                call_replace_func(&mut caller, replace, &s, m.start(), m.end(), &captures)
+                                call_replace_func(
+                                    &mut caller,
+                                    replace,
+                                    &s,
+                                    m.start(),
+                                    m.end(),
+                                    &captures,
+                                )
                             } else {
                                 let replace_str = get_string_value(&mut caller, replace);
                                 process_replacement(&replace_str, &s, m.start(), m.end(), &captures)
@@ -4131,7 +5208,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     let replaced = if is_func_replace {
                         // 构造 captures（只有完整匹配）
                         let captures = vec![Some(pos..pos + search_str.len())];
-                        call_replace_func(&mut caller, replace, &s, pos, pos + search_str.len(), &captures)
+                        call_replace_func(
+                            &mut caller,
+                            replace,
+                            &s,
+                            pos,
+                            pos + search_str.len(),
+                            &captures,
+                        )
                     } else {
                         let replace_str = get_string_value(&mut caller, replace);
                         replace_str
@@ -4220,16 +5304,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             } else {
                 // 非数字类型，尝试转换为字符串再解析
                 let s = get_string_value(&mut caller, limit);
-                s.parse::<f64>().map(|n| {
-                    if n.is_nan() || n.is_infinite() {
-                        0usize
-                    } else {
-                        let truncated = n.trunc();
-                        let modulus = 4294967296.0_f64;
-                        let result = truncated - (truncated / modulus).floor() * modulus;
-                        result as u32 as usize
-                    }
-                }).unwrap_or(0)
+                s.parse::<f64>()
+                    .map(|n| {
+                        if n.is_nan() || n.is_infinite() {
+                            0usize
+                        } else {
+                            let truncated = n.trunc();
+                            let modulus = 4294967296.0_f64;
+                            let result = truncated - (truncated / modulus).floor() * modulus;
+                            result as u32 as usize
+                        }
+                    })
+                    .unwrap_or(0)
             };
 
             // limit 为 0 时返回空数组
@@ -4263,7 +5349,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     let end = m.end();
                     if start > last_end {
                         // 添加匹配前的文本部分
-                        parts.push(store_runtime_string(&caller, s[last_end..start].to_string()));
+                        parts.push(store_runtime_string(
+                            &caller,
+                            s[last_end..start].to_string(),
+                        ));
                     }
                     // 根据 ECMAScript 规范，将捕获组插入结果数组
                     // 捕获组从索引 1 开始（索引 0 是完整匹配）
@@ -4300,7 +5389,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 let sep_str = get_string_value(&mut caller, sep);
                 // 空字符串分隔符：返回每个字符的数组
                 if sep_str.is_empty() {
-                    let chars: Vec<String> = s.chars().map(|c| c.to_string()).take(limit_val).collect();
+                    let chars: Vec<String> =
+                        s.chars().map(|c| c.to_string()).take(limit_val).collect();
                     let arr = alloc_array(&mut caller, chars.len() as u32);
                     let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
                         return value::encode_null();
@@ -4327,128 +5417,1423 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
         },
     );
-    
+
+    // ── Import 116: promise_create() -> i64 ────────────────────────────────
+    let promise_create_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+            let promise = alloc_object(&mut caller, 0);
+            let handle = value::decode_object_handle(promise) as usize;
+            let mut table = caller
+                .data()
+                .promise_table
+                .lock()
+                .expect("promise table mutex");
+            insert_promise_entry(&mut table, handle, PromiseEntry::pending());
+            promise
+        },
+    );
+
+    // ── Import 117: promise_instance_resolve(i64, i64) -> () ───────────────
+    let promise_instance_resolve_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, promise: i64, value: i64| {
+            resolve_promise_from_caller(&mut caller, promise, value);
+        },
+    );
+
+    // ── Import 118: promise_instance_reject(i64, i64) -> () ────────────────
+    let promise_instance_reject_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, promise: i64, reason: i64| {
+            settle_promise(caller.data(), promise, PromiseSettlement::Reject(reason));
+        },
+    );
+
+    // ── Import 142: promise_create_resolve_function(i64) -> i64 ─────────────
+    let promise_create_resolve_function_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, promise: i64| -> i64 {
+            let handle = raw_promise_handle(promise);
+            let already_resolved = {
+                let mut table = caller
+                    .data()
+                    .promise_table
+                    .lock()
+                    .expect("promise table mutex");
+                let Some(entry) = promise_entry_mut(&mut table, handle) else {
+                    return value::encode_undefined();
+                };
+                let record = Arc::new(Mutex::new(false));
+                entry.constructor_resolver = Some(Arc::clone(&record));
+                record
+            };
+            create_promise_resolving_function(
+                caller.data(),
+                promise,
+                already_resolved,
+                PromiseResolvingKind::Fulfill,
+            )
+        },
+    );
+
+    // ── Import 143: promise_create_reject_function(i64) -> i64 ──────────────
+    let promise_create_reject_function_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, promise: i64| -> i64 {
+            let handle = raw_promise_handle(promise);
+            let already_resolved = {
+                let mut table = caller
+                    .data()
+                    .promise_table
+                    .lock()
+                    .expect("promise table mutex");
+                let Some(entry) = promise_entry_mut(&mut table, handle) else {
+                    return value::encode_undefined();
+                };
+                entry
+                    .constructor_resolver
+                    .clone()
+                    .unwrap_or_else(|| Arc::new(Mutex::new(false)))
+            };
+            create_promise_resolving_function(
+                caller.data(),
+                promise,
+                already_resolved,
+                PromiseResolvingKind::Reject,
+            )
+        },
+    );
+
+    // ── Import 119: promise_then(i64, i64, i64) -> i64 ─────────────────────
+    let promise_then_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         promise: i64,
+         on_fulfilled: i64,
+         on_rejected: i64|
+         -> i64 {
+            let handle = raw_promise_handle(promise);
+            let result_promise = alloc_object(&mut caller, 0);
+            let result_handle = value::decode_object_handle(result_promise) as usize;
+            let mut queued = None;
+            {
+                let mut table = caller
+                    .data()
+                    .promise_table
+                    .lock()
+                    .expect("promise table mutex");
+                // §27.2.5.1 — 读取原 promise 的构造器作为 species
+                let species_constructor = promise_entry(&table, handle)
+                    .and_then(|entry| entry.constructor_handle);
+                let mut result_entry = PromiseEntry::pending();
+                result_entry.constructor_handle = species_constructor;
+                insert_promise_entry(&mut table, result_handle, result_entry);
+                if let Some(entry) = promise_entry_mut(&mut table, handle) {
+                    // §27.2.5.3.1 step 10 — .then() 总是标记为已处理
+                    entry.handled = true;
+                    match entry.state.clone() {
+                        PromiseState::Pending => {
+                            entry.fulfill_reactions.push(PromiseReaction::new(
+                                on_fulfilled,
+                                result_handle as i64,
+                                ReactionType::Fulfill,
+                            ));
+                            entry.reject_reactions.push(PromiseReaction::new(
+                                on_rejected,
+                                result_handle as i64,
+                                ReactionType::Reject,
+                            ));
+                        }
+                        PromiseState::Fulfilled(val) => {
+                            queued = Some((ReactionType::Fulfill, on_fulfilled, val));
+                        }
+                        PromiseState::Rejected(reason) => {
+                            queued = Some((ReactionType::Reject, on_rejected, reason));
+                        }
+                    }
+                }
+            }
+            if let Some((reaction_type, handler, argument)) = queued {
+                let mut queue = caller
+                    .data()
+                    .microtask_queue
+                    .lock()
+                    .expect("microtask queue mutex");
+                queue.push_back(Microtask::PromiseReaction {
+                    promise: result_handle as i64,
+                    reaction_type,
+                    handler,
+                    argument,
+                });
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 120: promise_catch(i64, i64) -> i64 ──────────────────────────
+    let promise_catch_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, promise: i64, on_rejected: i64| -> i64 {
+            let handle = raw_promise_handle(promise);
+            let result_promise = alloc_object(&mut caller, 0);
+            let result_handle = value::decode_object_handle(result_promise) as usize;
+            let mut queued = None;
+            {
+                let mut table = caller
+                    .data()
+                    .promise_table
+                    .lock()
+                    .expect("promise table mutex");
+                // §27.2.5.1 — species-aware: 读取原 promise 的构造器
+                let species_constructor = promise_entry(&table, handle)
+                    .and_then(|entry| entry.constructor_handle);
+                let mut result_entry = PromiseEntry::pending();
+                result_entry.constructor_handle = species_constructor;
+                insert_promise_entry(&mut table, result_handle, result_entry);
+                if let Some(entry) = promise_entry_mut(&mut table, handle) {
+                    entry.handled = true;
+                    match entry.state.clone() {
+                        PromiseState::Pending => {
+                            entry.fulfill_reactions.push(PromiseReaction::new(
+                                value::encode_undefined(),
+                                result_handle as i64,
+                                ReactionType::Fulfill,
+                            ));
+                            entry.reject_reactions.push(PromiseReaction::new(
+                                on_rejected,
+                                result_handle as i64,
+                                ReactionType::Reject,
+                            ));
+                        }
+                        PromiseState::Fulfilled(val) => {
+                            queued = Some((ReactionType::Fulfill, value::encode_undefined(), val));
+                        }
+                        PromiseState::Rejected(reason) => {
+                            queued = Some((ReactionType::Reject, on_rejected, reason));
+                        }
+                    }
+                }
+            }
+            if let Some((reaction_type, handler, argument)) = queued {
+                let mut queue = caller
+                    .data()
+                    .microtask_queue
+                    .lock()
+                    .expect("microtask queue mutex");
+                queue.push_back(Microtask::PromiseReaction {
+                    promise: result_handle as i64,
+                    reaction_type,
+                    handler,
+                    argument,
+                });
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 121: promise_finally(i64, i64) -> i64 ────────────────────────
+    let promise_finally_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, promise: i64, on_finally: i64| -> i64 {
+            let handle = raw_promise_handle(promise);
+            let result_promise = alloc_object(&mut caller, 0);
+            let result_handle = value::decode_object_handle(result_promise) as usize;
+            let mut queued = None;
+            {
+                let mut table = caller
+                    .data()
+                    .promise_table
+                    .lock()
+                    .expect("promise table mutex");
+                // §27.2.5.1 — species-aware: 读取原 promise 的构造器
+                let species_constructor = promise_entry(&table, handle)
+                    .and_then(|entry| entry.constructor_handle);
+                let mut result_entry = PromiseEntry::pending();
+                result_entry.constructor_handle = species_constructor;
+                insert_promise_entry(&mut table, result_handle, result_entry);
+                if let Some(entry) = promise_entry_mut(&mut table, handle) {
+                    entry.handled = true;
+                    match entry.state.clone() {
+                        PromiseState::Pending => {
+                            entry.fulfill_reactions.push(PromiseReaction::new(
+                                on_finally,
+                                result_handle as i64,
+                                ReactionType::FinallyFulfill,
+                            ));
+                            entry.reject_reactions.push(PromiseReaction::new(
+                                on_finally,
+                                result_handle as i64,
+                                ReactionType::FinallyReject,
+                            ));
+                        }
+                        PromiseState::Fulfilled(val) => {
+                            queued = Some((ReactionType::FinallyFulfill, on_finally, val));
+                        }
+                        PromiseState::Rejected(reason) => {
+                            queued = Some((ReactionType::FinallyReject, on_finally, reason));
+                        }
+                    }
+                }
+            }
+            if let Some((reaction_type, handler, argument)) = queued {
+                let mut queue = caller
+                    .data()
+                    .microtask_queue
+                    .lock()
+                    .expect("microtask queue mutex");
+                queue.push_back(Microtask::PromiseReaction {
+                    promise: result_handle as i64,
+                    reaction_type,
+                    handler,
+                    argument,
+                });
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 122: promise_all(i64, i64) -> i64 ─────────────────────────────────
+    let promise_all_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                let mut entry = PromiseEntry::rejected(value::encode_undefined());
+                if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                    entry.constructor_handle = Some(constructor);
+                }
+                return alloc_promise(
+                    &mut caller,
+                    entry,
+                );
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let mut entry = PromiseEntry::pending();
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            let result_promise = alloc_promise(&mut caller, entry);
+
+            if len == 0 {
+                let empty_arr = alloc_array(&mut caller, 0);
+                if let Some(empty_ptr) = resolve_array_ptr(&mut caller, empty_arr) {
+                    write_array_length(&mut caller, empty_ptr, 0);
+                }
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(empty_arr),
+                );
+                return result_promise;
+            }
+
+            let result_array = alloc_array(&mut caller, len);
+            if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_array) {
+                write_array_length(&mut caller, result_ptr, len);
+            }
+            let context = create_combinator_context(caller.data(), result_promise, result_array);
+            let result_handle = raw_promise_handle(result_promise) as i64;
+            let elems: Vec<i64> = (0..len)
+                .map(|i| {
+                    read_array_elem(&mut caller, ptr, i).unwrap_or_else(value::encode_undefined)
+                })
+                .collect();
+            let mut remaining = 0usize;
+            let mut rejected = None;
+
+            for (index, elem) in elems.iter().copied().enumerate() {
+                let mut fulfilled = None;
+                let mut rejected_elem = None;
+                let mut pending = false;
+                let mut known_promise = false;
+
+                if value::is_object(elem) {
+                    let elem_handle = value::decode_object_handle(elem) as usize;
+                    let mut table = caller
+                        .data()
+                        .promise_table
+                        .lock()
+                        .expect("promise table mutex");
+                    if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
+                        known_promise = true;
+                        entry.handled = true; // §27.2.4.1.1 — 标记所有已知 promise 为已处理
+                        match entry.state.clone() {
+                            PromiseState::Fulfilled(value) => fulfilled = Some(value),
+                            PromiseState::Rejected(reason) => rejected_elem = Some(reason),
+                            PromiseState::Pending => {
+                                pending = true;
+                                let handler = create_combinator_reaction_handler(
+                                    caller.data(),
+                                    context,
+                                    index,
+                                    PromiseCombinatorReactionKind::AllFulfill,
+                                );
+                                entry.fulfill_reactions.push(PromiseReaction::new(
+                                    handler,
+                                    result_handle,
+                                    ReactionType::Fulfill,
+                                ));
+                                entry.reject_reactions.push(PromiseReaction::new(
+                                    value::encode_undefined(),
+                                    result_handle,
+                                    ReactionType::Reject,
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                if pending {
+                    remaining += 1;
+                } else if let Some(reason) = rejected_elem {
+                    rejected.get_or_insert(reason);
+                } else {
+                    let value = fulfilled.unwrap_or(elem);
+                    if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_array) {
+                        write_array_elem(&mut caller, result_ptr, index as u32, value);
+                    }
+                    let _ = known_promise;
+                }
+            }
+
+            set_combinator_remaining(caller.data(), context, remaining);
+            if let Some(reason) = rejected {
+                mark_combinator_settled(caller.data(), context);
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Reject(reason),
+                );
+            } else if remaining == 0 {
+                mark_combinator_settled(caller.data(), context);
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(result_array),
+                );
+            }
+
+            result_promise
+        },
+    );
+
+    // ── Import 123: promise_race(i64, i64) -> i64 ────────────────────────────────
+    let promise_race_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
+            let mut entry = PromiseEntry::pending();
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            let result_promise = alloc_promise(&mut caller, entry);
+            let result_handle = raw_promise_handle(result_promise) as i64;
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Reject(value::encode_undefined()),
+                );
+                return result_promise;
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+
+            for index in 0..len {
+                let elem = read_array_elem(&mut caller, ptr, index)
+                    .unwrap_or_else(value::encode_undefined);
+                if value::is_object(elem) {
+                    let elem_handle = value::decode_object_handle(elem) as usize;
+                    let mut immediate = None;
+                    {
+                        let mut table = caller
+                            .data()
+                            .promise_table
+                            .lock()
+                            .expect("promise table mutex");
+                        if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
+                            entry.handled = true; // 标记所有已知 promise 为已处理
+                            match entry.state.clone() {
+                                PromiseState::Fulfilled(value) => {
+                                    immediate = Some(PromiseSettlement::Fulfill(value));
+                                }
+                                PromiseState::Rejected(reason) => {
+                                    immediate = Some(PromiseSettlement::Reject(reason));
+                                }
+                                PromiseState::Pending => {
+                                    entry.fulfill_reactions.push(PromiseReaction::new(
+                                        value::encode_undefined(),
+                                        result_handle,
+                                        ReactionType::Fulfill,
+                                    ));
+                                    entry.reject_reactions.push(PromiseReaction::new(
+                                        value::encode_undefined(),
+                                        result_handle,
+                                        ReactionType::Reject,
+                                    ));
+                                }
+                            }
+                        } else {
+                            immediate = Some(PromiseSettlement::Fulfill(elem));
+                        }
+                    }
+                    if let Some(settlement) = immediate {
+                        settle_promise(caller.data(), result_promise, settlement);
+                        return result_promise;
+                    }
+                } else {
+                    resolve_promise_from_caller(&mut caller, result_promise, elem);
+                    return result_promise;
+                }
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 124: promise_all_settled(i64, i64) -> i64 ─────────────────────────
+    let promise_all_settled_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
+            let mut entry = PromiseEntry::pending();
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            let result_promise = alloc_promise(&mut caller, entry);
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Reject(value::encode_undefined()),
+                );
+                return result_promise;
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let result_array = alloc_array(&mut caller, len);
+            if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_array) {
+                write_array_length(&mut caller, result_ptr, len);
+            }
+            let context = create_combinator_context(caller.data(), result_promise, result_array);
+            let result_handle = raw_promise_handle(result_promise) as i64;
+            let elems: Vec<i64> = (0..len)
+                .map(|i| {
+                    read_array_elem(&mut caller, ptr, i).unwrap_or_else(value::encode_undefined)
+                })
+                .collect();
+            let mut remaining = 0usize;
+
+            for (index, elem) in elems.iter().copied().enumerate() {
+                let mut outcome = Some(("fulfilled", "value", elem));
+                let mut pending = false;
+
+                if value::is_object(elem) {
+                    let elem_handle = value::decode_object_handle(elem) as usize;
+                    let mut table = caller
+                        .data()
+                        .promise_table
+                        .lock()
+                        .expect("promise table mutex");
+                    if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
+                        entry.handled = true; // 标记所有已知 promise 为已处理
+                        match entry.state.clone() {
+                            PromiseState::Fulfilled(value) => {
+                                outcome = Some(("fulfilled", "value", value))
+                            }
+                            PromiseState::Rejected(reason) => {
+                                outcome = Some(("rejected", "reason", reason))
+                            }
+                            PromiseState::Pending => {
+                                pending = true;
+                                outcome = None;
+                                let fulfill_handler = create_combinator_reaction_handler(
+                                    caller.data(),
+                                    context,
+                                    index,
+                                    PromiseCombinatorReactionKind::AllSettledFulfill,
+                                );
+                                let reject_handler = create_combinator_reaction_handler(
+                                    caller.data(),
+                                    context,
+                                    index,
+                                    PromiseCombinatorReactionKind::AllSettledReject,
+                                );
+                                entry.fulfill_reactions.push(PromiseReaction::new(
+                                    fulfill_handler,
+                                    result_handle,
+                                    ReactionType::Fulfill,
+                                ));
+                                entry.reject_reactions.push(PromiseReaction::new(
+                                    reject_handler,
+                                    result_handle,
+                                    ReactionType::Reject,
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                if pending {
+                    remaining += 1;
+                    continue;
+                }
+
+                if let Some((status, value_name, value)) = outcome {
+                    let record =
+                        alloc_promise_all_settled_result(&mut caller, status, value_name, value);
+                    if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_array) {
+                        write_array_elem(&mut caller, result_ptr, index as u32, record);
+                    }
+                }
+            }
+
+            set_combinator_remaining(caller.data(), context, remaining);
+            if remaining == 0 {
+                mark_combinator_settled(caller.data(), context);
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(result_array),
+                );
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 125: promise_any(i64, i64) -> i64 ─────────────────────────────────
+    let promise_any_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
+            let mut entry = PromiseEntry::pending();
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            let result_promise = alloc_promise(&mut caller, entry);
+            let result_handle = raw_promise_handle(result_promise) as i64;
+            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Reject(value::encode_undefined()),
+                );
+                return result_promise;
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let errors_array = alloc_array(&mut caller, len);
+            if let Some(errors_ptr) = resolve_array_ptr(&mut caller, errors_array) {
+                write_array_length(&mut caller, errors_ptr, len);
+            }
+            if len == 0 {
+                let aggregate = alloc_aggregate_error(&mut caller, errors_array);
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Reject(aggregate),
+                );
+                return result_promise;
+            }
+
+            let context = create_combinator_context(caller.data(), result_promise, errors_array);
+            let elems: Vec<i64> = (0..len)
+                .map(|i| {
+                    read_array_elem(&mut caller, ptr, i).unwrap_or_else(value::encode_undefined)
+                })
+                .collect();
+            let mut remaining = len as usize;
+            let mut fulfilled = None;
+
+            for (index, elem) in elems.iter().copied().enumerate() {
+                let mut rejected_reason = None;
+                let mut pending = false;
+                let mut known_promise = false;
+
+                if value::is_object(elem) {
+                    let elem_handle = value::decode_object_handle(elem) as usize;
+                    let mut table = caller
+                        .data()
+                        .promise_table
+                        .lock()
+                        .expect("promise table mutex");
+                    if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
+                        known_promise = true;
+                        entry.handled = true; // 标记所有已知 promise 为已处理
+                        match entry.state.clone() {
+                            PromiseState::Fulfilled(value) => fulfilled = Some(value),
+                            PromiseState::Rejected(reason) => rejected_reason = Some(reason),
+                            PromiseState::Pending => {
+                                pending = true;
+                                let reject_handler = create_combinator_reaction_handler(
+                                    caller.data(),
+                                    context,
+                                    index,
+                                    PromiseCombinatorReactionKind::AnyReject,
+                                );
+                                entry.fulfill_reactions.push(PromiseReaction::new(
+                                    value::encode_undefined(),
+                                    result_handle,
+                                    ReactionType::Fulfill,
+                                ));
+                                entry.reject_reactions.push(PromiseReaction::new(
+                                    reject_handler,
+                                    result_handle,
+                                    ReactionType::Reject,
+                                ));
+                            }
+                        }
+                    }
+                }
+
+                if fulfilled.is_some() {
+                    break;
+                }
+                if pending {
+                    continue;
+                }
+                if let Some(reason) = rejected_reason {
+                    if let Some(errors_ptr) = resolve_array_ptr(&mut caller, errors_array) {
+                        write_array_elem(&mut caller, errors_ptr, index as u32, reason);
+                    }
+                    remaining = remaining.saturating_sub(1);
+                } else if !known_promise {
+                    fulfilled = Some(elem);
+                    break;
+                }
+            }
+
+            set_combinator_remaining(caller.data(), context, remaining);
+            if let Some(value) = fulfilled {
+                mark_combinator_settled(caller.data(), context);
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(value),
+                );
+            } else if remaining == 0 {
+                mark_combinator_settled(caller.data(), context);
+                let aggregate = alloc_aggregate_error(&mut caller, errors_array);
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Reject(aggregate),
+                );
+            }
+            result_promise
+        },
+    );
+
+    // ── Import 126: promise_resolve_static(i64, i64) -> i64 ────────────
+    // §27.2.4.6 Promise.resolve(C, x) — species-aware
+    let promise_resolve_static_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, val: i64| -> i64 {
+            // 若 x 是 promise，检查 SameValue(x.constructor, C)
+            if is_promise_value(caller.data(), val) {
+                let handle = raw_promise_handle(val);
+                let table = caller
+                    .data()
+                    .promise_table
+                    .lock()
+                    .expect("promise table mutex");
+                if let Some(entry) = promise_entry(&table, handle) {
+                    let matches = match (&entry.constructor_handle, value::is_undefined(constructor)) {
+                        (None, true) => true,       // 都是内建 Promise
+                        (Some(_), true) => false,    // 子类 vs 内建
+                        (None, false) => false,      // 内建 vs 子类
+                        (Some(ctor), false) => *ctor == constructor, // 同一子类
+                    };
+                    drop(table);
+                    if matches {
+                        return val;
+                    }
+                } else {
+                    drop(table);
+                }
+            }
+            // NewPromiseCapability(C) + resolve(x)
+            let mut entry = PromiseEntry::pending();
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            let promise = alloc_promise_from_caller(&mut caller, entry);
+            resolve_promise_from_caller(&mut caller, promise, val);
+            promise
+        },
+    );
+
+    // ── Import 127: promise_reject_static(i64, i64) -> i64 ────────────
+    // §27.2.4.5 Promise.reject(C, r) — species-aware
+    let promise_reject_static_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64, reason: i64| -> i64 {
+            // NewPromiseCapability(C) + reject(r)
+            let mut entry = PromiseEntry::rejected(reason);
+            if !value::is_undefined(constructor) && !value::is_null(constructor) {
+                entry.constructor_handle = Some(constructor);
+            }
+            alloc_promise_from_caller(&mut caller, entry)
+        },
+    );
+
+    // ── Import 145: promise_with_resolvers(i64) -> i64 ────────────────
+    // §27.2.3.9 Promise.withResolvers(C) — ES2024
+    let promise_with_resolvers_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, constructor: i64| -> i64 {
+            let (promise, resolve, reject) =
+                new_promise_capability_from_caller(&mut caller, constructor);
+            // 创建 { promise, resolve, reject } 对象
+            let obj = alloc_host_object_from_caller(&mut caller, 3);
+            define_host_data_property_from_caller(&mut caller, obj, "promise", promise);
+            define_host_data_property_from_caller(&mut caller, obj, "resolve", resolve);
+            define_host_data_property_from_caller(&mut caller, obj, "reject", reject);
+            obj
+        },
+    );
+
+    // ── Import 128: is_promise(i64) -> i64 ──────────────────────────────────
+    let is_promise_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            value::encode_bool(is_promise_value(caller.data(), val))
+        },
+    );
+
+    // ── Import 144: is_callable(i64) -> i64 ──────────────────────────────────
+    // ECMAScript §7.2.3 IsCallable(argument) → boolean
+    let is_callable_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            value::encode_bool(value::is_callable(val))
+        },
+    );
+
+    // ── Import 129: queue_microtask(i64) -> () ──────────────────────────────
+    let queue_microtask_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, callback: i64| {
+            let mut queue = caller
+                .data()
+                .microtask_queue
+                .lock()
+                .expect("microtask queue mutex");
+            queue.push_back(Microtask::MicrotaskCallback { callback });
+        },
+    );
+
+    // ── Import 130: drain_microtasks() -> () ────────────────────────────────
+    let drain_microtasks_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
+        let table = caller.get_export("__table").and_then(|e| e.into_table());
+        let Some(func_table) = table else { return };
+        drain_microtasks_from_caller(&mut caller, &func_table);
+    });
+
+    // ── Import 131: async_function_start(i64) -> i64 ────────────────────────
+    let async_function_start_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, fn_table_idx: i64| -> i64 {
+            let fn_table_idx = if value::is_function(fn_table_idx) {
+                value::decode_function_idx(fn_table_idx)
+            } else if value::is_closure(fn_table_idx) {
+                let idx = value::decode_closure_idx(fn_table_idx);
+                let closures = caller.data().closures.lock().unwrap();
+                closures.get(idx as usize).map(|e| e.func_idx).unwrap_or(0)
+            } else {
+                nanbox_to_u32(fn_table_idx)
+            };
+            let outer_promise = alloc_promise(&mut caller, PromiseEntry::pending());
+
+            let mut c_table = caller
+                .data()
+                .continuation_table
+                .lock()
+                .expect("continuation table mutex");
+            let cont_handle = c_table.len() as u32;
+            c_table.push(ContinuationEntry {
+                fn_table_idx,
+                outer_promise,
+                captured_vars: vec![value::encode_undefined(); 4],
+            });
+            if let Some(entry) = c_table.get_mut(cont_handle as usize) {
+                entry.captured_vars[0] = value::encode_f64(0.0);
+                entry.captured_vars[1] = value::encode_bool(false);
+                entry.captured_vars[2] = outer_promise;
+            }
+            drop(c_table);
+
+            let mut queue = caller
+                .data()
+                .microtask_queue
+                .lock()
+                .expect("microtask queue mutex");
+            queue.push_back(Microtask::AsyncResume {
+                fn_table_idx,
+                continuation: cont_handle as i64,
+                state: 0,
+                resume_val: value::encode_undefined(),
+                is_rejected: false,
+            });
+
+            outer_promise
+        },
+    );
+
+    // ── Import 132: async_function_resume(i64, i64, i64, i64, i64) -> () ───
+    let async_function_resume_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>,
+         fn_table_idx: i64,
+         continuation: i64,
+         state: i64,
+         resume_val: i64,
+         is_rejected: i64| {
+            let resolved_fn_idx = if value::is_function(fn_table_idx) {
+                value::decode_function_idx(fn_table_idx)
+            } else if value::is_closure(fn_table_idx) {
+                let idx = value::decode_closure_idx(fn_table_idx);
+                let closures = caller.data().closures.lock().unwrap();
+                closures.get(idx as usize).map(|e| e.func_idx).unwrap_or(0)
+            } else {
+                nanbox_to_u32(fn_table_idx)
+            };
+            let state = nanbox_to_u32(state);
+            let is_rejected_bool = nanbox_to_bool(is_rejected);
+            {
+                let cont_handle = value::decode_object_handle(continuation) as usize;
+                let mut c_table = caller
+                    .data()
+                    .continuation_table
+                    .lock()
+                    .expect("continuation table mutex");
+                if let Some(entry) = c_table.get_mut(cont_handle) {
+                    while entry.captured_vars.len() < 2 {
+                        entry.captured_vars.push(value::encode_undefined());
+                    }
+                    entry.captured_vars[0] = value::encode_f64(state as f64);
+                    entry.captured_vars[1] = value::encode_bool(is_rejected_bool);
+                }
+            }
+            let mut queue = caller
+                .data()
+                .microtask_queue
+                .lock()
+                .expect("microtask queue mutex");
+            queue.push_back(Microtask::AsyncResume {
+                fn_table_idx: resolved_fn_idx,
+                continuation,
+                state,
+                resume_val,
+                is_rejected: is_rejected_bool,
+            });
+        },
+    );
+
+    // ── Import 133: async_function_suspend(i64, i64, i64) -> () ─────────────
+    let async_function_suspend_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, continuation: i64, awaited_promise: i64, state: i64| {
+            let cont_handle = value::decode_object_handle(continuation) as usize;
+            {
+                let mut c_table = caller
+                    .data()
+                    .continuation_table
+                    .lock()
+                    .expect("continuation table mutex");
+                if let Some(entry) = c_table.get_mut(cont_handle) {
+                    while entry.captured_vars.len() < 4 {
+                        entry.captured_vars.push(value::encode_undefined());
+                    }
+                    entry.captured_vars[0] = value::encode_f64(state as f64);
+                    entry.captured_vars[1] = value::encode_bool(false);
+                }
+            }
+            let cont_fn_idx = {
+                let c_table = caller
+                    .data()
+                    .continuation_table
+                    .lock()
+                    .expect("continuation table mutex");
+                c_table
+                    .get(cont_handle)
+                    .map(|e| e.fn_table_idx)
+                    .unwrap_or(0)
+            };
+
+            let awaited_handle = value::decode_object_handle(awaited_promise) as usize;
+            let mut p_table = caller
+                .data()
+                .promise_table
+                .lock()
+                .expect("promise table mutex");
+            if let Some(entry) = promise_entry_mut(&mut p_table, awaited_handle) {
+                // §15.8.1 — await 标记 promise 为已处理
+                entry.handled = true;
+                match &entry.state {
+                    PromiseState::Pending => {
+                        entry.fulfill_reactions.push(PromiseReaction::new_async(
+                            cont_fn_idx as i64,
+                            continuation,
+                            ReactionType::Fulfill,
+                            state,
+                        ));
+                        entry.reject_reactions.push(PromiseReaction::new_async(
+                            cont_fn_idx as i64,
+                            continuation,
+                            ReactionType::Reject,
+                            state,
+                        ));
+                    }
+                    PromiseState::Fulfilled(val) => {
+                        let val = *val;
+                        drop(p_table);
+                        let mut queue = caller
+                            .data()
+                            .microtask_queue
+                            .lock()
+                            .expect("microtask queue mutex");
+                        queue.push_back(Microtask::AsyncResume {
+                            fn_table_idx: cont_fn_idx,
+                            continuation,
+                            state: state as u32,
+                            resume_val: val,
+                            is_rejected: false,
+                        });
+                        return;
+                    }
+                    PromiseState::Rejected(reason) => {
+                        let reason = *reason;
+                        drop(p_table);
+                        let mut queue = caller
+                            .data()
+                            .microtask_queue
+                            .lock()
+                            .expect("microtask queue mutex");
+                        queue.push_back(Microtask::AsyncResume {
+                            fn_table_idx: cont_fn_idx,
+                            continuation,
+                            state: state as u32,
+                            resume_val: reason,
+                            is_rejected: true,
+                        });
+                        return;
+                    }
+                }
+            }
+        },
+    );
+
+    // ── Import 134: continuation_create(i64, i64, i64) -> i64 ───────────────
+    let continuation_create_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>,
+         fn_table_idx: i64,
+         outer_promise: i64,
+         captured_var_count: i64|
+         -> i64 {
+            let resolved_fn_idx = if value::is_function(fn_table_idx) {
+                value::decode_function_idx(fn_table_idx)
+            } else if value::is_closure(fn_table_idx) {
+                let idx = value::decode_closure_idx(fn_table_idx);
+                let closures = caller.data().closures.lock().unwrap();
+                closures.get(idx as usize).map(|e| e.func_idx).unwrap_or(0)
+            } else {
+                nanbox_to_u32(fn_table_idx)
+            };
+            let mut table = caller
+                .data()
+                .continuation_table
+                .lock()
+                .expect("continuation table mutex");
+            let handle = table.len() as u32;
+            let total_slots = nanbox_to_usize(captured_var_count);
+            table.push(ContinuationEntry {
+                fn_table_idx: resolved_fn_idx,
+                outer_promise,
+                captured_vars: vec![value::encode_undefined(); total_slots],
+            });
+            if let Some(entry) = table.get_mut(handle as usize) {
+                entry.captured_vars[0] = value::encode_f64(0.0);
+                entry.captured_vars[1] = value::encode_bool(false);
+            }
+            value::encode_object_handle(handle)
+        },
+    );
+
+    // ── Import 135: continuation_save_var(i64, i64, i64) -> () ──────────────
+    let continuation_save_var_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, continuation: i64, slot: i64, val: i64| {
+            let handle = value::decode_object_handle(continuation) as usize;
+            let actual_slot = nanbox_to_usize(slot);
+            let mut table = caller
+                .data()
+                .continuation_table
+                .lock()
+                .expect("continuation table mutex");
+            if let Some(entry) = table.get_mut(handle) {
+                if actual_slot < entry.captured_vars.len() {
+                    entry.captured_vars[actual_slot] = val;
+                }
+            }
+        },
+    );
+
+    // ── Import 136: continuation_load_var(i64, i64) -> i64 ──────────────────
+    let continuation_load_var_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, continuation: i64, slot: i64| -> i64 {
+            let handle = value::decode_object_handle(continuation) as usize;
+            let actual_slot = nanbox_to_usize(slot);
+            let table = caller
+                .data()
+                .continuation_table
+                .lock()
+                .expect("continuation table mutex");
+            if let Some(entry) = table.get(handle) {
+                if actual_slot < entry.captured_vars.len() {
+                    return entry.captured_vars[actual_slot];
+                }
+            }
+            value::encode_undefined()
+        },
+    );
+
+    // ── Import 137: async_generator_start(i64) -> i64 ───────────────────────
+    let async_generator_start_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, continuation: i64| -> i64 {
+            let generator = alloc_object(&mut caller, 4);
+            if !value::is_object(generator) {
+                return value::encode_undefined();
+            }
+            let next = create_async_generator_method(
+                caller.data(),
+                generator,
+                AsyncGeneratorCompletionType::Next,
+            );
+            let ret = create_async_generator_method(
+                caller.data(),
+                generator,
+                AsyncGeneratorCompletionType::Return,
+            );
+            let throw = create_async_generator_method(
+                caller.data(),
+                generator,
+                AsyncGeneratorCompletionType::Throw,
+            );
+            let _ = define_host_data_property_from_caller(&mut caller, generator, "next", next);
+            let _ = define_host_data_property_from_caller(&mut caller, generator, "return", ret);
+            let _ = define_host_data_property_from_caller(&mut caller, generator, "throw", throw);
+            let async_iter = create_async_generator_identity(caller.data(), generator);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                generator,
+                "Symbol.asyncIterator",
+                async_iter,
+            );
+
+            let handle = value::decode_object_handle(generator) as usize;
+            let mut table = caller
+                .data()
+                .async_generator_table
+                .lock()
+                .expect("async generator table mutex");
+            if table.len() <= handle {
+                table.resize_with(handle + 1, || AsyncGeneratorEntry {
+                    state: AsyncGeneratorState::Completed,
+                    continuation: value::encode_undefined(),
+                    active_request: None,
+                    waiting_resume_promise: None,
+                    queue: Vec::new(),
+                });
+            }
+            table[handle] = AsyncGeneratorEntry {
+                state: AsyncGeneratorState::SuspendedStart,
+                continuation,
+                active_request: None,
+                waiting_resume_promise: None,
+                queue: Vec::new(),
+            };
+            generator
+        },
+    );
+
+    // ── Import 138: async_generator_next(i64, i64) -> i64 ───────────────────
+    let async_generator_next_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
+            let resume_promise = alloc_promise(&mut caller, PromiseEntry::pending());
+            let request_to_fulfill = {
+                let mut table = caller
+                    .data()
+                    .async_generator_table
+                    .lock()
+                    .expect("async generator table mutex");
+                let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
+                else {
+                    return resume_promise;
+                };
+                entry.state = AsyncGeneratorState::SuspendedYield;
+                entry.waiting_resume_promise = Some(resume_promise);
+                let active = entry.active_request.take();
+                active
+            };
+            if let Some(request) = request_to_fulfill {
+                let result = alloc_iterator_result_from_caller(&mut caller, value, false);
+                resolve_promise_from_caller(&mut caller, request.promise, result);
+            }
+            pump_async_generator_from_caller(&mut caller, generator);
+            resume_promise
+        },
+    );
+
+    // ── Import 139: async_generator_return(i64, i64) -> i64 ─────────────────
+    let async_generator_return_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
+            let (active, queued) = {
+                let mut table = caller
+                    .data()
+                    .async_generator_table
+                    .lock()
+                    .expect("async generator table mutex");
+                let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
+                else {
+                    return value::encode_undefined();
+                };
+                entry.state = AsyncGeneratorState::Completed;
+                let active = entry.active_request.take();
+                let queued = std::mem::take(&mut entry.queue);
+                (active, queued)
+            };
+            if let Some(request) = active {
+                let result = alloc_iterator_result_from_caller(&mut caller, value, true);
+                resolve_promise_from_caller(&mut caller, request.promise, result);
+            }
+            for request in queued {
+                match request.completion_type {
+                    AsyncGeneratorCompletionType::Throw => settle_promise(
+                        caller.data(),
+                        request.promise,
+                        PromiseSettlement::Reject(request.value),
+                    ),
+                    _ => {
+                        let result = alloc_iterator_result_from_caller(
+                            &mut caller,
+                            value::encode_undefined(),
+                            true,
+                        );
+                        resolve_promise_from_caller(&mut caller, request.promise, result);
+                    }
+                }
+            }
+            value::encode_undefined()
+        },
+    );
+
+    // ── Import 140: async_generator_throw(i64, i64) -> i64 ──────────────────
+    let async_generator_throw_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
+            let (active, queued) = {
+                let mut table = caller
+                    .data()
+                    .async_generator_table
+                    .lock()
+                    .expect("async generator table mutex");
+                let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
+                else {
+                    return value::encode_undefined();
+                };
+                entry.state = AsyncGeneratorState::Completed;
+                let active = entry.active_request.take();
+                let queued = std::mem::take(&mut entry.queue);
+                (active, queued)
+            };
+            if let Some(request) = active {
+                settle_promise(
+                    caller.data(),
+                    request.promise,
+                    PromiseSettlement::Reject(value),
+                );
+            }
+            for request in queued {
+                settle_promise(
+                    caller.data(),
+                    request.promise,
+                    PromiseSettlement::Reject(value),
+                );
+            }
+            value::encode_undefined()
+        },
+    );
+
+    // ── Import 141: native_call(i64, i64, i32, i32) -> i64 ─────────────────
+    let native_call_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         callable: i64,
+         _this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let argument = if args_count > 0 {
+                Some(read_shadow_arg(&mut caller, args_base, 0))
+            } else {
+                None
+            };
+            call_native_callable_from_caller(&mut caller, callable, argument)
+                .unwrap_or_else(value::encode_undefined)
+        },
+    );
+
     let imports = [
-        console_log.into(),          // 0
-        f64_mod.into(),              // 1
-        f64_pow.into(),              // 2
-        throw_fn.into(),             // 3
-        iterator_from.into(),        // 4
-        iterator_next.into(),        // 5
-        iterator_close.into(),       // 6
-        iterator_value.into(),       // 7
-        iterator_done.into(),        // 8
-        enumerator_from.into(),      // 9
-        enumerator_next.into(),      // 10
-        enumerator_key.into(),       // 11
-        enumerator_done.into(),      // 12
-        typeof_fn.into(),            // 13
-        op_in.into(),                // 14
-        op_instanceof.into(),        // 15
-        string_concat.into(),        // 16
-        string_concat_va.into(),     // 17
-        define_property_fn.into(),   // 18
-        get_own_prop_desc_fn.into(), // 19
-        abstract_eq.into(),          // 20
-        abstract_compare.into(),     // 21
-        gc_collect.into(),           // 22
-        console_error.into(),        // 23
-        console_warn.into(),         // 24
-        console_info.into(),         // 25
-        console_debug.into(),        // 26
-        console_trace.into(),        // 27
-        set_timeout_fn.into(),       // 28
-        clear_timeout_fn.into(),     // 29
-        set_interval_fn.into(),      // 30
-        clear_interval_fn.into(),    // 31
-        fetch_fn.into(),             // 32
-        json_stringify_fn.into(),    // 33
-        json_parse_fn.into(),        // 34
-        closure_create_fn.into(),    // 35
-        closure_get_func_fn.into(),  // 36
-        closure_get_env_fn.into(),   // 37
-        arr_push_fn.into(),          // 38
-        arr_pop_fn.into(),           // 39
-        arr_includes_fn.into(),      // 40
-        arr_index_of_fn.into(),      // 41
-        arr_join_fn.into(),          // 42
-        arr_concat_fn.into(),        // 43
-        arr_slice_fn.into(),         // 44
-        arr_fill_fn.into(),          // 45
-        arr_reverse_fn.into(),       // 46
-        arr_flat_fn.into(),          // 47
-        arr_init_length_fn.into(),   // 48
-        arr_get_length_fn.into(),    // 49
-        arr_proto_push_fn.into(),        // 50
-        arr_proto_pop_fn.into(),         // 51
-        arr_proto_includes_fn.into(),    // 52
-        arr_proto_index_of_fn.into(),    // 53
-        arr_proto_join_fn.into(),        // 54
-        arr_proto_concat_fn.into(),      // 55
-        arr_proto_slice_fn.into(),       // 56
-        arr_proto_fill_fn.into(),        // 57
-        arr_proto_reverse_fn.into(),     // 58
-        arr_proto_flat_fn.into(),        // 59
-        arr_proto_shift_fn.into(),       // 60
-        arr_proto_unshift_fn.into(),     // 61
-        arr_proto_sort_fn.into(),        // 62
-        arr_proto_at_fn.into(),          // 63
-        arr_proto_copy_within_fn.into(), // 64
-        arr_proto_for_each_fn.into(),    // 65
-        arr_proto_map_fn.into(),         // 66
-        arr_proto_filter_fn.into(),      // 67
-        arr_proto_reduce_fn.into(),      // 68
-        arr_proto_reduce_right_fn.into(),// 69
-        arr_proto_find_fn.into(),        // 70
-        arr_proto_find_index_fn.into(),  // 71
-        arr_proto_some_fn.into(),        // 72
-        arr_proto_every_fn.into(),       // 73
-        arr_proto_flat_map_fn.into(),    // 74
-        arr_proto_splice_fn.into(),      // 75
-        arr_proto_is_array_fn.into(),    // 76
+        console_log.into(),                    // 0
+        f64_mod.into(),                        // 1
+        f64_pow.into(),                        // 2
+        throw_fn.into(),                       // 3
+        iterator_from.into(),                  // 4
+        iterator_next.into(),                  // 5
+        iterator_close.into(),                 // 6
+        iterator_value.into(),                 // 7
+        iterator_done.into(),                  // 8
+        enumerator_from.into(),                // 9
+        enumerator_next.into(),                // 10
+        enumerator_key.into(),                 // 11
+        enumerator_done.into(),                // 12
+        typeof_fn.into(),                      // 13
+        op_in.into(),                          // 14
+        op_instanceof.into(),                  // 15
+        string_concat.into(),                  // 16
+        string_concat_va.into(),               // 17
+        define_property_fn.into(),             // 18
+        get_own_prop_desc_fn.into(),           // 19
+        abstract_eq.into(),                    // 20
+        abstract_compare.into(),               // 21
+        gc_collect.into(),                     // 22
+        console_error.into(),                  // 23
+        console_warn.into(),                   // 24
+        console_info.into(),                   // 25
+        console_debug.into(),                  // 26
+        console_trace.into(),                  // 27
+        set_timeout_fn.into(),                 // 28
+        clear_timeout_fn.into(),               // 29
+        set_interval_fn.into(),                // 30
+        clear_interval_fn.into(),              // 31
+        fetch_fn.into(),                       // 32
+        json_stringify_fn.into(),              // 33
+        json_parse_fn.into(),                  // 34
+        closure_create_fn.into(),              // 35
+        closure_get_func_fn.into(),            // 36
+        closure_get_env_fn.into(),             // 37
+        arr_push_fn.into(),                    // 38
+        arr_pop_fn.into(),                     // 39
+        arr_includes_fn.into(),                // 40
+        arr_index_of_fn.into(),                // 41
+        arr_join_fn.into(),                    // 42
+        arr_concat_fn.into(),                  // 43
+        arr_slice_fn.into(),                   // 44
+        arr_fill_fn.into(),                    // 45
+        arr_reverse_fn.into(),                 // 46
+        arr_flat_fn.into(),                    // 47
+        arr_init_length_fn.into(),             // 48
+        arr_get_length_fn.into(),              // 49
+        arr_proto_push_fn.into(),              // 50
+        arr_proto_pop_fn.into(),               // 51
+        arr_proto_includes_fn.into(),          // 52
+        arr_proto_index_of_fn.into(),          // 53
+        arr_proto_join_fn.into(),              // 54
+        arr_proto_concat_fn.into(),            // 55
+        arr_proto_slice_fn.into(),             // 56
+        arr_proto_fill_fn.into(),              // 57
+        arr_proto_reverse_fn.into(),           // 58
+        arr_proto_flat_fn.into(),              // 59
+        arr_proto_shift_fn.into(),             // 60
+        arr_proto_unshift_fn.into(),           // 61
+        arr_proto_sort_fn.into(),              // 62
+        arr_proto_at_fn.into(),                // 63
+        arr_proto_copy_within_fn.into(),       // 64
+        arr_proto_for_each_fn.into(),          // 65
+        arr_proto_map_fn.into(),               // 66
+        arr_proto_filter_fn.into(),            // 67
+        arr_proto_reduce_fn.into(),            // 68
+        arr_proto_reduce_right_fn.into(),      // 69
+        arr_proto_find_fn.into(),              // 70
+        arr_proto_find_index_fn.into(),        // 71
+        arr_proto_some_fn.into(),              // 72
+        arr_proto_every_fn.into(),             // 73
+        arr_proto_flat_map_fn.into(),          // 74
+        arr_proto_splice_fn.into(),            // 75
+        arr_proto_is_array_fn.into(),          // 76
         abort_shadow_stack_overflow_fn.into(), // 77
         func_call_fn.into(),                   // 78
         func_apply_fn.into(),                  // 79
         func_bind_fn.into(),                   // 80
         object_rest_fn.into(),                 // 81
         obj_spread_fn.into(),                  // 82
-        has_own_property_fn.into(),          // 83
-        obj_keys_fn.into(),                  // 84
-        obj_values_fn.into(),                // 85
-        obj_entries_fn.into(),               // 86
-        obj_assign_fn.into(),                // 87
-        obj_create_fn.into(),                // 88
-        obj_get_proto_of_fn.into(),          // 89
-        obj_set_proto_of_fn.into(),          // 90
-        obj_get_own_prop_names_fn.into(),    // 91
-        obj_is_fn.into(),                    // 92
-        obj_proto_to_string_fn.into(),       // 93
-        obj_proto_value_of_fn.into(),        // 94
+        has_own_property_fn.into(),            // 83
+        obj_keys_fn.into(),                    // 84
+        obj_values_fn.into(),                  // 85
+        obj_entries_fn.into(),                 // 86
+        obj_assign_fn.into(),                  // 87
+        obj_create_fn.into(),                  // 88
+        obj_get_proto_of_fn.into(),            // 89
+        obj_set_proto_of_fn.into(),            // 90
+        obj_get_own_prop_names_fn.into(),      // 91
+        obj_is_fn.into(),                      // 92
+        obj_proto_to_string_fn.into(),         // 93
+        obj_proto_value_of_fn.into(),          // 94
         // ── BigInt imports ──
-        bigint_from_literal_fn.into(),       // 95
-        bigint_add_fn.into(),                // 96
-        bigint_sub_fn.into(),                // 97
-        bigint_mul_fn.into(),                // 98
-        bigint_div_fn.into(),                // 99
-        bigint_mod_fn.into(),                // 100
-        bigint_pow_fn.into(),                // 101
-        bigint_neg_fn.into(),                // 102
-        bigint_eq_fn.into(),                 // 103
-        bigint_cmp_fn.into(),                // 104
+        bigint_from_literal_fn.into(), // 95
+        bigint_add_fn.into(),          // 96
+        bigint_sub_fn.into(),          // 97
+        bigint_mul_fn.into(),          // 98
+        bigint_div_fn.into(),          // 99
+        bigint_mod_fn.into(),          // 100
+        bigint_pow_fn.into(),          // 101
+        bigint_neg_fn.into(),          // 102
+        bigint_eq_fn.into(),           // 103
+        bigint_cmp_fn.into(),          // 104
         // ── Symbol imports ──
-        symbol_create_fn.into(),             // 105
-        symbol_for_fn.into(),                // 106
-        symbol_key_for_fn.into(),            // 107
-        symbol_well_known_fn.into(),         // 108
+        symbol_create_fn.into(),     // 105
+        symbol_for_fn.into(),        // 106
+        symbol_key_for_fn.into(),    // 107
+        symbol_well_known_fn.into(), // 108
         // ── RegExp imports ──
-        regex_create_fn.into(),              // 109
-        regex_test_fn.into(),                // 110
-        regex_exec_fn.into(),                // 111
+        regex_create_fn.into(), // 109
+        regex_test_fn.into(),   // 110
+        regex_exec_fn.into(),   // 111
         // ── String prototype imports ──
-        string_match_fn.into(),              // 112
-        string_replace_fn.into(),            // 113
-        string_search_fn.into(),             // 114
-        string_split_fn.into(),              // 115
+        string_match_fn.into(),   // 112
+        string_replace_fn.into(), // 113
+        string_search_fn.into(),  // 114
+        string_split_fn.into(),   // 115
+        // ── Promise / async imports ──
+        promise_create_fn.into(),                  // 116
+        promise_instance_resolve_fn.into(),        // 117
+        promise_instance_reject_fn.into(),         // 118
+        promise_then_fn.into(),                    // 119
+        promise_catch_fn.into(),                   // 120
+        promise_finally_fn.into(),                 // 121
+        promise_all_fn.into(),                     // 122
+        promise_race_fn.into(),                    // 123
+        promise_all_settled_fn.into(),             // 124
+        promise_any_fn.into(),                     // 125
+        promise_resolve_static_fn.into(),          // 126
+        promise_reject_static_fn.into(),           // 127
+        is_promise_fn.into(),                      // 128
+        queue_microtask_fn.into(),                 // 129
+        drain_microtasks_fn.into(),                // 130
+        async_function_start_fn.into(),            // 131
+        async_function_resume_fn.into(),           // 132
+        async_function_suspend_fn.into(),          // 133
+        continuation_create_fn.into(),             // 134
+        continuation_save_var_fn.into(),           // 135
+        continuation_load_var_fn.into(),           // 136
+        async_generator_start_fn.into(),           // 137
+        async_generator_next_fn.into(),            // 138
+        async_generator_return_fn.into(),          // 139
+        async_generator_throw_fn.into(),           // 140
+        native_call_fn.into(),                     // 141
+        promise_create_resolve_function_fn.into(), // 142
+        promise_create_reject_function_fn.into(),  // 143
+        is_callable_fn.into(),                     // 144
+        promise_with_resolvers_fn.into(),          // 145
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -4456,12 +6841,41 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let main = instance.get_typed_func::<(), ()>(&mut store, "main")?;
     let main_result = main.call(&mut store, ());
 
+    // ── Drain microtasks after main() ────────────────────────────────────
+    if main_result.is_ok() {
+        if let Some(Extern::Table(func_table)) = instance.get_export(&mut store, "__table") {
+            if let (
+                Some(Extern::Memory(memory)),
+                Some(Extern::Global(shadow_sp_global)),
+                Some(Extern::Global(heap_ptr_global)),
+                Some(Extern::Global(obj_table_ptr_global)),
+                Some(Extern::Global(obj_table_count_global)),
+            ) = (
+                instance.get_export(&mut store, "memory"),
+                instance.get_export(&mut store, "__shadow_sp"),
+                instance.get_export(&mut store, "__heap_ptr"),
+                instance.get_export(&mut store, "__obj_table_ptr"),
+                instance.get_export(&mut store, "__obj_table_count"),
+            ) {
+                drain_microtasks_from_store(
+                    &mut store,
+                    &func_table,
+                    &memory,
+                    &shadow_sp_global,
+                    &heap_ptr_global,
+                    &obj_table_ptr_global,
+                    &obj_table_count_global,
+                );
+            }
+        }
+    }
+
     // ── Timer event loop (only if main succeeded) ─────────────────────────
     // Poll timers; fire expired callbacks via the WASM function table.
     if main_result.is_ok() {
         loop {
             let now = Instant::now();
-            let mut entry_to_fire: Option<TimerEntry> = None;
+            let mut _entry_to_fire: Option<TimerEntry> = None;
 
             {
                 let mut timers = store.data().timers.lock().expect("timers mutex");
@@ -4481,7 +6895,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
                 // Find earliest expired timer
                 if let Some(idx) = timers.iter().position(|t| t.deadline <= now) {
-                    entry_to_fire = Some(timers.remove(idx));
+                    _entry_to_fire = Some(timers.remove(idx));
                 } else {
                     // Sleep until next timer
                     let next = timers.iter().min_by_key(|t| t.deadline).unwrap().deadline;
@@ -4493,7 +6907,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 }
             }
 
-            if let Some(entry) = entry_to_fire {
+            if let Some(entry) = _entry_to_fire {
                 let callback = entry.callback;
                 let repeating = entry.repeating;
                 let interval = entry.interval;
@@ -4520,6 +6934,30 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                                 }
                             }
                         }
+                    }
+                    // Drain microtasks after timer callback
+                    if let (
+                        Some(Extern::Memory(mem)),
+                        Some(Extern::Global(sp_global)),
+                        Some(Extern::Global(heap_ptr_global)),
+                        Some(Extern::Global(obj_table_ptr_global)),
+                        Some(Extern::Global(obj_table_count_global)),
+                    ) = (
+                        instance.get_export(&mut store, "memory"),
+                        instance.get_export(&mut store, "__shadow_sp"),
+                        instance.get_export(&mut store, "__heap_ptr"),
+                        instance.get_export(&mut store, "__obj_table_ptr"),
+                        instance.get_export(&mut store, "__obj_table_count"),
+                    ) {
+                        drain_microtasks_from_store(
+                            &mut store,
+                            &tbl,
+                            &mem,
+                            &sp_global,
+                            &heap_ptr_global,
+                            &obj_table_ptr_global,
+                            &obj_table_count_global,
+                        );
                     }
                 }
 
@@ -4573,6 +7011,7 @@ struct RuntimeState {
     /// 分配计数器：每次对象分配后递增，用于触发周期性 GC。
     alloc_counter: Arc<Mutex<u64>>,
     /// GC 触发阈值：当 alloc_counter 达到此值时触发 GC。
+    #[allow(dead_code)]
     gc_threshold: u64,
     /// 定时器列表
     timers: Arc<Mutex<Vec<TimerEntry>>>,
@@ -4584,12 +7023,24 @@ struct RuntimeState {
     closures: Arc<Mutex<Vec<ClosureEntry>>>,
     /// 绑定函数表：存储 func.bind(this, args) 创建的绑定函数
     bound_objects: Arc<Mutex<Vec<BoundRecord>>>,
+    /// 运行时原生可调用对象表：Promise resolving functions 等宿主创建函数。
+    native_callables: Arc<Mutex<Vec<NativeCallable>>>,
     /// BigInt 侧表：存储任意精度 BigInt 值
     bigint_table: Arc<Mutex<Vec<num_bigint::BigInt>>>,
     /// Symbol 侧表：存储 symbol 条目（description + global_key）
     symbol_table: Arc<Mutex<Vec<SymbolEntry>>>,
     /// RegExp 侧表：存储编译后的正则表达式和元数据
     regex_table: Arc<Mutex<Vec<RegexEntry>>>,
+    /// Promise 侧表：object handle → Promise 内部槽；非 Promise object handle 使用空占位。
+    promise_table: Arc<Mutex<Vec<PromiseEntry>>>,
+    /// 微任务队列
+    microtask_queue: Arc<Mutex<VecDeque<Microtask>>>,
+    /// Continuation 侧表：存储异步函数续延
+    continuation_table: Arc<Mutex<Vec<ContinuationEntry>>>,
+    /// AsyncGenerator 侧表：存储异步生成器状态
+    async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>>,
+    /// Promise combinator 侧表：pending 元素的 reaction 通过索引回写共享结果。
+    combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>>,
 }
 
 /// 绑定函数记录
@@ -4620,6 +7071,48 @@ struct ClosureEntry {
     env_obj: i64,
 }
 
+#[derive(Clone)]
+enum NativeCallable {
+    PromiseResolvingFunction {
+        promise: i64,
+        already_resolved: Arc<Mutex<bool>>,
+        kind: PromiseResolvingKind,
+    },
+    PromiseCombinatorReaction {
+        context: usize,
+        index: usize,
+        kind: PromiseCombinatorReactionKind,
+    },
+    AsyncGeneratorMethod {
+        generator: i64,
+        kind: AsyncGeneratorCompletionType,
+    },
+    AsyncGeneratorIdentity {
+        generator: i64,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum PromiseCombinatorReactionKind {
+    AllFulfill,
+    AllSettledFulfill,
+    AllSettledReject,
+    AnyReject,
+}
+
+struct CombinatorContext {
+    result_promise: i64,
+    result_array: i64,
+    remaining: usize,
+    settled: bool,
+}
+
+#[derive(Clone, Copy)]
+enum PromiseResolvingKind {
+    Fulfill,
+    Reject,
+}
+
 struct TimerEntry {
     id: u32,
     deadline: Instant,
@@ -4629,7 +7122,17 @@ struct TimerEntry {
 }
 
 enum IteratorState {
-    StringIter { data: Vec<u8>, byte_pos: usize },
+    StringIter {
+        data: Vec<u8>,
+        byte_pos: usize,
+    },
+    ObjectIter {
+        next: i64,
+        return_method: Option<i64>,
+        current_value: i64,
+        done: bool,
+        has_current: bool,
+    },
     Error,
 }
 
@@ -4644,6 +7147,166 @@ enum EnumeratorState {
         index: usize,
     },
     Error,
+}
+
+#[derive(Clone)]
+enum PromiseState {
+    Pending,
+    Fulfilled(i64),
+    Rejected(i64),
+}
+
+struct PromiseEntry {
+    state: PromiseState,
+    fulfill_reactions: Vec<PromiseReaction>,
+    reject_reactions: Vec<PromiseReaction>,
+    handled: bool,
+    constructor_resolver: Option<Arc<Mutex<bool>>>,
+    /// 构造器引用（用于 species-aware 操作；None 表示内建 Promise）
+    constructor_handle: Option<i64>,
+    is_promise: bool,
+}
+
+impl PromiseEntry {
+    fn pending() -> Self {
+        Self {
+            state: PromiseState::Pending,
+            fulfill_reactions: Vec::new(),
+            reject_reactions: Vec::new(),
+            handled: false,
+            constructor_resolver: None,
+            constructor_handle: None,
+            is_promise: true,
+        }
+    }
+
+    fn rejected(reason: i64) -> Self {
+        Self {
+            state: PromiseState::Rejected(reason),
+            fulfill_reactions: Vec::new(),
+            reject_reactions: Vec::new(),
+            handled: false,
+            constructor_resolver: None,
+            constructor_handle: None,
+            is_promise: true,
+        }
+    }
+
+    fn empty() -> Self {
+        Self {
+            state: PromiseState::Pending,
+            fulfill_reactions: Vec::new(),
+            reject_reactions: Vec::new(),
+            handled: false,
+            constructor_resolver: None,
+            constructor_handle: None,
+            is_promise: false,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PromiseReaction {
+    handler: i64,
+    target_promise: i64,
+    reaction_type: ReactionType,
+    async_resume_state: Option<i64>,
+}
+
+impl PromiseReaction {
+    fn new(handler: i64, target_promise: i64, reaction_type: ReactionType) -> Self {
+        Self {
+            handler,
+            target_promise,
+            reaction_type,
+            async_resume_state: None,
+        }
+    }
+    fn new_async(
+        handler: i64,
+        target_promise: i64,
+        reaction_type: ReactionType,
+        state: i64,
+    ) -> Self {
+        Self {
+            handler,
+            target_promise,
+            reaction_type,
+            async_resume_state: Some(state),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ReactionType {
+    Fulfill,
+    Reject,
+    FinallyFulfill,
+    FinallyReject,
+}
+
+#[allow(dead_code)]
+enum Microtask {
+    PromiseReaction {
+        promise: i64,
+        reaction_type: ReactionType,
+        handler: i64,
+        argument: i64,
+    },
+    PromiseResolveThenable {
+        promise: i64,
+        thenable: i64,
+        then: i64,
+    },
+    MicrotaskCallback {
+        callback: i64,
+    },
+    AsyncResume {
+        fn_table_idx: u32,
+        continuation: i64,
+        state: u32,
+        resume_val: i64,
+        is_rejected: bool,
+    },
+}
+
+#[allow(dead_code)]
+struct ContinuationEntry {
+    fn_table_idx: u32,
+    outer_promise: i64,
+    captured_vars: Vec<i64>,
+}
+
+#[allow(dead_code)]
+struct AsyncGeneratorEntry {
+    state: AsyncGeneratorState,
+    continuation: i64,
+    active_request: Option<AsyncGeneratorRequest>,
+    waiting_resume_promise: Option<i64>,
+    queue: Vec<AsyncGeneratorRequest>,
+}
+
+#[derive(Clone)]
+#[allow(dead_code)]
+enum AsyncGeneratorState {
+    SuspendedStart,
+    SuspendedYield,
+    Executing,
+    Completed,
+}
+#[derive(Clone, Copy)]
+#[allow(dead_code)]
+struct AsyncGeneratorRequest {
+    completion_type: AsyncGeneratorCompletionType,
+    value: i64,
+    promise: i64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AsyncGeneratorCompletionType {
+    Next,
+    Return,
+    Throw,
 }
 
 fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<String> {
@@ -4729,7 +7392,11 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
 
     if value::is_bigint(val) {
         let handle = value::decode_bigint_handle(val) as usize;
-        let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+        let table = caller
+            .data()
+            .bigint_table
+            .lock()
+            .expect("bigint_table mutex");
         if let Some(bigint) = table.get(handle) {
             return Ok(format!("{bigint}n"));
         }
@@ -4738,7 +7405,11 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
 
     if value::is_symbol(val) {
         let handle = value::decode_symbol_handle(val) as usize;
-        let table = caller.data().symbol_table.lock().expect("symbol_table mutex");
+        let table = caller
+            .data()
+            .symbol_table
+            .lock()
+            .expect("symbol_table mutex");
         if let Some(entry) = table.get(handle) {
             if let Some(ref desc) = entry.description {
                 // Escape the description for display
@@ -4753,7 +7424,11 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
         let handle = value::decode_regexp_handle(val) as usize;
         let table = caller.data().regex_table.lock().expect("regex_table mutex");
         if let Some(entry) = table.get(handle) {
-            return Ok(format!("/{}/{}", entry.pattern.replace('/', "\\/"), entry.flags));
+            return Ok(format!(
+                "/{}/{}",
+                entry.pattern.replace('/', "\\/"),
+                entry.flags
+            ));
         }
         return Ok("/(?:)/".to_string()); // empty regex fallback
     }
@@ -4834,7 +7509,11 @@ fn runtime_json_stringify(caller: &mut Caller<'_, RuntimeState>, val: i64) -> St
         "undefined".to_string()
     } else if value::is_bigint(val) {
         // JSON.stringify on BigInt throws TypeError
-        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+        *caller
+            .data()
+            .runtime_error
+            .lock()
+            .expect("runtime error mutex") =
             Some("TypeError: Do not know how to serialize a BigInt".to_string());
         "null".to_string()
     } else if value::is_symbol(val) {
@@ -4898,6 +7577,509 @@ fn store_runtime_string(caller: &Caller<'_, RuntimeState>, string: String) -> i6
     let handle = strings.len() as u32;
     strings.push(string);
     value::encode_runtime_string_handle(handle)
+}
+
+fn store_runtime_string_in_state(state: &RuntimeState, string: String) -> i64 {
+    let mut strings = state.runtime_strings.lock().expect("runtime strings mutex");
+    let handle = strings.len() as u32;
+    strings.push(string);
+    value::encode_runtime_string_handle(handle)
+}
+
+fn find_memory_c_string_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
+    let mut needle = Vec::with_capacity(name.len() + 1);
+    needle.extend_from_slice(name.as_bytes());
+    needle.push(0);
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return None;
+    };
+    memory
+        .data(&*caller)
+        .windows(needle.len())
+        .position(|window| window == needle.as_slice())
+        .map(|offset| offset as u32)
+}
+
+fn alloc_heap_c_string_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
+    let heap_ptr = caller
+        .get_export("__heap_ptr")
+        .and_then(|e| e.into_global())?
+        .get(&mut *caller)
+        .i32()
+        .unwrap_or(0) as usize;
+    let bytes = name.as_bytes();
+    let end = heap_ptr.checked_add(bytes.len() + 1)?;
+    let aligned_end = (end + 7) & !7;
+    {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data_mut(&mut *caller);
+        if aligned_end > data.len() {
+            return None;
+        }
+        data[heap_ptr..heap_ptr + bytes.len()].copy_from_slice(bytes);
+        data[heap_ptr + bytes.len()] = 0;
+        data[end..aligned_end].fill(0);
+    }
+    if let Some(Extern::Global(global)) = caller.get_export("__heap_ptr") {
+        let _ = global.set(&mut *caller, Val::I32(aligned_end as i32));
+    }
+    Some(heap_ptr as u32)
+}
+
+fn alloc_host_object_from_caller(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
+    let heap_ptr = caller
+        .get_export("__heap_ptr")
+        .and_then(|e| e.into_global())
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    let obj_table_count = caller
+        .get_export("__obj_table_count")
+        .and_then(|e| e.into_global())
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    let obj_table_ptr = caller
+        .get_export("__obj_table_ptr")
+        .and_then(|e| e.into_global())
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    let size = 16 + capacity * 32;
+    let new_heap_ptr = heap_ptr.saturating_add(size);
+    {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return value::encode_undefined();
+        };
+        let data = memory.data_mut(&mut *caller);
+        let ptr = heap_ptr as usize;
+        if new_heap_ptr as usize > data.len() {
+            return value::encode_undefined();
+        }
+        data[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+        data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
+        data[ptr + 5..ptr + 8].fill(0);
+        data[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes());
+        data[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+        let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+        if slot_addr + 4 <= data.len() {
+            data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+        }
+    }
+    if let Some(Extern::Global(global)) = caller.get_export("__heap_ptr") {
+        let _ = global.set(&mut *caller, Val::I32(new_heap_ptr as i32));
+    }
+    if let Some(Extern::Global(global)) = caller.get_export("__obj_table_count") {
+        let _ = global.set(&mut *caller, Val::I32((obj_table_count + 1) as i32));
+    }
+    value::encode_object_handle(obj_table_count)
+}
+
+fn define_host_data_property_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+    val: i64,
+) -> Option<()> {
+    let name_id = find_memory_c_string_global(caller, name)
+        .or_else(|| alloc_heap_c_string_global(caller, name))?;
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize)?;
+    let (capacity, num_props) = {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data(&*caller);
+        if obj_ptr + 16 > data.len() {
+            return None;
+        }
+        let capacity = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]);
+        let num_props = u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]);
+        (capacity, num_props)
+    };
+    if num_props >= capacity {
+        return None;
+    }
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return None;
+    };
+    let data = memory.data_mut(&mut *caller);
+    let slot_offset = obj_ptr + 16 + num_props as usize * 32;
+    if slot_offset + 32 > data.len() {
+        return None;
+    }
+    let flags =
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
+    let undef = value::encode_undefined();
+    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
+    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
+    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
+    Some(())
+}
+
+fn alloc_all_settled_result_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    status: &str,
+    value_name: &str,
+    val: i64,
+) -> i64 {
+    let obj = alloc_host_object_from_caller(caller, 2);
+    let status_value = store_runtime_string(caller, status.to_string());
+    let _ = define_host_data_property_from_caller(caller, obj, "status", status_value);
+    let _ = define_host_data_property_from_caller(caller, obj, value_name, val);
+    obj
+}
+
+fn alloc_aggregate_error_from_caller(caller: &mut Caller<'_, RuntimeState>, errors: i64) -> i64 {
+    let obj = alloc_host_object_from_caller(caller, 3);
+    let name = store_runtime_string(caller, "AggregateError".to_string());
+    let message = store_runtime_string(caller, "All promises were rejected".to_string());
+    let _ = define_host_data_property_from_caller(caller, obj, "name", name);
+    let _ = define_host_data_property_from_caller(caller, obj, "message", message);
+    let _ = define_host_data_property_from_caller(caller, obj, "errors", errors);
+    obj
+}
+
+fn read_string_bytes_from_store(store: &Store<RuntimeState>, memory: &Memory, ptr: u32) -> Vec<u8> {
+    let data = memory.data(store);
+    let start = ptr as usize;
+    if start >= data.len() {
+        return Vec::new();
+    }
+    let end = data[start..]
+        .iter()
+        .position(|byte| *byte == 0)
+        .map_or(data.len(), |offset| start + offset);
+    data[start..end].to_vec()
+}
+
+fn find_memory_c_string_from_store(
+    store: &Store<RuntimeState>,
+    memory: &Memory,
+    name: &str,
+) -> Option<u32> {
+    let mut needle = Vec::with_capacity(name.len() + 1);
+    needle.extend_from_slice(name.as_bytes());
+    needle.push(0);
+    memory
+        .data(store)
+        .windows(needle.len())
+        .position(|window| window == needle.as_slice())
+        .map(|offset| offset as u32)
+}
+
+fn alloc_heap_c_string_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    name: &str,
+) -> Option<u32> {
+    let heap_ptr = heap_ptr_global.get(&mut *store).i32().unwrap_or(0) as usize;
+    let bytes = name.as_bytes();
+    let end = heap_ptr.checked_add(bytes.len() + 1)?;
+    let aligned_end = (end + 7) & !7;
+    {
+        let data = memory.data_mut(&mut *store);
+        if aligned_end > data.len() {
+            return None;
+        }
+        data[heap_ptr..heap_ptr + bytes.len()].copy_from_slice(bytes);
+        data[heap_ptr + bytes.len()] = 0;
+        data[end..aligned_end].fill(0);
+    }
+    let _ = heap_ptr_global.set(&mut *store, Val::I32(aligned_end as i32));
+    Some(heap_ptr as u32)
+}
+
+fn resolve_handle_idx_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    obj_table_ptr_global: &Global,
+    handle_idx: usize,
+) -> Option<usize> {
+    let obj_table_ptr = obj_table_ptr_global.get(&mut *store).i32().unwrap_or(0) as usize;
+    let slot_addr = obj_table_ptr + handle_idx * 4;
+    let data = memory.data(&mut *store);
+    if slot_addr + 4 > data.len() {
+        return None;
+    }
+    let ptr = u32::from_le_bytes([
+        data[slot_addr],
+        data[slot_addr + 1],
+        data[slot_addr + 2],
+        data[slot_addr + 3],
+    ]) as usize;
+    if ptr == 0 { None } else { Some(ptr) }
+}
+
+fn resolve_handle_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    obj_table_ptr_global: &Global,
+    val: i64,
+) -> Option<usize> {
+    let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    resolve_handle_idx_from_store(store, memory, obj_table_ptr_global, handle_idx)
+}
+
+fn read_object_property_by_name_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    obj_ptr: usize,
+    prop_name: &str,
+) -> Option<i64> {
+    let num_props = {
+        let data = memory.data(&mut *store);
+        if obj_ptr + 16 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]) as usize
+    };
+    let mut name_ids = Vec::with_capacity(num_props);
+    {
+        let data = memory.data(&mut *store);
+        for i in 0..num_props {
+            let slot_offset = obj_ptr + 16 + i * 32;
+            if slot_offset + 4 > data.len() {
+                break;
+            }
+            name_ids.push(u32::from_le_bytes([
+                data[slot_offset],
+                data[slot_offset + 1],
+                data[slot_offset + 2],
+                data[slot_offset + 3],
+            ]));
+        }
+    }
+    for (index, name_id) in name_ids.iter().enumerate() {
+        if read_string_bytes_from_store(store, memory, *name_id) == prop_name.as_bytes() {
+            let data = memory.data(&mut *store);
+            let slot_offset = obj_ptr + 16 + index * 32;
+            if slot_offset + 16 > data.len() {
+                return None;
+            }
+            return Some(i64::from_le_bytes([
+                data[slot_offset + 8],
+                data[slot_offset + 9],
+                data[slot_offset + 10],
+                data[slot_offset + 11],
+                data[slot_offset + 12],
+                data[slot_offset + 13],
+                data[slot_offset + 14],
+                data[slot_offset + 15],
+            ]));
+        }
+    }
+    None
+}
+
+fn alloc_host_object_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj_table_count_global: &Global,
+    capacity: u32,
+) -> i64 {
+    let heap_ptr = heap_ptr_global.get(&mut *store).i32().unwrap_or(0) as u32;
+    let obj_table_count = obj_table_count_global.get(&mut *store).i32().unwrap_or(0) as u32;
+    let obj_table_ptr = obj_table_ptr_global.get(&mut *store).i32().unwrap_or(0) as u32;
+    let size = 16 + capacity * 32;
+    let new_heap_ptr = heap_ptr.saturating_add(size);
+    {
+        let data = memory.data_mut(&mut *store);
+        let ptr = heap_ptr as usize;
+        if new_heap_ptr as usize > data.len() {
+            return value::encode_undefined();
+        }
+        data[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+        data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
+        data[ptr + 5..ptr + 8].fill(0);
+        data[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes());
+        data[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+        let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+        if slot_addr + 4 <= data.len() {
+            data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+        }
+    }
+    let _ = heap_ptr_global.set(&mut *store, Val::I32(new_heap_ptr as i32));
+    let _ = obj_table_count_global.set(&mut *store, Val::I32((obj_table_count + 1) as i32));
+    value::encode_object_handle(obj_table_count)
+}
+
+fn write_array_elem_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    ptr: usize,
+    index: u32,
+    val: i64,
+) {
+    let data = memory.data_mut(&mut *store);
+    let elem_offset = ptr + 16 + index as usize * 8;
+    if elem_offset + 8 <= data.len() {
+        data[elem_offset..elem_offset + 8].copy_from_slice(&val.to_le_bytes());
+    }
+}
+
+fn define_host_data_property_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj: i64,
+    name: &str,
+    val: i64,
+) -> Option<()> {
+    let name_id = find_memory_c_string_from_store(store, memory, name)
+        .or_else(|| alloc_heap_c_string_from_store(store, memory, heap_ptr_global, name))?;
+    let obj_ptr = resolve_handle_idx_from_store(
+        store,
+        memory,
+        obj_table_ptr_global,
+        value::decode_object_handle(obj) as usize,
+    )?;
+    let (capacity, num_props) = {
+        let data = memory.data(&mut *store);
+        if obj_ptr + 16 > data.len() {
+            return None;
+        }
+        let capacity = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]);
+        let num_props = u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]);
+        (capacity, num_props)
+    };
+    if num_props >= capacity {
+        return None;
+    }
+    let data = memory.data_mut(&mut *store);
+    let slot_offset = obj_ptr + 16 + num_props as usize * 32;
+    if slot_offset + 32 > data.len() {
+        return None;
+    }
+    let flags =
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
+    let undef = value::encode_undefined();
+    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
+    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
+    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
+    Some(())
+}
+
+fn alloc_all_settled_result_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj_table_count_global: &Global,
+    status: &str,
+    value_name: &str,
+    val: i64,
+) -> i64 {
+    let obj = alloc_host_object_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj_table_count_global,
+        2,
+    );
+    let status_value = store_runtime_string_in_state(store.data(), status.to_string());
+    let _ = define_host_data_property_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj,
+        "status",
+        status_value,
+    );
+    let _ = define_host_data_property_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj,
+        value_name,
+        val,
+    );
+    obj
+}
+
+fn alloc_aggregate_error_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj_table_count_global: &Global,
+    errors: i64,
+) -> i64 {
+    let obj = alloc_host_object_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj_table_count_global,
+        3,
+    );
+    let name = store_runtime_string_in_state(store.data(), "AggregateError".to_string());
+    let message =
+        store_runtime_string_in_state(store.data(), "All promises were rejected".to_string());
+    let _ = define_host_data_property_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj,
+        "name",
+        name,
+    );
+    let _ = define_host_data_property_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj,
+        "message",
+        message,
+    );
+    let _ = define_host_data_property_from_store(
+        store,
+        memory,
+        heap_ptr_global,
+        obj_table_ptr_global,
+        obj,
+        "errors",
+        errors,
+    );
+    obj
 }
 
 /// GC 标记阶段：递归标记对象及其所有可达对象。
@@ -4987,10 +8169,14 @@ fn mark_object_recursive(
                     break;
                 }
                 let elem = i64::from_le_bytes([
-                    data[elem_offset], data[elem_offset+1],
-                    data[elem_offset+2], data[elem_offset+3],
-                    data[elem_offset+4], data[elem_offset+5],
-                    data[elem_offset+6], data[elem_offset+7],
+                    data[elem_offset],
+                    data[elem_offset + 1],
+                    data[elem_offset + 2],
+                    data[elem_offset + 3],
+                    data[elem_offset + 4],
+                    data[elem_offset + 5],
+                    data[elem_offset + 6],
+                    data[elem_offset + 7],
                 ]);
                 if value::is_object(elem) || value::is_function(elem) {
                     let child_handle_idx = (elem as u64 & 0xFFFF_FFFF) as usize;
@@ -5140,56 +8326,101 @@ fn resolve_array_ptr(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<
 
 /// 读取数组的 length 字段（offset 8）
 fn read_array_length(caller: &mut Caller<'_, RuntimeState>, ptr: usize) -> Option<u32> {
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return None;
+    };
     let d = mem.data(&*caller);
-    if ptr + 16 > d.len() { return None; }
-    Some(u32::from_le_bytes([d[ptr+8], d[ptr+9], d[ptr+10], d[ptr+11]]))
+    if ptr + 16 > d.len() {
+        return None;
+    }
+    Some(u32::from_le_bytes([
+        d[ptr + 8],
+        d[ptr + 9],
+        d[ptr + 10],
+        d[ptr + 11],
+    ]))
 }
 
 fn write_array_length(caller: &mut Caller<'_, RuntimeState>, ptr: usize, len: u32) {
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return; };
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return;
+    };
     let d = mem.data_mut(&mut *caller);
-    if ptr + 16 > d.len() { return; }
-    d[ptr+8..ptr+12].copy_from_slice(&len.to_le_bytes());
+    if ptr + 16 > d.len() {
+        return;
+    }
+    d[ptr + 8..ptr + 12].copy_from_slice(&len.to_le_bytes());
 }
 
 /// 读取数组的 capacity 字段（offset 12）
 fn read_array_capacity(caller: &mut Caller<'_, RuntimeState>, ptr: usize) -> Option<u32> {
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return None;
+    };
     let d = mem.data(&*caller);
-    if ptr + 16 > d.len() { return None; }
-    Some(u32::from_le_bytes([d[ptr+12], d[ptr+13], d[ptr+14], d[ptr+15]]))
+    if ptr + 16 > d.len() {
+        return None;
+    }
+    Some(u32::from_le_bytes([
+        d[ptr + 12],
+        d[ptr + 13],
+        d[ptr + 14],
+        d[ptr + 15],
+    ]))
 }
 
 /// 读取数组元素 elements[index]（offset 16 + index * 8）
 fn read_array_elem(caller: &mut Caller<'_, RuntimeState>, ptr: usize, index: u32) -> Option<i64> {
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return None;
+    };
     let d = mem.data(&*caller);
     let elem_offset = ptr + 16 + (index as usize) * 8;
-    if elem_offset + 8 > d.len() { return None; }
+    if elem_offset + 8 > d.len() {
+        return None;
+    }
     Some(i64::from_le_bytes([
-        d[elem_offset], d[elem_offset+1], d[elem_offset+2], d[elem_offset+3],
-        d[elem_offset+4], d[elem_offset+5], d[elem_offset+6], d[elem_offset+7],
+        d[elem_offset],
+        d[elem_offset + 1],
+        d[elem_offset + 2],
+        d[elem_offset + 3],
+        d[elem_offset + 4],
+        d[elem_offset + 5],
+        d[elem_offset + 6],
+        d[elem_offset + 7],
     ]))
 }
 
 /// 写入数组元素
 fn write_array_elem(caller: &mut Caller<'_, RuntimeState>, ptr: usize, index: u32, val: i64) {
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return; };
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return;
+    };
     let d = mem.data_mut(&mut *caller);
     let elem_offset = ptr + 16 + (index as usize) * 8;
-    if elem_offset + 8 > d.len() { return; }
-    d[elem_offset..elem_offset+8].copy_from_slice(&val.to_le_bytes());
+    if elem_offset + 8 > d.len() {
+        return;
+    }
+    d[elem_offset..elem_offset + 8].copy_from_slice(&val.to_le_bytes());
 }
 
 /// 数组动态扩容 — 遵循现有对象扩容的 capacity × 2 倍增策略
-fn grow_array(caller: &mut Caller<'_, RuntimeState>, ptr: usize, this_val: i64, new_cap: u32) -> Option<usize> {
+fn grow_array(
+    caller: &mut Caller<'_, RuntimeState>,
+    ptr: usize,
+    this_val: i64,
+    new_cap: u32,
+) -> Option<usize> {
     let heap_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return None; };
+        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
+            return None;
+        };
         g.get(&mut *caller).i32().unwrap_or(0) as usize
     };
     let obj_table_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return None; };
+        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
+            return None;
+        };
         g.get(&mut *caller).i32().unwrap_or(0) as usize
     };
     let new_size = 16 + new_cap as usize * 8;
@@ -5197,9 +8428,13 @@ fn grow_array(caller: &mut Caller<'_, RuntimeState>, ptr: usize, this_val: i64, 
         let cap = read_array_capacity(caller, ptr)?;
         16 + cap as usize * 8
     };
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return None;
+    };
     let d = mem.data_mut(&mut *caller);
-    if heap_ptr + new_size > d.len() { return None; }
+    if heap_ptr + new_size > d.len() {
+        return None;
+    }
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&new_cap.to_le_bytes());
     let handle_idx = (this_val as u64 & 0xFFFF_FFFF) as usize;
@@ -5214,26 +8449,43 @@ fn grow_array(caller: &mut Caller<'_, RuntimeState>, ptr: usize, this_val: i64, 
 }
 /// 对象动态扩容 — 遵循 capacity × 2 倍增策略，与 grow_array 同构
 /// 对象槽位大小为 32 bytes（name_id:4 + flags:4 + value:8 + reserved:16）
-fn grow_object(caller: &mut Caller<'_, RuntimeState>, ptr: usize, handle_val: i64, new_cap: u32) -> Option<usize> {
+fn grow_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    ptr: usize,
+    handle_val: i64,
+    new_cap: u32,
+) -> Option<usize> {
     let heap_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else { return None; };
+        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
+            return None;
+        };
         g.get(&mut *caller).i32().unwrap_or(0) as usize
     };
     let obj_table_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else { return None; };
+        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
+            return None;
+        };
         g.get(&mut *caller).i32().unwrap_or(0) as usize
     };
     let new_size = 16 + new_cap as usize * 32;
     let old_cap = {
-        let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+            return None;
+        };
         let d = mem.data(&*caller);
-        if ptr + 12 > d.len() { return None; }
+        if ptr + 12 > d.len() {
+            return None;
+        }
         u32::from_le_bytes([d[ptr + 8], d[ptr + 9], d[ptr + 10], d[ptr + 11]]) as usize
     };
     let old_size = 16 + old_cap * 32;
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else { return None; };
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return None;
+    };
     let d = mem.data_mut(&mut *caller);
-    if heap_ptr + new_size > d.len() { return None; }
+    if heap_ptr + new_size > d.len() {
+        return None;
+    }
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&new_cap.to_le_bytes());
     let handle_idx = (handle_val as u64 & 0xFFFF_FFFF) as usize;
@@ -5250,7 +8502,9 @@ fn grow_object(caller: &mut Caller<'_, RuntimeState>, ptr: usize, handle_val: i6
 /// 自顶向下迭代 merge sort，稳定 O(n log n)
 fn merge_sort_by<T: Copy>(slice: &mut [T], cmp: &mut dyn FnMut(&T, &T) -> std::cmp::Ordering) {
     let n = slice.len();
-    if n <= 1 { return; }
+    if n <= 1 {
+        return;
+    }
     let mut buf: Vec<T> = Vec::with_capacity(n);
     let mut width = 1;
     while width < n {
@@ -5372,22 +8626,23 @@ fn find_property_slot_by_name_id(
             data[obj_ptr + 15],
         ]) as usize
     };
+    let target_name_bytes = read_string_bytes(caller, name_id);
     for i in 0..num_props {
         let slot_offset = obj_ptr + 16 + i * 32;
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(&*caller);
-        if slot_offset + 32 > data.len() {
-            break;
-        }
-        let slot_name_id = u32::from_le_bytes([
-            data[slot_offset],
-            data[slot_offset + 1],
-            data[slot_offset + 2],
-            data[slot_offset + 3],
-        ]);
-        if slot_name_id == name_id {
+        let (slot_name_id, flags, val) = {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return None;
+            };
+            let data = memory.data(&*caller);
+            if slot_offset + 32 > data.len() {
+                break;
+            }
+            let slot_name_id = u32::from_le_bytes([
+                data[slot_offset],
+                data[slot_offset + 1],
+                data[slot_offset + 2],
+                data[slot_offset + 3],
+            ]);
             let flags = i32::from_le_bytes([
                 data[slot_offset + 4],
                 data[slot_offset + 5],
@@ -5404,6 +8659,12 @@ fn find_property_slot_by_name_id(
                 data[slot_offset + 14],
                 data[slot_offset + 15],
             ]);
+            (slot_name_id, flags, val)
+        };
+        let same_name = slot_name_id == name_id
+            || (!target_name_bytes.is_empty()
+                && read_string_bytes(caller, slot_name_id) == target_name_bytes);
+        if same_name {
             return Some((slot_offset, flags, val));
         }
     }
@@ -5427,8 +8688,12 @@ fn enumerate_object_keys(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec
         return Vec::new();
     }
 
-    let num_props =
-        u32::from_le_bytes([data[ptr + 12], data[ptr + 13], data[ptr + 14], data[ptr + 15]]) as usize;
+    let num_props = u32::from_le_bytes([
+        data[ptr + 12],
+        data[ptr + 13],
+        data[ptr + 14],
+        data[ptr + 15],
+    ]) as usize;
 
     let mut name_ids = Vec::with_capacity(num_props);
     for i in 0..num_props {
@@ -5653,7 +8918,11 @@ fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
     // BigInt → ToNumber: 转为 f64（可能丢失精度）
     if value::is_bigint(val) {
         let handle = value::decode_bigint_handle(val) as usize;
-        let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+        let table = caller
+            .data()
+            .bigint_table
+            .lock()
+            .expect("bigint_table mutex");
         if let Some(bi) = table.get(handle) {
             if let Some(f) = bi.to_f64() {
                 return f.to_bits() as i64;
@@ -5669,7 +8938,11 @@ fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
 
     // Symbol → ToNumber: 抛出 TypeError
     if value::is_symbol(val) {
-        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+        *caller
+            .data()
+            .runtime_error
+            .lock()
+            .expect("runtime error mutex") =
             Some("TypeError: Cannot convert a Symbol value to a number".to_string());
         return f64::NAN.to_bits() as i64;
     }
@@ -5757,15 +9030,23 @@ fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -> i64 {
         6 => {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
-            let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
-            let eq = table.get(a_handle).zip(table.get(b_handle)).map(|(x, y)| x == y).unwrap_or(false);
+            let table = caller
+                .data()
+                .bigint_table
+                .lock()
+                .expect("bigint_table mutex");
+            let eq = table
+                .get(a_handle)
+                .zip(table.get(b_handle))
+                .map(|(x, y)| x == y)
+                .unwrap_or(false);
             value::encode_bool(eq)
         }
         // Symbol: 引用比较（同一 handle）
         7 => value::encode_bool(a == b),
         // object/function/iterator/enumerator/exception: 引用比较
         _ => value::encode_bool(a == b),
-}
+    }
 }
 
 /// 获取类型标签 (用于 strict_eq)
@@ -5813,19 +9094,27 @@ fn resolve_and_call(
     args_base: i32,
     args_count: i32,
 ) -> i64 {
-    let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+    let memory = caller
+        .get_export("memory")
+        .and_then(|e| e.into_memory())
+        .unwrap();
 
     if value::is_bound(func) {
         let bound_idx = value::decode_bound_idx(func);
         let (target_func, bound_this, bound_args_ref) = {
             let bound = caller.data().bound_objects.lock().unwrap();
             let record = &bound[bound_idx as usize];
-            (record.target_func, record.bound_this, record.bound_args.clone())
+            (
+                record.target_func,
+                record.bound_this,
+                record.bound_args.clone(),
+            )
         };
 
         let total_count = bound_args_ref.len() as i32 + args_count;
         // 读取当前 shadow_sp
-        let shadow_sp_global = caller.get_export("__shadow_sp")
+        let shadow_sp_global = caller
+            .get_export("__shadow_sp")
             .and_then(|e| e.into_global())
             .unwrap();
         let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
@@ -5833,13 +9122,31 @@ fn resolve_and_call(
 
         // Push bound_args at position 0
         for (i, arg) in bound_args_ref.iter().enumerate() {
-            memory.write(&mut *caller, (ptr + i as i32 * 8) as usize, &arg.to_le_bytes()).unwrap();
+            memory
+                .write(
+                    &mut *caller,
+                    (ptr + i as i32 * 8) as usize,
+                    &arg.to_le_bytes(),
+                )
+                .unwrap();
         }
         // Copy call args after
         for i in 0..args_count {
             let mut buf = [0u8; 8];
-            memory.read(&mut *caller, (shadow_sp + args_base + i * 8) as usize, &mut buf).unwrap();
-            memory.write(&mut *caller, (ptr + (bound_args_ref.len() as i32 + i) * 8) as usize, &buf).unwrap();
+            memory
+                .read(
+                    &mut *caller,
+                    (shadow_sp + args_base + i * 8) as usize,
+                    &mut buf,
+                )
+                .unwrap();
+            memory
+                .write(
+                    &mut *caller,
+                    (ptr + (bound_args_ref.len() as i32 + i) * 8) as usize,
+                    &buf,
+                )
+                .unwrap();
         }
 
         // 递归解析 target_func
@@ -5862,21 +9169,36 @@ fn resolve_callable_and_call(
         let entry = &closures[idx as usize];
         (entry.func_idx, entry.env_obj)
     } else if value::is_function(callee) {
-        (value::decode_function_idx(callee), value::encode_undefined())
+        (
+            value::decode_function_idx(callee),
+            value::encode_undefined(),
+        )
     } else if value::is_bound(callee) {
         return resolve_and_call(caller, callee, this_val, args_base, args_count);
     } else {
         return value::encode_undefined();
     };
 
-    let table = caller.get_export("__table").and_then(|e| e.into_table()).unwrap();
+    let table = caller
+        .get_export("__table")
+        .and_then(|e| e.into_table())
+        .unwrap();
     let func_ref = table.get(&mut *caller, func_idx as u64);
     let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
     let Some(func) = func else {
         return value::encode_undefined();
     };
     let mut results = [Val::I64(0)];
-    let _ = func.call(&mut *caller, &[Val::I64(env_obj), Val::I64(this_val), Val::I32(args_base), Val::I32(args_count)], &mut results);
+    let _ = func.call(
+        &mut *caller,
+        &[
+            Val::I64(env_obj),
+            Val::I64(this_val),
+            Val::I32(args_base),
+            Val::I32(args_count),
+        ],
+        &mut results,
+    );
     results[0].unwrap_i64()
 }
 
@@ -5899,11 +9221,16 @@ fn func_bind_impl(
     args_base: i32,
     args_count: i32,
 ) -> i64 {
-    let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+    let memory = caller
+        .get_export("memory")
+        .and_then(|e| e.into_memory())
+        .unwrap();
     let mut bound_args = Vec::with_capacity(args_count as usize);
     for i in 0..args_count {
         let mut buf = [0u8; 8];
-        memory.read(&mut *caller, (args_base + i * 8) as usize, &mut buf).unwrap();
+        memory
+            .read(&mut *caller, (args_base + i * 8) as usize, &mut buf)
+            .unwrap();
         bound_args.push(i64::from_le_bytes(buf));
     }
     let mut bound = caller.data().bound_objects.lock().unwrap();
@@ -5916,24 +9243,1497 @@ fn func_bind_impl(
     value::encode_bound_idx(idx)
 }
 
-fn object_rest_impl(
-    _caller: &mut Caller<'_, RuntimeState>,
-    _obj: i64,
-    _excluded_keys: i64,
-) -> i64 {
+fn object_rest_impl(_caller: &mut Caller<'_, RuntimeState>, _obj: i64, _excluded_keys: i64) -> i64 {
     // 简化实现：返回一个新的空对象
     // 完整实现需要遍历 obj 的属性并排除指定键
     value::encode_undefined()
 }
 
-
-fn obj_spread_impl(
-    _caller: &mut Caller<'_, RuntimeState>,
-    _dest: i64,
-    _source: i64,
-) {
+fn obj_spread_impl(_caller: &mut Caller<'_, RuntimeState>, _dest: i64, _source: i64) {
     // 简化实现：不做任何复制
     // 完整实现需要遍历 source 的 own properties 并复制到 dest
+}
+
+#[derive(Clone, Copy)]
+enum PromiseSettlement {
+    Fulfill(i64),
+    Reject(i64),
+}
+
+fn raw_promise_handle(promise: i64) -> usize {
+    if value::is_object(promise) {
+        value::decode_object_handle(promise) as usize
+    } else {
+        promise as usize
+    }
+}
+
+fn insert_promise_entry(table: &mut Vec<PromiseEntry>, handle: usize, entry: PromiseEntry) {
+    if table.len() <= handle {
+        table.resize_with(handle + 1, PromiseEntry::empty);
+    }
+    table[handle] = entry;
+}
+
+fn advance_object_iterator_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_table: &Table,
+    next: i64,
+) -> (i64, i64, bool, bool) {
+    let result =
+        call_host_function_from_caller(caller, func_table, next, value::encode_undefined())
+            .unwrap_or_else(value::encode_undefined);
+    if value::is_object(result) || value::is_function(result) || value::is_array(result) {
+        if let Some(ptr) = resolve_handle(caller, result) {
+            let done = read_object_property_by_name(caller, ptr, "done")
+                .map(nanbox_to_bool)
+                .unwrap_or(false);
+            let current_value = read_object_property_by_name(caller, ptr, "value")
+                .unwrap_or_else(value::encode_undefined);
+            return (result, current_value, done, true);
+        }
+    }
+    if !value::is_undefined(result) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: iterator next must return an object".to_string(),
+        );
+    }
+    (result, value::encode_undefined(), true, true)
+}
+
+fn create_async_generator_identity(state: &RuntimeState, generator: i64) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::AsyncGeneratorIdentity { generator });
+    value::encode_native_callable_idx(handle)
+}
+
+fn call_native_callable_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    callable: i64,
+    argument: Option<i64>,
+) -> Option<i64> {
+    if !value::is_native_callable(callable) {
+        return None;
+    }
+
+    let idx = value::decode_native_callable_idx(callable) as usize;
+    let record = {
+        let table = caller
+            .data()
+            .native_callables
+            .lock()
+            .expect("native callable table mutex");
+        table.get(idx).cloned()
+    }?;
+    let argument = argument.unwrap_or_else(value::encode_undefined);
+
+    match record {
+        NativeCallable::PromiseResolvingFunction {
+            promise,
+            already_resolved,
+            kind,
+        } => {
+            let mut already = already_resolved.lock().expect("promise resolver mutex");
+            if *already {
+                return Some(value::encode_undefined());
+            }
+            *already = true;
+            drop(already);
+            match kind {
+                PromiseResolvingKind::Fulfill => {
+                    resolve_promise_from_caller(caller, promise, argument);
+                }
+                PromiseResolvingKind::Reject => {
+                    settle_promise(caller.data(), promise, PromiseSettlement::Reject(argument));
+                }
+            }
+            Some(value::encode_undefined())
+        }
+        NativeCallable::PromiseCombinatorReaction { .. } => Some(value::encode_undefined()),
+        NativeCallable::AsyncGeneratorIdentity { generator } => Some(generator),
+        NativeCallable::AsyncGeneratorMethod { generator, kind } => {
+            let result_promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+            let request = AsyncGeneratorRequest {
+                completion_type: kind,
+                value: argument,
+                promise: result_promise,
+            };
+            let completed = {
+                let mut table = caller
+                    .data()
+                    .async_generator_table
+                    .lock()
+                    .expect("async generator table mutex");
+                let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
+                else {
+                    return Some(result_promise);
+                };
+                if matches!(entry.state, AsyncGeneratorState::Completed) {
+                    true
+                } else {
+                    entry.queue.push(request);
+                    false
+                }
+            };
+            if completed {
+                match kind {
+                    AsyncGeneratorCompletionType::Throw => settle_promise(
+                        caller.data(),
+                        result_promise,
+                        PromiseSettlement::Reject(argument),
+                    ),
+                    _ => {
+                        let result = alloc_iterator_result_from_caller(caller, argument, true);
+                        resolve_promise_from_caller(caller, result_promise, result);
+                    }
+                }
+            } else {
+                pump_async_generator_from_caller(caller, generator);
+            }
+            Some(result_promise)
+        }
+    }
+}
+fn promise_entry_mut(table: &mut [PromiseEntry], handle: usize) -> Option<&mut PromiseEntry> {
+    table.get_mut(handle).filter(|entry| entry.is_promise)
+}
+
+fn promise_entry(table: &[PromiseEntry], handle: usize) -> Option<&PromiseEntry> {
+    table.get(handle).filter(|entry| entry.is_promise)
+}
+
+fn is_promise_value(state: &RuntimeState, val: i64) -> bool {
+    if !value::is_object(val) {
+        return false;
+    }
+    let handle = value::decode_object_handle(val) as usize;
+    let table = state.promise_table.lock().expect("promise table mutex");
+    promise_entry(&table, handle).is_some()
+}
+
+fn create_promise_resolving_function(
+    state: &RuntimeState,
+    promise: i64,
+    already_resolved: Arc<Mutex<bool>>,
+    kind: PromiseResolvingKind,
+) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::PromiseResolvingFunction {
+        promise,
+        already_resolved,
+        kind,
+    });
+    value::encode_native_callable_idx(handle)
+}
+
+fn create_promise_resolving_functions(state: &RuntimeState, promise: i64) -> (i64, i64) {
+    let already_resolved = Arc::new(Mutex::new(false));
+    let resolve = create_promise_resolving_function(
+        state,
+        promise,
+        Arc::clone(&already_resolved),
+        PromiseResolvingKind::Fulfill,
+    );
+    let reject = create_promise_resolving_function(
+        state,
+        promise,
+        already_resolved,
+        PromiseResolvingKind::Reject,
+    );
+    (resolve, reject)
+}
+
+fn alloc_promise_from_caller(caller: &mut Caller<'_, RuntimeState>, entry: PromiseEntry) -> i64 {
+    let promise = alloc_host_object_from_caller(caller, 0);
+    if value::is_object(promise) {
+        let handle = value::decode_object_handle(promise) as usize;
+        let mut table = caller
+            .data()
+            .promise_table
+            .lock()
+            .expect("promise table mutex");
+        insert_promise_entry(&mut table, handle, entry);
+    }
+    promise
+}
+
+// ── §27.2.1.3 NewPromiseCapability(C) ─────────────────────────────────
+/// 创建 PromiseCapability = { [[Promise]], [[Resolve]], [[Reject]] }。
+/// 当 constructor 为 undefined/null 时使用内建 Promise 快速路径；
+/// 否则记录构造器引用（用于 species-aware 操作）。
+fn new_promise_capability_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    constructor: i64,
+) -> (i64, i64, i64) {
+    let mut entry = PromiseEntry::pending();
+    // 如果构造器不是 undefined/null，记录到 entry 中用于后续 species 查找
+    if !value::is_undefined(constructor) && !value::is_null(constructor) {
+        entry.constructor_handle = Some(constructor);
+    }
+    let promise = alloc_promise_from_caller(caller, entry);
+    let (resolve, reject) = create_promise_resolving_functions(caller.data(), promise);
+    (promise, resolve, reject)
+}
+
+
+fn create_async_generator_method(
+    state: &RuntimeState,
+    generator: i64,
+    kind: AsyncGeneratorCompletionType,
+) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::AsyncGeneratorMethod { generator, kind });
+    value::encode_native_callable_idx(handle)
+}
+
+fn alloc_iterator_result_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+    done: bool,
+) -> i64 {
+    let obj = alloc_host_object_from_caller(caller, 2);
+    let _ = define_host_data_property_from_caller(caller, obj, "value", val);
+    let _ = define_host_data_property_from_caller(caller, obj, "done", value::encode_bool(done));
+    obj
+}
+
+fn enqueue_async_resume_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    continuation: i64,
+    state: u32,
+    resume_val: i64,
+    is_rejected: bool,
+) {
+    let cont_handle = value::decode_object_handle(continuation) as usize;
+    let fn_table_idx = {
+        let mut table = caller
+            .data()
+            .continuation_table
+            .lock()
+            .expect("continuation table mutex");
+        let Some(entry) = table.get_mut(cont_handle) else {
+            return;
+        };
+        while entry.captured_vars.len() < 2 {
+            entry.captured_vars.push(value::encode_undefined());
+        }
+        entry.captured_vars[0] = value::encode_f64(state as f64);
+        entry.captured_vars[1] = value::encode_bool(is_rejected);
+        entry.fn_table_idx
+    };
+    caller
+        .data()
+        .microtask_queue
+        .lock()
+        .expect("microtask queue mutex")
+        .push_back(Microtask::AsyncResume {
+            fn_table_idx,
+            continuation,
+            state,
+            resume_val,
+            is_rejected,
+        });
+}
+
+enum AsyncGeneratorPumpAction {
+    Resume {
+        continuation: i64,
+        state: u32,
+        value: i64,
+        is_rejected: bool,
+    },
+    SettleResumePromise {
+        promise: i64,
+        value: i64,
+        is_rejected: bool,
+    },
+    Fulfill {
+        promise: i64,
+        value: i64,
+        done: bool,
+    },
+    Reject {
+        promise: i64,
+        reason: i64,
+    },
+}
+
+fn pump_async_generator_from_caller(caller: &mut Caller<'_, RuntimeState>, generator: i64) {
+    let handle = value::decode_object_handle(generator) as usize;
+    let action = {
+        let mut table = caller
+            .data()
+            .async_generator_table
+            .lock()
+            .expect("async generator table mutex");
+        let Some(entry) = table.get_mut(handle) else {
+            return;
+        };
+        match entry.state {
+            AsyncGeneratorState::Executing | AsyncGeneratorState::Completed => None,
+            AsyncGeneratorState::SuspendedYield => {
+                let Some(resume_promise) = entry.waiting_resume_promise.take() else {
+                    return;
+                };
+                if entry.queue.is_empty() {
+                    entry.waiting_resume_promise = Some(resume_promise);
+                    None
+                } else {
+                    let request = entry.queue.remove(0);
+                    entry.active_request = Some(request);
+                    entry.state = AsyncGeneratorState::Executing;
+                    match request.completion_type {
+                        AsyncGeneratorCompletionType::Next => {
+                            Some(AsyncGeneratorPumpAction::SettleResumePromise {
+                                promise: resume_promise,
+                                value: request.value,
+                                is_rejected: false,
+                            })
+                        }
+                        AsyncGeneratorCompletionType::Throw => {
+                            Some(AsyncGeneratorPumpAction::SettleResumePromise {
+                                promise: resume_promise,
+                                value: request.value,
+                                is_rejected: true,
+                            })
+                        }
+                        AsyncGeneratorCompletionType::Return => {
+                            Some(AsyncGeneratorPumpAction::Fulfill {
+                                promise: request.promise,
+                                value: request.value,
+                                done: true,
+                            })
+                        }
+                    }
+                }
+            }
+            AsyncGeneratorState::SuspendedStart => {
+                if entry.queue.is_empty() {
+                    None
+                } else {
+                    let request = entry.queue.remove(0);
+                    match request.completion_type {
+                        AsyncGeneratorCompletionType::Next => {
+                            entry.active_request = Some(request);
+                            entry.state = AsyncGeneratorState::Executing;
+                            Some(AsyncGeneratorPumpAction::Resume {
+                                continuation: entry.continuation,
+                                state: 0,
+                                value: request.value,
+                                is_rejected: false,
+                            })
+                        }
+                        AsyncGeneratorCompletionType::Return => {
+                            entry.state = AsyncGeneratorState::Completed;
+                            Some(AsyncGeneratorPumpAction::Fulfill {
+                                promise: request.promise,
+                                value: request.value,
+                                done: true,
+                            })
+                        }
+                        AsyncGeneratorCompletionType::Throw => {
+                            entry.state = AsyncGeneratorState::Completed;
+                            Some(AsyncGeneratorPumpAction::Reject {
+                                promise: request.promise,
+                                reason: request.value,
+                            })
+                        }
+                    }
+                }
+            }
+        }
+    };
+    match action {
+        Some(AsyncGeneratorPumpAction::Resume {
+            continuation,
+            state,
+            value,
+            is_rejected,
+        }) => enqueue_async_resume_from_caller(caller, continuation, state, value, is_rejected),
+        Some(AsyncGeneratorPumpAction::SettleResumePromise {
+            promise,
+            value,
+            is_rejected,
+        }) => {
+            if is_rejected {
+                settle_promise(caller.data(), promise, PromiseSettlement::Reject(value));
+            } else {
+                resolve_promise_from_caller(caller, promise, value);
+            }
+        }
+        Some(AsyncGeneratorPumpAction::Fulfill {
+            promise,
+            value,
+            done,
+        }) => {
+            let result = alloc_iterator_result_from_caller(caller, value, done);
+            resolve_promise_from_caller(caller, promise, result);
+        }
+        Some(AsyncGeneratorPumpAction::Reject { promise, reason }) => {
+            settle_promise(caller.data(), promise, PromiseSettlement::Reject(reason));
+        }
+        None => {}
+    }
+}
+
+fn create_combinator_context(
+    state: &RuntimeState,
+    result_promise: i64,
+    result_array: i64,
+) -> usize {
+    let mut contexts = state
+        .combinator_contexts
+        .lock()
+        .expect("combinator context mutex");
+    let idx = contexts.len();
+    contexts.push(CombinatorContext {
+        result_promise,
+        result_array,
+        remaining: 0,
+        settled: false,
+    });
+    idx
+}
+
+fn set_combinator_remaining(state: &RuntimeState, context: usize, remaining: usize) {
+    if let Some(entry) = state
+        .combinator_contexts
+        .lock()
+        .expect("combinator context mutex")
+        .get_mut(context)
+    {
+        entry.remaining = remaining;
+    }
+}
+
+fn mark_combinator_settled(state: &RuntimeState, context: usize) {
+    if let Some(entry) = state
+        .combinator_contexts
+        .lock()
+        .expect("combinator context mutex")
+        .get_mut(context)
+    {
+        entry.settled = true;
+    }
+}
+
+fn create_combinator_reaction_handler(
+    state: &RuntimeState,
+    context: usize,
+    index: usize,
+    kind: PromiseCombinatorReactionKind,
+) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::PromiseCombinatorReaction {
+        context,
+        index,
+        kind,
+    });
+    value::encode_native_callable_idx(handle)
+}
+
+fn combinator_reaction_record(
+    state: &RuntimeState,
+    handler: i64,
+) -> Option<(usize, usize, PromiseCombinatorReactionKind)> {
+    if !value::is_native_callable(handler) {
+        return None;
+    }
+    let idx = value::decode_native_callable_idx(handler) as usize;
+    let record = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex")
+        .get(idx)
+        .cloned()?;
+    match record {
+        NativeCallable::PromiseCombinatorReaction {
+            context,
+            index,
+            kind,
+        } => Some((context, index, kind)),
+        _ => None,
+    }
+}
+
+fn open_combinator_context(state: &RuntimeState, context: usize) -> Option<(i64, i64)> {
+    let contexts = state
+        .combinator_contexts
+        .lock()
+        .expect("combinator context mutex");
+    let entry = contexts.get(context)?;
+    if entry.settled {
+        None
+    } else {
+        Some((entry.result_promise, entry.result_array))
+    }
+}
+
+fn decrement_combinator_remaining(state: &RuntimeState, context: usize) -> Option<(i64, i64)> {
+    let mut contexts = state
+        .combinator_contexts
+        .lock()
+        .expect("combinator context mutex");
+    let entry = contexts.get_mut(context)?;
+    if entry.settled {
+        return None;
+    }
+    entry.remaining = entry.remaining.saturating_sub(1);
+    if entry.remaining == 0 {
+        entry.settled = true;
+        Some((entry.result_promise, entry.result_array))
+    } else {
+        None
+    }
+}
+
+fn handle_combinator_reaction_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    handler: i64,
+    argument: i64,
+) -> bool {
+    let Some((context, index, kind)) = combinator_reaction_record(caller.data(), handler) else {
+        return false;
+    };
+    let Some((_, result_array)) = open_combinator_context(caller.data(), context) else {
+        return true;
+    };
+
+    match kind {
+        PromiseCombinatorReactionKind::AllFulfill => {
+            if let Some(result_ptr) = resolve_array_ptr(caller, result_array) {
+                write_array_elem(caller, result_ptr, index as u32, argument);
+            }
+            if let Some((result_promise, result_array)) =
+                decrement_combinator_remaining(caller.data(), context)
+            {
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(result_array),
+                );
+            }
+        }
+        PromiseCombinatorReactionKind::AllSettledFulfill
+        | PromiseCombinatorReactionKind::AllSettledReject => {
+            let (status, value_name) = match kind {
+                PromiseCombinatorReactionKind::AllSettledFulfill => ("fulfilled", "value"),
+                PromiseCombinatorReactionKind::AllSettledReject => ("rejected", "reason"),
+                _ => unreachable!(),
+            };
+            let record = alloc_all_settled_result_from_caller(caller, status, value_name, argument);
+            if let Some(result_ptr) = resolve_array_ptr(caller, result_array) {
+                write_array_elem(caller, result_ptr, index as u32, record);
+            }
+            if let Some((result_promise, result_array)) =
+                decrement_combinator_remaining(caller.data(), context)
+            {
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(result_array),
+                );
+            }
+        }
+        PromiseCombinatorReactionKind::AnyReject => {
+            if let Some(errors_ptr) = resolve_array_ptr(caller, result_array) {
+                write_array_elem(caller, errors_ptr, index as u32, argument);
+            }
+            if let Some((result_promise, errors_array)) =
+                decrement_combinator_remaining(caller.data(), context)
+            {
+                let aggregate = alloc_aggregate_error_from_caller(caller, errors_array);
+                settle_promise(
+                    caller.data(),
+                    result_promise,
+                    PromiseSettlement::Reject(aggregate),
+                );
+            }
+        }
+    }
+    true
+}
+
+fn handle_combinator_reaction_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj_table_count_global: &Global,
+    handler: i64,
+    argument: i64,
+) -> bool {
+    let Some((context, index, kind)) = combinator_reaction_record(store.data(), handler) else {
+        return false;
+    };
+    let Some((_, result_array)) = open_combinator_context(store.data(), context) else {
+        return true;
+    };
+
+    match kind {
+        PromiseCombinatorReactionKind::AllFulfill => {
+            if let Some(result_ptr) =
+                resolve_handle_from_store(store, memory, obj_table_ptr_global, result_array)
+            {
+                write_array_elem_from_store(store, memory, result_ptr, index as u32, argument);
+            }
+            if let Some((result_promise, result_array)) =
+                decrement_combinator_remaining(store.data(), context)
+            {
+                settle_promise(
+                    store.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(result_array),
+                );
+            }
+        }
+        PromiseCombinatorReactionKind::AllSettledFulfill
+        | PromiseCombinatorReactionKind::AllSettledReject => {
+            let (status, value_name) = match kind {
+                PromiseCombinatorReactionKind::AllSettledFulfill => ("fulfilled", "value"),
+                PromiseCombinatorReactionKind::AllSettledReject => ("rejected", "reason"),
+                _ => unreachable!(),
+            };
+            let record = alloc_all_settled_result_from_store(
+                store,
+                memory,
+                heap_ptr_global,
+                obj_table_ptr_global,
+                obj_table_count_global,
+                status,
+                value_name,
+                argument,
+            );
+            if let Some(result_ptr) =
+                resolve_handle_from_store(store, memory, obj_table_ptr_global, result_array)
+            {
+                write_array_elem_from_store(store, memory, result_ptr, index as u32, record);
+            }
+            if let Some((result_promise, result_array)) =
+                decrement_combinator_remaining(store.data(), context)
+            {
+                settle_promise(
+                    store.data(),
+                    result_promise,
+                    PromiseSettlement::Fulfill(result_array),
+                );
+            }
+        }
+        PromiseCombinatorReactionKind::AnyReject => {
+            if let Some(errors_ptr) =
+                resolve_handle_from_store(store, memory, obj_table_ptr_global, result_array)
+            {
+                write_array_elem_from_store(store, memory, errors_ptr, index as u32, argument);
+            }
+            if let Some((result_promise, errors_array)) =
+                decrement_combinator_remaining(store.data(), context)
+            {
+                let aggregate = alloc_aggregate_error_from_store(
+                    store,
+                    memory,
+                    heap_ptr_global,
+                    obj_table_ptr_global,
+                    obj_table_count_global,
+                    errors_array,
+                );
+                settle_promise(
+                    store.data(),
+                    result_promise,
+                    PromiseSettlement::Reject(aggregate),
+                );
+            }
+        }
+    }
+    true
+}
+
+fn queue_promise_reactions(
+    state: &RuntimeState,
+    reactions: Vec<PromiseReaction>,
+    value: i64,
+    is_rejected: bool,
+) {
+    let mut queue = state.microtask_queue.lock().expect("microtask queue mutex");
+    for reaction in reactions {
+        if let Some(async_state) = reaction.async_resume_state {
+            queue.push_back(Microtask::AsyncResume {
+                fn_table_idx: reaction.handler as u32,
+                continuation: reaction.target_promise,
+                state: async_state as u32,
+                resume_val: value,
+                is_rejected,
+            });
+        } else {
+            queue.push_back(Microtask::PromiseReaction {
+                promise: reaction.target_promise,
+                reaction_type: reaction.reaction_type,
+                handler: reaction.handler,
+                argument: value,
+            });
+        }
+    }
+}
+
+fn settle_promise(state: &RuntimeState, promise: i64, settlement: PromiseSettlement) {
+    let handle = raw_promise_handle(promise);
+    let (reactions, value, is_rejected) = {
+        let mut table = state.promise_table.lock().expect("promise table mutex");
+        let Some(entry) = promise_entry_mut(&mut table, handle) else {
+            return;
+        };
+        if !matches!(entry.state, PromiseState::Pending) {
+            return;
+        }
+        match settlement {
+            PromiseSettlement::Fulfill(value) => {
+                let reactions = std::mem::take(&mut entry.fulfill_reactions);
+                entry.state = PromiseState::Fulfilled(value);
+                (reactions, value, false)
+            }
+            PromiseSettlement::Reject(reason) => {
+                let reactions = std::mem::take(&mut entry.reject_reactions);
+                entry.state = PromiseState::Rejected(reason);
+                (reactions, reason, true)
+            }
+        }
+    };
+    queue_promise_reactions(state, reactions, value, is_rejected);
+}
+
+fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
+    let target_handle = raw_promise_handle(promise);
+    let source_handle = raw_promise_handle(source);
+    let mut queued = None;
+    {
+        let mut table = state.promise_table.lock().expect("promise table mutex");
+        let Some(source_entry) = promise_entry_mut(&mut table, source_handle) else {
+            return;
+        };
+        source_entry.handled = true;
+        match source_entry.state.clone() {
+            PromiseState::Pending => {
+                source_entry.fulfill_reactions.push(PromiseReaction::new(
+                    value::encode_undefined(),
+                    target_handle as i64,
+                    ReactionType::Fulfill,
+                ));
+                source_entry.reject_reactions.push(PromiseReaction::new(
+                    value::encode_undefined(),
+                    target_handle as i64,
+                    ReactionType::Reject,
+                ));
+            }
+            PromiseState::Fulfilled(value) => {
+                queued = Some((ReactionType::Fulfill, value));
+            }
+            PromiseState::Rejected(reason) => {
+                queued = Some((ReactionType::Reject, reason));
+            }
+        }
+    }
+    if let Some((reaction_type, argument)) = queued {
+        let mut queue = state.microtask_queue.lock().expect("microtask queue mutex");
+        queue.push_back(Microtask::PromiseReaction {
+            promise: target_handle as i64,
+            reaction_type,
+            handler: value::encode_undefined(),
+            argument,
+        });
+    }
+}
+
+fn resolve_promise_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    promise: i64,
+    resolution: i64,
+) {
+    if promise == resolution {
+        let reason = runtime_error_value(
+            caller.data(),
+            "TypeError: cannot resolve promise with itself".to_string(),
+        );
+        settle_promise(caller.data(), promise, PromiseSettlement::Reject(reason));
+        return;
+    }
+
+    if is_promise_value(caller.data(), resolution) {
+        adopt_promise(caller.data(), promise, resolution);
+        return;
+    }
+
+    if value::is_object(resolution)
+        || value::is_function(resolution)
+        || value::is_callable(resolution)
+    {
+        if let Some(ptr) = resolve_handle(caller, resolution) {
+            if let Some(then) = read_object_property_by_name(caller, ptr, "then") {
+                if value::is_callable(then) {
+                    let mut queue = caller
+                        .data()
+                        .microtask_queue
+                        .lock()
+                        .expect("microtask queue mutex");
+                    queue.push_back(Microtask::PromiseResolveThenable {
+                        promise,
+                        thenable: resolution,
+                        then,
+                    });
+                    return;
+                }
+            }
+        }
+    }
+
+    settle_promise(
+        caller.data(),
+        promise,
+        PromiseSettlement::Fulfill(resolution),
+    );
+}
+
+fn resolve_promise_from_store(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    obj_table_ptr_global: &Global,
+    promise: i64,
+    resolution: i64,
+) {
+    if promise == resolution {
+        let reason = runtime_error_value(
+            store.data(),
+            "TypeError: cannot resolve promise with itself".to_string(),
+        );
+        settle_promise(store.data(), promise, PromiseSettlement::Reject(reason));
+        return;
+    }
+
+    if is_promise_value(store.data(), resolution) {
+        adopt_promise(store.data(), promise, resolution);
+        return;
+    }
+
+    if value::is_object(resolution)
+        || value::is_function(resolution)
+        || value::is_callable(resolution)
+    {
+        if let Some(ptr) =
+            resolve_handle_from_store(store, memory, obj_table_ptr_global, resolution)
+        {
+            if let Some(then) = read_object_property_by_name_from_store(store, memory, ptr, "then")
+            {
+                if value::is_callable(then) {
+                    let mut queue = store
+                        .data()
+                        .microtask_queue
+                        .lock()
+                        .expect("microtask queue mutex");
+                    queue.push_back(Microtask::PromiseResolveThenable {
+                        promise,
+                        thenable: resolution,
+                        then,
+                    });
+                    return;
+                }
+            }
+        }
+    }
+
+    settle_promise(
+        store.data(),
+        promise,
+        PromiseSettlement::Fulfill(resolution),
+    );
+}
+
+fn passive_reaction_settlement(reaction_type: ReactionType, argument: i64) -> PromiseSettlement {
+    match reaction_type {
+        ReactionType::Fulfill | ReactionType::FinallyFulfill => {
+            PromiseSettlement::Fulfill(argument)
+        }
+        ReactionType::Reject | ReactionType::FinallyReject => PromiseSettlement::Reject(argument),
+    }
+}
+
+fn runtime_error_value(state: &RuntimeState, message: String) -> i64 {
+    let mut table = state.runtime_strings.lock().expect("runtime strings mutex");
+    let handle = table.len() as u32;
+    table.push(message);
+    value::encode_runtime_string_handle(handle)
+}
+
+fn set_runtime_error(state: &RuntimeState, message: String) {
+    let mut error_lock = state.runtime_error.lock().expect("runtime_error mutex");
+    if error_lock.is_none() {
+        *error_lock = Some(message);
+    }
+}
+
+fn drain_microtasks_from_caller(caller: &mut Caller<'_, RuntimeState>, func_table: &Table) {
+    loop {
+        let task = {
+            let mut queue = caller
+                .data()
+                .microtask_queue
+                .lock()
+                .expect("microtask queue mutex");
+            queue.pop_front()
+        };
+        match task {
+            Some(Microtask::PromiseReaction {
+                promise,
+                reaction_type,
+                handler,
+                argument,
+            }) => {
+                if handle_combinator_reaction_from_caller(caller, handler, argument) {
+                    continue;
+                }
+                if value::is_callable(handler) {
+                    // §27.2.5.3 — finally 的 handler 应以零参数调用（不传 value/reason）
+                    let call_arg = match reaction_type {
+                        ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
+                            value::encode_undefined()
+                        }
+                        _ => argument,
+                    };
+                    match call_host_function_from_caller(caller, func_table, handler, call_arg) {
+                        Some(result) => match reaction_type {
+                            ReactionType::Fulfill | ReactionType::Reject => {
+                                resolve_promise_from_caller(caller, promise, result);
+                            }
+                            ReactionType::FinallyFulfill => {
+                                settle_promise(
+                                    caller.data(),
+                                    promise,
+                                    PromiseSettlement::Fulfill(argument),
+                                );
+                            }
+                            ReactionType::FinallyReject => {
+                                settle_promise(
+                                    caller.data(),
+                                    promise,
+                                    PromiseSettlement::Reject(argument),
+                                );
+                            }
+                        },
+                        None => settle_promise(
+                            caller.data(),
+                            promise,
+                            PromiseSettlement::Reject(runtime_error_value(
+                                caller.data(),
+                                "TypeError: promise reaction handler failed".to_string(),
+                            )),
+                        ),
+                    }
+                } else {
+                    let settlement = passive_reaction_settlement(reaction_type, argument);
+                    settle_promise(caller.data(), promise, settlement);
+                }
+            }
+            Some(Microtask::PromiseResolveThenable {
+                promise,
+                thenable,
+                then,
+            }) => {
+                let (resolve, reject) = create_promise_resolving_functions(caller.data(), promise);
+                if call_host_function_from_caller(caller, func_table, then, resolve).is_none() {
+                    settle_promise(caller.data(), promise, PromiseSettlement::Reject(reject));
+                }
+                let _ = thenable;
+            }
+            Some(Microtask::MicrotaskCallback { callback }) => {
+                if value::is_callable(callback) {
+                    let _ = call_host_function_from_caller(
+                        caller,
+                        func_table,
+                        callback,
+                        value::encode_undefined(),
+                    );
+                }
+            }
+            Some(Microtask::AsyncResume {
+                fn_table_idx,
+                continuation,
+                state,
+                resume_val,
+                is_rejected,
+            }) => {
+                resume_async_function_from_caller(
+                    caller,
+                    func_table,
+                    fn_table_idx,
+                    continuation,
+                    state,
+                    resume_val,
+                    is_rejected,
+                );
+            }
+            None => break,
+        }
+    }
+    // ── §27.2.1.9 HostPromiseRejectionTracker ────────────────────────────
+    // 微任务队列排空后，扫描 promise table 检测未处理的 rejection 并输出警告
+    let unhandled: Vec<i64> = {
+        let table = caller.data().promise_table.lock().expect("promise table mutex");
+        table.iter()
+            .filter(|e| e.is_promise && !e.handled)
+            .filter_map(|e| match &e.state {
+                PromiseState::Rejected(reason) => Some(*reason),
+                _ => None,
+            })
+            .collect()
+    };
+    for reason in unhandled {
+        let msg = render_value(caller, reason).unwrap_or_else(|_| String::from("unknown"));
+        eprintln!("UnhandledPromiseRejectionWarning: {msg}");
+    }
+}
+
+fn drain_microtasks_from_store(
+    store: &mut Store<RuntimeState>,
+    func_table: &Table,
+    memory: &Memory,
+    shadow_sp_global: &Global,
+    heap_ptr_global: &Global,
+    obj_table_ptr_global: &Global,
+    obj_table_count_global: &Global,
+) {
+    loop {
+        let task = {
+            let mut queue = store
+                .data()
+                .microtask_queue
+                .lock()
+                .expect("microtask queue mutex");
+            queue.pop_front()
+        };
+        match task {
+            Some(Microtask::PromiseReaction {
+                promise,
+                reaction_type,
+                handler,
+                argument,
+            }) => {
+                if handle_combinator_reaction_from_store(
+                    store,
+                    memory,
+                    heap_ptr_global,
+                    obj_table_ptr_global,
+                    obj_table_count_global,
+                    handler,
+                    argument,
+                ) {
+                    continue;
+                }
+                if value::is_callable(handler) {
+                    // §27.2.5.3 — finally 的 handler 应以零参数调用（不传 value/reason）
+                    let call_arg = match reaction_type {
+                        ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
+                            value::encode_undefined()
+                        }
+                        _ => argument,
+                    };
+                    match call_host_function_from_store(
+                        store,
+                        func_table,
+                        memory,
+                        shadow_sp_global,
+                        handler,
+                        call_arg,
+                    ) {
+                        Some(result) => match reaction_type {
+                            ReactionType::Fulfill | ReactionType::Reject => {
+                                resolve_promise_from_store(
+                                    store,
+                                    memory,
+                                    obj_table_ptr_global,
+                                    promise,
+                                    result,
+                                );
+                            }
+                            ReactionType::FinallyFulfill => {
+                                settle_promise(
+                                    store.data(),
+                                    promise,
+                                    PromiseSettlement::Fulfill(argument),
+                                );
+                            }
+                            ReactionType::FinallyReject => {
+                                settle_promise(
+                                    store.data(),
+                                    promise,
+                                    PromiseSettlement::Reject(argument),
+                                );
+                            }
+                        },
+                        None => settle_promise(
+                            store.data(),
+                            promise,
+                            PromiseSettlement::Reject(runtime_error_value(
+                                store.data(),
+                                "TypeError: promise reaction handler failed".to_string(),
+                            )),
+                        ),
+                    }
+                } else {
+                    let settlement = passive_reaction_settlement(reaction_type, argument);
+                    settle_promise(store.data(), promise, settlement);
+                }
+            }
+            Some(Microtask::PromiseResolveThenable {
+                promise,
+                thenable,
+                then,
+            }) => {
+                let (resolve, reject) = create_promise_resolving_functions(store.data(), promise);
+                if call_host_function_from_store(
+                    store,
+                    func_table,
+                    memory,
+                    shadow_sp_global,
+                    then,
+                    resolve,
+                )
+                .is_none()
+                {
+                    settle_promise(store.data(), promise, PromiseSettlement::Reject(reject));
+                }
+                let _ = thenable;
+            }
+            Some(Microtask::MicrotaskCallback { callback }) => {
+                if value::is_callable(callback) {
+                    let _ = call_host_function_from_store(
+                        store,
+                        func_table,
+                        memory,
+                        shadow_sp_global,
+                        callback,
+                        value::encode_undefined(),
+                    );
+                }
+            }
+            Some(Microtask::AsyncResume {
+                fn_table_idx,
+                continuation,
+                state,
+                resume_val,
+                is_rejected,
+            }) => {
+                resume_async_function_from_store(
+                    store,
+                    func_table,
+                    fn_table_idx,
+                    continuation,
+                    state,
+                    resume_val,
+                    is_rejected,
+                );
+            }
+            None => break,
+        }
+    }
+    // ── §27.2.1.9 HostPromiseRejectionTracker ────────────────────────────
+    // 微任务队列排空后，扫描 promise table 检测未处理的 rejection 并输出警告
+    let unhandled: Vec<i64> = {
+        let table = store.data().promise_table.lock().expect("promise table mutex");
+        table.iter()
+            .filter(|e| e.is_promise && !e.handled)
+            .filter_map(|e| match &e.state {
+                PromiseState::Rejected(reason) => Some(*reason),
+                _ => None,
+            })
+            .collect()
+    };
+    for reason in unhandled {
+        // store 变体无法直接调用 render_value，使用简化格式
+        let msg = if value::is_string(reason) {
+            String::from("<string>")
+        } else if value::is_f64(reason) {
+            format!("{}", f64::from_bits(reason as u64))
+        } else if value::is_object(reason) {
+            String::from("Object")
+        } else {
+            format!("0x{:016x}", reason as u64)
+        };
+        eprintln!("UnhandledPromiseRejectionWarning: {msg}");
+    }
+}
+
+fn call_host_function_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_table: &Table,
+    handler: i64,
+    argument: i64,
+) -> Option<i64> {
+    if value::is_native_callable(handler) {
+        return call_native_callable_from_caller(caller, handler, Some(argument));
+    }
+
+    let (func_idx, env_obj) = if value::is_closure(handler) {
+        let idx = value::decode_closure_idx(handler);
+        let closures = caller.data().closures.lock().unwrap();
+        let entry = &closures[idx as usize];
+        (entry.func_idx, entry.env_obj)
+    } else if value::is_function(handler) {
+        (
+            value::decode_function_idx(handler),
+            value::encode_undefined(),
+        )
+    } else if value::is_bound(handler) {
+        let bound_idx = value::decode_bound_idx(handler);
+        let bound = caller.data().bound_objects.lock().unwrap();
+        let record = &bound[bound_idx as usize];
+        (
+            value::decode_function_idx(record.target_func),
+            record.bound_this,
+        )
+    } else {
+        return None;
+    };
+
+    let shadow_sp_global = caller
+        .get_export("__shadow_sp")
+        .and_then(|e| e.into_global());
+    let saved_sp = shadow_sp_global
+        .as_ref()
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0);
+
+    if let Some(sp_global) = &shadow_sp_global {
+        let sp = saved_sp;
+        let new_sp = sp + 8;
+        if let Some(Extern::Memory(memory)) = caller.get_export("memory") {
+            let data = memory.data_mut(&mut *caller);
+            let offset = sp as usize;
+            if offset + 8 <= data.len() {
+                data[offset..offset + 8].copy_from_slice(&argument.to_le_bytes());
+            }
+        }
+        let _ = sp_global.set(&mut *caller, Val::I32(new_sp));
+    }
+
+    let func_ref = func_table.get(&mut *caller, func_idx as u64);
+    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
+    let Some(func) = func else {
+        if let Some(sp_global) = &shadow_sp_global {
+            let _ = sp_global.set(&mut *caller, Val::I32(saved_sp));
+        }
+        return None;
+    };
+    let mut results = [Val::I64(0)];
+    if let Err(err) = func.call(
+        &mut *caller,
+        &[
+            Val::I64(env_obj),
+            Val::I64(value::encode_undefined()),
+            Val::I32(saved_sp),
+            Val::I32(1),
+        ],
+        &mut results,
+    ) {
+        set_runtime_error(
+            caller.data(),
+            format!("promise reaction handler error: {err}"),
+        );
+        if let Some(sp_global) = &shadow_sp_global {
+            let _ = sp_global.set(&mut *caller, Val::I32(saved_sp));
+        }
+        return None;
+    }
+
+    if let Some(sp_global) = &shadow_sp_global {
+        let _ = sp_global.set(&mut *caller, Val::I32(saved_sp));
+    }
+
+    results[0].i64()
+}
+
+fn nanbox_to_usize(val: i64) -> usize {
+    if value::is_bool(val) {
+        if value::decode_bool(val) { 1 } else { 0 }
+    } else {
+        f64::from_bits(val as u64) as usize
+    }
+}
+
+fn nanbox_to_u32(val: i64) -> u32 {
+    nanbox_to_usize(val) as u32
+}
+
+fn nanbox_to_bool(val: i64) -> bool {
+    if value::is_bool(val) {
+        value::decode_bool(val)
+    } else {
+        f64::from_bits(val as u64) != 0.0
+    }
+}
+
+fn resume_async_function_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_table: &Table,
+    fn_table_idx: u32,
+    continuation: i64,
+    state: u32,
+    resume_val: i64,
+    is_rejected: bool,
+) {
+    {
+        let cont_handle = value::decode_object_handle(continuation) as usize;
+        let mut c_table = caller
+            .data()
+            .continuation_table
+            .lock()
+            .expect("continuation table mutex");
+        if let Some(entry) = c_table.get_mut(cont_handle) {
+            while entry.captured_vars.len() < 2 {
+                entry.captured_vars.push(value::encode_undefined());
+            }
+            entry.captured_vars[0] = value::encode_f64(state as f64);
+            entry.captured_vars[1] = value::encode_bool(is_rejected);
+        }
+    }
+    let func_ref = func_table.get(&mut *caller, fn_table_idx as u64);
+    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
+    let Some(func) = func else { return };
+    let mut results = [Val::I64(0)];
+    let _ = func.call(
+        &mut *caller,
+        &[
+            Val::I64(continuation),
+            Val::I64(resume_val),
+            Val::I32(0),
+            Val::I32(0),
+        ],
+        &mut results,
+    );
+}
+
+fn call_host_function_from_store(
+    store: &mut Store<RuntimeState>,
+    func_table: &Table,
+    memory: &Memory,
+    shadow_sp_global: &Global,
+    handler: i64,
+    argument: i64,
+) -> Option<i64> {
+    let (func_idx, env_obj) = if value::is_closure(handler) {
+        let idx = value::decode_closure_idx(handler);
+        let closures = store.data().closures.lock().unwrap();
+        let entry = &closures[idx as usize];
+        (entry.func_idx, entry.env_obj)
+    } else if value::is_function(handler) {
+        (
+            value::decode_function_idx(handler),
+            value::encode_undefined(),
+        )
+    } else if value::is_bound(handler) {
+        let bound_idx = value::decode_bound_idx(handler);
+        let bound = store.data().bound_objects.lock().unwrap();
+        let record = &bound[bound_idx as usize];
+        (
+            value::decode_function_idx(record.target_func),
+            record.bound_this,
+        )
+    } else {
+        return None;
+    };
+
+    let saved_sp = shadow_sp_global.get(&mut *store).i32().unwrap_or(0);
+    {
+        let data = memory.data_mut(&mut *store);
+        let offset = saved_sp as usize;
+        if offset + 8 <= data.len() {
+            data[offset..offset + 8].copy_from_slice(&argument.to_le_bytes());
+        }
+    }
+    let new_sp = saved_sp + 8;
+    let _ = shadow_sp_global.set(&mut *store, Val::I32(new_sp));
+
+    let func_ref = func_table.get(&mut *store, func_idx as u64);
+    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
+    let Some(func) = func else {
+        let _ = shadow_sp_global.set(&mut *store, Val::I32(saved_sp));
+        return None;
+    };
+    let mut results = [Val::I64(0)];
+    if let Err(err) = func.call(
+        &mut *store,
+        &[
+            Val::I64(env_obj),
+            Val::I64(value::encode_undefined()),
+            Val::I32(saved_sp),
+            Val::I32(1),
+        ],
+        &mut results,
+    ) {
+        set_runtime_error(
+            store.data(),
+            format!("promise reaction handler error: {err}"),
+        );
+        let _ = shadow_sp_global.set(&mut *store, Val::I32(saved_sp));
+        return None;
+    }
+
+    let _ = shadow_sp_global.set(&mut *store, Val::I32(saved_sp));
+
+    results[0].i64()
+}
+
+fn resume_async_function_from_store(
+    store: &mut Store<RuntimeState>,
+    func_table: &Table,
+    fn_table_idx: u32,
+    continuation: i64,
+    state: u32,
+    resume_val: i64,
+    is_rejected: bool,
+) {
+    {
+        let cont_handle = value::decode_object_handle(continuation) as usize;
+        let mut c_table = store
+            .data()
+            .continuation_table
+            .lock()
+            .expect("continuation table mutex");
+        if let Some(entry) = c_table.get_mut(cont_handle) {
+            while entry.captured_vars.len() < 2 {
+                entry.captured_vars.push(value::encode_undefined());
+            }
+            entry.captured_vars[0] = value::encode_f64(state as f64);
+            entry.captured_vars[1] = value::encode_bool(is_rejected);
+        }
+    }
+    let func_ref = func_table.get(&mut *store, fn_table_idx as u64);
+    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
+    let Some(func) = func else { return };
+    let mut results = [Val::I64(0)];
+    let _ = func.call(
+        &mut *store,
+        &[
+            Val::I64(continuation),
+            Val::I64(resume_val),
+            Val::I32(0),
+            Val::I32(0),
+        ],
+        &mut results,
+    );
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@
 //! - 2: runtime error (WASM execution failure)
 //! - 3: usage error (invalid arguments)
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use colored::Colorize;
 use std::fs;
@@ -127,6 +127,10 @@ enum Commands {
         /// Watch for changes and re-run
         #[arg(short, long)]
         watch: bool,
+
+        /// Parse as script instead of module (allows await as identifier)
+        #[arg(long)]
+        script: bool,
     },
 
     /// Parse and check a JS/TS file for errors (no output)
@@ -294,11 +298,12 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             ref input,
             ref root,
             watch,
+            script,
         } => {
             if watch {
-                cmd_run_watch(&cli, input, root.as_deref())
+                cmd_run_watch(&cli, input, root.as_deref(), script)
             } else {
-                cmd_run(&cli, input, root.as_deref())
+                cmd_run(&cli, input, root.as_deref(), script)
             }
         }
 
@@ -306,10 +311,7 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
 
         Commands::Eval { ref code } => cmd_eval(&cli, code),
 
-        Commands::DumpIr {
-            ref input,
-            format,
-        } => cmd_dump_ir(&cli, input, format),
+        Commands::DumpIr { ref input, format } => cmd_dump_ir(&cli, input, format),
 
         Commands::DumpAst { ref input } => cmd_dump_ast(&cli, input),
 
@@ -318,10 +320,7 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             ref root,
         } => cmd_dump_wat(&cli, input, root.as_deref()),
 
-        Commands::Fmt {
-            ref input,
-            write,
-        } => cmd_fmt(input, write),
+        Commands::Fmt { ref input, write } => cmd_fmt(input, write),
 
         Commands::Validate { ref input } => cmd_validate(input),
 
@@ -367,37 +366,44 @@ fn cmd_build(
     stage: Option<Stage>,
     root: Option<&str>,
 ) -> Result<ExitCode> {
-    let source = read_input(input)?;
     let stage = stage.unwrap_or(Stage::Compile);
 
-    let result = run_pipeline(&source, stage, cli.verbose, cli.time, cli.target)?;
-
     match stage {
-        Stage::Parse => {
-            if let Some(ast) = &result.ast {
-                let json = serde_json::to_string_pretty(ast)?;
-                println!("{}", json);
-            }
-        }
-        Stage::Lower => {
-            if let Some(program) = &result.program {
-                print_ir(program);
+        Stage::Parse | Stage::Lower => {
+            let source = read_input(input)?;
+            let result = run_pipeline(&source, stage, cli.verbose, cli.time, cli.target)?;
+
+            if matches!(stage, Stage::Parse) {
+                if let Some(ast) = &result.ast {
+                    let json = serde_json::to_string_pretty(ast)?;
+                    println!("{}", json);
+                }
+            } else {
+                if let Some(program) = &result.program {
+                    print_ir(program);
+                }
             }
         }
         Stage::Compile | Stage::Execute => {
-            if let Some(wasm) = &result.wasm {
-                if output == "-" {
-                    io::stdout().write_all(wasm)?;
-                } else {
-                    fs::write(output, wasm)?;
-                    if cli.verbose >= 1 {
-                        eprintln!("Wrote {} bytes to {}", wasm.len(), output);
-                    }
-                }
+            let wasm = if input == "-" {
+                let mut source = String::new();
+                io::stdin().read_to_string(&mut source)?;
+                compile_source(&source, cli.target, false)?
+            } else {
+                compile_from_file_input(input, root, cli.target, false)?
+            };
 
-                if cli.stats {
-                    print_stats(&result);
+            if output == "-" {
+                io::stdout().write_all(&wasm)?;
+            } else {
+                fs::write(output, &wasm)?;
+                if cli.verbose >= 1 {
+                    eprintln!("Wrote {} bytes to {}", wasm.len(), output);
                 }
+            }
+
+            if cli.stats {
+                eprintln!("Output: {} bytes", wasm.len());
             }
         }
     }
@@ -405,14 +411,14 @@ fn cmd_build(
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_run(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
+fn cmd_run(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<ExitCode> {
     let wasm = if input == "-" {
         // stdin can't be a module
         let mut source = String::new();
         io::stdin().read_to_string(&mut source)?;
-        compile_source(&source, cli.target)?
+        compile_source(&source, cli.target, script)?
     } else {
-        compile_from_file_input(input, root, cli.target)?
+        compile_from_file_input(input, root, cli.target, script)?
     };
 
     if let Err(e) = runtime::execute(&wasm) {
@@ -427,7 +433,7 @@ fn cmd_run(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
+fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<ExitCode> {
     use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
     let input_path = PathBuf::from(input);
@@ -436,7 +442,9 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode>
     }
 
     // Determine watch target: root directory if provided, otherwise just the input file
-    let watch_target = root.map(PathBuf::from).unwrap_or_else(|| input_path.clone());
+    let watch_target = root
+        .map(PathBuf::from)
+        .unwrap_or_else(|| input_path.clone());
     let watch_mode = if root.is_some() {
         RecursiveMode::Recursive
     } else {
@@ -445,7 +453,7 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode>
 
     // Initial run
     eprintln!("Watching {} for changes...", watch_target.display());
-    let mut last_exit = match cmd_run(cli, input, root) {
+    let mut last_exit = match cmd_run(cli, input, root, script) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("Initial run failed: {:#}", e);
@@ -472,7 +480,7 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode>
     // Wait for changes
     while rx.recv().is_ok() {
         eprintln!("\n--- File changed, re-running ---");
-        last_exit = match cmd_run(cli, input, root) {
+        last_exit = match cmd_run(cli, input, root, script) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("Error: {:#}", e);
@@ -845,9 +853,7 @@ fn colorize_ir_line(line: &str) -> String {
     if result.contains('%') {
         let re = VALUE_RE.get_or_init(|| regex::Regex::new(r"%\d+").unwrap());
         result = re
-            .replace_all(&result, |caps: &regex::Captures| {
-                caps[0].cyan().to_string()
-            })
+            .replace_all(&result, |caps: &regex::Captures| caps[0].cyan().to_string())
             .to_string();
     }
 
@@ -855,9 +861,7 @@ fn colorize_ir_line(line: &str) -> String {
     if result.contains('$') {
         let re = SCOPE_RE.get_or_init(|| regex::Regex::new(r"\$\d+\.\w+").unwrap());
         result = re
-            .replace_all(&result, |caps: &regex::Captures| {
-                caps[0].cyan().to_string()
-            })
+            .replace_all(&result, |caps: &regex::Captures| caps[0].cyan().to_string())
             .to_string();
     }
 
@@ -919,7 +923,10 @@ fn print_ir_dot(program: &Program) {
                     false_block,
                 } => {
                     println!("    bb{} -> bb{} [label=\"true\"];", bb_id.0, true_block.0);
-                    println!("    bb{} -> bb{} [label=\"false\"];", bb_id.0, false_block.0);
+                    println!(
+                        "    bb{} -> bb{} [label=\"false\"];",
+                        bb_id.0, false_block.0
+                    );
                 }
                 Terminator::Switch {
                     value: _,
@@ -930,7 +937,10 @@ fn print_ir_dot(program: &Program) {
                     for case in cases {
                         println!("    bb{} -> bb{};", bb_id.0, case.target.0);
                     }
-                    println!("    bb{} -> bb{} [label=\"default\"];", bb_id.0, default_block.0);
+                    println!(
+                        "    bb{} -> bb{} [label=\"default\"];",
+                        bb_id.0, default_block.0
+                    );
                     println!("    bb{} -> bb{} [label=\"exit\"];", bb_id.0, exit_block.0);
                 }
                 Terminator::Throw { .. } => {
@@ -1028,7 +1038,10 @@ fn build_compile_plan(input: &Path, root: Option<&str>) -> Result<CompilePlan> {
         .parent()
         .ok_or_else(|| anyhow::anyhow!("Cannot infer module root from '{}'", input.display()))?;
     let file_name = canonical_input.file_name().ok_or_else(|| {
-        anyhow::anyhow!("Cannot infer module entry file name from '{}'", input.display())
+        anyhow::anyhow!(
+            "Cannot infer module entry file name from '{}'",
+            input.display()
+        )
     })?;
 
     let entry = format!("./{}", file_name.to_string_lossy());
@@ -1043,9 +1056,9 @@ fn bundle_plan_from_root(input: PathBuf, root: PathBuf) -> Result<CompilePlan> {
         .map_err(|e| anyhow::anyhow!("cannot canonicalize root path {:?}: {}", root, e))?;
     let canonical_input = std::fs::canonicalize(&input)
         .map_err(|e| anyhow::anyhow!("cannot canonicalize input path {:?}: {}", input, e))?;
-    let rel = canonical_input.strip_prefix(&canonical_root).map_err(|_| {
-        anyhow::anyhow!("input file {:?} is not under root {:?}", input, root)
-    })?;
+    let rel = canonical_input
+        .strip_prefix(&canonical_root)
+        .map_err(|_| anyhow::anyhow!("input file {:?} is not under root {:?}", input, root))?;
     let entry = format!("./{}", rel.to_string_lossy());
     Ok(CompilePlan::Bundle {
         entry,
@@ -1053,7 +1066,7 @@ fn bundle_plan_from_root(input: PathBuf, root: PathBuf) -> Result<CompilePlan> {
     })
 }
 
-fn compile_from_file_input(input: &str, root: Option<&str>, target: Target) -> Result<Vec<u8>> {
+fn compile_from_file_input(input: &str, root: Option<&str>, target: Target, script: bool) -> Result<Vec<u8>> {
     let plan = build_compile_plan(Path::new(input), root)?;
     match plan {
         CompilePlan::Bundle { entry, root } => {
@@ -1063,12 +1076,16 @@ fn compile_from_file_input(input: &str, root: Option<&str>, target: Target) -> R
                 Target::Jit => bail!("JIT backend is not implemented yet"),
             }
         }
-        CompilePlan::SingleSource(source) => compile_source(&source, target),
+        CompilePlan::SingleSource(source) => compile_source(&source, target, script),
     }
 }
 
-fn compile_source(source: &str, target: Target) -> Result<Vec<u8>> {
-    let module = parser::parse_module(source)?;
+fn compile_source(source: &str, target: Target, script: bool) -> Result<Vec<u8>> {
+    let module = if script {
+        parser::parse_script_as_module(source)?
+    } else {
+        parser::parse_module(source)?
+    };
     let program = semantic::lower_module(module)?;
     match target {
         Target::Wasm => backend_wasm::compile(&program),

@@ -1,6 +1,6 @@
 // 模块解析器：文件系统模块解析、import/export 提取
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use swc_core::common::Span;
@@ -38,18 +38,13 @@ pub struct ImportEntry {
 #[derive(Debug, Clone)]
 pub enum ExportEntry {
     /// export { x } / export { x as y }
-    Named {
-        local: String,
-        exported: String,
-    },
+    Named { local: String, exported: String },
     /// export default expr
     Default {
         local: String, // 内部生成的变量名
     },
     /// export * from './foo'
-    All {
-        source: String,
-    },
+    All { source: String },
     /// export { x, y } from './foo' — 命名重导出
     NamedReExport {
         local: String,
@@ -57,9 +52,7 @@ pub enum ExportEntry {
         source: String,
     },
     /// export const/let/var/function/class
-    Declaration {
-        name: String,
-    },
+    Declaration { name: String },
 }
 
 /// 模块解析器
@@ -72,8 +65,11 @@ pub struct ModuleResolver {
 
 impl ModuleResolver {
     pub fn new(root_path: &Path) -> Self {
+        let root_path = root_path
+            .canonicalize()
+            .unwrap_or_else(|_| root_path.to_path_buf());
         Self {
-            root_path: root_path.to_path_buf(),
+            root_path,
             next_id: 0,
             visited: HashMap::new(),
             modules: HashMap::new(),
@@ -121,6 +117,14 @@ impl ModuleResolver {
     /// 解析模块（如果已解析过则返回缓存的 ID）
     pub fn resolve(&mut self, specifier: &str, parent: &Path) -> Result<ModuleId> {
         let path = Self::resolve_path(specifier, parent)?;
+        if !path.starts_with(&self.root_path) {
+            bail!(
+                "Module '{}' resolves outside root '{}': {}",
+                specifier,
+                self.root_path.display(),
+                path.display()
+            );
+        }
 
         // 检查缓存
         if let Some(&id) = self.visited.get(&path) {
@@ -186,9 +190,14 @@ impl ModuleResolver {
 
     /// 为指定模块添加合成默认导出（如果它没有默认导出但有其他导出）
     pub fn ensure_default_export_for(&mut self, module_id: ModuleId) -> Result<()> {
-        let module = self.modules.get_mut(&module_id)
+        let module = self
+            .modules
+            .get_mut(&module_id)
             .ok_or_else(|| anyhow::anyhow!("invalid ModuleId: {:?}", module_id))?;
-        let has_default = module.exports.iter().any(|e| matches!(e, ExportEntry::Default { .. }));
+        let has_default = module
+            .exports
+            .iter()
+            .any(|e| matches!(e, ExportEntry::Default { .. }));
         if !has_default && !module.exports.is_empty() {
             Self::add_synthetic_default_export(&mut module.ast, &module.exports);
             module.exports = Self::extract_exports(&module.ast);
@@ -265,8 +274,12 @@ impl ModuleResolver {
                                     .imported
                                     .as_ref()
                                     .map(|id| match id {
-                                        ast::ModuleExportName::Ident(ident) => ident.sym.to_string(),
-                                        ast::ModuleExportName::Str(s) => s.value.to_string_lossy().into_owned(),
+                                        ast::ModuleExportName::Ident(ident) => {
+                                            ident.sym.to_string()
+                                        }
+                                        ast::ModuleExportName::Str(s) => {
+                                            s.value.to_string_lossy().into_owned()
+                                        }
                                     })
                                     .unwrap_or_else(|| local.clone());
                                 names.push((local, imported));
@@ -369,7 +382,9 @@ impl ModuleResolver {
                                             ast::ModuleExportName::Ident(ident) => {
                                                 ident.sym.to_string()
                                             }
-                                            ast::ModuleExportName::Str(s) => s.value.to_string_lossy().into_owned(),
+                                            ast::ModuleExportName::Str(s) => {
+                                                s.value.to_string_lossy().into_owned()
+                                            }
                                         };
                                         let exported = named
                                             .exported
@@ -542,13 +557,33 @@ mod tests {
     }
 
     #[test]
+    fn resolve_rejects_path_outside_root() {
+        let root = create_temp_project("outside_root");
+        let outside_name = format!("{}_sibling", root.file_name().unwrap().to_string_lossy());
+        let outside = root.parent().unwrap().join(&outside_name);
+        std::fs::create_dir_all(&outside).expect("outside dir should be created");
+        write_file(&outside, "dep.js", "export const x = 1;\n");
+        let parent = root.join("main.js");
+        let mut resolver = ModuleResolver::new(&root);
+
+        let result = resolver.resolve(&format!("../{outside_name}/dep.js"), &parent);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("outside root"));
+    }
+
+    #[test]
     fn resolve_returns_cached_id_on_second_call() {
         let root = create_temp_project("cache_test");
         write_file(&root, "dep.js", "export const x = 1;\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id1 = resolver.resolve("./dep.js", &parent).expect("first resolve should succeed");
-        let id2 = resolver.resolve("./dep.js", &parent).expect("second resolve should succeed");
+        let id1 = resolver
+            .resolve("./dep.js", &parent)
+            .expect("first resolve should succeed");
+        let id2 = resolver
+            .resolve("./dep.js", &parent)
+            .expect("second resolve should succeed");
         assert_eq!(id1, id2, "cached resolve should return same ID");
     }
 
@@ -558,7 +593,9 @@ mod tests {
         write_file(&root, "cjs.js", "module.exports.x = 1;\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./cjs.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./cjs.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
         assert!(module.is_cjs, "module should be detected as CJS");
     }
@@ -569,7 +606,9 @@ mod tests {
         write_file(&root, "esm.js", "export const x = 1;\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./esm.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./esm.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
         assert!(!module.is_cjs, "module should not be detected as CJS");
     }
@@ -580,7 +619,9 @@ mod tests {
         write_file(&root, "dep.js", "export const x = 1;\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         assert!(resolver.get_module(id).is_some());
     }
 
@@ -598,8 +639,12 @@ mod tests {
         write_file(&root, "b.js", "export const b = 2;\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        resolver.resolve("./a.js", &parent).expect("resolve a should succeed");
-        resolver.resolve("./b.js", &parent).expect("resolve b should succeed");
+        resolver
+            .resolve("./a.js", &parent)
+            .expect("resolve a should succeed");
+        resolver
+            .resolve("./b.js", &parent)
+            .expect("resolve b should succeed");
         let count = resolver.all_modules().count();
         assert_eq!(count, 2);
     }
@@ -610,8 +655,13 @@ mod tests {
         write_file(&root, "dep.js", "export const x = 1;\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
-        let dep_path = root.join("dep.js").canonicalize().expect("canonicalize should work");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
+        let dep_path = root
+            .join("dep.js")
+            .canonicalize()
+            .expect("canonicalize should work");
         assert_eq!(resolver.get_id_by_path(&dep_path), Some(id));
     }
 
@@ -629,11 +679,18 @@ mod tests {
         write_file(&root, "dep.js", "export const x = 1;\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let before_count = resolver.get_module(id).unwrap().exports.len();
-        resolver.ensure_default_export_for(id);
+        resolver
+            .ensure_default_export_for(id)
+            .expect("ensure default export should succeed");
         let after_count = resolver.get_module(id).unwrap().exports.len();
-        assert!(after_count > before_count, "should have added a default export");
+        assert!(
+            after_count > before_count,
+            "should have added a default export"
+        );
     }
 
     #[test]
@@ -642,11 +699,18 @@ mod tests {
         write_file(&root, "dep.js", "export default 42;\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let before_count = resolver.get_module(id).unwrap().exports.len();
-        resolver.ensure_default_export_for(id);
+        resolver
+            .ensure_default_export_for(id)
+            .expect("ensure default export should succeed");
         let after_count = resolver.get_module(id).unwrap().exports.len();
-        assert_eq!(after_count, before_count, "should not add default export when one exists");
+        assert_eq!(
+            after_count, before_count,
+            "should not add default export when one exists"
+        );
     }
 
     #[test]
@@ -655,64 +719,107 @@ mod tests {
         write_file(&root, "dep.js", "const x = 1;\nconsole.log(x);\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let before_count = resolver.get_module(id).unwrap().exports.len();
         assert_eq!(before_count, 0, "module should have no exports");
-        resolver.ensure_default_export_for(id);
+        resolver
+            .ensure_default_export_for(id)
+            .expect("ensure default export should succeed");
         let after_count = resolver.get_module(id).unwrap().exports.len();
-        assert_eq!(after_count, 0, "should not add default export when no exports exist");
+        assert_eq!(
+            after_count, 0,
+            "should not add default export when no exports exist"
+        );
     }
 
     #[test]
     fn extract_imports_handles_named_import() {
         let root = create_temp_project("import_named");
         write_file(&root, "dep.js", "export const x = 1;\n");
-        write_file(&root, "main.js", "import { x } from './dep.js';\nconsole.log(x);\n");
+        write_file(
+            &root,
+            "main.js",
+            "import { x } from './dep.js';\nconsole.log(x);\n",
+        );
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./main.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./main.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
         assert_eq!(module.imports.len(), 1);
-        assert_eq!(module.imports[0].names, vec![("x".to_string(), "x".to_string())]);
+        assert_eq!(
+            module.imports[0].names,
+            vec![("x".to_string(), "x".to_string())]
+        );
     }
 
     #[test]
     fn extract_imports_handles_default_import() {
         let root = create_temp_project("import_default");
         write_file(&root, "dep.js", "export default 42;\n");
-        write_file(&root, "main.js", "import answer from './dep.js';\nconsole.log(answer);\n");
+        write_file(
+            &root,
+            "main.js",
+            "import answer from './dep.js';\nconsole.log(answer);\n",
+        );
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./main.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./main.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
         assert_eq!(module.imports.len(), 1);
-        assert_eq!(module.imports[0].names, vec![("answer".to_string(), "default".to_string())]);
+        assert_eq!(
+            module.imports[0].names,
+            vec![("answer".to_string(), "default".to_string())]
+        );
     }
 
     #[test]
     fn extract_imports_handles_namespace_import() {
         let root = create_temp_project("import_ns");
         write_file(&root, "dep.js", "export const x = 1;\n");
-        write_file(&root, "main.js", "import * as ns from './dep.js';\nconsole.log(ns);\n");
+        write_file(
+            &root,
+            "main.js",
+            "import * as ns from './dep.js';\nconsole.log(ns);\n",
+        );
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./main.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./main.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
         assert_eq!(module.imports.len(), 1);
-        assert_eq!(module.imports[0].names, vec![("ns".to_string(), "*".to_string())]);
+        assert_eq!(
+            module.imports[0].names,
+            vec![("ns".to_string(), "*".to_string())]
+        );
     }
 
     #[test]
     fn extract_imports_handles_aliased_named_import() {
         let root = create_temp_project("import_alias");
         write_file(&root, "dep.js", "export const x = 1;\n");
-        write_file(&root, "main.js", "import { x as y } from './dep.js';\nconsole.log(y);\n");
+        write_file(
+            &root,
+            "main.js",
+            "import { x as y } from './dep.js';\nconsole.log(y);\n",
+        );
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./main.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./main.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
         assert_eq!(module.imports.len(), 1);
-        assert_eq!(module.imports[0].names, vec![("y".to_string(), "x".to_string())]);
+        assert_eq!(
+            module.imports[0].names,
+            vec![("y".to_string(), "x".to_string())]
+        );
     }
 
     #[test]
@@ -721,9 +828,16 @@ mod tests {
         write_file(&root, "dep.js", "const x = 1;\nexport { x };\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
-        assert!(module.exports.iter().any(|e| matches!(e, ExportEntry::Named { exported, .. } if exported == "x")));
+        assert!(
+            module
+                .exports
+                .iter()
+                .any(|e| matches!(e, ExportEntry::Named { exported, .. } if exported == "x"))
+        );
     }
 
     #[test]
@@ -732,9 +846,16 @@ mod tests {
         write_file(&root, "dep.js", "export default 99;\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
-        assert!(module.exports.iter().any(|e| matches!(e, ExportEntry::Default { .. })));
+        assert!(
+            module
+                .exports
+                .iter()
+                .any(|e| matches!(e, ExportEntry::Default { .. }))
+        );
     }
 
     #[test]
@@ -743,9 +864,16 @@ mod tests {
         write_file(&root, "dep.js", "export default function hello() {}\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
-        assert!(module.exports.iter().any(|e| matches!(e, ExportEntry::Default { local, .. } if local == "hello")));
+        assert!(
+            module
+                .exports
+                .iter()
+                .any(|e| matches!(e, ExportEntry::Default { local, .. } if local == "hello"))
+        );
     }
 
     #[test]
@@ -754,22 +882,43 @@ mod tests {
         write_file(&root, "dep.js", "export default class MyClass {}\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
-        assert!(module.exports.iter().any(|e| matches!(e, ExportEntry::Default { local, .. } if local == "MyClass")));
+        assert!(
+            module
+                .exports
+                .iter()
+                .any(|e| matches!(e, ExportEntry::Default { local, .. } if local == "MyClass"))
+        );
     }
 
     #[test]
     fn extract_exports_handles_declaration_export() {
         let root = create_temp_project("export_decl");
-        write_file(&root, "dep.js", "export const x = 1;\nexport function foo() {}\nexport class Bar {}\n");
+        write_file(
+            &root,
+            "dep.js",
+            "export const x = 1;\nexport function foo() {}\nexport class Bar {}\n",
+        );
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
-        let names: Vec<&str> = module.exports.iter().filter_map(|e| {
-            if let ExportEntry::Declaration { name } = e { Some(name.as_str()) } else { None }
-        }).collect();
+        let names: Vec<&str> = module
+            .exports
+            .iter()
+            .filter_map(|e| {
+                if let ExportEntry::Declaration { name } = e {
+                    Some(name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert!(names.contains(&"x"));
         assert!(names.contains(&"foo"));
         assert!(names.contains(&"Bar"));
@@ -782,9 +931,16 @@ mod tests {
         write_file(&root, "dep.js", "export * from './base.js';\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
-        assert!(module.exports.iter().any(|e| matches!(e, ExportEntry::All { source } if source == "./base.js")));
+        assert!(
+            module
+                .exports
+                .iter()
+                .any(|e| matches!(e, ExportEntry::All { source } if source == "./base.js"))
+        );
     }
 
     #[test]
@@ -794,7 +950,9 @@ mod tests {
         write_file(&root, "dep.js", "export { x } from './base.js';\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
         // export { x } from './base.js' 应该产生 NamedReExport，而不是 All
         assert!(module.exports.iter().any(|e| matches!(
@@ -810,9 +968,13 @@ mod tests {
         write_file(&root, "dep.js", "export default function() {}\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
-        assert!(module.exports.iter().any(|e| matches!(e, ExportEntry::Default { local, .. } if local == "_default_export")));
+        assert!(module.exports.iter().any(
+            |e| matches!(e, ExportEntry::Default { local, .. } if local == "_default_export")
+        ));
     }
 
     #[test]
@@ -821,9 +983,13 @@ mod tests {
         write_file(&root, "dep.js", "export default class {}\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
-        assert!(module.exports.iter().any(|e| matches!(e, ExportEntry::Default { local, .. } if local == "_default_export")));
+        assert!(module.exports.iter().any(
+            |e| matches!(e, ExportEntry::Default { local, .. } if local == "_default_export")
+        ));
     }
 
     #[test]
@@ -832,11 +998,21 @@ mod tests {
         write_file(&root, "dep.js", "export const a = 1, b = 2;\n");
         let parent = root.join("main.js");
         let mut resolver = ModuleResolver::new(&root);
-        let id = resolver.resolve("./dep.js", &parent).expect("resolve should succeed");
+        let id = resolver
+            .resolve("./dep.js", &parent)
+            .expect("resolve should succeed");
         let module = resolver.get_module(id).expect("module should exist");
-        let names: Vec<&str> = module.exports.iter().filter_map(|e| {
-            if let ExportEntry::Declaration { name } = e { Some(name.as_str()) } else { None }
-        }).collect();
+        let names: Vec<&str> = module
+            .exports
+            .iter()
+            .filter_map(|e| {
+                if let ExportEntry::Declaration { name } = e {
+                    Some(name.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
         assert!(names.contains(&"a"));
         assert!(names.contains(&"b"));
     }

@@ -1,0 +1,72 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = undefined
+    c2 = number(NaN)
+    c3 = number(inf)
+    c4 = undefined
+    c5 = number(42)
+    c6 = undefined
+    c7 = functionref(@0)
+    c8 = undefined
+    c9 = undefined
+    c10 = string("err")
+    c11 = functionref(@1)
+    c12 = functionref(@2)
+
+  fn @anon_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
+    bb0:
+      %0 = load var $1.v
+      %1 = call builtin.console.log(%0)
+      return
+
+  fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
+    bb0:
+      %0 = load var $2.v
+      %1 = call builtin.console.log(%0)
+      return
+
+  fn @anon_2 [params: $3.$env, $3.$this, $3.e] [entry=bb0]:
+    bb0:
+      %0 = load var $3.e
+      %1 = call builtin.console.log(%0)
+      return
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.p, %0
+      store var $0.p2, %0
+      store var $0.p3, %0
+      %1 = const c1
+      store var $0.undefined, %1
+      %2 = const c2
+      store var $0.NaN, %2
+      %3 = const c3
+      store var $0.Infinity, %3
+      %4 = const c4
+      %5 = const c5
+      %6 = call builtin.promise.resolve_static(%4, %5)
+      store var $0.p, %6
+      %7 = const c6
+      %8 = load var $0.p
+      %9 = call builtin.promise.resolve_static(%7, %8)
+      store var $0.p2, %9
+      %10 = load var $0.p
+      %11 = load var $0.p2
+      %12 = stricteq %10, %11
+      %13 = call builtin.console.log(%12)
+      %14 = load var $0.p2
+      %15 = const c7
+      %16 = const c8
+      %17 = call builtin.promise.then(%14, %15, %16)
+      %18 = const c9
+      %19 = const c10
+      %20 = call builtin.promise.reject_static(%18, %19)
+      store var $0.p3, %20
+      %21 = load var $0.p3
+      %22 = const c11
+      %23 = const c12
+      %24 = call builtin.promise.then(%21, %22, %23)
+      return
+}

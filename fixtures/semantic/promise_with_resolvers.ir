@@ -1,0 +1,65 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = undefined
+    c2 = number(NaN)
+    c3 = number(inf)
+    c4 = undefined
+    c5 = string("promise")
+    c6 = string("resolve")
+    c7 = string("reject")
+    c8 = string("resolve")
+    c9 = number(42)
+    c10 = string("promise")
+    c11 = functionref(@0)
+    c12 = undefined
+
+  fn @anon_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
+    bb0:
+      %0 = load var $1.v
+      %1 = call builtin.console.log(%0)
+      return
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.obj, %0
+      %1 = const c1
+      store var $0.undefined, %1
+      %2 = const c2
+      store var $0.NaN, %2
+      %3 = const c3
+      store var $0.Infinity, %3
+      %4 = const c4
+      %5 = const c4
+      %6 = call builtin.promise.with_resolvers(%4, %5)
+      store var $0.obj, %6
+      %7 = load var $0.obj
+      %8 = const c5
+      %9 = get_prop %7, %8
+      %10 = call builtin.typeof(%9)
+      %11 = call builtin.console.log(%10)
+      %12 = load var $0.obj
+      %13 = const c6
+      %14 = get_prop %12, %13
+      %15 = call builtin.typeof(%14)
+      %16 = call builtin.console.log(%15)
+      %17 = load var $0.obj
+      %18 = const c7
+      %19 = get_prop %17, %18
+      %20 = call builtin.typeof(%19)
+      %21 = call builtin.console.log(%20)
+      %22 = load var $0.obj
+      %23 = load var $0.obj
+      %24 = const c8
+      %25 = get_prop %23, %24
+      %26 = const c9
+      %27 = call %25, this=%22, args=[%26]
+      %28 = load var $0.obj
+      %29 = const c10
+      %30 = get_prop %28, %29
+      %31 = const c11
+      %32 = const c12
+      %33 = call builtin.promise.then(%30, %31, %32)
+      return
+}

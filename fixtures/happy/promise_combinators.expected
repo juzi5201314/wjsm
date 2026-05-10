@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+[1, 2, 3]
+first
+fulfilled
+rejected
+win
+--- stderr ---

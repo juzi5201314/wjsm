@@ -1,0 +1,68 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = undefined
+    c4 = number(7)
+    c5 = functionref(@0)
+    c6 = string("then")
+    c7 = undefined
+    c8 = number(0)
+    c9 = string("$0.thenable")
+    c10 = functionref(@1)
+    c11 = string("$0.thenable")
+    c12 = undefined
+    c13 = functionref(@2)
+    c14 = undefined
+
+  fn @arrow_0 [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
+    bb0:
+      %0 = const c3
+      %1 = load var $1.resolve
+      %2 = const c4
+      %3 = call %1, this=%0, args=[%2]
+      return %3
+
+  fn @arrow_1 [captures: $0.thenable] [params: $2.$env, $2.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $env
+      %1 = const c9
+      %2 = get_prop %0, %1
+      return %2
+
+  fn @arrow_2 [params: $3.$env, $3.$this, $3.value] [entry=bb0]:
+    bb0:
+      %0 = load var $3.value
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = new_object(capacity=4)
+      %4 = const c5
+      %5 = const c6
+      set_prop %3, %5, %4
+      store var $0.thenable, %3
+      %6 = const c7
+      %7 = const c8
+      %8 = call builtin.promise.resolve_static(%6, %7)
+      %9 = const c10
+      %10 = new_object(capacity=1)
+      %11 = load var $0.thenable
+      %12 = const c11
+      set_prop %10, %12, %11
+      %13 = call builtin.create_closure(%9, %10)
+      %14 = const c12
+      %15 = call builtin.promise.then(%8, %13, %14)
+      %16 = const c13
+      %17 = const c14
+      %18 = call builtin.promise.then(%15, %16, %17)
+      return
+}
