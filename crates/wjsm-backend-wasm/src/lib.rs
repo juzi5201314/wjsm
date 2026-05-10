@@ -113,6 +113,8 @@ struct Compiler {
     closure_get_func_idx: u32,
     /// WASM function index for closure_get_env import.
     closure_get_env_idx: u32,
+    /// WASM function index for native_call import.
+    native_call_func_idx: u32,
     /// WASM global index for array prototype handle.
     array_proto_handle_global_idx: u32,
     /// Base table index for array prototype methods (Table[N+8])
@@ -618,6 +620,20 @@ impl Compiler {
         imports.import("env", "async_generator_return", EntityType::Function(2));
         // Import index 140: async_generator_throw: (i64, i64) -> i64
         imports.import("env", "async_generator_throw", EntityType::Function(2));
+        // Import index 141: native_call: (i64 func, i64 this, i32 args_base, i32 args_count) -> i64
+        imports.import("env", "native_call", EntityType::Function(12));
+        // Import index 142: promise_create_resolve_function: (i64) -> i64
+        imports.import(
+            "env",
+            "promise_create_resolve_function",
+            EntityType::Function(3),
+        );
+        // Import index 143: promise_create_reject_function: (i64) -> i64
+        imports.import(
+            "env",
+            "promise_create_reject_function",
+            EntityType::Function(3),
+        );
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -727,6 +743,8 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::PromiseCreate, 116);
         builtin_func_indices.insert(Builtin::PromiseInstanceResolve, 117);
         builtin_func_indices.insert(Builtin::PromiseInstanceReject, 118);
+        builtin_func_indices.insert(Builtin::PromiseCreateResolveFunction, 142);
+        builtin_func_indices.insert(Builtin::PromiseCreateRejectFunction, 143);
         builtin_func_indices.insert(Builtin::PromiseThen, 119);
         builtin_func_indices.insert(Builtin::PromiseCatch, 120);
         builtin_func_indices.insert(Builtin::PromiseFinally, 121);
@@ -785,7 +803,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 141, // 141 imports (0-140)
+            _next_import_func: 144, // 144 imports (0-143)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -816,6 +834,7 @@ impl Compiler {
             closure_create_func_idx: 35,
             closure_get_func_idx: 36,
             closure_get_env_idx: 37,
+            native_call_func_idx: 141,
             array_proto_handle_global_idx: 0,
             arr_proto_table_base: 0,
             obj_spread_func_idx: 0,
@@ -1675,6 +1694,7 @@ impl Compiler {
             // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
             // local 5 = resolved ptr (i32), local 6 = flags (i32), local 7 = getter (i64)
             // local 8 = getter env_obj (i64), local 9 = getter func_idx (i32)
+            let length_name_id = self.ensure_string_ptr_const(&"length".to_string());
             let mut func = Function::new(vec![
                 (5, ValType::I32),
                 (2, ValType::I64),
@@ -1700,6 +1720,31 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Eqz);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
+            // 数组的 length 是内建数据属性，不存放在对象属性槽里。
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Load8U(MemArg {
+                offset: 4,
+                align: 0,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_ARRAY as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Const(length_name_id as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::I32And);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 8,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::F64ConvertI32U);
+            func.instruction(&WasmInstruction::I64ReinterpretF64);
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
 
@@ -4007,13 +4052,26 @@ impl Compiler {
                     self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
                 }
 
-                // Step 3: 运行时解析 callee → (func_idx, env_obj)
-                // 检查 callee tag == TAG_CLOSURE (0xA)
-                // ((callee >> 32) & 0xF) == 0xA ?
+                // Step 3: native callable 由宿主运行时执行，普通 JS 函数继续走函数表。
                 let call_func_idx_scratch = self.call_func_idx_scratch();
                 let call_env_obj_scratch = self.call_env_obj_scratch();
 
-                // 计算 tag
+                self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I64Const(0xF));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(value::TAG_NATIVE_CALLABLE as i64));
+                self.emit(WasmInstruction::I64Eq);
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(args.len() as i32));
+                self.emit(WasmInstruction::Call(self.native_call_func_idx));
+                self.emit(WasmInstruction::Else);
+
+                // 运行时解析 callee → (func_idx, env_obj)。callee 可能是 TAG_FUNCTION 或 TAG_CLOSURE。
                 self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
                 self.emit(WasmInstruction::I64Const(32));
                 self.emit(WasmInstruction::I64ShrU);
@@ -4021,9 +4079,7 @@ impl Compiler {
                 self.emit(WasmInstruction::I64And);
                 self.emit(WasmInstruction::I64Const(0xA)); // TAG_CLOSURE
                 self.emit(WasmInstruction::I64Eq);
-                // if closure
                 self.emit(WasmInstruction::If(BlockType::Empty));
-                // closure path: 调用 closure_get_func + closure_get_env
                 self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
                 self.emit(WasmInstruction::I32WrapI64);
                 self.emit(WasmInstruction::Call(self.closure_get_func_idx));
@@ -4033,7 +4089,6 @@ impl Compiler {
                 self.emit(WasmInstruction::Call(self.closure_get_env_idx));
                 self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
                 self.emit(WasmInstruction::Else);
-                // function path: func_idx = callee & 0xFFFFFFFF, env_obj = undefined
                 self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
                 self.emit(WasmInstruction::I32WrapI64);
                 self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
@@ -4041,27 +4096,26 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
                 self.emit(WasmInstruction::End);
 
-                // Step 4: 推入 call_indirect 参数
-                // 顺序: env_obj (i64), this_val (i64), args_base (i32), args_count (i32), func_idx (i32)
                 self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
                 self.emit(WasmInstruction::I32Const(args.len() as i32));
                 self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
-
-                // Step 5: call_indirect type 12
                 self.emit(WasmInstruction::CallIndirect {
                     type_index: 12,
                     table_index: 0,
                 });
+                self.emit(WasmInstruction::End);
 
-                // Step 6: 恢复 shadow_sp
+                // Step 4: 恢复 shadow_sp
                 self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
                 self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
 
-                // Step 7: 处理返回值
+                // Step 5: 处理返回值
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
                 }
                 Ok(false)
             }
@@ -5417,6 +5471,8 @@ impl Compiler {
             | Builtin::PromiseAny
             | Builtin::PromiseResolveStatic
             | Builtin::PromiseRejectStatic
+            | Builtin::PromiseCreateResolveFunction
+            | Builtin::PromiseCreateRejectFunction
             | Builtin::IsPromise
             | Builtin::AsyncGeneratorStart => {
                 let val = args.first().context("expects 1 arg")?;
@@ -6098,6 +6154,8 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::PromiseCreate => ("promise.create", 0),
         Builtin::PromiseInstanceResolve => ("promise.instance_resolve", 2),
         Builtin::PromiseInstanceReject => ("promise.instance_reject", 2),
+        Builtin::PromiseCreateResolveFunction => ("promise.create_resolve_function", 1),
+        Builtin::PromiseCreateRejectFunction => ("promise.create_reject_function", 1),
         Builtin::PromiseThen => ("promise.then", 3),
         Builtin::PromiseCatch => ("promise.catch", 2),
         Builtin::PromiseFinally => ("promise.finally", 2),
