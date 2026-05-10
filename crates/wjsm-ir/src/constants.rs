@@ -26,24 +26,24 @@ pub const PROP_DESC_SET_OFFSET: u32 = 109; // "set\0" (4 bytes)
 pub const PROP_DESC_END: u32 = 113;
 
 // ── Promise 相关字符串区域 ──────────────────────────────────────────────────
-pub const PROMISE_STATE_PENDING_OFFSET: u32 = 113;
-pub const PROMISE_STATE_FULFILLED_OFFSET: u32 = 121;
-pub const PROMISE_STATE_REJECTED_OFFSET: u32 = 132;
-pub const PROMISE_THEN_OFFSET: u32 = 141;
-pub const PROMISE_CATCH_OFFSET: u32 = 146;
-pub const PROMISE_FINALLY_OFFSET: u32 = 152;
-pub const PROMISE_RESOLVE_OFFSET: u32 = 160;
-pub const PROMISE_REJECT_OFFSET: u32 = 168;
-pub const PROMISE_ALL_OFFSET: u32 = 175;
-pub const PROMISE_RACE_OFFSET: u32 = 179;
-pub const PROMISE_ALLSETTLED_OFFSET: u32 = 184;
-pub const PROMISE_ANY_OFFSET: u32 = 195;
-pub const PROMISE_CONSTRUCTOR_OFFSET: u32 = 199;
-pub const ASYNC_ITERATOR_OFFSET: u32 = 207;
-pub const PROMISE_STRINGS_END: u32 = 222;
+pub const PROMISE_STATE_PENDING_OFFSET: u32 = 113; // "pending\0" (8 bytes)
+pub const PROMISE_STATE_FULFILLED_OFFSET: u32 = 121; // "fulfilled\0" (10 bytes)
+pub const PROMISE_STATE_REJECTED_OFFSET: u32 = 131; // "rejected\0" (9 bytes)
+pub const PROMISE_THEN_OFFSET: u32 = 140; // "then\0" (5 bytes)
+pub const PROMISE_CATCH_OFFSET: u32 = 145; // "catch\0" (6 bytes)
+pub const PROMISE_FINALLY_OFFSET: u32 = 151; // "finally\0" (8 bytes)
+pub const PROMISE_RESOLVE_OFFSET: u32 = 159; // "resolve\0" (8 bytes)
+pub const PROMISE_REJECT_OFFSET: u32 = 167; // "reject\0" (7 bytes)
+pub const PROMISE_ALL_OFFSET: u32 = 174; // "all\0" (4 bytes)
+pub const PROMISE_RACE_OFFSET: u32 = 178; // "race\0" (5 bytes)
+pub const PROMISE_ALLSETTLED_OFFSET: u32 = 183; // "allSettled\0" (11 bytes)
+pub const PROMISE_ANY_OFFSET: u32 = 194; // "any\0" (4 bytes)
+pub const PROMISE_CONSTRUCTOR_OFFSET: u32 = 198; // "constructor\0" (12 bytes)
+pub const ASYNC_ITERATOR_OFFSET: u32 = 210; // "asyncIterator\0" (14 bytes)
+pub const PROMISE_STRINGS_END: u32 = 224;
 
 // ── 用户字符串起始位置 ──────────────────────────────────────────────────────
-pub const USER_STRING_START: u32 = 222;
+pub const USER_STRING_START: u32 = PROMISE_STRINGS_END;
 
 // ── 属性槽相关常量 ──────────────────────────────────────────────────────────
 // 属性槽格式（32 字节）：
