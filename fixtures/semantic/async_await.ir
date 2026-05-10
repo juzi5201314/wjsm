@@ -1,0 +1,119 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(0)
+    c4 = number(1)
+    c5 = number(2)
+    c6 = number(3)
+    c7 = undefined
+    c8 = string("hello")
+    c9 = undefined
+    c10 = number(4)
+    c11 = number(4)
+    c12 = undefined
+    c13 = number(0)
+    c14 = number(1)
+    c15 = functionref(@0)
+    c16 = number(5)
+    c17 = number(2)
+    c18 = number(3)
+    c19 = undefined
+    c20 = number(0)
+    c21 = undefined
+    c22 = bool(false)
+    c23 = functionref(@1)
+    c24 = undefined
+
+  fn @greet$async [params: $1.$env, $1.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $1.$env
+      %1 = const c3
+      %2 = call builtin.continuation.load_var(%0, %1)
+      store var $1.$state, %2
+      %3 = const c4
+      %4 = call builtin.continuation.load_var(%0, %3)
+      store var $1.$is_rejected, %4
+      %5 = load var $1.$this
+      store var $1.$resume_val, %5
+      %6 = const c5
+      %7 = call builtin.continuation.load_var(%0, %6)
+      store var $1.$promise, %7
+      %8 = const c6
+      %9 = call builtin.continuation.load_var(%0, %8)
+      store var $1.$closure_env, %9
+      jump bb1
+    bb1:
+      %29 = load var $1.$state
+      switch %29 [case c13 -> bb2, case c14 -> bb3], default bb6, exit bb7
+    bb2:
+      %10 = const c7
+      %11 = const c8
+      %12 = call builtin.promise.resolve_static(%10, %11)
+      %14 = const c9
+      %13 = call builtin.promise.resolve_static(%14, %12)
+      %15 = load var $1.$env
+      %16 = const c10
+      %17 = load var $1.result
+      call builtin.continuation.save_var(%15, %16, %17)
+      suspend %13, state=1
+      jump bb5
+    bb3:
+      %18 = load var $1.$env
+      %19 = const c11
+      %20 = call builtin.continuation.load_var(%18, %19)
+      store var $1.result, %20
+      %21 = load var $1.$resume_val
+      %22 = load var $1.$is_rejected
+      branch %22, bb4, bb5
+    bb4:
+      %23 = load var $1.$promise
+      promise_reject %23, %21
+      return
+    bb5:
+      %24 = load var $1.$resume_val
+      store var $1.result, %24
+      %25 = load var $1.result
+      %26 = call builtin.console.log(%25)
+      %27 = const c12
+      %28 = load var $1.$promise
+      promise_resolve %28, %27
+      return
+    bb6:
+      return
+    bb7:
+      unreachable
+
+  fn @greet [params: $2.$env, $2.$this] [entry=bb0]:
+    bb0:
+      %0 = new_promise
+      %1 = const c15
+      %2 = const c16
+      %3 = call builtin.continuation.create(%1, %0, %2)
+      %4 = const c17
+      call builtin.continuation.save_var(%3, %4, %0)
+      %5 = const c18
+      %6 = const c19
+      call builtin.continuation.save_var(%3, %5, %6)
+      %7 = const c20
+      %8 = const c21
+      %9 = const c22
+      call builtin.async_function.resume(%1, %3, %7, %8, %9)
+      return %0
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c23
+      store var $0.greet, %3
+      %4 = const c24
+      %5 = load var $0.greet
+      %6 = call %5, this=%4
+      return
+}

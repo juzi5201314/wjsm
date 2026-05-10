@@ -127,6 +127,10 @@ enum Commands {
         /// Watch for changes and re-run
         #[arg(short, long)]
         watch: bool,
+
+        /// Parse as script instead of module (allows await as identifier)
+        #[arg(long)]
+        script: bool,
     },
 
     /// Parse and check a JS/TS file for errors (no output)
@@ -294,11 +298,12 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             ref input,
             ref root,
             watch,
+            script,
         } => {
             if watch {
-                cmd_run_watch(&cli, input, root.as_deref())
+                cmd_run_watch(&cli, input, root.as_deref(), script)
             } else {
-                cmd_run(&cli, input, root.as_deref())
+                cmd_run(&cli, input, root.as_deref(), script)
             }
         }
 
@@ -383,9 +388,9 @@ fn cmd_build(
             let wasm = if input == "-" {
                 let mut source = String::new();
                 io::stdin().read_to_string(&mut source)?;
-                compile_source(&source, cli.target)?
+                compile_source(&source, cli.target, false)?
             } else {
-                compile_from_file_input(input, root, cli.target)?
+                compile_from_file_input(input, root, cli.target, false)?
             };
 
             if output == "-" {
@@ -406,14 +411,14 @@ fn cmd_build(
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_run(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
+fn cmd_run(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<ExitCode> {
     let wasm = if input == "-" {
         // stdin can't be a module
         let mut source = String::new();
         io::stdin().read_to_string(&mut source)?;
-        compile_source(&source, cli.target)?
+        compile_source(&source, cli.target, script)?
     } else {
-        compile_from_file_input(input, root, cli.target)?
+        compile_from_file_input(input, root, cli.target, script)?
     };
 
     if let Err(e) = runtime::execute(&wasm) {
@@ -428,7 +433,7 @@ fn cmd_run(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
+fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<ExitCode> {
     use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
     let input_path = PathBuf::from(input);
@@ -448,7 +453,7 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode>
 
     // Initial run
     eprintln!("Watching {} for changes...", watch_target.display());
-    let mut last_exit = match cmd_run(cli, input, root) {
+    let mut last_exit = match cmd_run(cli, input, root, script) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("Initial run failed: {:#}", e);
@@ -475,7 +480,7 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode>
     // Wait for changes
     while rx.recv().is_ok() {
         eprintln!("\n--- File changed, re-running ---");
-        last_exit = match cmd_run(cli, input, root) {
+        last_exit = match cmd_run(cli, input, root, script) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("Error: {:#}", e);
@@ -1061,7 +1066,7 @@ fn bundle_plan_from_root(input: PathBuf, root: PathBuf) -> Result<CompilePlan> {
     })
 }
 
-fn compile_from_file_input(input: &str, root: Option<&str>, target: Target) -> Result<Vec<u8>> {
+fn compile_from_file_input(input: &str, root: Option<&str>, target: Target, script: bool) -> Result<Vec<u8>> {
     let plan = build_compile_plan(Path::new(input), root)?;
     match plan {
         CompilePlan::Bundle { entry, root } => {
@@ -1071,12 +1076,16 @@ fn compile_from_file_input(input: &str, root: Option<&str>, target: Target) -> R
                 Target::Jit => bail!("JIT backend is not implemented yet"),
             }
         }
-        CompilePlan::SingleSource(source) => compile_source(&source, target),
+        CompilePlan::SingleSource(source) => compile_source(&source, target, script),
     }
 }
 
-fn compile_source(source: &str, target: Target) -> Result<Vec<u8>> {
-    let module = parser::parse_module(source)?;
+fn compile_source(source: &str, target: Target, script: bool) -> Result<Vec<u8>> {
+    let module = if script {
+        parser::parse_script_as_module(source)?
+    } else {
+        parser::parse_module(source)?
+    };
     let program = semantic::lower_module(module)?;
     match target {
         Target::Wasm => backend_wasm::compile(&program),

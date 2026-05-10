@@ -1,0 +1,4 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: Parse error: Error { error: (20..25, TS1109) }

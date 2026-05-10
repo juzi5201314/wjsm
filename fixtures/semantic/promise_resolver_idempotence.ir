@@ -1,0 +1,96 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(0)
+    c4 = undefined
+    c5 = number(1)
+    c6 = undefined
+    c7 = number(2)
+    c8 = undefined
+    c9 = number(3)
+    c10 = functionref(@0)
+    c11 = undefined
+    c12 = string("$0.calls")
+    c13 = string("$0.calls")
+    c14 = number(1)
+    c15 = functionref(@1)
+    c16 = string("$0.calls")
+    c17 = undefined
+    c18 = undefined
+    c19 = string("$0.calls")
+    c20 = functionref(@2)
+    c21 = undefined
+
+  fn @arrow_0 [params: $1.$env, $1.$this, $1.resolve, $1.reject] [entry=bb0]:
+    bb0:
+      %0 = const c4
+      %1 = load var $1.resolve
+      %2 = const c5
+      %3 = call %1, this=%0, args=[%2]
+      %4 = const c6
+      %5 = load var $1.reject
+      %6 = const c7
+      %7 = call %5, this=%4, args=[%6]
+      %8 = const c8
+      %9 = load var $1.resolve
+      %10 = const c9
+      %11 = call %9, this=%8, args=[%10]
+      return
+
+  fn @arrow_1 [captures: $0.calls] [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
+    bb0:
+      %0 = load var $env
+      %1 = const c12
+      %2 = load var $env
+      %3 = const c13
+      %4 = get_prop %2, %3
+      %5 = const c14
+      %6 = add %4, %5
+      set_prop %0, %1, %6
+      %7 = load var $2.v
+      %8 = call builtin.console.log(%7)
+      return
+
+  fn @arrow_2 [captures: $0.calls] [params: $3.$env, $3.$this] [entry=bb0]:
+    bb0:
+      %0 = load var $env
+      %1 = const c19
+      %2 = get_prop %0, %1
+      %3 = call builtin.console.log(%2)
+      return %3
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.calls, %3
+      %4 = new_promise
+      %5 = const c10
+      %6 = call builtin.promise.create_resolve_function(%4)
+      %7 = call builtin.promise.create_reject_function(%4)
+      %8 = const c11
+      call %5, this=%8, args=[%6, %7]
+      %9 = const c15
+      %10 = new_object(capacity=1)
+      %11 = load var $0.calls
+      %12 = const c16
+      set_prop %10, %12, %11
+      %13 = call builtin.create_closure(%9, %10)
+      %14 = const c17
+      %15 = call builtin.promise.then(%4, %13, %14)
+      %16 = const c18
+      %17 = const c18
+      %18 = call builtin.promise.resolve_static(%16, %17)
+      %19 = const c20
+      %20 = call builtin.create_closure(%19, %10)
+      %21 = const c21
+      %22 = call builtin.promise.then(%18, %20, %21)
+      return
+}

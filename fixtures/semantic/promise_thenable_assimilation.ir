@@ -1,0 +1,48 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = undefined
+    c4 = number(3)
+    c5 = functionref(@0)
+    c6 = string("then")
+    c7 = undefined
+    c8 = functionref(@1)
+    c9 = undefined
+
+  fn @arrow_0 [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
+    bb0:
+      %0 = const c3
+      %1 = load var $1.resolve
+      %2 = const c4
+      %3 = call %1, this=%0, args=[%2]
+      return %3
+
+  fn @arrow_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
+    bb0:
+      %0 = load var $2.v
+      %1 = call builtin.console.log(%0)
+      return %1
+
+  fn @main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = new_object(capacity=4)
+      %4 = const c5
+      %5 = const c6
+      set_prop %3, %5, %4
+      store var $0.thenable, %3
+      %6 = const c7
+      %7 = load var $0.thenable
+      %8 = call builtin.promise.resolve_static(%6, %7)
+      %9 = const c8
+      %10 = const c9
+      %11 = call builtin.promise.then(%8, %9, %10)
+      return
+}

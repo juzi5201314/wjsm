@@ -9484,28 +9484,6 @@ fn new_promise_capability_from_caller(
     (promise, resolve, reject)
 }
 
-// ── §27.2.1.6 SpeciesConstructor(O, defaultConstructor) ───────────────
-/// 从 PromiseEntry 读取构造器引用；若无则返回 default。
-/// 简化实现：不读 constructor[@@species]（需 symbol 属性支持），
-/// 直接使用 constructor_handle 作为 species。
-fn species_constructor_from_caller(
-    caller: &Caller<'_, RuntimeState>,
-    promise: i64,
-    default_constructor: i64,
-) -> i64 {
-    let handle = raw_promise_handle(promise);
-    let table = caller
-        .data()
-        .promise_table
-        .lock()
-        .expect("promise table mutex");
-    if let Some(entry) = promise_entry(&table, handle) {
-        if let Some(constructor) = entry.constructor_handle {
-            return constructor;
-        }
-    }
-    default_constructor
-}
 
 fn create_async_generator_method(
     state: &RuntimeState,
