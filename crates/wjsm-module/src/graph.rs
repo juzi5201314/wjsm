@@ -24,6 +24,8 @@ pub struct GraphNode {
     pub ast: swc_core::ecma::ast::Module,
     pub imports: Vec<(ModuleId, ImportEntry)>,
     pub exports: Vec<ExportEntry>,
+    /// 动态 import() 的目标模块：(specifier, 目标模块 ID)
+    pub dynamic_imports: Vec<(String, ModuleId)>,
 }
 
 impl ModuleGraph {
@@ -44,11 +46,20 @@ impl ModuleGraph {
         while let Some(module_id) = queue.pop_front() {
             let module = resolver.get_module(module_id).unwrap();
             let imports = module.imports.clone();
+            let dynamic_imports = module.dynamic_imports.clone();
             let path = module.path.clone();
 
-            // 解析所有 import 依赖
+            // 解析所有静态 import 依赖
             for import in &imports {
                 let dep_id = resolver.resolve(&import.specifier, &path)?;
+                if discovered.insert(dep_id) {
+                    queue.push_back(dep_id);
+                }
+            }
+
+            // 解析所有动态 import() 依赖（BFS 遍历确保模块被发现）
+            for specifier in &dynamic_imports {
+                let dep_id = resolver.resolve(specifier, &path)?;
                 if discovered.insert(dep_id) {
                     queue.push_back(dep_id);
                 }
@@ -102,6 +113,15 @@ impl ModuleGraph {
                 }
             }
 
+            // 构建动态 import 列表：(specifier, 目标 ModuleId)
+            let mut dynamic_imports_with_ids = Vec::new();
+            for specifier in &module.dynamic_imports {
+                let dep_path = ModuleResolver::resolve_path(specifier, &module.path)?;
+                if let Some(dep_id) = resolver.get_id_by_path(&dep_path) {
+                    dynamic_imports_with_ids.push((specifier.clone(), dep_id));
+                }
+            }
+
             let node = GraphNode {
                 id,
                 path,
@@ -109,6 +129,7 @@ impl ModuleGraph {
                 ast,
                 imports: imports_with_ids,
                 exports,
+                dynamic_imports: dynamic_imports_with_ids,
             };
 
             modules.insert(id, node);
@@ -165,7 +186,9 @@ impl ModuleGraph {
 
         visit_state.insert(id, VisitState::Visiting);
 
-        // 使用 modules 中的 imports 字段，避免数据冗余
+        // 仅沿静态 import 边递归，动态 import 不构成静态依赖关系
+        // 动态 import 目标模块通过 BFS 已被发现并存在于图中，
+        // 但它们的初始化顺序不依赖动态 import 边
         if let Some(node) = self.modules.get(&id) {
             for (dep_id, _) in &node.imports {
                 self.visit_module(*dep_id, visit_state, result, cycles)?;

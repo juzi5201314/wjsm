@@ -46,8 +46,14 @@ impl ModuleBundler {
         }
 
         // 5. 调用语义层的多模块 lowering
-        let program = wjsm_semantic::lower_modules(modules, &link_result.import_map)
-            .with_context(|| "Failed to lower modules")?;
+        let program = wjsm_semantic::lower_modules(
+            modules,
+            &link_result.import_map,
+            &link_result.dynamic_import_targets,
+            &link_result.export_names,
+            &link_result.dynamic_import_specifiers,
+        )
+        .with_context(|| "Failed to lower modules")?;
 
         // 6. 编译为 WASM
         let wasm_bytes =

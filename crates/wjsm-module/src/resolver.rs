@@ -17,6 +17,8 @@ pub struct ResolvedModule {
     pub ast: ast::Module,
     pub imports: Vec<ImportEntry>,
     pub exports: Vec<ExportEntry>,
+    /// 动态 import() 的 specifier 列表（不合并进 imports）
+    pub dynamic_imports: Vec<String>,
     pub is_cjs: bool,
 }
 
@@ -152,6 +154,9 @@ impl ModuleResolver {
         let imports = Self::extract_imports(&ast);
         let exports = Self::extract_exports(&ast);
 
+        // 提取动态 import() specifier（不合并进 imports，保持图语义正确）
+        let dynamic_imports = Self::extract_dynamic_imports(&ast)?;
+
         // 分配 ID
         let id = ModuleId(self.next_id);
         self.next_id += 1;
@@ -164,6 +169,7 @@ impl ModuleResolver {
             ast,
             imports,
             exports,
+            dynamic_imports,
             is_cjs,
         };
 
@@ -305,7 +311,382 @@ impl ModuleResolver {
             })
             .collect()
     }
+    /// 从 AST 中提取动态 import() 的 specifier
+    ///
+    /// 遍历 AST 中所有 CallExpr，检测 Callee::Import 的调用，
+    /// 提取静态可分析的 specifier 字符串。
+    /// - 字符串字面量 → 直接提取
+    /// - 无插值模板字符串 → 静态求值
+    /// - 有插值模板字符串 → 编译报错
+    /// - 其他表达式类型 → 编译报错
+    pub fn extract_dynamic_imports(module: &ast::Module) -> Result<Vec<String>> {
+        let mut specifiers = Vec::new();
+        for item in &module.body {
+            Self::extract_dynamic_imports_from_item(item, &mut specifiers)?;
+        }
+        Ok(specifiers)
+    }
+ 
+    fn extract_dynamic_imports_from_item(
+        item: &ast::ModuleItem,
+        specifiers: &mut Vec<String>,
+    ) -> Result<()> {
+        match item {
+            ast::ModuleItem::ModuleDecl(decl) => {
+                Self::extract_dynamic_imports_from_module_decl(decl, specifiers)?;
+            }
+            ast::ModuleItem::Stmt(stmt) => {
+                Self::extract_dynamic_imports_from_stmt(stmt, specifiers)?;
+            }
+        }
+        Ok(())
+    }
+ 
+    fn extract_dynamic_imports_from_module_decl(
+        decl: &ast::ModuleDecl,
+        specifiers: &mut Vec<String>,
+    ) -> Result<()> {
+        match decl {
+            ast::ModuleDecl::ExportDecl(export_decl) => {
+                Self::extract_dynamic_imports_from_decl(&export_decl.decl, specifiers)?;
+            }
+            ast::ModuleDecl::ExportDefaultExpr(default_expr) => {
+                Self::extract_dynamic_imports_from_expr(&default_expr.expr, specifiers)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+ 
+    fn extract_dynamic_imports_from_decl(
+        decl: &ast::Decl,
+        specifiers: &mut Vec<String>,
+    ) -> Result<()> {
+        match decl {
+            ast::Decl::Fn(fn_decl) => {
+                Self::extract_dynamic_imports_from_function(&fn_decl.function, specifiers)?;
+            }
+            ast::Decl::Class(class_decl) => {
+                Self::extract_dynamic_imports_from_class(&class_decl.class, specifiers)?;
+            }
+            ast::Decl::Var(var_decl) => {
+                for declarator in &var_decl.decls {
+                    if let Some(init) = &declarator.init {
+                        Self::extract_dynamic_imports_from_expr(init, specifiers)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+ 
+    fn extract_dynamic_imports_from_stmt(
+        stmt: &ast::Stmt,
+        specifiers: &mut Vec<String>,
+    ) -> Result<()> {
+        match stmt {
+            ast::Stmt::Expr(expr_stmt) => {
+                Self::extract_dynamic_imports_from_expr(&expr_stmt.expr, specifiers)?;
+            }
+            ast::Stmt::Decl(decl) => {
+                Self::extract_dynamic_imports_from_decl(decl, specifiers)?;
+            }
+            ast::Stmt::Block(block) => {
+                for s in &block.stmts {
+                    Self::extract_dynamic_imports_from_stmt(s, specifiers)?;
+                }
+            }
+            ast::Stmt::If(if_stmt) => {
+                Self::extract_dynamic_imports_from_expr(&if_stmt.test, specifiers)?;
+                Self::extract_dynamic_imports_from_stmt(&if_stmt.cons, specifiers)?;
+                if let Some(alt) = &if_stmt.alt {
+                    Self::extract_dynamic_imports_from_stmt(alt, specifiers)?;
+                }
+            }
+            ast::Stmt::For(for_stmt) => {
+                if let Some(init) = &for_stmt.init {
+                    match init {
+                        ast::VarDeclOrExpr::VarDecl(var_decl) => {
+                            Self::extract_dynamic_imports_from_decl(
+                                &ast::Decl::Var(var_decl.clone()),
+                                specifiers,
+                            )?;
+                        }
+                        ast::VarDeclOrExpr::Expr(expr) => {
+                            Self::extract_dynamic_imports_from_expr(expr, specifiers)?;
+                        }
+                    }
+                }
+                if let Some(test) = &for_stmt.test {
+                    Self::extract_dynamic_imports_from_expr(test, specifiers)?;
+                }
+                if let Some(update) = &for_stmt.update {
+                    Self::extract_dynamic_imports_from_expr(update, specifiers)?;
+                }
+                Self::extract_dynamic_imports_from_stmt(&for_stmt.body, specifiers)?;
+            }
+            ast::Stmt::ForIn(for_in) => {
+                Self::extract_dynamic_imports_from_stmt(&for_in.body, specifiers)?;
+            }
+            ast::Stmt::ForOf(for_of) => {
+                Self::extract_dynamic_imports_from_stmt(&for_of.body, specifiers)?;
+            }
+            ast::Stmt::While(while_stmt) => {
+                Self::extract_dynamic_imports_from_expr(&while_stmt.test, specifiers)?;
+                Self::extract_dynamic_imports_from_stmt(&while_stmt.body, specifiers)?;
+            }
+            ast::Stmt::DoWhile(do_while) => {
+                Self::extract_dynamic_imports_from_stmt(&do_while.body, specifiers)?;
+                Self::extract_dynamic_imports_from_expr(&do_while.test, specifiers)?;
+            }
+            ast::Stmt::Switch(switch) => {
+                Self::extract_dynamic_imports_from_expr(&switch.discriminant, specifiers)?;
+                for case in &switch.cases {
+                    for s in &case.cons {
+                        Self::extract_dynamic_imports_from_stmt(s, specifiers)?;
+                    }
+                }
+            }
+            ast::Stmt::Try(try_stmt) => {
+                Self::extract_dynamic_imports_from_stmt(
+                    &ast::Stmt::Block(try_stmt.block.clone()),
+                    specifiers,
+                )?;
+                if let Some(handler) = &try_stmt.handler {
+                    Self::extract_dynamic_imports_from_stmt(
+                        &ast::Stmt::Block(handler.body.clone()),
+                        specifiers,
+                    )?;
+                }
+                if let Some(finalizer) = &try_stmt.finalizer {
+                    Self::extract_dynamic_imports_from_stmt(
+                        &ast::Stmt::Block(finalizer.clone()),
+                        specifiers,
+                    )?;
+                }
+            }
+            ast::Stmt::Labeled(labeled) => {
+                Self::extract_dynamic_imports_from_stmt(&labeled.body, specifiers)?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+ 
+    fn extract_dynamic_imports_from_expr(
+        expr: &ast::Expr,
+        specifiers: &mut Vec<String>,
+    ) -> Result<()> {
+        match expr {
+            ast::Expr::Call(call) => {
+                // 检测 import() 调用
+                if matches!(call.callee, ast::Callee::Import(_)) {
+                    let specifier = Self::extract_import_call_specifier(call)?;
+                    specifiers.push(specifier);
+                } else {
+                    // 递归进入被调用者和参数
+                    if let ast::Callee::Expr(callee_expr) = &call.callee {
+                        Self::extract_dynamic_imports_from_expr(callee_expr, specifiers)?;
+                    }
+                    for arg in &call.args {
+                        Self::extract_dynamic_imports_from_expr(&arg.expr, specifiers)?;
+                    }
+                }
+            }
+            ast::Expr::Bin(bin) => {
+                Self::extract_dynamic_imports_from_expr(&bin.left, specifiers)?;
+                Self::extract_dynamic_imports_from_expr(&bin.right, specifiers)?;
+            }
+            ast::Expr::Unary(unary) => {
+                Self::extract_dynamic_imports_from_expr(&unary.arg, specifiers)?;
+            }
+            ast::Expr::Assign(assign) => {
+                Self::extract_dynamic_imports_from_expr(assign.right.as_ref(), specifiers)?;
+            }
+            ast::Expr::Cond(cond) => {
+                Self::extract_dynamic_imports_from_expr(&cond.test, specifiers)?;
+                Self::extract_dynamic_imports_from_expr(&cond.cons, specifiers)?;
+                Self::extract_dynamic_imports_from_expr(&cond.alt, specifiers)?;
+            }
+            ast::Expr::Member(member) => {
+                Self::extract_dynamic_imports_from_expr(&member.obj, specifiers)?;
+                // 计算成员属性：obj[import(...)] 中的表达式也可能包含动态 import
+                if let ast::MemberProp::Computed(computed) = &member.prop {
+                    Self::extract_dynamic_imports_from_expr(&computed.expr, specifiers)?;
+                }
+            }
+            ast::Expr::Object(obj) => {
+                for prop in &obj.props {
+                    match prop {
+                        ast::PropOrSpread::Prop(p) => match p.as_ref() {
+                            ast::Prop::KeyValue(kv) => {
+                                Self::extract_dynamic_imports_from_expr(&kv.value, specifiers)?;
+                            }
+                            ast::Prop::Shorthand(_) => {}
+                            ast::Prop::Getter(getter) => {
+                                if let Some(body) = &getter.body {
+                                    for s in &body.stmts {
+                                        Self::extract_dynamic_imports_from_stmt(s, specifiers)?;
+                                    }
+                                }
+                            }
+                            ast::Prop::Setter(setter) => {
+                                if let Some(body) = &setter.body {
+                                    for s in &body.stmts {
+                                        Self::extract_dynamic_imports_from_stmt(s, specifiers)?;
+                                    }
+                                }
+                            }
+                            ast::Prop::Method(method) => {
+                                Self::extract_dynamic_imports_from_function(
+                                    &method.function, specifiers,
+                                )?;
+                            }
+                            _ => {}
+                        },
+                        ast::PropOrSpread::Spread(spread) => {
+                            Self::extract_dynamic_imports_from_expr(&spread.expr, specifiers)?;
+                        }
+                    }
+                }
+            }
+            ast::Expr::Array(arr) => {
+                for elem in &arr.elems {
+                    if let Some(elem) = elem {
+                        Self::extract_dynamic_imports_from_expr(&elem.expr, specifiers)?;
+                    }
+                }
+            }
+            ast::Expr::Arrow(arrow) => {
+                match &*arrow.body {
+                    ast::BlockStmtOrExpr::BlockStmt(block) => {
+                        for s in &block.stmts {
+                            Self::extract_dynamic_imports_from_stmt(s, specifiers)?;
+                        }
+                    }
+                    ast::BlockStmtOrExpr::Expr(expr) => {
+                        Self::extract_dynamic_imports_from_expr(expr, specifiers)?;
+                    }
+                }
+            }
+            ast::Expr::Fn(fn_expr) => {
+                Self::extract_dynamic_imports_from_function(&fn_expr.function, specifiers)?;
+            }
+            ast::Expr::Class(class_expr) => {
+                Self::extract_dynamic_imports_from_class(&class_expr.class, specifiers)?;
+            }
+            ast::Expr::Tpl(tpl) => {
+                for expr in &tpl.exprs {
+                    Self::extract_dynamic_imports_from_expr(expr, specifiers)?;
+                }
+            }
+            ast::Expr::TaggedTpl(tagged) => {
+                Self::extract_dynamic_imports_from_expr(&tagged.tag, specifiers)?;
+                for expr in &tagged.tpl.exprs {
+                    Self::extract_dynamic_imports_from_expr(expr, specifiers)?;
+                }
+            }
+            ast::Expr::Paren(paren) => {
+                Self::extract_dynamic_imports_from_expr(&paren.expr, specifiers)?;
+            }
+            ast::Expr::Seq(seq) => {
+                for expr in &seq.exprs {
+                    Self::extract_dynamic_imports_from_expr(expr, specifiers)?;
+                }
+            }
+            ast::Expr::New(new) => {
+                Self::extract_dynamic_imports_from_expr(&new.callee, specifiers)?;
+                if let Some(args) = &new.args {
+                    for arg in args {
+                        Self::extract_dynamic_imports_from_expr(&arg.expr, specifiers)?;
+                    }
+                }
+            }
+            ast::Expr::Await(await_expr) => {
+                Self::extract_dynamic_imports_from_expr(&await_expr.arg, specifiers)?;
+            }
+            ast::Expr::Yield(yield_expr) => {
+                if let Some(arg) = &yield_expr.arg {
+                    Self::extract_dynamic_imports_from_expr(arg, specifiers)?;
+                }
+            }
+            ast::Expr::MetaProp(_) | ast::Expr::Ident(_) | ast::Expr::Lit(_) => {}
+            _ => {}
+        }
+        Ok(())
+    }
+ 
+    fn extract_dynamic_imports_from_function(
+        function: &ast::Function,
+        specifiers: &mut Vec<String>,
+    ) -> Result<()> {
+        if let Some(body) = &function.body {
+            for s in &body.stmts {
+                Self::extract_dynamic_imports_from_stmt(s, specifiers)?;
+            }
+        }
+        Ok(())
+    }
+ 
+    fn extract_dynamic_imports_from_class(
+        class: &ast::Class,
+        specifiers: &mut Vec<String>,
+    ) -> Result<()> {
+        for member in &class.body {
+            match member {
+                ast::ClassMember::Method(method) => {
+                    Self::extract_dynamic_imports_from_function(&method.function, specifiers)?;
+                }
+                ast::ClassMember::Constructor(ctor) => {
+                    if let Some(body) = &ctor.body {
+                        for s in &body.stmts {
+                            Self::extract_dynamic_imports_from_stmt(s, specifiers)?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+ 
+    fn extract_import_call_specifier(call: &ast::CallExpr) -> Result<String> {
+        let first_arg = call.args.first().ok_or_else(|| {
+            anyhow::anyhow!(
+                "import() requires a module specifier; \
+                 in AOT compilation mode, only string literal specifiers are supported"
+            )
+        })?;
 
+        match first_arg.expr.as_ref() {
+            ast::Expr::Lit(ast::Lit::Str(s)) => {
+                Ok(s.value.to_string_lossy().into_owned())
+            }
+            ast::Expr::Tpl(tpl) => {
+                if tpl.exprs.is_empty() {
+                    // 无插值的模板字符串：静态求值
+                    let mut result = String::new();
+                    for quasi in &tpl.quasis {
+                        result.push_str(&quasi.raw);
+                    }
+                    Ok(result)
+                } else {
+                    bail!(
+                        "import() with template literal containing expressions is not supported; \
+                         AOT compilation requires the specifier to be a static string literal"
+                    )
+                }
+            }
+            _ => {
+                bail!(
+                    "import() requires a string literal specifier; \
+                     AOT compilation cannot resolve dynamic specifiers at compile time. \
+                     Use a string literal like import('./module.js') instead"
+                )
+            }
+        }
+    }
     /// 从 AST 中提取 export 声明
     fn extract_exports(module: &ast::Module) -> Vec<ExportEntry> {
         let mut exports = Vec::new();

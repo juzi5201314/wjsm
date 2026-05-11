@@ -1,6 +1,6 @@
 use anyhow::Result;
 use num_traits::cast::ToPrimitive;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, Write};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -59,6 +59,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>> =
         Arc::new(Mutex::new(Vec::new()));
     let combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>> = Arc::new(Mutex::new(Vec::new()));
+    let module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>> = Arc::new(Mutex::new(HashMap::new()));
 
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
@@ -89,6 +90,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             continuation_table: Arc::clone(&continuation_table),
             async_generator_table: Arc::clone(&async_generator_table),
             combinator_contexts: Arc::clone(&combinator_contexts),
+            module_namespace_cache: Arc::clone(&module_namespace_cache),
         },
     );
 
@@ -1540,6 +1542,17 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     for entry in closures.iter() {
                         if value::is_object(entry.env_obj) {
                             let handle_idx = value::decode_object_handle(entry.env_obj) as usize;
+                            add_root(handle_idx, data, &mut roots);
+                        }
+                    }
+                }
+
+                // 3e. 模块命名空间对象缓存（dynamic import 返回的命名空间对象必须保持可达）
+                {
+                    let cache = caller.data().module_namespace_cache.lock().expect("module namespace cache mutex");
+                    for &val in cache.values() {
+                        if value::is_object(val) {
+                            let handle_idx = value::decode_object_handle(val) as usize;
                             add_root(handle_idx, data, &mut roots);
                         }
                     }
@@ -6682,6 +6695,76 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
+    // ── Import 146: register_module_namespace(i64, i64) -> () ──────────────
+    // 将模块命名空间对象注册到运行时缓存
+    let register_module_namespace_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, module_id: i64, namespace_obj: i64| {
+            let mid = module_id as u32;
+            let mut cache = caller
+                .data()
+                .module_namespace_cache
+                .lock()
+                .expect("module namespace cache mutex");
+            cache.insert(mid, namespace_obj);
+        },
+    );
+
+    // ── Import 147: dynamic_import(i64) -> i64 ────────────────────────────
+    // 动态导入：查找命名空间对象并返回 resolved Promise
+    let dynamic_import_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, module_id: i64| -> i64 {
+            let mid = module_id as u32;
+
+            // 创建 Promise 并添加 .then/.catch/.finally 方法
+            let promise = alloc_promise(&mut caller, PromiseEntry::pending());
+            let then_fn = create_promise_resolving_function(
+                caller.data(),
+                promise,
+                Arc::new(Mutex::new(false)),
+                PromiseResolvingKind::Fulfill,
+            );
+            let catch_fn = create_promise_resolving_function(
+                caller.data(),
+                promise,
+                Arc::new(Mutex::new(false)),
+                PromiseResolvingKind::Reject,
+            );
+            let _ = define_host_data_property_from_caller(&mut caller, promise, "then", then_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, promise, "catch", catch_fn);
+
+            // 从缓存查找命名空间对象
+            let namespace_obj = {
+                let cache = caller
+                    .data()
+                    .module_namespace_cache
+                    .lock()
+                    .expect("module namespace cache mutex");
+                cache.get(&mid).copied()
+            };
+
+            match namespace_obj {
+                Some(ns_obj) => {
+                    // 直接 resolve Promise（AOT 模式下命名空间对象已构建完成）
+                    resolve_promise_from_caller(&mut caller, promise, ns_obj);
+                }
+                None => {
+                    // 模块未找到：reject Promise
+                    let error_msg = format!("Cannot find module with id {}", mid);
+                    let error_val = runtime_error_value(caller.data(), error_msg);
+                    settle_promise(
+                        caller.data(),
+                        promise,
+                        PromiseSettlement::Reject(error_val),
+                    );
+                }
+            }
+
+            promise
+        },
+    );
+
     let imports = [
         console_log.into(),                    // 0
         f64_mod.into(),                        // 1
@@ -6834,6 +6917,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         promise_create_reject_function_fn.into(),  // 143
         is_callable_fn.into(),                     // 144
         promise_with_resolvers_fn.into(),          // 145
+        register_module_namespace_fn.into(),       // 146
+        dynamic_import_fn.into(),                  // 147
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -7041,6 +7126,8 @@ struct RuntimeState {
     async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>>,
     /// Promise combinator 侧表：pending 元素的 reaction 通过索引回写共享结果。
     combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>>,
+    /// 模块命名空间对象缓存：module_id → namespace object (i64 NaN-boxed)
+    module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>>,
 }
 
 /// 绑定函数记录
