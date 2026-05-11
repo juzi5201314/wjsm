@@ -1,0 +1,4 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: semantic lowering error [47..48]: undeclared identifier `x`

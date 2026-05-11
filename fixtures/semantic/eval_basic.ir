@@ -1,0 +1,34 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = undefined
+    c2 = number(NaN)
+    c3 = number(inf)
+    c4 = string("1 + 2")
+    c5 = string("x")
+    c6 = string("x")
+
+  fn @main [has_eval] [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.x, %0
+      %1 = const c1
+      store var $0.undefined, %1
+      %2 = const c2
+      store var $0.NaN, %2
+      %3 = const c3
+      store var $0.Infinity, %3
+      %4 = const c4
+      %5 = new_object(capacity=1)
+      %6 = const c5
+      %7 = load var $0.x
+      set_prop %5, %6, %7
+      %8 = call builtin.eval(%4, %5)
+      %9 = const c6
+      %10 = get_prop %5, %9
+      store var $0.x, %10
+      store var $0.x, %8
+      %11 = load var $0.x
+      %12 = call builtin.console.log(%11)
+      return
+}

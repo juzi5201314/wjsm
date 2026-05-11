@@ -1,0 +1,43 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = undefined
+    c2 = number(NaN)
+    c3 = number(inf)
+    c4 = string("use strict")
+    c5 = number(0)
+    c6 = string("var x = 1;")
+    c7 = string("__wjsm_eval_strict")
+    c8 = bool(true)
+    c9 = string("x")
+    c10 = string("x")
+
+  fn @main [has_eval] [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.x, %0
+      %1 = const c1
+      store var $0.undefined, %1
+      %2 = const c2
+      store var $0.NaN, %2
+      %3 = const c3
+      store var $0.Infinity, %3
+      %4 = const c4
+      %5 = const c5
+      store var $0.x, %5
+      %6 = const c6
+      %7 = new_object(capacity=2)
+      %8 = const c7
+      %9 = const c8
+      set_prop %7, %8, %9
+      %10 = const c9
+      %11 = load var $0.x
+      set_prop %7, %10, %11
+      %12 = call builtin.eval(%6, %7)
+      %13 = const c10
+      %14 = get_prop %7, %13
+      store var $0.x, %14
+      %15 = load var $0.x
+      %16 = call builtin.console.log(%15)
+      return
+}

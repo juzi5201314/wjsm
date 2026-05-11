@@ -12,12 +12,175 @@ use wjsm_ir::{
 };
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
+const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
+const HOST_IMPORT_NAMES: [&str; 150] = [
+    "console_log",
+    "f64_mod",
+    "f64_pow",
+    "throw",
+    "iterator_from",
+    "iterator_next",
+    "iterator_close",
+    "iterator_value",
+    "iterator_done",
+    "enumerator_from",
+    "enumerator_next",
+    "enumerator_key",
+    "enumerator_done",
+    "typeof",
+    "op_in",
+    "op_instanceof",
+    "string_concat",
+    "string_concat_va",
+    "define_property",
+    "get_own_prop_desc",
+    "abstract_eq",
+    "abstract_compare",
+    "gc_collect",
+    "console_error",
+    "console_warn",
+    "console_info",
+    "console_debug",
+    "console_trace",
+    "set_timeout",
+    "clear_timeout",
+    "set_interval",
+    "clear_interval",
+    "fetch",
+    "json_stringify",
+    "json_parse",
+    "closure_create",
+    "closure_get_func",
+    "closure_get_env",
+    "arr_push",
+    "arr_pop",
+    "arr_includes",
+    "arr_index_of",
+    "arr_join",
+    "arr_concat",
+    "arr_slice",
+    "arr_fill",
+    "arr_reverse",
+    "arr_flat",
+    "arr_init_length",
+    "arr_get_length",
+    "arr_proto_push",
+    "arr_proto_pop",
+    "arr_proto_includes",
+    "arr_proto_index_of",
+    "arr_proto_join",
+    "arr_proto_concat",
+    "arr_proto_slice",
+    "arr_proto_fill",
+    "arr_proto_reverse",
+    "arr_proto_flat",
+    "arr_proto_shift",
+    "arr_proto_unshift",
+    "arr_proto_sort",
+    "arr_proto_at",
+    "arr_proto_copy_within",
+    "arr_proto_for_each",
+    "arr_proto_map",
+    "arr_proto_filter",
+    "arr_proto_reduce",
+    "arr_proto_reduce_right",
+    "arr_proto_find",
+    "arr_proto_find_index",
+    "arr_proto_some",
+    "arr_proto_every",
+    "arr_proto_flat_map",
+    "arr_proto_splice",
+    "arr_proto_is_array",
+    "abort_shadow_stack_overflow",
+    "func_call",
+    "func_apply",
+    "func_bind",
+    "object_rest",
+    "obj_spread",
+    "has_own_property",
+    "obj_keys",
+    "obj_values",
+    "obj_entries",
+    "obj_assign",
+    "obj_create",
+    "obj_get_proto_of",
+    "obj_set_proto_of",
+    "obj_get_own_prop_names",
+    "obj_is",
+    "obj_proto_to_string",
+    "obj_proto_value_of",
+    "bigint_from_literal",
+    "bigint_add",
+    "bigint_sub",
+    "bigint_mul",
+    "bigint_div",
+    "bigint_mod",
+    "bigint_pow",
+    "bigint_neg",
+    "bigint_eq",
+    "bigint_cmp",
+    "symbol_create",
+    "symbol_for",
+    "symbol_key_for",
+    "symbol_well_known",
+    "regex_create",
+    "regex_test",
+    "regex_exec",
+    "string_match",
+    "string_replace",
+    "string_search",
+    "string_split",
+    "promise_create",
+    "promise_instance_resolve",
+    "promise_instance_reject",
+    "promise_then",
+    "promise_catch",
+    "promise_finally",
+    "promise_all",
+    "promise_race",
+    "promise_all_settled",
+    "promise_any",
+    "promise_resolve_static",
+    "promise_reject_static",
+    "is_promise",
+    "queue_microtask",
+    "drain_microtasks",
+    "async_function_start",
+    "async_function_resume",
+    "async_function_suspend",
+    "continuation_create",
+    "continuation_save_var",
+    "continuation_load_var",
+    "async_generator_start",
+    "async_generator_next",
+    "async_generator_return",
+    "async_generator_throw",
+    "native_call",
+    "promise_create_resolve_function",
+    "promise_create_reject_function",
+    "is_callable",
+    "promise_with_resolvers",
+    "register_module_namespace",
+    "dynamic_import",
+    "eval_direct",
+    "eval_indirect",
+];
 // SHADOW_STACK_ALIGN: reserved for future use
 
 // ── Public API ──────────────────────────────────────────────────────────
 
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
-    let mut compiler = Compiler::new();
+    let mut compiler = Compiler::new(CompileMode::Normal);
+    compiler.compile_module(program)?;
+    Ok(compiler.finish())
+}
+
+pub fn compile_eval(program: &Program) -> Result<Vec<u8>> {
+    compile_eval_at_data_base(program, 0)
+}
+
+pub fn compile_eval_at_data_base(program: &Program, data_base: u32) -> Result<Vec<u8>> {
+    let mut compiler = Compiler::new_with_data_base(CompileMode::Eval, data_base);
     compiler.compile_module(program)?;
     Ok(compiler.finish())
 }
@@ -38,9 +201,12 @@ struct Compiler {
     globals: GlobalSection,
     current_func: Option<Function>,
     string_data: Vec<u8>,
+    data_base: u32,
     data_offset: u32,
     /// Map variable name → WASM local index (for LoadVar / StoreVar).
     var_locals: HashMap<String, u32>,
+    /// Map variable name → current eval frame byte offset.
+    var_memory_offsets: HashMap<String, u32>,
     /// Next available WASM local index (after SSA temporaries).
     next_var_local: u32,
     /// Phi locals: mapping from Phi dest ValueId → WASM local index.
@@ -97,6 +263,8 @@ struct Compiler {
     shadow_sp_global_idx: u32,
     /// WASM local index for shadow_sp scratch variable (i32, used during Call).
     shadow_sp_scratch_idx: u32,
+    /// WASM local index for the base address of eval-visible variable storage.
+    eval_var_base_local_idx: u32,
     /// WASM function index for gc_collect host function.
     gc_collect_func_idx: u32,
     /// WASM global index for alloc_counter (GC heuristic).
@@ -123,10 +291,29 @@ struct Compiler {
     obj_spread_func_idx: u32,
     /// WASM function index for $get_prototype_from_constructor helper.
     get_proto_from_ctor_func_idx: u32,
+    /// WASM function index for nul-terminated string equality helper.
+    string_eq_func_idx: u32,
     /// WASM global index for Object.prototype handle.
     object_proto_handle_global_idx: u32,
+    /// WASM global index for __eval_var_map_ptr.
+    eval_var_map_ptr_global_idx: u32,
+    /// WASM global index for __eval_var_map_count.
+    eval_var_map_count_global_idx: u32,
+    /// Encoded eval variable map metadata emitted into the data section.
+    eval_var_map_records: Vec<EvalVarMapRecord>,
+    eval_var_map_ptr: u32,
+    eval_var_map_count: u32,
     /// WASM local index for continuation handle (used in async state machine functions).
     continuation_local_idx: u32,
+    current_function_has_eval: bool,
+    mode: CompileMode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EvalVarMapRecord {
+    function_name: String,
+    var_name: String,
+    offset: u32,
 }
 /// 循环元信息（编译前预扫描得到）。
 #[derive(Debug, Clone)]
@@ -203,6 +390,29 @@ struct SwitchCaseRegion {
     _target_idx: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompileMode {
+    Normal,
+    Eval,
+}
+
+fn import_eval_global(
+    imports: &mut ImportSection,
+    name: &'static str,
+    val_type: ValType,
+    mutable: bool,
+) {
+    imports.import(
+        "env",
+        name,
+        EntityType::Global(GlobalType {
+            val_type,
+            mutable,
+            shared: false,
+        }),
+    );
+}
+
 #[derive(Debug, Clone)]
 struct RegionTree {
     root: Region,
@@ -227,7 +437,11 @@ impl RegionTree {
 }
 
 impl Compiler {
-    fn new() -> Self {
+    fn new(mode: CompileMode) -> Self {
+        Self::new_with_data_base(mode, 0)
+    }
+
+    fn new_with_data_base(mode: CompileMode, data_base: u32) -> Self {
         let mut types = TypeSection::new();
         // Type 0: (i64) -> ()  — console_log
         types.ty().function(vec![ValType::I64], vec![]);
@@ -491,6 +705,10 @@ impl Compiler {
         types
             .ty()
             .function(vec![ValType::I64, ValType::I64, ValType::I64], vec![]);
+        // Type 26: (i32, i32) -> (i32) — nul-terminated string equality helper
+        types
+            .ty()
+            .function(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
         // Import index 78: func_call — Type 12 (uses shadow stack for args)
         imports.import("env", "func_call", EntityType::Function(12));
         // Import index 79: func_apply — Type 16 (i64 func, i64 this, i64 argsArray) -> i64
@@ -642,6 +860,37 @@ impl Compiler {
         imports.import("env", "register_module_namespace", EntityType::Function(5));
         // Import index 147: dynamic_import: (i64) -> i64
         imports.import("env", "dynamic_import", EntityType::Function(3));
+        // Import index 148: eval_direct: (i64 code, i64 env) -> i64
+        imports.import("env", "eval_direct", EntityType::Function(2));
+        // Import index 149: eval_indirect: (i64 code) -> i64
+        imports.import("env", "eval_indirect", EntityType::Function(3));
+
+        if mode == CompileMode::Eval {
+            imports.import(
+                "env",
+                "memory",
+                EntityType::Memory(MemoryType {
+                    minimum: 2,
+                    maximum: None,
+                    memory64: false,
+                    shared: false,
+                    page_size_log2: None,
+                }),
+            );
+            import_eval_global(&mut imports, "__func_props", ValType::I32, false);
+            import_eval_global(&mut imports, "__heap_ptr", ValType::I32, true);
+            import_eval_global(&mut imports, "__obj_table_ptr", ValType::I32, false);
+            import_eval_global(&mut imports, "__obj_table_count", ValType::I32, true);
+            import_eval_global(&mut imports, "__shadow_sp", ValType::I32, true);
+            import_eval_global(&mut imports, "__alloc_counter", ValType::I32, true);
+            import_eval_global(&mut imports, "__object_heap_start", ValType::I32, false);
+            import_eval_global(&mut imports, "__num_ir_functions", ValType::I32, false);
+            import_eval_global(&mut imports, "__shadow_stack_end", ValType::I32, false);
+            import_eval_global(&mut imports, "__array_proto_handle", ValType::I32, true);
+            import_eval_global(&mut imports, "__object_proto_handle", ValType::I32, true);
+            import_eval_global(&mut imports, "__eval_var_map_ptr", ValType::I32, false);
+            import_eval_global(&mut imports, "__eval_var_map_count", ValType::I32, false);
+        }
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -780,19 +1029,26 @@ impl Compiler {
         // ── 动态 import builtins ──
         builtin_func_indices.insert(Builtin::RegisterModuleNamespace, 146);
         builtin_func_indices.insert(Builtin::DynamicImport, 147);
+        builtin_func_indices.insert(Builtin::Eval, 148);
+        builtin_func_indices.insert(Builtin::EvalIndirect, 149);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
         exports.export("memory", ExportKind::Memory, 0);
+        for (index, name) in HOST_IMPORT_NAMES.iter().enumerate() {
+            exports.export(name, ExportKind::Func, index as u32);
+        }
 
         let mut memory = MemorySection::new();
-        memory.memory(MemoryType {
-            minimum: 2, // 2 pages (128KB) to accommodate shadow stack
-            maximum: None,
-            memory64: false,
-            shared: false,
-            page_size_log2: None,
-        });
+        if mode == CompileMode::Normal {
+            memory.memory(MemoryType {
+                minimum: 2, // 2 pages (128KB) to accommodate shadow stack
+                maximum: None,
+                memory64: false,
+                shared: false,
+                page_size_log2: None,
+            });
+        }
 
         Self {
             module: Module::new(),
@@ -808,14 +1064,16 @@ impl Compiler {
             globals: GlobalSection::new(),
             current_func: None,
             string_data: Vec::new(),
+            data_base,
             data_offset: 0,
             var_locals: HashMap::new(),
+            var_memory_offsets: HashMap::new(),
             next_var_local: 0,
             phi_locals: HashMap::new(),
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 148, // 148 imports (0-147)
+            _next_import_func: HOST_IMPORT_NAMES.len() as u32,
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -838,6 +1096,7 @@ impl Compiler {
             string_concat_scratch_idx: 0,
             shadow_sp_global_idx: 0,
             shadow_sp_scratch_idx: 0,
+            eval_var_base_local_idx: 0,
             gc_collect_func_idx: 22,
             alloc_counter_global_idx: 0,
             object_heap_start_global_idx: 6,
@@ -851,8 +1110,16 @@ impl Compiler {
             arr_proto_table_base: 0,
             obj_spread_func_idx: 0,
             get_proto_from_ctor_func_idx: 0,
+            string_eq_func_idx: 0,
             object_proto_handle_global_idx: 0,
+            eval_var_map_ptr_global_idx: 11,
+            eval_var_map_count_global_idx: 12,
+            eval_var_map_records: Vec::new(),
+            eval_var_map_ptr: 0,
+            eval_var_map_count: 0,
             continuation_local_idx: 0,
+            current_function_has_eval: false,
+            mode,
         }
     }
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -913,8 +1180,13 @@ impl Compiler {
                 .insert(function.name().to_string(), wasm_idx);
 
             if function.name() == "main" {
-                // main: Type 1 = () -> ()
-                self.functions.function(1);
+                if self.mode == CompileMode::Eval {
+                    // eval entry: Type 3 = (scope_env: i64) -> i64 completion value
+                    self.functions.function(3);
+                } else {
+                    // main: Type 1 = () -> ()
+                    self.functions.function(1);
+                }
                 main_wasm_idx = Some(wasm_idx);
             } else {
                 // JS functions: Type 12 = (i64, i64, i32, i32) -> i64 (含 env_obj)
@@ -927,7 +1199,12 @@ impl Compiler {
 
         // Add main export (must be known now).
         let main_idx = main_wasm_idx.context("backend-wasm expects lowered `main` function")?;
-        self.exports.export("main", ExportKind::Func, main_idx);
+        if self.mode == CompileMode::Eval {
+            self.exports
+                .export("__eval_entry", ExportKind::Func, main_idx);
+        } else {
+            self.exports.export("main", ExportKind::Func, main_idx);
+        }
 
         // Reserve indices for object helper functions (so they're known during user function compilation).
         self.obj_new_func_idx = self._next_import_func;
@@ -952,6 +1229,11 @@ impl Compiler {
 
         self.to_int32_func_idx = self._next_import_func;
         self.functions.function(10); // Type 10: (i64) -> (i32)
+        self.function_table.push(self._next_import_func);
+        self._next_import_func += 1;
+
+        self.string_eq_func_idx = self._next_import_func;
+        self.functions.function(26); // Type 26: (i32, i32) -> i32
         self.function_table.push(self._next_import_func);
         self._next_import_func += 1;
 
@@ -1004,7 +1286,8 @@ impl Compiler {
             self.string_data[offset as usize..offset as usize + s.len()]
                 .copy_from_slice(s.as_bytes());
             self.string_data[offset as usize + s.len()] = 0;
-            self.string_ptr_cache.insert(s.to_string(), offset);
+            self.string_ptr_cache
+                .insert(s.to_string(), self.data_base + offset);
         }
 
         // Pre-write property descriptor strings after typeof strings
@@ -1025,7 +1308,8 @@ impl Compiler {
             self.string_data[offset as usize..offset as usize + s.len()]
                 .copy_from_slice(s.as_bytes());
             self.string_data[offset as usize + s.len()] = 0;
-            self.string_ptr_cache.insert(s.to_string(), offset);
+            self.string_ptr_cache
+                .insert(s.to_string(), self.data_base + offset);
         }
 
         let promise_strings: &[(u32, &str)] = &[
@@ -1052,7 +1336,8 @@ impl Compiler {
             self.string_data[offset as usize..offset as usize + s.len()]
                 .copy_from_slice(s.as_bytes());
             self.string_data[offset as usize + s.len()] = 0;
-            self.string_ptr_cache.insert(s.to_string(), offset);
+            self.string_ptr_cache
+                .insert(s.to_string(), self.data_base + offset);
         }
 
         self.data_offset = constants::USER_STRING_START;
@@ -1069,6 +1354,8 @@ impl Compiler {
         self.alloc_counter_global_idx = 5;
         self.array_proto_handle_global_idx = 9;
         self.object_proto_handle_global_idx = 10;
+        self.eval_var_map_ptr_global_idx = 11;
+        self.eval_var_map_count_global_idx = 12;
 
         for function in module.functions() {
             if function.name() == "main" {
@@ -1097,6 +1384,8 @@ impl Compiler {
             Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
         );
 
+        self.finalize_eval_var_map_data();
+
         // Allocate handle table at start of heap.
         // Handle table replaces func_props: maps handle_index → object ptr (i32).
         // Function property objects are stored at indices 0..num_functions-1.
@@ -1106,147 +1395,218 @@ impl Compiler {
         let handle_table_entries = std::cmp::max(256, num_functions * 2);
         let handle_table_size = handle_table_entries * 4;
 
-        // Global 0: func_props_ptr (deprecated, set to 0)
-        self.globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: false,
-                shared: false,
-            },
-            &ConstExpr::i32_const(0),
-        );
-        // Global 1: heap_ptr (starts after handle table + shadow stack, mutable)
         let shadow_stack_base = heap_start + handle_table_size;
         let object_heap_start = shadow_stack_base + SHADOW_STACK_SIZE;
-        self.globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(object_heap_start as i32),
-        );
-        self.heap_ptr_global_idx = 1;
-        // Global 2: obj_table_ptr (immutable, points to handle table base)
-        self.globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: false,
-                shared: false,
-            },
-            &ConstExpr::i32_const(heap_start as i32),
-        );
-        self.obj_table_global_idx = 2;
-        // Global 3: obj_table_count (mutable, starts at 0, incremented by $obj_new)
-        self.globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(0),
-        );
-        self.obj_table_count_global_idx = 3;
-        // Global 4: shadow_sp (mutable, starts at shadow_stack_base)
-        self.globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(shadow_stack_base as i32),
-        );
-        self.shadow_sp_global_idx = 4;
-        // Global 5: alloc_counter (mutable i32, initial 0, for GC heuristic)
-        self.globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(0),
-        );
-        self.alloc_counter_global_idx = 5;
-        // Export alloc_counter for runtime debugging
-        self.exports
-            .export("__alloc_counter", ExportKind::Global, 5);
-        // Export globals for runtime access
-        self.exports
-            .export("__obj_table_ptr", ExportKind::Global, 2);
-        self.exports.export("__heap_ptr", ExportKind::Global, 1);
-        self.exports
-            .export("__obj_table_count", ExportKind::Global, 3);
-        self.exports.export("__shadow_sp", ExportKind::Global, 4);
-        // Global 6: __object_heap_start (immutable, for runtime GC heap base)
-        self.globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: false,
-                shared: false,
-            },
-            &ConstExpr::i32_const(object_heap_start as i32),
-        );
-        // Global 7: __num_ir_functions (immutable, for runtime GC root set)
-        self.globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: false,
-                shared: false,
-            },
-            &ConstExpr::i32_const(num_functions as i32),
-        );
-        self.object_heap_start_global_idx = 6;
-        self.num_ir_functions_global_idx = 7;
-        self.exports
-            .export("__object_heap_start", ExportKind::Global, 6);
-        self.exports
-            .export("__num_ir_functions", ExportKind::Global, 7);
-        // Global 8: __shadow_stack_end (immutable, for shadow stack bounds check)
         let shadow_stack_end = shadow_stack_base + SHADOW_STACK_SIZE;
-        self.globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: false,
-                shared: false,
-            },
-            &ConstExpr::i32_const(shadow_stack_end as i32),
-        );
-        self.exports
-            .export("__shadow_stack_end", ExportKind::Global, 8);
-        // Global 9: array_proto_handle (mutable, starts at -1 for uninitialized)
-        self.globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(-1),
-        );
-        // Global 10: object_proto_handle (mutable, starts at -1 for uninitialized)
-        self.globals.global(
-            GlobalType {
-                val_type: ValType::I32,
-                mutable: true,
-                shared: false,
-            },
-            &ConstExpr::i32_const(-1),
-        );
-        self.exports
-            .export("__object_proto_handle", ExportKind::Global, 10);
+        if self.mode == CompileMode::Normal {
+            // Global 0: func_props_ptr (deprecated, set to 0)
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: false,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(0),
+            );
+            self.exports.export("__func_props", ExportKind::Global, 0);
+            // Global 1: heap_ptr (starts after handle table + shadow stack, mutable)
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(object_heap_start as i32),
+            );
+            self.heap_ptr_global_idx = 1;
+            // Global 2: obj_table_ptr (immutable, points to handle table base)
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: false,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(heap_start as i32),
+            );
+            self.obj_table_global_idx = 2;
+            // Global 3: obj_table_count (mutable, starts at 0, incremented by $obj_new)
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(0),
+            );
+            self.obj_table_count_global_idx = 3;
+            // Global 4: shadow_sp (mutable, starts at shadow_stack_base)
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(shadow_stack_base as i32),
+            );
+            self.shadow_sp_global_idx = 4;
+            // Global 5: alloc_counter (mutable i32, initial 0, for GC heuristic)
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(0),
+            );
+            self.alloc_counter_global_idx = 5;
+            // Export alloc_counter for runtime debugging
+            self.exports
+                .export("__alloc_counter", ExportKind::Global, 5);
+            // Export globals for runtime access
+            self.exports
+                .export("__obj_table_ptr", ExportKind::Global, 2);
+            self.exports.export("__heap_ptr", ExportKind::Global, 1);
+            self.exports
+                .export("__obj_table_count", ExportKind::Global, 3);
+            self.exports.export("__shadow_sp", ExportKind::Global, 4);
+            // Global 6: __object_heap_start (immutable, for runtime GC heap base)
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: false,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(object_heap_start as i32),
+            );
+            // Global 7: __num_ir_functions (immutable, for runtime GC root set)
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: false,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(num_functions as i32),
+            );
+            self.object_heap_start_global_idx = 6;
+            self.num_ir_functions_global_idx = 7;
+            self.exports
+                .export("__object_heap_start", ExportKind::Global, 6);
+            self.exports
+                .export("__num_ir_functions", ExportKind::Global, 7);
+            // Global 8: __shadow_stack_end (immutable, for shadow stack bounds check)
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: false,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(shadow_stack_end as i32),
+            );
+            self.exports
+                .export("__shadow_stack_end", ExportKind::Global, 8);
+            // Global 9: array_proto_handle (mutable, starts at -1 for uninitialized)
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(-1),
+            );
+            self.exports
+                .export("__array_proto_handle", ExportKind::Global, 9);
+            // Global 10: object_proto_handle (mutable, starts at -1 for uninitialized)
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(-1),
+            );
+            self.exports
+                .export("__object_proto_handle", ExportKind::Global, 10);
+            // Global 11/12: eval variable map metadata.
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: false,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(self.eval_var_map_ptr as i32),
+            );
+            self.exports.export(
+                "__eval_var_map_ptr",
+                ExportKind::Global,
+                self.eval_var_map_ptr_global_idx,
+            );
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: false,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(self.eval_var_map_count as i32),
+            );
+            self.exports.export(
+                "__eval_var_map_count",
+                ExportKind::Global,
+                self.eval_var_map_count_global_idx,
+            );
+        } else {
+            self.exports.export("__func_props", ExportKind::Global, 0);
+            self.exports.export("__heap_ptr", ExportKind::Global, 1);
+            self.exports
+                .export("__obj_table_ptr", ExportKind::Global, 2);
+            self.exports
+                .export("__obj_table_count", ExportKind::Global, 3);
+            self.exports.export("__shadow_sp", ExportKind::Global, 4);
+            self.exports
+                .export("__alloc_counter", ExportKind::Global, 5);
+            self.exports
+                .export("__object_heap_start", ExportKind::Global, 6);
+            self.exports
+                .export("__num_ir_functions", ExportKind::Global, 7);
+            self.exports
+                .export("__shadow_stack_end", ExportKind::Global, 8);
+            self.exports
+                .export("__array_proto_handle", ExportKind::Global, 9);
+            self.exports
+                .export("__object_proto_handle", ExportKind::Global, 10);
+            self.exports.export(
+                "__eval_var_map_ptr",
+                ExportKind::Global,
+                self.eval_var_map_ptr_global_idx,
+            );
+            self.exports.export(
+                "__eval_var_map_count",
+                ExportKind::Global,
+                self.eval_var_map_count_global_idx,
+            );
+        }
         if !self.string_data.is_empty() {
-            self.data
-                .active(0, &ConstExpr::i32_const(0), self.string_data.clone());
+            self.data.active(
+                0,
+                &ConstExpr::i32_const(self.data_base as i32),
+                self.string_data.clone(),
+            );
         }
         Ok(())
     }
 
     fn compile_function(&mut self, module: &IrModule, function: &IrFunction) -> Result<()> {
-        self.current_func_returns_value = false;
-        self.ssa_local_base = 0;
-        // Pass 1: assign WASM local indices to all variable names.
+        self.current_func_returns_value = self.mode == CompileMode::Eval;
+        self.ssa_local_base = if self.mode == CompileMode::Eval {
+            function.params().len() as u32
+        } else {
+            0
+        };
+        // Pass 1: direct eval 函数的变量改由 shadow stack frame 承载。
+        self.assign_eval_var_memory(function);
+        // Pass 2: assign WASM local indices to non-eval variable names.
         self.assign_var_locals(function);
 
-        // Pass 2: lower Phi to dedicated locals after variable locals to avoid index overlap.
+        // Pass 3: lower Phi to dedicated locals after variable locals to avoid index overlap.
         self.lower_phi_to_locals(function);
 
         let local_count = self.required_local_count(function);
@@ -1257,13 +1617,20 @@ impl Compiler {
         // call_func_idx (i32) at local_count+3
         self.string_concat_scratch_idx = local_count;
         self.shadow_sp_scratch_idx = local_count + 2;
-        let total_i64_locals = local_count + 2; // string_concat + call_env_obj
-        let locals = if total_i64_locals == 0 && 2 == 0 {
+        self.eval_var_base_local_idx = self.shadow_sp_scratch_idx + 2;
+        let param_i64_count = self.ssa_local_base;
+        let total_i64_locals = local_count.saturating_sub(param_i64_count) + 2; // string_concat + call_env_obj
+        let total_i32_locals = 2 + u32::from(!self.var_memory_offsets.is_empty());
+        let locals = if total_i64_locals == 0 && total_i32_locals == 0 {
             Vec::new()
         } else {
-            vec![(total_i64_locals, ValType::I64), (2, ValType::I32)]
+            vec![
+                (total_i64_locals, ValType::I64),
+                (total_i32_locals, ValType::I32),
+            ]
         };
         self.current_func = Some(Function::new(locals));
+        self.emit_eval_var_frame_enter();
 
         // 预分配函数属性对象：为每个 IR 函数调用 $obj_new(8)，将返回的 handle_idx
         // 对应 obj_table[0..num_functions-1]，存储函数属性对象的 ptr。
@@ -1366,7 +1733,9 @@ impl Compiler {
 
         // Clean up per-function state.
         self.var_locals.clear();
+        self.var_memory_offsets.clear();
         self.phi_locals.clear();
+        self.current_function_has_eval = false;
 
         Ok(())
     }
@@ -1376,6 +1745,7 @@ impl Compiler {
         // Type 12 signature: (i64 env_obj, i64 this_val, i32 args_base, i32 args_count) -> i64
         // WASM params: local 0 = env_obj (i64), local 1 = this_val (i64),
         //              local 2 = args_base_ptr (i32), local 3 = args_count (i32)
+        self.assign_eval_var_memory(function);
 
         // Map $env/$this to WASM params (both bare and scoped names)
         self.var_locals.clear();
@@ -1396,6 +1766,9 @@ impl Compiler {
         // These will be loaded from shadow stack in the prologue
         let mut param_local_idx = 4;
         for param_name in &declared_params {
+            if self.is_eval_memory_var(param_name) {
+                continue;
+            }
             self.var_locals
                 .insert((*param_name).clone(), param_local_idx);
             param_local_idx += 1;
@@ -1418,6 +1791,9 @@ impl Compiler {
                     Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. } => name,
                     _ => continue,
                 };
+                if self.is_eval_memory_var(name) {
+                    continue;
+                }
                 self.var_locals.entry(name.clone()).or_insert_with(|| {
                     let idx = self.next_var_local;
                     self.next_var_local += 1;
@@ -1470,20 +1846,27 @@ impl Compiler {
         self.string_concat_scratch_idx = total_locals;
         // call_env_obj scratch = string_concat + 1 (i64), computed by call_env_obj_scratch()
         self.shadow_sp_scratch_idx = total_locals + 2;
+        self.eval_var_base_local_idx = self.shadow_sp_scratch_idx + 2;
         // call_func_idx = shadow_sp + 1 (i32), computed by call_func_idx_scratch()
         let total_i64_locals = total_locals.saturating_sub(4) + 2; // string_concat + call_env_obj
+        let total_i32_locals = 2 + u32::from(!self.var_memory_offsets.is_empty());
 
-        let locals = if total_i64_locals == 0 && 2 == 0 {
+        let locals = if total_i64_locals == 0 && total_i32_locals == 0 {
             Vec::new()
         } else {
-            vec![(total_i64_locals, ValType::I64), (2, ValType::I32)]
+            vec![
+                (total_i64_locals, ValType::I64),
+                (total_i32_locals, ValType::I32),
+            ]
         };
         self.current_func = Some(Function::new(locals));
+        self.emit_eval_var_frame_enter();
 
         // ── Prologue: Load declared params from shadow stack ──
         // args_base_ptr is at local 2, args_count is at local 3
         for (i, param_name) in declared_params.iter().enumerate() {
-            let param_local = *self.var_locals.get(*param_name).unwrap();
+            let param_memory_offset = self.var_memory_offsets.get(*param_name).copied();
+            let param_local = self.var_locals.get(*param_name).copied();
 
             // if i < args_count: load from shadow stack
             // else: set to undefined
@@ -1501,11 +1884,11 @@ impl Compiler {
                 align: 3,
                 memory_index: 0,
             }));
-            self.emit(WasmInstruction::LocalSet(param_local));
+            self.emit_store_stacked_binding(param_memory_offset, param_local);
             self.emit(WasmInstruction::Else);
             // Out of bounds: set to undefined
             self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-            self.emit(WasmInstruction::LocalSet(param_local));
+            self.emit_store_stacked_binding(param_memory_offset, param_local);
             self.emit(WasmInstruction::End);
         }
 
@@ -1535,7 +1918,9 @@ impl Compiler {
 
         // Clean up per-function state.
         self.var_locals.clear();
+        self.var_memory_offsets.clear();
         self.phi_locals.clear();
+        self.current_function_has_eval = false;
 
         Ok(())
     }
@@ -1809,8 +2194,13 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            func.instruction(&WasmInstruction::LocalTee(6));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Call(self.string_eq_func_idx));
+            func.instruction(&WasmInstruction::I32Or);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             // 找到！检查是否为访问器属性
             // 加载 flags (offset 4)
@@ -1970,8 +2360,13 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            func.instruction(&WasmInstruction::LocalTee(10));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::LocalGet(10));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Call(self.string_eq_func_idx));
+            func.instruction(&WasmInstruction::I32Or);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             // 找到！检查是否为访问器属性
             // 加载 flags (offset 4)
@@ -2081,6 +2476,12 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Const(2));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::LocalSet(7));
+            func.instruction(&WasmInstruction::LocalGet(7));
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::LocalSet(7));
+            func.instruction(&WasmInstruction::End);
 
             // new_ptr = heap_ptr
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
@@ -2285,8 +2686,13 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            func.instruction(&WasmInstruction::LocalTee(6));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Call(self.string_eq_func_idx));
+            func.instruction(&WasmInstruction::I32Or);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
 
             // 检查 configurable 标志 (flags bit 0)
@@ -2518,6 +2924,58 @@ impl Compiler {
 
             // Not a raw number (sentinel) -> return 0
             func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::End);
+            self.codes.function(&func);
+        }
+
+        // ── $str_eq (param $a i32) (param $b i32) (result i32) — Type 26 ──
+        // 比较两个 nul-terminated 字符串内容，允许不同 module 使用不同 offset 表示同一属性名。
+        {
+            // local 0 = a, local 1 = b, local 2 = byte_a, local 3 = byte_b
+            let mut func = Function::new(vec![(2, ValType::I32)]);
+            func.instruction(&WasmInstruction::Block(BlockType::Empty));
+            func.instruction(&WasmInstruction::Loop(BlockType::Empty));
+
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32Load8U(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalTee(2));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Load8U(MemArg {
+                offset: 0,
+                align: 0,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalTee(3));
+            func.instruction(&WasmInstruction::I32Ne);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalSet(0));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalSet(1));
+            func.instruction(&WasmInstruction::Br(0));
+
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
         }
@@ -2956,8 +3414,48 @@ impl Compiler {
         self.next_var_local = next_local;
     }
 
+    fn assign_eval_var_memory(&mut self, function: &IrFunction) {
+        self.var_memory_offsets.clear();
+        self.current_function_has_eval = function.has_eval();
+        if !function.has_eval() {
+            return;
+        }
+
+        let mut names = Vec::new();
+        for block in function.blocks() {
+            for instruction in block.instructions() {
+                let name = match instruction {
+                    Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. } => name,
+                    _ => continue,
+                };
+                if is_eval_memory_var_name(name) {
+                    names.push(name.clone());
+                }
+            }
+        }
+        names.sort();
+        names.dedup();
+
+        for (index, name) in names.into_iter().enumerate() {
+            let offset = index as u32 * 8;
+            self.var_memory_offsets.insert(name.clone(), offset);
+            self.eval_var_map_records.push(EvalVarMapRecord {
+                function_name: function.name().to_string(),
+                var_name: name,
+                offset,
+            });
+        }
+    }
+
     fn assign_var_locals(&mut self, function: &IrFunction) {
         self.var_locals.clear();
+        if self.ssa_local_base > 0 {
+            for (index, param) in function.params().iter().enumerate() {
+                if !self.is_eval_memory_var(param) {
+                    self.var_locals.insert(param.clone(), index as u32);
+                }
+            }
+        }
         let max_ssa = function
             .blocks()
             .iter()
@@ -2966,19 +3464,73 @@ impl Compiler {
             .max()
             .map_or(0, |max| max + 1);
 
-        self.next_var_local = max_ssa;
+        self.next_var_local = self.ssa_local_base + max_ssa;
         for block in function.blocks() {
             for instruction in block.instructions() {
                 let name = match instruction {
                     Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. } => name,
                     _ => continue,
                 };
+                if self.is_eval_memory_var(name) {
+                    continue;
+                }
                 self.var_locals.entry(name.clone()).or_insert_with(|| {
                     let idx = self.next_var_local;
                     self.next_var_local += 1;
                     idx
                 });
             }
+        }
+    }
+
+    fn is_eval_memory_var(&self, name: &str) -> bool {
+        self.current_function_has_eval && self.var_memory_offsets.contains_key(name)
+    }
+
+    fn emit_eval_var_frame_enter(&mut self) {
+        let frame_bytes = (self.var_memory_offsets.len() as u32) * 8;
+        if frame_bytes == 0 {
+            return;
+        }
+
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::LocalTee(self.eval_var_base_local_idx));
+        self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+        self.emit_shadow_stack_overflow_check(frame_bytes as i32);
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::I32Const(frame_bytes as i32));
+        self.emit(WasmInstruction::I32Add);
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+    }
+
+    fn emit_eval_var_frame_exit(&mut self) {
+        if self.var_memory_offsets.is_empty() {
+            return;
+        }
+        self.emit(WasmInstruction::LocalGet(self.eval_var_base_local_idx));
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+    }
+
+    fn emit_eval_var_address(&mut self, offset: u32) {
+        self.emit(WasmInstruction::LocalGet(self.eval_var_base_local_idx));
+        if offset != 0 {
+            self.emit(WasmInstruction::I32Const(offset as i32));
+            self.emit(WasmInstruction::I32Add);
+        }
+    }
+
+    fn emit_store_stacked_binding(&mut self, memory_offset: Option<u32>, local_idx: Option<u32>) {
+        if let Some(offset) = memory_offset {
+            self.emit(WasmInstruction::LocalSet(self.string_concat_scratch_idx));
+            self.emit_eval_var_address(offset);
+            self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
+            self.emit(WasmInstruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+        } else if let Some(local_idx) = local_idx {
+            self.emit(WasmInstruction::LocalSet(local_idx));
         }
     }
 
@@ -3241,6 +3793,7 @@ impl Compiler {
                 }
                 Terminator::Throw { value } => {
                     // 调用 runtime throw host function，然后 trap
+                    self.emit_eval_var_frame_exit();
                     self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                     let func_idx = self
                         .builtin_func_indices
@@ -3532,6 +4085,7 @@ impl Compiler {
                     idx = nested_exit_idx;
                 }
                 Terminator::Throw { value } => {
+                    self.emit_eval_var_frame_exit();
                     self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                     let func_idx = self
                         .builtin_func_indices
@@ -3710,6 +4264,7 @@ impl Compiler {
         } else if self.current_func_returns_value {
             self.emit(WasmInstruction::I64Const(value::encode_undefined()));
         }
+        self.emit_eval_var_frame_exit();
         self.emit(WasmInstruction::Return);
     }
 
@@ -4020,21 +4575,40 @@ impl Compiler {
                 .compile_builtin_call(*dest, builtin, args)
                 .map(|_| false),
             Instruction::LoadVar { dest, name } => {
-                let local_idx = self
-                    .var_locals
-                    .get(name)
-                    .with_context(|| format!("variable `{name}` has no assigned WASM local"))?;
-                self.emit(WasmInstruction::LocalGet(*local_idx));
+                if let Some(offset) = self.var_memory_offsets.get(name).copied() {
+                    self.emit_eval_var_address(offset);
+                    self.emit(WasmInstruction::I64Load(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                } else {
+                    let local_idx = self
+                        .var_locals
+                        .get(name)
+                        .with_context(|| format!("variable `{name}` has no assigned WASM local"))?;
+                    self.emit(WasmInstruction::LocalGet(*local_idx));
+                }
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(false)
             }
             Instruction::StoreVar { name, value } => {
-                let local_idx = *self
-                    .var_locals
-                    .get(name)
-                    .with_context(|| format!("variable `{name}` has no assigned WASM local"))?;
-                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
-                self.emit(WasmInstruction::LocalSet(local_idx));
+                if let Some(offset) = self.var_memory_offsets.get(name).copied() {
+                    self.emit_eval_var_address(offset);
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                    self.emit(WasmInstruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                } else {
+                    let local_idx = *self
+                        .var_locals
+                        .get(name)
+                        .with_context(|| format!("variable `{name}` has no assigned WASM local"))?;
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                    self.emit(WasmInstruction::LocalSet(local_idx));
+                }
                 Ok(false)
             }
             Instruction::Call {
@@ -4712,7 +5286,7 @@ impl Compiler {
         if let Some(&ptr) = self.string_ptr_cache.get(s) {
             return ptr;
         }
-        let ptr = self.data_offset;
+        let ptr = self.data_base + self.data_offset;
         let mut bytes = s.as_bytes().to_vec();
         bytes.push(0);
         let len = bytes.len() as u32;
@@ -4827,6 +5401,50 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::Eval => {
+                let code = args.first().context("eval expects code arg")?;
+                let env = args.get(1).context("eval expects scope env arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(code.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(env.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::EvalIndirect => {
+                let code = args.first().context("indirect eval expects code arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(code.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::EvalResult => {
+                let value = args.first().context("eval.result expects value arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 } else {
@@ -5462,10 +6080,14 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Builtin::PromiseCatch | Builtin::PromiseFinally
-            | Builtin::PromiseResolveStatic | Builtin::PromiseRejectStatic
-            | Builtin::PromiseAll | Builtin::PromiseRace
-            | Builtin::PromiseAllSettled | Builtin::PromiseAny => {
+            Builtin::PromiseCatch
+            | Builtin::PromiseFinally
+            | Builtin::PromiseResolveStatic
+            | Builtin::PromiseRejectStatic
+            | Builtin::PromiseAll
+            | Builtin::PromiseRace
+            | Builtin::PromiseAllSettled
+            | Builtin::PromiseAny => {
                 let promise = args
                     .first()
                     .context("promise catch/finally expects 2 args")?;
@@ -5485,7 +6107,7 @@ impl Compiler {
                 }
                 Ok(())
             }
-            | Builtin::PromiseWithResolvers
+            Builtin::PromiseWithResolvers
             | Builtin::PromiseCreateResolveFunction
             | Builtin::PromiseCreateRejectFunction
             | Builtin::IsCallable
@@ -5636,8 +6258,12 @@ impl Compiler {
             }
             // ── 动态 import builtins ─────────────────────────────────────────────
             Builtin::RegisterModuleNamespace => {
-                let module_id = args.first().context("register_module_namespace expects 2 args")?;
-                let namespace_obj = args.get(1).context("register_module_namespace expects 2 args")?;
+                let module_id = args
+                    .first()
+                    .context("register_module_namespace expects 2 args")?;
+                let namespace_obj = args
+                    .get(1)
+                    .context("register_module_namespace expects 2 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(module_id.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(namespace_obj.0)));
                 let func_idx = self
@@ -5674,7 +6300,7 @@ impl Compiler {
                 if let Some(&ptr) = self.string_ptr_cache.get(value) {
                     return Ok(value::encode_string_ptr(ptr));
                 }
-                let ptr = self.data_offset;
+                let ptr = self.data_base + self.data_offset;
                 let mut bytes = value.as_bytes().to_vec();
                 bytes.push(0);
                 let len = bytes.len() as u32;
@@ -5692,6 +6318,7 @@ impl Compiler {
                 let table_idx = function_id.0;
                 Ok(value::encode_function_idx(table_idx))
             }
+            Constant::NativeCallableEval => Ok(value::encode_native_callable_idx(0)),
             Constant::BigInt(_) => {
                 bail!("BigInt constants should be handled in compile_instruction::Const")
             }
@@ -5711,7 +6338,7 @@ impl Compiler {
         if let Some(&ptr) = self.string_ptr_cache.get(s) {
             return ptr;
         }
-        let ptr = self.data_offset;
+        let ptr = self.data_base + self.data_offset;
         let mut bytes = s.as_bytes().to_vec();
         bytes.push(0);
         let len = bytes.len() as u32;
@@ -5719,6 +6346,43 @@ impl Compiler {
         self.data_offset += len;
         self.string_ptr_cache.insert(s.to_string(), ptr);
         ptr
+    }
+
+    fn finalize_eval_var_map_data(&mut self) {
+        self.eval_var_map_records.sort_by(|a, b| {
+            a.function_name
+                .cmp(&b.function_name)
+                .then_with(|| a.var_name.cmp(&b.var_name))
+                .then_with(|| a.offset.cmp(&b.offset))
+        });
+        self.eval_var_map_records.dedup();
+
+        if self.eval_var_map_records.is_empty() {
+            self.eval_var_map_ptr = 0;
+            self.eval_var_map_count = 0;
+            return;
+        }
+
+        let records = self.eval_var_map_records.clone();
+        let mut table = Vec::with_capacity(records.len() * EVAL_VAR_MAP_RECORD_SIZE as usize);
+        for record in records {
+            let function_ptr = self.intern_data_string(&record.function_name);
+            let var_ptr = self.intern_data_string(&record.var_name);
+            table.extend_from_slice(&function_ptr.to_le_bytes());
+            table.extend_from_slice(&(record.function_name.len() as u32).to_le_bytes());
+            table.extend_from_slice(&var_ptr.to_le_bytes());
+            table.extend_from_slice(&(record.var_name.len() as u32).to_le_bytes());
+            table.extend_from_slice(&record.offset.to_le_bytes());
+        }
+
+        let table_ptr = (self.data_offset + 3) & !3;
+        if self.string_data.len() < table_ptr as usize {
+            self.string_data.resize(table_ptr as usize, 0);
+        }
+        self.string_data.extend_from_slice(&table);
+        self.data_offset = table_ptr + table.len() as u32;
+        self.eval_var_map_ptr = self.data_base + table_ptr;
+        self.eval_var_map_count = (table.len() as u32) / EVAL_VAR_MAP_RECORD_SIZE;
     }
 
     /// Emit WASM instructions that test whether a NaN-boxed i64 value is null or undefined.
@@ -5913,7 +6577,7 @@ impl Compiler {
             .max()
             .map_or(0, |max| max + 1);
 
-        max_ssa
+        (max_ssa + self.ssa_local_base)
             .max(self.next_var_local)
             .max(self.phi_locals.values().copied().max().map_or(0, |m| m + 1))
     }
@@ -5951,8 +6615,10 @@ impl Compiler {
         self.module.section(&self.imports);
         self.module.section(&self.functions);
         self.module.section(&self.table);
-        self.module.section(&self.memory);
-        self.module.section(&self.globals);
+        if self.mode == CompileMode::Normal {
+            self.module.section(&self.memory);
+            self.module.section(&self.globals);
+        }
         self.module.section(&self.exports);
         self.module.section(&self.elements);
         self.module.section(&self.codes);
@@ -6030,6 +6696,12 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
 
     loops.sort_by_key(|l| l.header_idx);
     loops
+}
+
+fn is_eval_memory_var_name(name: &str) -> bool {
+    !matches!(name, "$env" | "$this" | "$eval_env")
+        && !name.ends_with(".$env")
+        && !name.ends_with(".$this")
 }
 
 fn max_instruction_value_id(instruction: &Instruction) -> u32 {
@@ -6134,6 +6806,9 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::SetInterval => ("setInterval", 2),
         Builtin::ClearInterval => ("clearInterval", 1),
         Builtin::Fetch => ("fetch", 1),
+        Builtin::Eval => ("eval", 2),
+        Builtin::EvalIndirect => ("eval.indirect", 1),
+        Builtin::EvalResult => ("eval.result", 1),
         Builtin::JsonStringify => ("JSON.stringify", 1),
         Builtin::JsonParse => ("JSON.parse", 1),
         Builtin::CreateClosure => ("create_closure", 2),
@@ -6244,13 +6919,20 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
 
 #[cfg(test)]
 mod tests {
-    use super::compile;
+    use super::{compile, compile_eval};
     use anyhow::Result;
+    use wasmparser::{Parser, Payload, Validator};
 
     fn compile_source(source: &str) -> Result<Vec<u8>> {
         let module = wjsm_parser::parse_module(source)?;
         let program = wjsm_semantic::lower_module(module)?;
         compile(&program)
+    }
+
+    fn compile_eval_source(source: &str) -> Result<Vec<u8>> {
+        let module = wjsm_parser::parse_script_as_module(source)?;
+        let program = wjsm_semantic::lower_eval_module(module)?;
+        compile_eval(&program)
     }
 
     #[test]
@@ -6301,10 +6983,92 @@ mod tests {
     }
 
     #[test]
+    fn compile_eval_exports_entry_and_imports_runtime_state() -> Result<()> {
+        let wasm_bytes = compile_eval_source("1 + 2")?;
+
+        Validator::new().validate_all(&wasm_bytes)?;
+
+        let mut imports = Vec::new();
+        let mut exports = Vec::new();
+        for payload in Parser::new(0).parse_all(&wasm_bytes) {
+            match payload? {
+                Payload::ImportSection(section) => {
+                    for import in section.into_imports() {
+                        let import = import?;
+                        imports.push((import.module.to_string(), import.name.to_string()));
+                    }
+                }
+                Payload::ExportSection(section) => {
+                    for export in section {
+                        let export = export?;
+                        exports.push(export.name.to_string());
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        assert!(
+            imports
+                .iter()
+                .any(|(module, name)| module == "env" && name == "memory"),
+            "eval module should import parent memory"
+        );
+        assert!(
+            imports
+                .iter()
+                .any(|(module, name)| module == "env" && name == "__heap_ptr"),
+            "eval module should import parent heap pointer"
+        );
+        assert!(
+            exports.iter().any(|name| name == "__eval_entry"),
+            "eval module should export __eval_entry"
+        );
+        assert!(
+            !exports.iter().any(|name| name == "main"),
+            "eval module should not export main"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compile_direct_eval_exports_var_map_metadata() -> Result<()> {
+        let wasm_bytes = compile_source(r#"var x = 1; eval("x");"#)?;
+
+        Validator::new().validate_all(&wasm_bytes)?;
+
+        let mut exports = Vec::new();
+        for payload in Parser::new(0).parse_all(&wasm_bytes) {
+            if let Payload::ExportSection(section) = payload? {
+                for export in section {
+                    exports.push(export?.name.to_string());
+                }
+            }
+        }
+
+        assert!(
+            exports.iter().any(|name| name == "__eval_var_map_ptr"),
+            "module should export eval variable map pointer"
+        );
+        assert!(
+            exports.iter().any(|name| name == "__eval_var_map_count"),
+            "module should export eval variable map count"
+        );
+        assert!(
+            wasm_bytes
+                .windows("$0.x\0".len())
+                .any(|window| window == b"$0.x\0"),
+            "eval variable map should embed scoped variable names"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn dump_if_else_ir() -> Result<()> {
         let source = "if (true) { console.log(\"yes\"); } else { console.log(\"no\"); }";
         let module = wjsm_parser::parse_module(source)?;
         let program = wjsm_semantic::lower_module(module)?;
+        assert!(program.dump_text().contains("fn @main"));
         Ok(())
     }
 }
