@@ -638,6 +638,10 @@ impl Compiler {
         imports.import("env", "is_callable", EntityType::Function(3));
         // Import index 145: promise_with_resolvers: (i64) -> i64
         imports.import("env", "promise_with_resolvers", EntityType::Function(3));
+        // Import index 146: register_module_namespace: (i64, i64) -> ()
+        imports.import("env", "register_module_namespace", EntityType::Function(5));
+        // Import index 147: dynamic_import: (i64) -> i64
+        imports.import("env", "dynamic_import", EntityType::Function(3));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -773,7 +777,9 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::AsyncGeneratorThrow, 140);
         builtin_func_indices.insert(Builtin::PromiseWithResolvers, 145);
         builtin_func_indices.insert(Builtin::IsCallable, 144);
-
+        // ── 动态 import builtins ──
+        builtin_func_indices.insert(Builtin::RegisterModuleNamespace, 146);
+        builtin_func_indices.insert(Builtin::DynamicImport, 147);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -809,7 +815,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: 146, // 146 imports (0-145)
+            _next_import_func: 148, // 148 imports (0-147)
             builtin_func_indices,
             function_table: Vec::new(),
             function_name_to_wasm_idx: HashMap::new(),
@@ -5628,6 +5634,34 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── 动态 import builtins ─────────────────────────────────────────────
+            Builtin::RegisterModuleNamespace => {
+                let module_id = args.first().context("register_module_namespace expects 2 args")?;
+                let namespace_obj = args.get(1).context("register_module_namespace expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(module_id.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(namespace_obj.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                Ok(())
+            }
+            Builtin::DynamicImport => {
+                let module_id = args.first().context("dynamic_import expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(module_id.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
         }
     }
 
@@ -5663,6 +5697,10 @@ impl Compiler {
             }
             Constant::RegExp { .. } => {
                 bail!("RegExp constants should be handled in compile_instruction::Const")
+            }
+            Constant::ModuleId(module_id) => {
+                // 模块 ID 直接编码为 i64 整数
+                Ok(module_id.0 as i64)
             }
         }
     }
@@ -6196,6 +6234,9 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::PromiseWithResolvers => ("promise.with_resolvers", 1),
         Builtin::IsCallable => ("is_callable", 1),
         Builtin::AsyncGeneratorThrow => ("async_generator.throw", 2),
+        // ── 动态 import builtins ──
+        Builtin::DynamicImport => ("dynamic_import", 1),
+        Builtin::RegisterModuleNamespace => ("register_module_namespace", 2),
     }
 }
 

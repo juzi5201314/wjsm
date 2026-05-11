@@ -523,9 +523,15 @@ pub fn lower_module(module: swc_ast::Module) -> Result<Program, LoweringError> {
 /// # 参数
 /// - `modules`: 模块列表，每个元素是 (ModuleId, AST)
 /// - `import_map`: 导入映射，module_id → ImportBinding 列表
+/// - `dynamic_import_targets`: 动态 import() 目标映射，module_id → 被动态 import 的目标模块 ID 列表
+/// - `export_names`: 导出名称映射，module_id → 导出名集合
+/// - `dynamic_import_specifiers`: 动态 import() specifier 映射，module_id → [(specifier, 目标 ModuleId)]
 pub fn lower_modules(
     modules: Vec<(wjsm_ir::ModuleId, swc_ast::Module)>,
     import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
+    dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
+    export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
+    dynamic_import_specifiers: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<(String, wjsm_ir::ModuleId)>>,
 ) -> Result<Program, LoweringError> {
     // 如果只有一个模块且没有 import，使用单模块编译路径
     if modules.len() == 1 && import_map.is_empty() {
@@ -536,6 +542,26 @@ pub fn lower_modules(
     // 多模块编译路径
     let mut lowerer = Lowerer::new();
     lowerer.import_bindings = import_map.clone();
+    lowerer.dynamic_import_targets = dynamic_import_targets.clone();
+    lowerer.module_export_names = export_names.clone();
+ 
+    // 收集需要构建命名空间对象的模块
+    for targets in dynamic_import_targets.values() {
+        for &target_id in targets {
+            lowerer.dynamic_import_namespace_modules.insert(target_id);
+        }
+    }
+ 
+    // 构建 specifier → ModuleId 映射（从动态 import specifier 列表构建，而非 import_map）
+    for (module_id, spec_list) in dynamic_import_specifiers.iter() {
+        for (specifier, target_id) in spec_list {
+            lowerer.dynamic_import_specifier_map.insert(
+                (*module_id, specifier.clone()),
+                *target_id,
+            );
+        }
+    }
+
     lowerer.shared_env_stack.push(None);
 
     // 预扫描：为所有模块的变量声明创建作用域条目
@@ -678,6 +704,50 @@ pub fn lower_modules(
         },
     );
 
+    // ── 为动态 import 的目标模块创建并注册命名空间对象 ──────────────────────
+    // 必须在模块体执行前注册，否则 import() 在模块体中调用时找不到命名空间
+    // 属性在模块体执行后填充（此时导出变量才有值）
+    {
+        let mut namespace_modules: Vec<_> = lowerer.dynamic_import_namespace_modules.iter().copied().collect();
+        namespace_modules.sort_by_key(|id| id.0);
+        for target_module_id in &namespace_modules {
+            let export_names_set = lowerer.module_export_names.get(target_module_id).cloned();
+            let capacity = export_names_set.as_ref().map_or(0, |s| s.len()) + 1;
+
+            // 创建空命名空间对象
+            let ns_obj = lowerer.alloc_value();
+            lowerer.current_function.append_instruction(
+                entry,
+                Instruction::NewObject {
+                    dest: ns_obj,
+                    capacity: capacity as u32,
+                },
+            );
+
+            // 注册到运行时缓存
+            let module_id_const = lowerer.module.add_constant(Constant::ModuleId(*target_module_id));
+            let module_id_val = lowerer.alloc_value();
+            lowerer.current_function.append_instruction(
+                entry,
+                Instruction::Const {
+                    dest: module_id_val,
+                    constant: module_id_const,
+                },
+            );
+            lowerer.current_function.append_instruction(
+                entry,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::RegisterModuleNamespace,
+                    args: vec![module_id_val, ns_obj],
+                },
+            );
+
+            // 记录 ValueId 供后续属性填充使用
+            lowerer.dynamic_import_namespace_objects.insert(*target_module_id, ns_obj);
+        }
+    }
+
     // 处理每个模块的 body
     let mut flow = StmtFlow::Open(entry);
     for (module_id, module_ast) in &modules {
@@ -697,6 +767,15 @@ pub fn lower_modules(
                         swc_ast::ModuleDecl::ExportDecl(export_decl) => {
                             flow = lowerer
                                 .lower_stmt(&swc_ast::Stmt::Decl(export_decl.decl.clone()), flow)?;
+                            // 将导出名注册到 export_map
+                            let current_mid = lowerer.current_module_id.unwrap_or(wjsm_ir::ModuleId(0));
+                            let names = decl_exported_names(&export_decl.decl);
+                            for name in names {
+                                if let Ok((scope_id, _)) = lowerer.scopes.lookup(&name) {
+                                    let ir_name = format!("${scope_id}.{name}");
+                                    lowerer.export_map.insert((current_mid, name), ir_name);
+                                }
+                            }
                         }
                         // export default expr → 计算表达式并存储到 _default_export_mod{id} 变量
                         swc_ast::ModuleDecl::ExportDefaultExpr(default_expr) => {
@@ -808,13 +887,120 @@ pub fn lower_modules(
                         swc_ast::ModuleDecl::Import(_) => {
                             // 暂时跳过 import（依赖已由 bundler 预处理）
                         }
-                        // export * from / export { ... } → 暂时跳过
+                        // export { x } / export { x as y } → 将导出名注册到 export_map
+                        swc_ast::ModuleDecl::ExportNamed(named_export) => {
+                            let current_mid = lowerer.current_module_id.unwrap_or(wjsm_ir::ModuleId(0));
+                            if named_export.src.is_none() {
+                                // 本地导出：export { x } / export { x as y }
+                                for spec in &named_export.specifiers {
+                                    if let swc_ast::ExportSpecifier::Named(named) = spec {
+                                        let local_name = match &named.orig {
+                                            swc_ast::ModuleExportName::Ident(ident) => ident.sym.to_string(),
+                                            swc_ast::ModuleExportName::Str(s) => s.value.to_string_lossy().into_owned(),
+                                        };
+                                        let exported_name = named.exported.as_ref().map_or_else(
+                                            || local_name.clone(),
+                                            |e| match e {
+                                                swc_ast::ModuleExportName::Ident(ident) => ident.sym.to_string(),
+                                                swc_ast::ModuleExportName::Str(s) => s.value.to_string_lossy().into_owned(),
+                                            },
+                                        );
+                                        if let Ok((scope_id, _)) = lowerer.scopes.lookup(&local_name) {
+                                            let ir_name = format!("${scope_id}.{local_name}");
+                                            lowerer.export_map.insert((current_mid, exported_name), ir_name);
+                                        }
+                                    }
+                                }
+                            }
+                            // re-export (export { x } from './foo') 暂不支持，需要跨模块绑定查找
+                        }
+                        // export * from → 暂时跳过
                         _ => {
                             // 暂不处理 re-exports
                         }
                     }
                 }
             }
+        }
+    }
+
+    // ── 为动态 import 的命名空间对象填充属性 ────────────────────────────────
+    // 命名空间对象已在模块体执行前创建并注册，此处仅设置属性值
+    // （模块体执行后，导出变量才被赋值）
+    //
+    // TODO: 当前实现为一次性快照语义（SetProp 后不再更新），不符合 ES Module live binding 规范。
+    // 根据规范，命名空间属性必须是 live binding：ns.x 应反映导出变量的最新值。
+    // 完整修复需要 IR 层支持 getter 或在 StoreVar 时同步更新命名空间属性。
+    // 这属于较大特性，需要 IR 层变更后才能实现。
+    if let StmtFlow::Open(ns_block) = flow {
+        let mut namespace_modules: Vec<_> = lowerer.dynamic_import_namespace_objects.keys().copied().collect();
+        namespace_modules.sort_by_key(|id| id.0);
+        for target_module_id in namespace_modules {
+            let ns_obj = lowerer.dynamic_import_namespace_objects[&target_module_id];
+            let export_names_set = lowerer.module_export_names.get(&target_module_id).cloned();
+
+            // 为每个导出设置属性
+            if let Some(names) = export_names_set {
+                let mut sorted_names: Vec<_> = names.iter().collect();
+                sorted_names.sort();
+                for export_name in sorted_names {
+                    if let Some(ir_name) = lowerer.export_map.get(&(target_module_id, export_name.clone())).cloned() {
+                        let value_val = lowerer.alloc_value();
+                        lowerer.current_function.append_instruction(
+                            ns_block,
+                            Instruction::LoadVar {
+                                dest: value_val,
+                                name: ir_name,
+                            },
+                        );
+                        let key_const = lowerer.module.add_constant(Constant::String(export_name.clone()));
+                        let key_val = lowerer.alloc_value();
+                        lowerer.current_function.append_instruction(
+                            ns_block,
+                            Instruction::Const {
+                                dest: key_val,
+                                constant: key_const,
+                            },
+                        );
+                        lowerer.current_function.append_instruction(
+                            ns_block,
+                            Instruction::SetProp {
+                                object: ns_obj,
+                                key: key_val,
+                                value: value_val,
+                            },
+                        );
+                    }
+                }
+            }
+
+            // 设置 Symbol.toStringTag = "Module"
+            let tag_key = lowerer.module.add_constant(Constant::String("Symbol.toStringTag".to_string()));
+            let tag_key_val = lowerer.alloc_value();
+            lowerer.current_function.append_instruction(
+                ns_block,
+                Instruction::Const {
+                    dest: tag_key_val,
+                    constant: tag_key,
+                },
+            );
+            let tag_value = lowerer.module.add_constant(Constant::String("Module".to_string()));
+            let tag_value_val = lowerer.alloc_value();
+            lowerer.current_function.append_instruction(
+                ns_block,
+                Instruction::Const {
+                    dest: tag_value_val,
+                    constant: tag_value,
+                },
+            );
+            lowerer.current_function.append_instruction(
+                ns_block,
+                Instruction::SetProp {
+                    object: ns_obj,
+                    key: tag_key_val,
+                    value: tag_value_val,
+                },
+            );
         }
     }
 
@@ -917,6 +1103,15 @@ struct Lowerer {
     /// 导入别名映射：local_name → source_ir_name
     /// 用于 `import { x as y }` 和 `import x from './dep'` 等场景
     import_aliases: std::collections::HashMap<String, String>,
+    /// 动态 import() 目标映射：module_id → 被动态 import 的目标模块 ID 列表
+    dynamic_import_targets: std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
+    /// 动态 import specifier → ModuleId 映射：(当前模块 ID, specifier) → 目标 ModuleId
+    dynamic_import_specifier_map: std::collections::HashMap<(wjsm_ir::ModuleId, String), wjsm_ir::ModuleId>,
+    /// 需要构建命名空间对象的模块集合
+    dynamic_import_namespace_modules: std::collections::HashSet<wjsm_ir::ModuleId>,
+    /// 命名空间对象的 ValueId：ModuleId → ValueId（在模块体执行前创建，模块体执行后填充属性）
+    dynamic_import_namespace_objects: std::collections::HashMap<wjsm_ir::ModuleId, wjsm_ir::ValueId>,
+    module_export_names: std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
     is_async_fn: bool,
     is_async_generator_fn: bool,
     async_state_counter: u32,
@@ -1033,6 +1228,11 @@ impl Lowerer {
             import_bindings: std::collections::HashMap::new(),
             export_map: std::collections::HashMap::new(),
             import_aliases: std::collections::HashMap::new(),
+            dynamic_import_targets: std::collections::HashMap::new(),
+            dynamic_import_namespace_modules: std::collections::HashSet::new(),
+            dynamic_import_namespace_objects: std::collections::HashMap::new(),
+            dynamic_import_specifier_map: std::collections::HashMap::new(),
+            module_export_names: std::collections::HashMap::new(),
             is_async_fn: false,
             is_async_generator_fn: false,
             async_state_counter: 0,
@@ -9345,6 +9545,92 @@ impl Lowerer {
         Ok(dest)
     }
 
+    /// 处理动态 import() 调用
+    fn lower_dynamic_import_call(
+        &mut self,
+        call: &swc_ast::CallExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        // 1. 提取 specifier 字符串
+        let first_arg = call.args.first().ok_or_else(|| {
+            self.error(call.span,
+                "import() requires a module specifier; \
+                 in AOT compilation mode, only string literal specifiers are supported")
+        })?;
+
+        let specifier = match first_arg.expr.as_ref() {
+            swc_ast::Expr::Lit(swc_ast::Lit::Str(s)) => {
+                s.value.to_string_lossy().into_owned()
+            }
+            swc_ast::Expr::Tpl(tpl) => {
+                if tpl.exprs.is_empty() {
+                    let mut result = String::new();
+                    for quasi in &tpl.quasis {
+                        result.push_str(&quasi.raw);
+                    }
+                    result
+                } else {
+                    return Err(self.error(
+                        call.span,
+                        "import() with template literal containing expressions is not supported; \
+                         AOT compilation requires the specifier to be a static string literal",
+                    ));
+                }
+            }
+            _ => {
+                return Err(self.error(
+                    call.span,
+                    "import() requires a string literal specifier; \
+                     AOT compilation cannot resolve dynamic specifiers at compile time. \
+                     Use a string literal like import('./module.js') instead",
+                ));
+            }
+        };
+ 
+        // 2. 查找目标模块 ID
+        let current_module_id = self.current_module_id.ok_or_else(|| {
+            self.error(call.span, "dynamic import is only supported in multi-module mode")
+        })?;
+ 
+        let target_id = self.find_dynamic_import_target(current_module_id, &specifier)
+            .ok_or_else(|| {
+                self.error(call.span, format!("cannot resolve dynamic import specifier '{}'", specifier))
+            })?;
+ 
+        // 3. 生成 CallBuiltin(DynamicImport, [module_id])
+        let module_id_const = self.module.add_constant(Constant::ModuleId(target_id));
+        let module_id_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: module_id_val,
+                constant: module_id_const,
+            },
+        );
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(dest),
+                builtin: Builtin::DynamicImport,
+                args: vec![module_id_val],
+            },
+        );
+        Ok(dest)
+    }
+ 
+    /// 从 specifier 映射中查找动态 import 目标的 ModuleId
+    fn find_dynamic_import_target(
+        &self,
+        current_module_id: wjsm_ir::ModuleId,
+        specifier: &str,
+    ) -> Option<wjsm_ir::ModuleId> {
+        self.dynamic_import_specifier_map
+            .get(&(current_module_id, specifier.to_string()))
+            .copied()
+    }
+
+
     fn lower_call_expr(
         &mut self,
         call: &swc_ast::CallExpr,
@@ -9628,7 +9914,13 @@ impl Lowerer {
                     callee_val = self.lower_expr(expr, block)?;
                 }
             }
-            _ => return Err(self.error(call.span, "unsupported callee type")),
+            swc_ast::Callee::Import { .. } => {
+                // 动态 import() 调用
+                return self.lower_dynamic_import_call(call, block);
+            }
+            swc_ast::Callee::Super(_) => {
+                return Err(self.error(call.span, "super call is not supported"));
+            }
         }
 
         // 性能优化：预分配容量避免循环中多次 reallocation
@@ -11764,5 +12056,41 @@ fn module_decl_kind(decl: &swc_ast::ModuleDecl) -> &'static str {
         swc_ast::ModuleDecl::TsImportEquals(_) => "ts-import-equals",
         swc_ast::ModuleDecl::TsExportAssignment(_) => "ts-export-assignment",
         swc_ast::ModuleDecl::TsNamespaceExport(_) => "ts-namespace-export",
+    }
+}
+
+/// 从 Decl 中提取所有导出的标识符名称
+fn decl_exported_names(decl: &swc_ast::Decl) -> Vec<String> {
+    match decl {
+        swc_ast::Decl::Var(var_decl) => {
+            var_decl.decls.iter().map(|d| {
+                match &d.name {
+                    swc_ast::Pat::Ident(ident) => ident.id.sym.to_string(),
+                    _ => String::new(), // 解构导出暂不支持
+                }
+            }).filter(|s| !s.is_empty()).collect()
+        }
+        swc_ast::Decl::Fn(fn_decl) => {
+            vec![fn_decl.ident.sym.to_string()]
+        }
+        swc_ast::Decl::Class(class_decl) => {
+            vec![class_decl.ident.sym.to_string()]
+        }
+        swc_ast::Decl::TsInterface(ts_iface) => {
+            vec![ts_iface.id.sym.to_string()]
+        }
+        swc_ast::Decl::TsTypeAlias(ts_alias) => {
+            vec![ts_alias.id.sym.to_string()]
+        }
+        swc_ast::Decl::TsEnum(ts_enum) => {
+            vec![ts_enum.id.sym.to_string()]
+        }
+        swc_ast::Decl::TsModule(ts_module) => {
+            match &ts_module.id {
+                swc_ast::TsModuleName::Ident(ident) => vec![ident.sym.to_string()],
+                _ => vec![],
+            }
+        }
+        _ => vec![],
     }
 }

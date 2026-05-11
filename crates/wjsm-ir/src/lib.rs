@@ -76,6 +76,8 @@ pub enum Constant {
         pattern: String,
         flags: String,
     },
+    /// AOT 解析的模块 ID（用于动态 import）
+    ModuleId(ModuleId),
 }
 
 impl fmt::Display for Constant {
@@ -91,6 +93,7 @@ impl fmt::Display for Constant {
             Self::RegExp { pattern, flags } => {
                 write!(formatter, "regex(/{pattern}/{flags})")
             }
+            Self::ModuleId(id) => write!(formatter, "moduleid({id})"),
         }
     }
 }
@@ -786,6 +789,9 @@ pub enum Builtin {
     AsyncGeneratorThrow,
     PromiseWithResolvers,
     IsCallable,
+    // ── 动态 import ──────────────────────────────────────────────────
+    DynamicImport,
+    RegisterModuleNamespace,
 }
 
 impl fmt::Display for Builtin {
@@ -923,6 +929,8 @@ impl fmt::Display for Builtin {
             Self::PromiseWithResolvers => "promise.with_resolvers",
             Self::IsCallable => "is_callable",
             Self::AsyncGeneratorThrow => "async_generator.throw",
+            Self::DynamicImport => "dynamic_import",
+            Self::RegisterModuleNamespace => "register_module_namespace",
         })
     }
 }
@@ -1066,6 +1074,8 @@ pub struct ImportBinding {
     /// - `import * as ns from './foo'` → ("ns", "*")
     /// - `import defaultExport from './foo'` → ("defaultExport", "default")
     pub names: Vec<(String, String)>,
+    /// 模块说明符（如 './foo'），用于动态 import 的 specifier 查找
+    pub specifier: String,
 }
 
 // ── Heap type tags ──────────────────────────────────────────────────────
