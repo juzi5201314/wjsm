@@ -1,0 +1,4 @@
+exit_code: 2
+--- stdout ---
+--- stderr ---
+Runtime error: SyntaxError: cannot redeclare identifier `x` in eval

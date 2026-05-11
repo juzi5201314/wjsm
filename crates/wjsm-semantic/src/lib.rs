@@ -8,6 +8,8 @@ use wjsm_ir::{
     Instruction, Module, PhiSource, Program, SwitchCaseTarget, Terminator, UnaryOp, ValueId,
 };
 
+const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
+
 // ── Scope tree ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -170,6 +172,29 @@ impl ScopeTree {
         }
     }
 
+    /// 返回当前词法环境可见的绑定；同名绑定只保留最近的一层。
+    fn visible_bindings(&self) -> Vec<(usize, String, VarKind)> {
+        let mut result = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut cursor = Some(self.current);
+        while let Some(scope_id) = cursor {
+            let scope = &self.arenas[scope_id];
+            let mut names: Vec<_> = scope.variables.keys().cloned().collect();
+            names.sort();
+            for name in names {
+                if seen.insert(name.clone()) {
+                    if let Some(info) = scope.variables.get(&name) {
+                        if info.initialised {
+                            result.push((scope.id, name, info.kind));
+                        }
+                    }
+                }
+            }
+            cursor = scope.parent;
+        }
+        result
+    }
+
     /// Resolve a variable's scope id without checking TDZ.
     fn resolve_scope_id(&self, name: &str) -> Result<usize, String> {
         let mut cursor = self.current;
@@ -257,6 +282,7 @@ struct FunctionBuilder {
     _name: String,
     _entry: BasicBlockId,
     blocks: Vec<BasicBlock>,
+    has_eval: bool,
 }
 
 impl FunctionBuilder {
@@ -265,7 +291,16 @@ impl FunctionBuilder {
             _name: name.into(),
             _entry: entry,
             blocks: vec![BasicBlock::new(entry)],
+            has_eval: false,
         }
+    }
+
+    fn mark_has_eval(&mut self) {
+        self.has_eval = true;
+    }
+
+    fn has_eval(&self) -> bool {
+        self.has_eval
     }
 
     fn new_block(&mut self) -> BasicBlockId {
@@ -327,7 +362,9 @@ impl FunctionBuilder {
     #[allow(dead_code)]
     fn finish(self) -> Function {
         let entry = self._entry;
-        Function::new(self._name, entry)
+        let mut function = Function::new(self._name, entry);
+        function.set_has_eval(self.has_eval);
+        function
     }
 
     fn into_blocks(mut self) -> Vec<BasicBlock> {
@@ -473,8 +510,12 @@ fn has_top_level_await(module: &swc_ast::Module) -> bool {
             swc_ast::Stmt::Throw(t) => expr_has_await(&t.arg),
             swc_ast::Stmt::Try(t) => {
                 t.block.stmts.iter().any(stmt_has_await)
-                    || t.handler.as_ref().map_or(false, |h| h.body.stmts.iter().any(stmt_has_await))
-                    || t.finalizer.as_ref().map_or(false, |f| f.stmts.iter().any(stmt_has_await))
+                    || t.handler
+                        .as_ref()
+                        .map_or(false, |h| h.body.stmts.iter().any(stmt_has_await))
+                    || t.finalizer
+                        .as_ref()
+                        .map_or(false, |f| f.stmts.iter().any(stmt_has_await))
             }
             swc_ast::Stmt::Switch(s) => {
                 expr_has_await(&s.discriminant)
@@ -518,6 +559,22 @@ pub fn lower_module(module: swc_ast::Module) -> Result<Program, LoweringError> {
     Lowerer::new().lower_module(&module)
 }
 
+pub fn lower_eval_module(module: swc_ast::Module) -> Result<Program, LoweringError> {
+    lower_eval_module_with_scope(module, false, false)
+}
+
+pub fn lower_eval_module_with_scope(
+    module: swc_ast::Module,
+    has_scope_bridge: bool,
+    var_writes_to_scope: bool,
+) -> Result<Program, LoweringError> {
+    let mut lowerer = Lowerer::new();
+    lowerer.eval_mode = true;
+    lowerer.eval_has_scope_bridge = has_scope_bridge;
+    lowerer.eval_var_writes_to_scope = var_writes_to_scope;
+    lowerer.lower_module(&module)
+}
+
 /// 将多个模块编译为单一的 IR Program（模块 bundling）
 ///
 /// # 参数
@@ -531,7 +588,10 @@ pub fn lower_modules(
     import_map: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ImportBinding>>,
     dynamic_import_targets: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
     export_names: &std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
-    dynamic_import_specifiers: &std::collections::HashMap<wjsm_ir::ModuleId, Vec<(String, wjsm_ir::ModuleId)>>,
+    dynamic_import_specifiers: &std::collections::HashMap<
+        wjsm_ir::ModuleId,
+        Vec<(String, wjsm_ir::ModuleId)>,
+    >,
 ) -> Result<Program, LoweringError> {
     // 如果只有一个模块且没有 import，使用单模块编译路径
     if modules.len() == 1 && import_map.is_empty() {
@@ -544,21 +604,20 @@ pub fn lower_modules(
     lowerer.import_bindings = import_map.clone();
     lowerer.dynamic_import_targets = dynamic_import_targets.clone();
     lowerer.module_export_names = export_names.clone();
- 
+
     // 收集需要构建命名空间对象的模块
     for targets in dynamic_import_targets.values() {
         for &target_id in targets {
             lowerer.dynamic_import_namespace_modules.insert(target_id);
         }
     }
- 
+
     // 构建 specifier → ModuleId 映射（从动态 import specifier 列表构建，而非 import_map）
     for (module_id, spec_list) in dynamic_import_specifiers.iter() {
         for (specifier, target_id) in spec_list {
-            lowerer.dynamic_import_specifier_map.insert(
-                (*module_id, specifier.clone()),
-                *target_id,
-            );
+            lowerer
+                .dynamic_import_specifier_map
+                .insert((*module_id, specifier.clone()), *target_id);
         }
     }
 
@@ -643,7 +702,10 @@ pub fn lower_modules(
     let has_tla = modules.iter().any(|(_, m)| has_top_level_await(m));
     let entry = if has_tla {
         // 取第一个模块的 span 用于错误报告
-        let first_span = modules.first().map(|(_, m)| m.span).unwrap_or(swc_core::common::DUMMY_SP);
+        let first_span = modules
+            .first()
+            .map(|(_, m)| m.span)
+            .unwrap_or(swc_core::common::DUMMY_SP);
         lowerer.init_async_main_context(first_span)?
     } else {
         BasicBlockId(0)
@@ -708,7 +770,11 @@ pub fn lower_modules(
     // 必须在模块体执行前注册，否则 import() 在模块体中调用时找不到命名空间
     // 属性在模块体执行后填充（此时导出变量才有值）
     {
-        let mut namespace_modules: Vec<_> = lowerer.dynamic_import_namespace_modules.iter().copied().collect();
+        let mut namespace_modules: Vec<_> = lowerer
+            .dynamic_import_namespace_modules
+            .iter()
+            .copied()
+            .collect();
         namespace_modules.sort_by_key(|id| id.0);
         for target_module_id in &namespace_modules {
             let export_names_set = lowerer.module_export_names.get(target_module_id).cloned();
@@ -725,7 +791,9 @@ pub fn lower_modules(
             );
 
             // 注册到运行时缓存
-            let module_id_const = lowerer.module.add_constant(Constant::ModuleId(*target_module_id));
+            let module_id_const = lowerer
+                .module
+                .add_constant(Constant::ModuleId(*target_module_id));
             let module_id_val = lowerer.alloc_value();
             lowerer.current_function.append_instruction(
                 entry,
@@ -744,7 +812,9 @@ pub fn lower_modules(
             );
 
             // 记录 ValueId 供后续属性填充使用
-            lowerer.dynamic_import_namespace_objects.insert(*target_module_id, ns_obj);
+            lowerer
+                .dynamic_import_namespace_objects
+                .insert(*target_module_id, ns_obj);
         }
     }
 
@@ -768,7 +838,8 @@ pub fn lower_modules(
                             flow = lowerer
                                 .lower_stmt(&swc_ast::Stmt::Decl(export_decl.decl.clone()), flow)?;
                             // 将导出名注册到 export_map
-                            let current_mid = lowerer.current_module_id.unwrap_or(wjsm_ir::ModuleId(0));
+                            let current_mid =
+                                lowerer.current_module_id.unwrap_or(wjsm_ir::ModuleId(0));
                             let names = decl_exported_names(&export_decl.decl);
                             for name in names {
                                 if let Ok((scope_id, _)) = lowerer.scopes.lookup(&name) {
@@ -889,25 +960,38 @@ pub fn lower_modules(
                         }
                         // export { x } / export { x as y } → 将导出名注册到 export_map
                         swc_ast::ModuleDecl::ExportNamed(named_export) => {
-                            let current_mid = lowerer.current_module_id.unwrap_or(wjsm_ir::ModuleId(0));
+                            let current_mid =
+                                lowerer.current_module_id.unwrap_or(wjsm_ir::ModuleId(0));
                             if named_export.src.is_none() {
                                 // 本地导出：export { x } / export { x as y }
                                 for spec in &named_export.specifiers {
                                     if let swc_ast::ExportSpecifier::Named(named) = spec {
                                         let local_name = match &named.orig {
-                                            swc_ast::ModuleExportName::Ident(ident) => ident.sym.to_string(),
-                                            swc_ast::ModuleExportName::Str(s) => s.value.to_string_lossy().into_owned(),
+                                            swc_ast::ModuleExportName::Ident(ident) => {
+                                                ident.sym.to_string()
+                                            }
+                                            swc_ast::ModuleExportName::Str(s) => {
+                                                s.value.to_string_lossy().into_owned()
+                                            }
                                         };
                                         let exported_name = named.exported.as_ref().map_or_else(
                                             || local_name.clone(),
                                             |e| match e {
-                                                swc_ast::ModuleExportName::Ident(ident) => ident.sym.to_string(),
-                                                swc_ast::ModuleExportName::Str(s) => s.value.to_string_lossy().into_owned(),
+                                                swc_ast::ModuleExportName::Ident(ident) => {
+                                                    ident.sym.to_string()
+                                                }
+                                                swc_ast::ModuleExportName::Str(s) => {
+                                                    s.value.to_string_lossy().into_owned()
+                                                }
                                             },
                                         );
-                                        if let Ok((scope_id, _)) = lowerer.scopes.lookup(&local_name) {
+                                        if let Ok((scope_id, _)) =
+                                            lowerer.scopes.lookup(&local_name)
+                                        {
                                             let ir_name = format!("${scope_id}.{local_name}");
-                                            lowerer.export_map.insert((current_mid, exported_name), ir_name);
+                                            lowerer
+                                                .export_map
+                                                .insert((current_mid, exported_name), ir_name);
                                         }
                                     }
                                 }
@@ -933,7 +1017,11 @@ pub fn lower_modules(
     // 完整修复需要 IR 层支持 getter 或在 StoreVar 时同步更新命名空间属性。
     // 这属于较大特性，需要 IR 层变更后才能实现。
     if let StmtFlow::Open(ns_block) = flow {
-        let mut namespace_modules: Vec<_> = lowerer.dynamic_import_namespace_objects.keys().copied().collect();
+        let mut namespace_modules: Vec<_> = lowerer
+            .dynamic_import_namespace_objects
+            .keys()
+            .copied()
+            .collect();
         namespace_modules.sort_by_key(|id| id.0);
         for target_module_id in namespace_modules {
             let ns_obj = lowerer.dynamic_import_namespace_objects[&target_module_id];
@@ -944,7 +1032,11 @@ pub fn lower_modules(
                 let mut sorted_names: Vec<_> = names.iter().collect();
                 sorted_names.sort();
                 for export_name in sorted_names {
-                    if let Some(ir_name) = lowerer.export_map.get(&(target_module_id, export_name.clone())).cloned() {
+                    if let Some(ir_name) = lowerer
+                        .export_map
+                        .get(&(target_module_id, export_name.clone()))
+                        .cloned()
+                    {
                         let value_val = lowerer.alloc_value();
                         lowerer.current_function.append_instruction(
                             ns_block,
@@ -953,7 +1045,9 @@ pub fn lower_modules(
                                 name: ir_name,
                             },
                         );
-                        let key_const = lowerer.module.add_constant(Constant::String(export_name.clone()));
+                        let key_const = lowerer
+                            .module
+                            .add_constant(Constant::String(export_name.clone()));
                         let key_val = lowerer.alloc_value();
                         lowerer.current_function.append_instruction(
                             ns_block,
@@ -975,7 +1069,9 @@ pub fn lower_modules(
             }
 
             // 设置 Symbol.toStringTag = "Module"
-            let tag_key = lowerer.module.add_constant(Constant::String("Symbol.toStringTag".to_string()));
+            let tag_key = lowerer
+                .module
+                .add_constant(Constant::String("Symbol.toStringTag".to_string()));
             let tag_key_val = lowerer.alloc_value();
             lowerer.current_function.append_instruction(
                 ns_block,
@@ -984,7 +1080,9 @@ pub fn lower_modules(
                     constant: tag_key,
                 },
             );
-            let tag_value = lowerer.module.add_constant(Constant::String("Module".to_string()));
+            let tag_value = lowerer
+                .module
+                .add_constant(Constant::String("Module".to_string()));
             let tag_value_val = lowerer.alloc_value();
             lowerer.current_function.append_instruction(
                 ns_block,
@@ -1048,8 +1146,10 @@ pub fn lower_modules(
     if has_tla {
         lowerer.finalize_async_main()?;
     } else {
+        let has_eval = lowerer.current_function.has_eval();
         let blocks = lowerer.current_function.into_blocks();
         let mut function = Function::new("main", BasicBlockId(0));
+        function.set_has_eval(has_eval);
         for block in blocks {
             function.push_block(block);
         }
@@ -1106,12 +1206,15 @@ struct Lowerer {
     /// 动态 import() 目标映射：module_id → 被动态 import 的目标模块 ID 列表
     dynamic_import_targets: std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ModuleId>>,
     /// 动态 import specifier → ModuleId 映射：(当前模块 ID, specifier) → 目标 ModuleId
-    dynamic_import_specifier_map: std::collections::HashMap<(wjsm_ir::ModuleId, String), wjsm_ir::ModuleId>,
+    dynamic_import_specifier_map:
+        std::collections::HashMap<(wjsm_ir::ModuleId, String), wjsm_ir::ModuleId>,
     /// 需要构建命名空间对象的模块集合
     dynamic_import_namespace_modules: std::collections::HashSet<wjsm_ir::ModuleId>,
     /// 命名空间对象的 ValueId：ModuleId → ValueId（在模块体执行前创建，模块体执行后填充属性）
-    dynamic_import_namespace_objects: std::collections::HashMap<wjsm_ir::ModuleId, wjsm_ir::ValueId>,
-    module_export_names: std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
+    dynamic_import_namespace_objects:
+        std::collections::HashMap<wjsm_ir::ModuleId, wjsm_ir::ValueId>,
+    module_export_names:
+        std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
     is_async_fn: bool,
     is_async_generator_fn: bool,
     async_state_counter: u32,
@@ -1128,6 +1231,11 @@ struct Lowerer {
     async_is_rejected_scope_id: usize,
     async_generator_scope_id: usize,
     async_closure_env_ir_name: Option<String>,
+    strict_mode: bool,
+    eval_mode: bool,
+    eval_has_scope_bridge: bool,
+    eval_var_writes_to_scope: bool,
+    eval_completion: Option<ValueId>,
 }
 
 #[derive(Clone)]
@@ -1249,6 +1357,11 @@ impl Lowerer {
             async_is_rejected_scope_id: 0,
             async_generator_scope_id: 0,
             async_closure_env_ir_name: None,
+            strict_mode: false,
+            eval_mode: false,
+            eval_has_scope_bridge: false,
+            eval_var_writes_to_scope: false,
+            eval_completion: None,
         }
     }
 
@@ -1449,6 +1562,7 @@ impl Lowerer {
     fn lower_module(mut self, module: &swc_ast::Module) -> Result<Program, LoweringError> {
         // main 函数也需要 shared_env_stack 条目（顶层闭包需要在 main 中创建 env 对象）
         self.shared_env_stack.push(None);
+        self.strict_mode = module_has_use_strict_directive(module);
         // Pre-scan: hoist variable declarations so let/const are in TDZ.
         self.predeclare_stmts(&module.body)?;
 
@@ -1627,7 +1741,28 @@ impl Lowerer {
                         .current_function
                         .block(block)
                         .map_or(false, |b| matches!(b.terminator(), Terminator::Unreachable));
-                    if is_unreachable {
+                    if self.eval_mode {
+                        let return_value = if let Some(value) = self.eval_completion {
+                            value
+                        } else {
+                            let undef_const = self.module.add_constant(Constant::Undefined);
+                            let undef_val = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::Const {
+                                    dest: undef_val,
+                                    constant: undef_const,
+                                },
+                            );
+                            undef_val
+                        };
+                        self.current_function.set_terminator(
+                            block,
+                            Terminator::Return {
+                                value: Some(return_value),
+                            },
+                        );
+                    } else if is_unreachable {
                         self.current_function
                             .set_terminator(block, Terminator::Return { value: None });
                     }
@@ -1639,8 +1774,13 @@ impl Lowerer {
         if has_tla {
             self.finalize_async_main()?;
         } else {
+            let has_eval = self.current_function.has_eval();
             let blocks = self.current_function.into_blocks();
             let mut function = Function::new("main", BasicBlockId(0));
+            function.set_has_eval(has_eval);
+            if self.eval_mode {
+                function.set_params(vec![EVAL_SCOPE_ENV_PARAM.to_string()]);
+            }
             for block in blocks {
                 function.push_block(block);
             }
@@ -1693,10 +1833,16 @@ impl Lowerer {
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
+        if self.eval_mode {
+            let value = self.lower_expr(&expr_stmt.expr, block)?;
+            self.eval_completion = Some(value);
+            return Ok(StmtFlow::Open(self.resolve_store_block(block)));
+        }
+
         let result_block = match expr_stmt.expr.as_ref() {
             swc_ast::Expr::Call(call) => self.lower_call(call, block)?,
             expr => {
-                let _ = self.lower_expr(expr, block)?;
+                let _value = self.lower_expr(expr, block)?;
                 self.resolve_store_block(block)
             }
         };
@@ -1757,12 +1903,17 @@ impl Lowerer {
             },
         );
 
+        let incoming_eval_completion = self.eval_completion;
+
         // lower 'then' branch
         let then_flow = self.lower_stmt(&if_stmt.cons, StmtFlow::Open(then_block))?;
+        let then_eval_completion = self.eval_completion;
 
         let has_else = if let Some(alt) = &if_stmt.alt {
+            self.eval_completion = incoming_eval_completion;
             // 'else' uses else_or_merge as its entry
             let else_flow = self.lower_stmt(alt, StmtFlow::Open(else_or_merge))?;
+            let else_eval_completion = self.eval_completion;
             match (then_flow, else_flow) {
                 (StmtFlow::Terminated, StmtFlow::Terminated) => StmtFlow::Terminated,
                 _ => {
@@ -1771,9 +1922,18 @@ impl Lowerer {
                     let after_then = self
                         .current_function
                         .ensure_jump_or_terminated(then_flow, merge);
-                    let _after_else = self
+                    let after_else = self
                         .current_function
                         .ensure_jump_or_terminated(else_flow, merge);
+                    self.merge_eval_completion_after_if(
+                        merge,
+                        then_flow,
+                        then_eval_completion,
+                        after_then,
+                        else_flow,
+                        else_eval_completion,
+                        after_else,
+                    );
                     after_then
                 }
             }
@@ -1784,10 +1944,58 @@ impl Lowerer {
             let _after_then = self
                 .current_function
                 .ensure_jump_or_terminated(then_flow, merge);
+            if self.eval_mode {
+                self.eval_completion = incoming_eval_completion.or(then_eval_completion);
+            }
             StmtFlow::Open(merge)
         };
 
         Ok(has_else)
+    }
+
+    fn merge_eval_completion_after_if(
+        &mut self,
+        merge: BasicBlockId,
+        then_flow: StmtFlow,
+        then_eval_completion: Option<ValueId>,
+        _after_then: StmtFlow,
+        else_flow: StmtFlow,
+        else_eval_completion: Option<ValueId>,
+        _after_else: StmtFlow,
+    ) {
+        if !self.eval_mode {
+            return;
+        }
+
+        let (StmtFlow::Open(then_block), Some(then_value)) = (then_flow, then_eval_completion)
+        else {
+            self.eval_completion = then_eval_completion.or(else_eval_completion);
+            return;
+        };
+        let (StmtFlow::Open(else_block), Some(else_value)) = (else_flow, else_eval_completion)
+        else {
+            self.eval_completion = then_eval_completion.or(else_eval_completion);
+            return;
+        };
+
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: then_block,
+                        value: then_value,
+                    },
+                    PhiSource {
+                        predecessor: else_block,
+                        value: else_value,
+                    },
+                ],
+            },
+        );
+        self.eval_completion = Some(result);
     }
 
     // ── while ───────────────────────────────────────────────────────────────
@@ -2260,7 +2468,10 @@ impl Lowerer {
             let undef_val = self.alloc_value();
             self.current_function.append_instruction(
                 header,
-                Instruction::Const { dest: undef_val, constant: undef_const },
+                Instruction::Const {
+                    dest: undef_val,
+                    constant: undef_const,
+                },
             );
             self.current_function.append_instruction(
                 header,
@@ -3541,6 +3752,7 @@ impl Lowerer {
                         value: src_val,
                     },
                 );
+                self.append_eval_var_leak_if_needed(&name, kind, src_val, store_block);
             }
             swc_ast::Pat::Object(object_pat) => {
                 self.lower_object_destructure(object_pat, src_val, block, kind)?;
@@ -3628,6 +3840,7 @@ impl Lowerer {
                                 value: resolved,
                             },
                         );
+                        self.append_eval_var_leak_if_needed(&name, kind, resolved, store_block);
                     } else {
                         self.lower_destructure_pattern(
                             &swc_ast::Pat::Ident(assign.key.clone()),
@@ -4013,8 +4226,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
+        ir_function.set_has_eval(has_eval);
         ir_function.set_params(param_ir_names);
         // 设置捕获变量列表（逃逸分析结果）
         let captured = self.captured_names_stack.last().unwrap().clone();
@@ -4070,6 +4285,7 @@ impl Lowerer {
                 value: callee_val,
             },
         );
+        self.append_eval_var_leak_if_needed(&name, VarKind::Var, callee_val, outer_block);
 
         Ok(StmtFlow::Open(outer_block))
     }
@@ -4410,8 +4626,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&async_gen_name, BasicBlockId(0));
+        ir_function.set_has_eval(has_eval);
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
@@ -4600,8 +4818,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut wrapper_ir_function = Function::new(&name, BasicBlockId(0));
+        wrapper_ir_function.set_has_eval(has_eval);
         wrapper_ir_function.set_params(wrapper_user_param_ir_names.clone());
         wrapper_ir_function.set_captured_names(Self::captured_display_names(&captured));
         for b in blocks {
@@ -4990,8 +5210,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&async_name, BasicBlockId(0));
+        ir_function.set_has_eval(has_eval);
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
@@ -5221,8 +5443,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut wrapper_ir_function = Function::new(&name, BasicBlockId(0));
+        wrapper_ir_function.set_has_eval(has_eval);
         wrapper_ir_function.set_params(wrapper_user_param_ir_names.clone());
         wrapper_ir_function.set_captured_names(Self::captured_display_names(&captured));
         for b in blocks {
@@ -5349,8 +5573,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
+        ir_function.set_has_eval(has_eval);
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
@@ -5734,8 +5960,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&async_name, BasicBlockId(0));
+        ir_function.set_has_eval(has_eval);
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
@@ -5965,8 +6193,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut wrapper_ir_function = Function::new(&name, BasicBlockId(0));
+        wrapper_ir_function.set_has_eval(has_eval);
         wrapper_ir_function.set_params(wrapper_user_param_ir_names.clone());
         wrapper_ir_function.set_captured_names(Self::captured_display_names(&captured));
         for b in blocks {
@@ -6077,8 +6307,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
+        ir_function.set_has_eval(has_eval);
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
@@ -6473,8 +6705,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&async_name, BasicBlockId(0));
+        ir_function.set_has_eval(has_eval);
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
@@ -6704,8 +6938,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut wrapper_ir_function = Function::new(&name, BasicBlockId(0));
+        wrapper_ir_function.set_has_eval(has_eval);
         wrapper_ir_function.set_params(wrapper_user_param_ir_names.clone());
         wrapper_ir_function.set_captured_names(Self::captured_display_names(&captured));
         for b in blocks {
@@ -6831,8 +7067,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&ctor_name, BasicBlockId(0));
+        ir_function.set_has_eval(has_eval);
         ir_function.set_params(param_ir_names);
         let ctor_captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&ctor_captured));
@@ -6943,8 +7181,10 @@ impl Lowerer {
                                 &mut self.current_function,
                                 FunctionBuilder::new("", BasicBlockId(0)),
                             );
+                            let m_has_eval = m_old_fn.has_eval();
                             let m_blocks = m_old_fn.into_blocks();
                             let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                            m_ir_function.set_has_eval(m_has_eval);
                             m_ir_function.set_params(method_param_ir_names);
                             let m_captured = self.captured_names_stack.last().unwrap().clone();
                             m_ir_function
@@ -7059,8 +7299,10 @@ impl Lowerer {
                                 &mut self.current_function,
                                 FunctionBuilder::new("", BasicBlockId(0)),
                             );
+                            let m_has_eval = m_old_fn.has_eval();
                             let m_blocks = m_old_fn.into_blocks();
                             let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                            m_ir_function.set_has_eval(m_has_eval);
                             m_ir_function.set_params(param_ir_names);
                             let m_captured = self.captured_names_stack.last().unwrap().clone();
                             m_ir_function
@@ -7152,8 +7394,10 @@ impl Lowerer {
                         &mut self.current_function,
                         FunctionBuilder::new("", BasicBlockId(0)),
                     );
+                    let m_has_eval = m_old_fn.has_eval();
                     let m_blocks = m_old_fn.into_blocks();
                     let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                    m_ir_function.set_has_eval(m_has_eval);
                     m_ir_function.set_params(param_ir_names);
                     let m_captured = self.captured_names_stack.last().unwrap().clone();
                     m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
@@ -7317,8 +7561,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&ctor_name, BasicBlockId(0));
+        ir_function.set_has_eval(has_eval);
         ir_function.set_params(param_ir_names);
         let ctor_captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&ctor_captured));
@@ -7422,8 +7668,10 @@ impl Lowerer {
                             &mut self.current_function,
                             FunctionBuilder::new("", BasicBlockId(0)),
                         );
+                        let m_has_eval = m_old_fn.has_eval();
                         let m_blocks = m_old_fn.into_blocks();
                         let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                        m_ir_function.set_has_eval(m_has_eval);
                         m_ir_function.set_params(method_param_ir_names);
                         let m_captured = self.captured_names_stack.last().unwrap().clone();
                         m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
@@ -7532,8 +7780,10 @@ impl Lowerer {
                             &mut self.current_function,
                             FunctionBuilder::new("", BasicBlockId(0)),
                         );
+                        let m_has_eval = m_old_fn.has_eval();
                         let m_blocks = m_old_fn.into_blocks();
                         let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                        m_ir_function.set_has_eval(m_has_eval);
                         m_ir_function.set_params(param_ir_names);
                         let m_captured = self.captured_names_stack.last().unwrap().clone();
                         m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
@@ -7617,8 +7867,10 @@ impl Lowerer {
                         &mut self.current_function,
                         FunctionBuilder::new("", BasicBlockId(0)),
                     );
+                    let m_has_eval = m_old_fn.has_eval();
                     let m_blocks = m_old_fn.into_blocks();
                     let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+                    m_ir_function.set_has_eval(m_has_eval);
                     m_ir_function.set_params(param_ir_names);
                     let m_captured = self.captured_names_stack.last().unwrap().clone();
                     m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
@@ -8133,8 +8385,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let m_has_eval = m_old_fn.has_eval();
         let m_blocks = m_old_fn.into_blocks();
         let mut m_ir_function = Function::new(&fn_name, BasicBlockId(0));
+        m_ir_function.set_has_eval(m_has_eval);
         m_ir_function.set_params(method_param_ir_names);
         let m_captured = self.captured_names_stack.last().unwrap().clone();
         m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
@@ -8663,7 +8917,10 @@ impl Lowerer {
         let slot0_val = self.alloc_value();
         self.current_function.append_instruction(
             entry,
-            Instruction::Const { dest: slot0_val, constant: slot0_const },
+            Instruction::Const {
+                dest: slot0_val,
+                constant: slot0_const,
+            },
         );
         let state_from_cont = self.alloc_value();
         self.current_function.append_instruction(
@@ -8687,7 +8944,10 @@ impl Lowerer {
         let slot1_val = self.alloc_value();
         self.current_function.append_instruction(
             entry,
-            Instruction::Const { dest: slot1_val, constant: slot1_const },
+            Instruction::Const {
+                dest: slot1_val,
+                constant: slot1_const,
+            },
         );
         let is_rejected_from_cont = self.alloc_value();
         self.current_function.append_instruction(
@@ -8728,7 +8988,10 @@ impl Lowerer {
         let slot2_val = self.alloc_value();
         self.current_function.append_instruction(
             entry,
-            Instruction::Const { dest: slot2_val, constant: slot2_const },
+            Instruction::Const {
+                dest: slot2_val,
+                constant: slot2_const,
+            },
         );
         let promise_from_cont = self.alloc_value();
         self.current_function.append_instruction(
@@ -8752,7 +9015,10 @@ impl Lowerer {
         let slot3_val = self.alloc_value();
         self.current_function.append_instruction(
             entry,
-            Instruction::Const { dest: slot3_val, constant: slot3_const },
+            Instruction::Const {
+                dest: slot3_val,
+                constant: slot3_const,
+            },
         );
         let env_from_cont = self.alloc_value();
         self.current_function.append_instruction(
@@ -8777,8 +9043,12 @@ impl Lowerer {
         self.async_dispatch_block = Some(dispatch_block);
         self.async_main_body_entry = Some(body_entry);
 
-        self.current_function
-            .set_terminator(entry, Terminator::Jump { target: dispatch_block });
+        self.current_function.set_terminator(
+            entry,
+            Terminator::Jump {
+                target: dispatch_block,
+            },
+        );
         self.current_function
             .set_terminator(dispatch_block, Terminator::Unreachable);
 
@@ -8852,8 +9122,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let has_eval = old_fn.has_eval();
         let blocks = old_fn.into_blocks();
         let mut async_fn = Function::new("main$async", BasicBlockId(0));
+        async_fn.set_has_eval(has_eval);
         async_fn.set_params(self.async_main_param_ir_names.clone());
         for b in blocks {
             async_fn.push_block(b);
@@ -8868,10 +9140,8 @@ impl Lowerer {
 
         // NewPromise
         let promise_val = self.alloc_value();
-        self.current_function.append_instruction(
-            wrapper_entry,
-            Instruction::NewPromise { dest: promise_val },
-        );
+        self.current_function
+            .append_instruction(wrapper_entry, Instruction::NewPromise { dest: promise_val });
 
         // FunctionRef for main$async
         let func_ref_const = self.module.add_constant(Constant::FunctionRef(async_fn_id));
@@ -8989,8 +9259,10 @@ impl Lowerer {
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
+        let wrapper_has_eval = wrapper_fn.has_eval();
         let wrapper_blocks = wrapper_fn.into_blocks();
         let mut wrapper_ir = Function::new("main", BasicBlockId(0));
+        wrapper_ir.set_has_eval(wrapper_has_eval);
         wrapper_ir.set_params(self.async_main_param_ir_names.clone());
         for b in wrapper_blocks {
             wrapper_ir.push_block(b);
@@ -8999,7 +9271,6 @@ impl Lowerer {
 
         Ok(())
     }
-
 
     fn is_async_internal_binding(name: &str) -> bool {
         matches!(
@@ -9166,7 +9437,10 @@ impl Lowerer {
             let undef_val = self.alloc_value();
             self.current_function.append_instruction(
                 block,
-                Instruction::Const { dest: undef_val, constant: undef_const },
+                Instruction::Const {
+                    dest: undef_val,
+                    constant: undef_const,
+                },
             );
             self.current_function.append_instruction(
                 block,
@@ -9553,15 +9827,15 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         // 1. 提取 specifier 字符串
         let first_arg = call.args.first().ok_or_else(|| {
-            self.error(call.span,
+            self.error(
+                call.span,
                 "import() requires a module specifier; \
-                 in AOT compilation mode, only string literal specifiers are supported")
+                 in AOT compilation mode, only string literal specifiers are supported",
+            )
         })?;
 
         let specifier = match first_arg.expr.as_ref() {
-            swc_ast::Expr::Lit(swc_ast::Lit::Str(s)) => {
-                s.value.to_string_lossy().into_owned()
-            }
+            swc_ast::Expr::Lit(swc_ast::Lit::Str(s)) => s.value.to_string_lossy().into_owned(),
             swc_ast::Expr::Tpl(tpl) => {
                 if tpl.exprs.is_empty() {
                     let mut result = String::new();
@@ -9586,17 +9860,24 @@ impl Lowerer {
                 ));
             }
         };
- 
+
         // 2. 查找目标模块 ID
         let current_module_id = self.current_module_id.ok_or_else(|| {
-            self.error(call.span, "dynamic import is only supported in multi-module mode")
+            self.error(
+                call.span,
+                "dynamic import is only supported in multi-module mode",
+            )
         })?;
- 
-        let target_id = self.find_dynamic_import_target(current_module_id, &specifier)
+
+        let target_id = self
+            .find_dynamic_import_target(current_module_id, &specifier)
             .ok_or_else(|| {
-                self.error(call.span, format!("cannot resolve dynamic import specifier '{}'", specifier))
+                self.error(
+                    call.span,
+                    format!("cannot resolve dynamic import specifier '{}'", specifier),
+                )
             })?;
- 
+
         // 3. 生成 CallBuiltin(DynamicImport, [module_id])
         let module_id_const = self.module.add_constant(Constant::ModuleId(target_id));
         let module_id_val = self.alloc_value();
@@ -9618,7 +9899,7 @@ impl Lowerer {
         );
         Ok(dest)
     }
- 
+
     /// 从 specifier 映射中查找动态 import 目标的 ModuleId
     fn find_dynamic_import_target(
         &self,
@@ -9629,7 +9910,6 @@ impl Lowerer {
             .get(&(current_module_id, specifier.to_string()))
             .copied()
     }
-
 
     fn lower_call_expr(
         &mut self,
@@ -9642,6 +9922,9 @@ impl Lowerer {
         match &call.callee {
             swc_ast::Callee::Expr(expr) => {
                 if let swc_ast::Expr::Ident(ident) = expr.as_ref() {
+                    if ident.sym.as_ref() == "eval" && self.scopes.lookup("eval").is_err() {
+                        return self.lower_direct_eval_call(call, block);
+                    }
                     if let Some(builtin) = builtin_from_global_ident(&ident.sym) {
                         if self.scopes.lookup(&ident.sym).is_err() {
                             return self.lower_host_builtin_call_expr(call, block, builtin);
@@ -9659,15 +9942,25 @@ impl Lowerer {
                             {
                                 if self.scopes.lookup(&obj_ident.sym).is_err() {
                                     // Promise 静态方法需要传递构造器作为第一个参数（species-aware）
-                                    if matches!(builtin, Builtin::PromiseResolveStatic | Builtin::PromiseRejectStatic
-                                        | Builtin::PromiseAll | Builtin::PromiseRace
-                                        | Builtin::PromiseAllSettled | Builtin::PromiseAny
-                                        | Builtin::PromiseWithResolvers) {
-                                        let undef_const = self.module.add_constant(Constant::Undefined);
+                                    if matches!(
+                                        builtin,
+                                        Builtin::PromiseResolveStatic
+                                            | Builtin::PromiseRejectStatic
+                                            | Builtin::PromiseAll
+                                            | Builtin::PromiseRace
+                                            | Builtin::PromiseAllSettled
+                                            | Builtin::PromiseAny
+                                            | Builtin::PromiseWithResolvers
+                                    ) {
+                                        let undef_const =
+                                            self.module.add_constant(Constant::Undefined);
                                         let constructor_val = self.alloc_value();
                                         self.current_function.append_instruction(
                                             block,
-                                            Instruction::Const { dest: constructor_val, constant: undef_const },
+                                            Instruction::Const {
+                                                dest: constructor_val,
+                                                constant: undef_const,
+                                            },
                                         );
                                         let mut args = vec![constructor_val];
                                         for arg in &call.args {
@@ -9678,14 +9971,21 @@ impl Lowerer {
                                             let undef_val = self.alloc_value();
                                             self.current_function.append_instruction(
                                                 block,
-                                                Instruction::Const { dest: undef_val, constant: undef_const },
+                                                Instruction::Const {
+                                                    dest: undef_val,
+                                                    constant: undef_const,
+                                                },
                                             );
                                             args.push(undef_val);
                                         }
                                         let dest = self.alloc_value();
                                         self.current_function.append_instruction(
                                             block,
-                                            Instruction::CallBuiltin { dest: Some(dest), builtin, args },
+                                            Instruction::CallBuiltin {
+                                                dest: Some(dest),
+                                                builtin,
+                                                args,
+                                            },
                                         );
                                         return Ok(dest);
                                     }
@@ -9943,6 +10243,234 @@ impl Lowerer {
         Ok(dest)
     }
 
+    fn lower_direct_eval_call(
+        &mut self,
+        call: &swc_ast::CallExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        self.current_function.mark_has_eval();
+
+        let code_val = if let Some(first_arg) = call.args.first() {
+            self.lower_expr(&first_arg.expr, block)?
+        } else {
+            let undef_const = self.module.add_constant(Constant::Undefined);
+            let undef_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: undef_val,
+                    constant: undef_const,
+                },
+            );
+            undef_val
+        };
+
+        let bindings: Vec<_> = self
+            .scopes
+            .visible_bindings()
+            .into_iter()
+            .filter(|(_, name, _)| !matches!(name.as_str(), "undefined" | "NaN" | "Infinity"))
+            .collect();
+
+        let env_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: env_val,
+                capacity: bindings.len() as u32 + u32::from(self.strict_mode),
+            },
+        );
+
+        if self.strict_mode {
+            let key_const = self
+                .module
+                .add_constant(Constant::String("__wjsm_eval_strict".to_string()));
+            let key_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: key_val,
+                    constant: key_const,
+                },
+            );
+            let true_const = self.module.add_constant(Constant::Bool(true));
+            let true_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: true_val,
+                    constant: true_const,
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp {
+                    object: env_val,
+                    key: key_val,
+                    value: true_val,
+                },
+            );
+        }
+
+        for (scope_id, name, _) in &bindings {
+            let key_const = self.module.add_constant(Constant::String(name.clone()));
+            let key_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: key_val,
+                    constant: key_const,
+                },
+            );
+
+            let binding = CapturedBinding::new(name.clone(), *scope_id);
+            let value = if !self.binding_belongs_to_current_function(&binding)
+                || self.is_shared_binding(&binding)
+            {
+                self.load_captured_binding(block, &binding)?
+            } else {
+                let value = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::LoadVar {
+                        dest: value,
+                        name: binding.var_ir_name(),
+                    },
+                );
+                value
+            };
+
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp {
+                    object: env_val,
+                    key: key_val,
+                    value,
+                },
+            );
+        }
+
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(dest),
+                builtin: Builtin::Eval,
+                args: vec![code_val, env_val],
+            },
+        );
+
+        for (scope_id, name, _) in &bindings {
+            let binding = CapturedBinding::new(name.clone(), *scope_id);
+            if !self.binding_belongs_to_current_function(&binding)
+                || self.is_shared_binding(&binding)
+            {
+                continue;
+            }
+
+            let key_const = self.module.add_constant(Constant::String(name.clone()));
+            let key_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: key_val,
+                    constant: key_const,
+                },
+            );
+
+            let value = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::GetProp {
+                    dest: value,
+                    object: env_val,
+                    key: key_val,
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::StoreVar {
+                    name: binding.var_ir_name(),
+                    value,
+                },
+            );
+        }
+
+        Ok(dest)
+    }
+
+    fn eval_scope_bridge_active(&self) -> bool {
+        self.eval_mode && self.eval_has_scope_bridge
+    }
+
+    fn load_eval_scope_env(&mut self, block: BasicBlockId) -> ValueId {
+        let env = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar {
+                dest: env,
+                name: EVAL_SCOPE_ENV_PARAM.to_string(),
+            },
+        );
+        env
+    }
+
+    fn append_eval_env_key_const(&mut self, block: BasicBlockId, name: &str) -> ValueId {
+        let key_const = self.module.add_constant(Constant::String(name.to_string()));
+        let key = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: key,
+                constant: key_const,
+            },
+        );
+        key
+    }
+
+    fn lower_eval_env_read(&mut self, name: &str, block: BasicBlockId) -> ValueId {
+        let env = self.load_eval_scope_env(block);
+        let key = self.append_eval_env_key_const(block, name);
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::GetProp {
+                dest,
+                object: env,
+                key,
+            },
+        );
+        dest
+    }
+
+    fn append_eval_env_write(&mut self, name: &str, value: ValueId, block: BasicBlockId) {
+        if !self.eval_scope_bridge_active() {
+            return;
+        }
+        let env = self.load_eval_scope_env(block);
+        let key = self.append_eval_env_key_const(block, name);
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object: env,
+                key,
+                value,
+            },
+        );
+    }
+
+    fn append_eval_var_leak_if_needed(
+        &mut self,
+        name: &str,
+        kind: VarKind,
+        value: ValueId,
+        block: BasicBlockId,
+    ) {
+        if self.eval_var_writes_to_scope && matches!(kind, VarKind::Var) {
+            self.append_eval_env_write(name, value, block);
+        }
+    }
+
     fn lower_ident(
         &mut self,
         ident: &swc_ast::Ident,
@@ -9962,10 +10490,23 @@ impl Lowerer {
             return Ok(dest);
         }
 
-        let (scope_id, _kind) = self
-            .scopes
-            .lookup(&name)
-            .map_err(|msg| self.error(ident.span, msg))?;
+        if name == "eval" && self.scopes.lookup("eval").is_err() {
+            let constant = self.module.add_constant(Constant::NativeCallableEval);
+            let dest = self.alloc_value();
+            self.current_function
+                .append_instruction(block, Instruction::Const { dest, constant });
+            return Ok(dest);
+        }
+
+        let (scope_id, _kind) = match self.scopes.lookup(&name) {
+            Ok(found) => found,
+            Err(msg)
+                if self.eval_scope_bridge_active() && msg.starts_with("undeclared identifier") =>
+            {
+                return Ok(self.lower_eval_env_read(&name, block));
+            }
+            Err(msg) => return Err(self.error(ident.span, msg)),
+        };
 
         let binding = CapturedBinding::new(name.clone(), scope_id);
         if !self.binding_belongs_to_current_function(&binding) || self.is_shared_binding(&binding) {
@@ -10163,10 +10704,15 @@ impl Lowerer {
 
         // 性能优化：使用 lookup_for_assign 一次遍历完成 const 检查 + TDZ 检查 + scope 解析，
         // 避免 check_mutable and lookup 各自遍历 scope chain 的冗余。
-        let (scope_id, _kind) = self
-            .scopes
-            .lookup_for_assign(&name)
-            .map_err(|msg| self.error(assign.span, msg))?;
+        let (scope_id, kind) = match self.scopes.lookup_for_assign(&name) {
+            Ok(found) => found,
+            Err(msg)
+                if self.eval_scope_bridge_active() && msg.starts_with("undeclared identifier") =>
+            {
+                return self.lower_assign_eval_env(assign, block, &name);
+            }
+            Err(msg) => return Err(self.error(assign.span, msg)),
+        };
 
         let binding = CapturedBinding::new(name.clone(), scope_id);
         if !self.binding_belongs_to_current_function(&binding) || self.is_shared_binding(&binding) {
@@ -10185,6 +10731,7 @@ impl Lowerer {
                         value: rhs,
                     },
                 );
+                self.append_eval_var_leak_if_needed(&name, kind, rhs, block);
                 Ok(rhs)
             }
             op => {
@@ -10256,10 +10803,74 @@ impl Lowerer {
                         value: dest,
                     },
                 );
+                self.append_eval_var_leak_if_needed(&name, kind, dest, block);
 
                 Ok(dest)
             }
         }
+    }
+
+    fn lower_assign_eval_env(
+        &mut self,
+        assign: &swc_ast::AssignExpr,
+        block: BasicBlockId,
+        name: &str,
+    ) -> Result<ValueId, LoweringError> {
+        if assign.op == swc_ast::AssignOp::Assign {
+            let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+            self.append_eval_env_write(name, rhs, block);
+            return Ok(rhs);
+        }
+
+        if matches!(
+            assign.op,
+            swc_ast::AssignOp::AndAssign
+                | swc_ast::AssignOp::OrAssign
+                | swc_ast::AssignOp::NullishAssign
+        ) {
+            return self.lower_logical_assign_eval_env(assign, block, name);
+        }
+
+        let bin_op = assign_op_to_binary(assign.op)
+            .ok_or_else(|| self.error(assign.span, "unsupported compound assignment operator"))?;
+        let loaded = self.lower_eval_env_read(name, block);
+        let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+        let dest = self.alloc_value();
+        match bin_op {
+            BinaryOp::Mod => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::F64Mod,
+                        args: vec![loaded, rhs],
+                    },
+                );
+            }
+            BinaryOp::Exp => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::F64Exp,
+                        args: vec![loaded, rhs],
+                    },
+                );
+            }
+            _ => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Binary {
+                        dest,
+                        op: bin_op,
+                        lhs: loaded,
+                        rhs,
+                    },
+                );
+            }
+        }
+        self.append_eval_env_write(name, dest, block);
+        Ok(dest)
     }
 
     /// 对捕获变量的赋值：通过 env 对象的 GetProp/SetProp 实现
@@ -10430,6 +11041,83 @@ impl Lowerer {
                 value: rhs,
             },
         );
+        self.current_function
+            .set_terminator(assign_end, Terminator::Jump { target: merge });
+
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: block,
+                        value: loaded,
+                    },
+                    PhiSource {
+                        predecessor: assign_end,
+                        value: rhs,
+                    },
+                ],
+            },
+        );
+        Ok(result)
+    }
+
+    fn lower_logical_assign_eval_env(
+        &mut self,
+        assign: &swc_ast::AssignExpr,
+        block: BasicBlockId,
+        name: &str,
+    ) -> Result<ValueId, LoweringError> {
+        let env_val = self.load_eval_scope_env(block);
+        let key_val = self.append_eval_env_key_const(block, name);
+        let loaded = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::GetProp {
+                dest: loaded,
+                object: env_val,
+                key: key_val,
+            },
+        );
+
+        let assign_block = self.current_function.new_block();
+        let merge = self.current_function.new_block();
+
+        let condition = if matches!(assign.op, swc_ast::AssignOp::NullishAssign) {
+            let is_nullish = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Unary {
+                    dest: is_nullish,
+                    op: UnaryOp::IsNullish,
+                    value: loaded,
+                },
+            );
+            is_nullish
+        } else {
+            loaded
+        };
+
+        let (true_block, false_block) = match assign.op {
+            swc_ast::AssignOp::AndAssign => (assign_block, merge),
+            swc_ast::AssignOp::OrAssign => (merge, assign_block),
+            swc_ast::AssignOp::NullishAssign => (assign_block, merge),
+            _ => unreachable!(),
+        };
+        self.current_function.set_terminator(
+            block,
+            Terminator::Branch {
+                condition,
+                true_block,
+                false_block,
+            },
+        );
+
+        let rhs = self.lower_expr(assign.right.as_ref(), assign_block)?;
+        let assign_end = self.resolve_store_block(assign_block);
+        self.append_eval_env_write(name, rhs, assign_end);
         self.current_function
             .set_terminator(assign_end, Terminator::Jump { target: merge });
 
@@ -11401,16 +12089,22 @@ impl Lowerer {
     }
 
     fn predeclare_stmts(&mut self, stmts: &[swc_ast::ModuleItem]) -> Result<(), LoweringError> {
+        let mut eval_string_bindings = std::collections::HashMap::new();
         for item in stmts {
             match item {
                 swc_ast::ModuleItem::Stmt(stmt) => {
-                    self.predeclare_stmt_with_mode(stmt, LexicalMode::Include)?;
+                    self.predeclare_stmt_with_mode_and_eval_strings(
+                        stmt,
+                        LexicalMode::Include,
+                        &mut eval_string_bindings,
+                    )?;
                 }
                 swc_ast::ModuleItem::ModuleDecl(swc_ast::ModuleDecl::ExportDecl(export_decl)) => {
                     // export const/let/var/function/class 需要预声明，确保 TDZ 正确
-                    self.predeclare_stmt_with_mode(
+                    self.predeclare_stmt_with_mode_and_eval_strings(
                         &swc_ast::Stmt::Decl(export_decl.decl.clone()),
                         LexicalMode::Include,
+                        &mut eval_string_bindings,
                     )?;
                 }
                 // 其他 ModuleDecl（import、re-export 等）不需要预声明
@@ -11421,16 +12115,22 @@ impl Lowerer {
     }
 
     fn predeclare_block_stmts(&mut self, stmts: &[swc_ast::Stmt]) -> Result<(), LoweringError> {
+        let mut eval_string_bindings = std::collections::HashMap::new();
         for stmt in stmts {
-            self.predeclare_stmt_with_mode(stmt, LexicalMode::Include)?;
+            self.predeclare_stmt_with_mode_and_eval_strings(
+                stmt,
+                LexicalMode::Include,
+                &mut eval_string_bindings,
+            )?;
         }
         Ok(())
     }
 
-    fn predeclare_stmt_with_mode(
+    fn predeclare_stmt_with_mode_and_eval_strings(
         &mut self,
         stmt: &swc_ast::Stmt,
         mode: LexicalMode,
+        eval_string_bindings: &mut std::collections::HashMap<String, String>,
     ) -> Result<(), LoweringError> {
         match stmt {
             swc_ast::Stmt::Decl(decl) => match decl {
@@ -11458,6 +12158,11 @@ impl Lowerer {
                                 self.record_hoisted_var(scope_id, name);
                             }
                         }
+                        if let swc_ast::Pat::Ident(binding) = &declarator.name
+                            && let Some(code) = literal_string_expr(&declarator.init)
+                        {
+                            eval_string_bindings.insert(binding.id.sym.to_string(), code);
+                        }
                     }
                 }
                 swc_ast::Decl::Fn(fn_decl) => {
@@ -11478,7 +12183,11 @@ impl Lowerer {
             },
             swc_ast::Stmt::Block(block_stmt) => {
                 for stmt in &block_stmt.stmts {
-                    self.predeclare_stmt_with_mode(stmt, LexicalMode::Exclude)?;
+                    self.predeclare_stmt_with_mode_and_eval_strings(
+                        stmt,
+                        LexicalMode::Exclude,
+                        eval_string_bindings,
+                    )?;
                 }
             }
             swc_ast::Stmt::For(for_stmt) => {
@@ -11492,7 +12201,11 @@ impl Lowerer {
                     }
                 }
                 // Recursively scan for nested declarations in the body
-                self.predeclare_stmt_with_mode(&for_stmt.body, LexicalMode::Exclude)?;
+                self.predeclare_stmt_with_mode_and_eval_strings(
+                    &for_stmt.body,
+                    LexicalMode::Exclude,
+                    eval_string_bindings,
+                )?;
             }
             swc_ast::Stmt::ForIn(for_in) => {
                 // Pre-declare the loop variable if it's a var declaration
@@ -11502,7 +12215,11 @@ impl Lowerer {
                     }
                     _ => {}
                 }
-                self.predeclare_stmt_with_mode(&for_in.body, LexicalMode::Exclude)?;
+                self.predeclare_stmt_with_mode_and_eval_strings(
+                    &for_in.body,
+                    LexicalMode::Exclude,
+                    eval_string_bindings,
+                )?;
             }
             swc_ast::Stmt::ForOf(for_of) => {
                 match &for_of.left {
@@ -11511,10 +12228,33 @@ impl Lowerer {
                     }
                     _ => {}
                 }
-                self.predeclare_stmt_with_mode(&for_of.body, LexicalMode::Exclude)?;
+                self.predeclare_stmt_with_mode_and_eval_strings(
+                    &for_of.body,
+                    LexicalMode::Exclude,
+                    eval_string_bindings,
+                )?;
             }
             swc_ast::Stmt::Labeled(labeled) => {
-                self.predeclare_stmt_with_mode(&labeled.body, mode)?;
+                self.predeclare_stmt_with_mode_and_eval_strings(
+                    &labeled.body,
+                    mode,
+                    eval_string_bindings,
+                )?;
+            }
+            swc_ast::Stmt::Expr(expr_stmt) => {
+                if !self.strict_mode
+                    && let Some(code) =
+                        direct_eval_predeclare_code(&expr_stmt.expr, eval_string_bindings)
+                    && !eval_code_has_use_strict_directive(&code)
+                {
+                    for name in eval_literal_binding_names(&code) {
+                        let scope_id = self
+                            .scopes
+                            .declare(&name, VarKind::Var, true)
+                            .map_err(|msg| self.error(expr_stmt.span, msg))?;
+                        self.record_hoisted_var(scope_id, name);
+                    }
+                }
             }
 
             _ => {}
@@ -11735,6 +12475,7 @@ fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "setInterval" => Some(Builtin::SetInterval),
         "clearInterval" => Some(Builtin::ClearInterval),
         "fetch" => Some(Builtin::Fetch),
+        "eval" => Some(Builtin::Eval),
         "Symbol" => Some(Builtin::SymbolCreate),
         "queueMicrotask" => Some(Builtin::QueueMicrotask),
         _ => None,
@@ -11886,6 +12627,9 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::SetInterval => ("setInterval", 2),
         Builtin::ClearInterval => ("clearInterval", 1),
         Builtin::Fetch => ("fetch", 1),
+        Builtin::Eval => ("eval", 2),
+        Builtin::EvalIndirect => ("eval.indirect", 1),
+        Builtin::EvalResult => ("eval.result", 1),
         Builtin::JsonStringify => ("JSON.stringify", 1),
         Builtin::JsonParse => ("JSON.parse", 1),
         Builtin::AbstractEq => ("abstract-eq", 2),
@@ -11929,6 +12673,199 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::StringSplit => ("String.prototype.split", 3),
         _ => ("builtin", 0),
     }
+}
+
+fn direct_eval_predeclare_code(
+    expr: &swc_ast::Expr,
+    eval_string_bindings: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    let swc_ast::Expr::Call(call) = expr else {
+        return None;
+    };
+    let swc_ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let swc_ast::Expr::Ident(ident) = callee.as_ref() else {
+        return None;
+    };
+    if ident.sym.as_ref() != "eval" {
+        return None;
+    }
+    let first = call.args.first()?;
+    literal_string_expr(&Some(first.expr.clone())).or_else(|| {
+        let swc_ast::Expr::Ident(arg_ident) = first.expr.as_ref() else {
+            return None;
+        };
+        eval_string_bindings.get(arg_ident.sym.as_ref()).cloned()
+    })
+}
+
+fn literal_string_expr(expr: &Option<Box<swc_ast::Expr>>) -> Option<String> {
+    let swc_ast::Expr::Lit(swc_ast::Lit::Str(string)) = expr.as_deref()? else {
+        return None;
+    };
+    Some(string.value.to_string_lossy().into_owned())
+}
+
+fn eval_code_has_use_strict_directive(code: &str) -> bool {
+    let bytes = code.as_bytes();
+    let mut index = 0;
+    skip_js_trivia(bytes, &mut index);
+
+    while let Some(quote @ (b'\'' | b'"')) = bytes.get(index).copied() {
+        index += 1;
+        let literal_start = index;
+        while index < bytes.len() && bytes[index] != quote {
+            if bytes[index] == b'\\' {
+                return false;
+            }
+            index += 1;
+        }
+        if index >= bytes.len() {
+            return false;
+        }
+
+        let directive = &code[literal_start..index];
+        index += 1;
+        skip_js_trivia(bytes, &mut index);
+        if bytes.get(index) == Some(&b';') {
+            index += 1;
+        }
+
+        if directive == "use strict" {
+            return true;
+        }
+
+        skip_js_trivia(bytes, &mut index);
+    }
+
+    false
+}
+
+fn skip_js_trivia(bytes: &[u8], index: &mut usize) {
+    loop {
+        while *index < bytes.len() && bytes[*index].is_ascii_whitespace() {
+            *index += 1;
+        }
+
+        if bytes.get(*index..*index + 2) == Some(b"//") {
+            *index += 2;
+            while *index < bytes.len() && !matches!(bytes[*index], b'\n' | b'\r') {
+                *index += 1;
+            }
+            continue;
+        }
+
+        if bytes.get(*index..*index + 2) == Some(b"/*") {
+            *index += 2;
+            while *index + 1 < bytes.len() && bytes.get(*index..*index + 2) != Some(b"*/") {
+                *index += 1;
+            }
+            if *index + 1 < bytes.len() {
+                *index += 2;
+            }
+            continue;
+        }
+
+        break;
+    }
+}
+
+fn module_has_use_strict_directive(module: &swc_ast::Module) -> bool {
+    for item in &module.body {
+        let swc_ast::ModuleItem::Stmt(swc_ast::Stmt::Expr(expr_stmt)) = item else {
+            return false;
+        };
+        let swc_ast::Expr::Lit(swc_ast::Lit::Str(string)) = expr_stmt.expr.as_ref() else {
+            return false;
+        };
+        if string.value.as_str() == Some("use strict") {
+            return true;
+        }
+    }
+    false
+}
+
+fn eval_literal_binding_names(code: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    let bytes = code.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if is_word_at(bytes, index, b"var") {
+            index += 3;
+            loop {
+                while index < bytes.len()
+                    && (bytes[index].is_ascii_whitespace() || bytes[index] == b',')
+                {
+                    index += 1;
+                }
+                if index >= bytes.len() || !is_ident_start(bytes[index]) {
+                    break;
+                }
+                let start = index;
+                index += 1;
+                while index < bytes.len() && is_ident_continue(bytes[index]) {
+                    index += 1;
+                }
+                let name = &code[start..index];
+                if !names.iter().any(|existing| existing == name) {
+                    names.push(name.to_string());
+                }
+                while index < bytes.len()
+                    && bytes[index] != b','
+                    && bytes[index] != b';'
+                    && bytes[index] != b'\n'
+                {
+                    index += 1;
+                }
+                if index >= bytes.len() || bytes[index] != b',' {
+                    break;
+                }
+            }
+        } else if is_word_at(bytes, index, b"function") {
+            index += "function".len();
+            while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+                index += 1;
+            }
+            if index < bytes.len() && bytes[index] == b'*' {
+                index += 1;
+                while index < bytes.len() && bytes[index].is_ascii_whitespace() {
+                    index += 1;
+                }
+            }
+            if index < bytes.len() && is_ident_start(bytes[index]) {
+                let start = index;
+                index += 1;
+                while index < bytes.len() && is_ident_continue(bytes[index]) {
+                    index += 1;
+                }
+                let name = &code[start..index];
+                if !names.iter().any(|existing| existing == name) {
+                    names.push(name.to_string());
+                }
+            }
+        }
+        index += 1;
+    }
+    names
+}
+
+fn is_word_at(bytes: &[u8], index: usize, word: &[u8]) -> bool {
+    bytes.get(index..index + word.len()) == Some(word)
+        && index
+            .checked_sub(1)
+            .map_or(true, |prev| !is_ident_continue(bytes[prev]))
+        && bytes
+            .get(index + word.len())
+            .map_or(true, |next| !is_ident_continue(*next))
+}
+
+fn is_ident_start(byte: u8) -> bool {
+    byte == b'_' || byte == b'$' || byte.is_ascii_alphabetic()
+}
+
+fn is_ident_continue(byte: u8) -> bool {
+    is_ident_start(byte) || byte.is_ascii_digit()
 }
 
 fn assign_op_to_binary(op: swc_ast::AssignOp) -> Option<BinaryOp> {
@@ -12063,12 +13000,17 @@ fn module_decl_kind(decl: &swc_ast::ModuleDecl) -> &'static str {
 fn decl_exported_names(decl: &swc_ast::Decl) -> Vec<String> {
     match decl {
         swc_ast::Decl::Var(var_decl) => {
-            var_decl.decls.iter().map(|d| {
-                match &d.name {
-                    swc_ast::Pat::Ident(ident) => ident.id.sym.to_string(),
-                    _ => String::new(), // 解构导出暂不支持
-                }
-            }).filter(|s| !s.is_empty()).collect()
+            var_decl
+                .decls
+                .iter()
+                .map(|d| {
+                    match &d.name {
+                        swc_ast::Pat::Ident(ident) => ident.id.sym.to_string(),
+                        _ => String::new(), // 解构导出暂不支持
+                    }
+                })
+                .filter(|s| !s.is_empty())
+                .collect()
         }
         swc_ast::Decl::Fn(fn_decl) => {
             vec![fn_decl.ident.sym.to_string()]
@@ -12085,12 +13027,10 @@ fn decl_exported_names(decl: &swc_ast::Decl) -> Vec<String> {
         swc_ast::Decl::TsEnum(ts_enum) => {
             vec![ts_enum.id.sym.to_string()]
         }
-        swc_ast::Decl::TsModule(ts_module) => {
-            match &ts_module.id {
-                swc_ast::TsModuleName::Ident(ident) => vec![ident.sym.to_string()],
-                _ => vec![],
-            }
-        }
+        swc_ast::Decl::TsModule(ts_module) => match &ts_module.id {
+            swc_ast::TsModuleName::Ident(ident) => vec![ident.sym.to_string()],
+            _ => vec![],
+        },
         _ => vec![],
     }
 }

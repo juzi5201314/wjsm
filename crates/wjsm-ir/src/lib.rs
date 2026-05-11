@@ -69,6 +69,8 @@ pub enum Constant {
     Null,
     Undefined,
     FunctionRef(FunctionId),
+    /// 运行时原生可调用对象；当前用于全局 eval 被作为值读取时。
+    NativeCallableEval,
     /// BigInt 字面量（十进制字符串）
     BigInt(String),
     /// RegExp 字面量（pattern 和 flags）
@@ -89,6 +91,7 @@ impl fmt::Display for Constant {
             Self::Null => formatter.write_str("null"),
             Self::Undefined => formatter.write_str("undefined"),
             Self::FunctionRef(id) => write!(formatter, "functionref(@{id})"),
+            Self::NativeCallableEval => formatter.write_str("native_callable(eval)"),
             Self::BigInt(value) => write!(formatter, "bigint({value})"),
             Self::RegExp { pattern, flags } => {
                 write!(formatter, "regex(/{pattern}/{flags})")
@@ -104,6 +107,8 @@ pub struct Function {
     params: Vec<String>,
     entry: BasicBlockId,
     blocks: Vec<BasicBlock>,
+    /// 函数体是否包含 direct eval。后端据此降低局部变量优化强度。
+    has_eval: bool,
     /// 该函数捕获的外层变量名列表（闭包用）。
     /// 语义层逃逸分析后填入，后端用于 env 对象的属性名。
     captured_names: Vec<String>,
@@ -120,6 +125,7 @@ impl Function {
             params: Vec::new(),
             entry,
             blocks: Vec::new(),
+            has_eval: false,
             captured_names: Vec::new(),
             home_object: None,
         }
@@ -135,6 +141,14 @@ impl Function {
 
     pub fn set_params(&mut self, params: Vec<String>) {
         self.params = params;
+    }
+
+    pub fn has_eval(&self) -> bool {
+        self.has_eval
+    }
+
+    pub fn set_has_eval(&mut self, has_eval: bool) {
+        self.has_eval = has_eval;
     }
 
     pub fn captured_names(&self) -> &[String] {
@@ -183,6 +197,9 @@ impl Function {
         let _ = write!(out, "  fn @{}", self.name);
         if let Some(home) = self.home_object {
             let _ = write!(out, " [home_object=@{}]", home.0);
+        }
+        if self.has_eval {
+            let _ = write!(out, " [has_eval]");
         }
         if !self.captured_names.is_empty() {
             let _ = write!(out, " [captures: ");
@@ -677,6 +694,9 @@ pub enum Builtin {
     SetInterval,
     ClearInterval,
     Fetch,
+    Eval,
+    EvalIndirect,
+    EvalResult,
     JsonStringify,
     JsonParse,
     CreateClosure,
@@ -829,6 +849,9 @@ impl fmt::Display for Builtin {
             Self::SetInterval => "setInterval",
             Self::ClearInterval => "clearInterval",
             Self::Fetch => "fetch",
+            Self::Eval => "eval",
+            Self::EvalIndirect => "eval.indirect",
+            Self::EvalResult => "eval.result",
             Self::JsonStringify => "JSON.stringify",
             Self::JsonParse => "JSON.parse",
             Self::CreateClosure => "create_closure",

@@ -537,6 +537,23 @@ fn promise_with_resolvers_fixture_matches_ir_snapshot() {
     assert_snapshot("promise_with_resolvers");
 }
 
+// ── eval ───────────────────────────────────────────────────────────────
+
+#[test]
+fn eval_basic_fixture_matches_ir_snapshot() {
+    assert_snapshot("eval_basic");
+}
+
+#[test]
+fn eval_direct_assign_fixture_matches_ir_snapshot() {
+    assert_snapshot("eval_direct_assign");
+}
+
+#[test]
+fn eval_strict_existing_var_fixture_matches_ir_snapshot() {
+    assert_snapshot("eval_strict_existing_var");
+}
+
 // ── async edge cases ───────────────────────────────────────────────────
 
 #[test]
@@ -563,7 +580,6 @@ fn async_as_callback_fixture_matches_ir_snapshot() {
 fn async_closure_capture_fixture_matches_ir_snapshot() {
     assert_snapshot("async_closure_capture");
 }
-
 
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
