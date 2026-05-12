@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-NaN
+fulfilled
 1
-NaN
+rejected
 2
 --- stderr ---
