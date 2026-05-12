@@ -103,7 +103,7 @@ pub fn decode_array_handle(val: i64) -> u32 {
 
 pub const TAG_MASK: u64 = 0x1F;
 
-pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x10;
+pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x20;
 pub const BOX_BASE: u64 = MASK_EXPONENT | MASK_QUIET_NAN;
 
 pub fn encode_f64(val: f64) -> i64 {

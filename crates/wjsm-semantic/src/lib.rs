@@ -10,6 +10,16 @@ use wjsm_ir::{
 
 const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
 
+const WK_SYMBOL_ITERATOR: u32 = 0;
+const WK_SYMBOL_SPECIES: u32 = 1;
+const WK_SYMBOL_TO_STRING_TAG: u32 = 2;
+const WK_SYMBOL_ASYNC_ITERATOR: u32 = 3;
+const WK_SYMBOL_HAS_INSTANCE: u32 = 4;
+const WK_SYMBOL_TO_PRIMITIVE: u32 = 5;
+const WK_SYMBOL_DISPOSE: u32 = 6;
+const WK_SYMBOL_MATCH: u32 = 7;
+const WK_SYMBOL_ASYNC_DISPOSE: u32 = 8;
+
 // ── Scope tree ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1896,13 +1906,19 @@ impl Lowerer {
         }
 
         // 在块退出时，对块内声明的 using 变量执行 dispose
-        if let StmtFlow::Open(block) = flow {
-            let new_using_count = self.active_using_vars.len();
-            if new_using_count > prev_using_count {
-                let merged = self.emit_using_disposal(block);
-                // 移除已 dispose 的 using 变量
-                self.active_using_vars.truncate(prev_using_count);
-                flow = StmtFlow::Open(merged);
+        let new_using_count = self.active_using_vars.len();
+        if new_using_count > prev_using_count {
+            match flow {
+                StmtFlow::Open(block) => {
+                    let merged = self.emit_using_disposal(block);
+                    self.active_using_vars.truncate(prev_using_count);
+                    flow = StmtFlow::Open(merged);
+                }
+                StmtFlow::Terminated => {
+                    // 块因 return/throw/break/continue 终止，
+                    // using 变量的 dispose 由外层 finally 或运行时异常处理负责
+                    self.active_using_vars.truncate(prev_using_count);
+                }
             }
         }
 
@@ -8032,70 +8048,22 @@ impl Lowerer {
                 },
             );
 
-            // 如果值是数字，添加反向映射：obj[value] = memberName
-            if let Some(init_expr) = &member.init {
+            // 反向映射：obj[value] = memberName（数字值 → 成员名）
+            let reverse_key_str = if let Some(init_expr) = &member.init {
                 if let swc_ast::Expr::Lit(swc_ast::Lit::Num(num)) = init_expr.as_ref() {
-                    let num_str = if num.value == num.value.trunc() {
+                    Some(if num.value == num.value.trunc() {
                         format!("{}", num.value as i64)
                     } else {
                         format!("{}", num.value)
-                    };
-                    let rev_key_const = self.module.add_constant(Constant::String(num_str));
-                    let rev_key_dest = self.alloc_value();
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::Const {
-                            dest: rev_key_dest,
-                            constant: rev_key_const,
-                        },
-                    );
-                    let rev_val_const = self.module.add_constant(Constant::String(member_name));
-                    let rev_val_dest = self.alloc_value();
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::Const {
-                            dest: rev_val_dest,
-                            constant: rev_val_const,
-                        },
-                    );
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::SetProp {
-                            object: obj_dest,
-                            key: rev_key_dest,
-                            value: rev_val_dest,
-                        },
-                    );
+                    })
+                } else {
+                    None
                 }
             } else {
-                // 隐式递增值，始终是整数
-                let num_str = format!("{}", (implicit_value - 1.0) as i64);
-                let rev_key_const = self.module.add_constant(Constant::String(num_str));
-                let rev_key_dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Const {
-                        dest: rev_key_dest,
-                        constant: rev_key_const,
-                    },
-                );
-                let rev_val_const = self.module.add_constant(Constant::String(member_name));
-                let rev_val_dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Const {
-                        dest: rev_val_dest,
-                        constant: rev_val_const,
-                    },
-                );
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::SetProp {
-                        object: obj_dest,
-                        key: rev_key_dest,
-                        value: rev_val_dest,
-                    },
-                );
+                Some(format!("{}", (implicit_value - 1.0) as i64))
+            };
+            if let Some(num_str) = reverse_key_str {
+                self.emit_enum_reverse_mapping(block, obj_dest, &num_str, &member_name);
             }
         }
 
@@ -8117,6 +8085,41 @@ impl Lowerer {
         Ok(StmtFlow::Open(block))
     }
 
+    fn emit_enum_reverse_mapping(
+        &mut self,
+        block: BasicBlockId,
+        obj_dest: ValueId,
+        num_str: &str,
+        member_name: &str,
+    ) {
+        let rev_key_const = self.module.add_constant(Constant::String(num_str.to_string()));
+        let rev_key_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: rev_key_dest,
+                constant: rev_key_const,
+            },
+        );
+        let rev_val_const = self.module.add_constant(Constant::String(member_name.to_string()));
+        let rev_val_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: rev_val_dest,
+                constant: rev_val_const,
+            },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object: obj_dest,
+                key: rev_key_dest,
+                value: rev_val_dest,
+            },
+        );
+    }
+
     fn lower_ts_module(
         &mut self,
         ts_module: &swc_ast::TsModuleDecl,
@@ -8124,18 +8127,39 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         let block = self.ensure_open(flow)?;
 
-        // 检查 declare 标志：declare namespace 跳过（类型擦除）
         if ts_module.declare {
             return Ok(StmtFlow::Open(block));
         }
 
-        // 获取 namespace 名称
         let module_name = match &ts_module.id {
             swc_ast::TsModuleName::Ident(ident) => ident.sym.to_string(),
             swc_ast::TsModuleName::Str(s) => s.value.to_string_lossy().into_owned(),
         };
 
-        // 创建 namespace 对象
+        let obj_dest = self.lower_ts_module_body(ts_module, block)?;
+
+        let scope_id = self
+            .scopes
+            .resolve_scope_id(&module_name)
+            .map_err(|msg| self.error(ts_module.span(), msg))?;
+        let ir_name = format!("${scope_id}.{module_name}");
+        self.current_function.append_instruction(
+            block,
+            Instruction::StoreVar {
+                name: ir_name,
+                value: obj_dest,
+            },
+        );
+        let _ = self.scopes.mark_initialised(&module_name);
+
+        Ok(StmtFlow::Open(block))
+    }
+
+    fn lower_ts_module_body(
+        &mut self,
+        ts_module: &swc_ast::TsModuleDecl,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
         let obj_dest = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -8145,13 +8169,10 @@ impl Lowerer {
             },
         );
 
-        // 降低 body 中的声明
         if let Some(body) = &ts_module.body {
             match body {
                 swc_ast::TsNamespaceBody::TsModuleBlock(module_block) => {
-                    // 推入新作用域，确保 namespace 内的局部变量不泄漏
                     self.scopes.push_scope(ScopeKind::Block);
-                    // 预声明 body 中的所有声明
                     for item in &module_block.body {
                         match item {
                             swc_ast::ModuleItem::Stmt(stmt) => {
@@ -8172,7 +8193,6 @@ impl Lowerer {
                             }
                         }
                     }
-                    // 降低 body 中的声明
                     for item in &module_block.body {
                         match item {
                             swc_ast::ModuleItem::Stmt(stmt) => {
@@ -8188,7 +8208,6 @@ impl Lowerer {
                     self.scopes.pop_scope();
                 }
                 swc_ast::TsNamespaceBody::TsNamespaceDecl(nested) => {
-                    // 嵌套 namespace：递归降低
                     let nested_module = swc_ast::TsModuleDecl {
                         span: nested.span,
                         declare: false,
@@ -8197,92 +8216,7 @@ impl Lowerer {
                         id: swc_ast::TsModuleName::Ident(nested.id.clone()),
                         body: Some(*nested.body.clone()),
                     };
-                    // 递归处理
-                    let nested_obj = self.lower_ts_module_decl_inner(&nested_module, block)?;
-                    let nested_name = nested.id.sym.to_string();
-                    let key_const = self.module.add_constant(Constant::String(nested_name));
-                    let key_dest = self.alloc_value();
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::Const {
-                            dest: key_dest,
-                            constant: key_const,
-                        },
-                    );
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::SetProp {
-                            object: obj_dest,
-                            key: key_dest,
-                            value: nested_obj,
-                        },
-                    );
-                }
-            }
-        }
-
-        // StoreVar: 将 namespace 对象赋给 namespace 名
-        let scope_id = self
-            .scopes
-            .resolve_scope_id(&module_name)
-            .map_err(|msg| self.error(ts_module.span(), msg))?;
-        let ir_name = format!("${scope_id}.{module_name}");
-        self.current_function.append_instruction(
-            block,
-            Instruction::StoreVar {
-                name: ir_name,
-                value: obj_dest,
-            },
-        );
-        let _ = self.scopes.mark_initialised(&module_name);
-
-        Ok(StmtFlow::Open(block))
-    }
-
-    fn lower_ts_module_decl_inner(
-        &mut self,
-        ts_module: &swc_ast::TsModuleDecl,
-        block: BasicBlockId,
-    ) -> Result<ValueId, LoweringError> {
-        // 创建 namespace 对象
-        let obj_dest = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::NewObject {
-                dest: obj_dest,
-                capacity: 4,
-            },
-        );
-
-        // 降低 body
-        if let Some(body) = &ts_module.body {
-            match body {
-                swc_ast::TsNamespaceBody::TsModuleBlock(module_block) => {
-                    for item in &module_block.body {
-                        match item {
-                            swc_ast::ModuleItem::Stmt(stmt) => {
-                                if let swc_ast::Stmt::Decl(_decl) = stmt {
-                                    self.lower_stmt(stmt, StmtFlow::Open(block))?;
-                                }
-                            }
-                            swc_ast::ModuleItem::ModuleDecl(module_decl) => {
-                                self.lower_module_decl_into_object(module_decl, obj_dest, block)?;
-                            }
-                        }
-                    }
-                }
-                swc_ast::TsNamespaceBody::TsNamespaceDecl(nested) => {
-                    let nested_obj = self.lower_ts_module_decl_inner(
-                        &swc_ast::TsModuleDecl {
-                            span: nested.span,
-                            declare: false,
-                            global: false,
-                            namespace: true,
-                            id: swc_ast::TsModuleName::Ident(nested.id.clone()),
-                            body: Some(*nested.body.clone()),
-                        },
-                        block,
-                    )?;
+                    let nested_obj = self.lower_ts_module_body(&nested_module, block)?;
                     let nested_name = nested.id.sym.to_string();
                     let key_const = self.module.add_constant(Constant::String(nested_name));
                     let key_dest = self.alloc_value();
@@ -8311,20 +8245,66 @@ impl Lowerer {
     fn lower_module_decl_into_object(
         &mut self,
         module_decl: &swc_ast::ModuleDecl,
-        _obj_dest: ValueId,
+        obj_dest: ValueId,
         block: BasicBlockId,
     ) -> Result<(), LoweringError> {
-        // 简化实现：降低声明但不设置到对象上
         match module_decl {
             swc_ast::ModuleDecl::ExportDecl(export_decl) => {
+                let decl_name = match &export_decl.decl {
+                    swc_ast::Decl::Fn(fn_decl) => Some(fn_decl.ident.sym.to_string()),
+                    swc_ast::Decl::Var(var_decl) => {
+                        var_decl.decls.first().and_then(|d| {
+                            match &d.name {
+                                swc_ast::Pat::Ident(ident) => Some(ident.id.sym.to_string()),
+                                _ => None,
+                            }
+                        })
+                    }
+                    swc_ast::Decl::TsEnum(ts_enum) => Some(ts_enum.id.sym.to_string()),
+                    swc_ast::Decl::TsModule(ts_module) => {
+                        match &ts_module.id {
+                            swc_ast::TsModuleName::Ident(ident) => Some(ident.sym.to_string()),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
                 self.lower_stmt(
                     &swc_ast::Stmt::Decl(export_decl.decl.clone()),
                     StmtFlow::Open(block),
                 )?;
+                if let Some(name) = decl_name {
+                    if let Ok(scope_id) = self.scopes.resolve_scope_id(&name) {
+                        let ir_name = format!("${scope_id}.{name}");
+                        let val = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::LoadVar {
+                                dest: val,
+                                name: ir_name,
+                            },
+                        );
+                        let key_const = self.module.add_constant(Constant::String(name));
+                        let key_dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest: key_dest,
+                                constant: key_const,
+                            },
+                        );
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::SetProp {
+                                object: obj_dest,
+                                key: key_dest,
+                                value: val,
+                            },
+                        );
+                    }
+                }
             }
-            _ => {
-                // 其他 export 类型暂跳过
-            }
+            _ => {}
         }
         Ok(())
     }
@@ -8430,7 +8410,7 @@ impl Lowerer {
             );
 
             // In dispose_block: get @@dispose / @@asyncDispose and call it
-            let symbol_idx = if var.is_async { 8u32 } else { 6u32 };
+            let symbol_idx = if var.is_async { WK_SYMBOL_ASYNC_DISPOSE } else { WK_SYMBOL_DISPOSE };
             let symbol_const = self.module.add_constant(Constant::Number(symbol_idx as f64));
             let symbol_val = self.alloc_value();
             self.current_function.append_instruction(
@@ -8507,27 +8487,16 @@ impl Lowerer {
         let props_val = self.lower_jsx_attrs(&jsx_el.opening.attrs, block)?;
 
         // 降低 children（作为数组）
-        let _children_val = self.lower_jsx_children(&jsx_el.children, block)?;
-        // 统计 children 数量
-        let children_count = jsx_el.children.len() as f64;
-        let count_const = self.module.add_constant(Constant::Number(children_count));
-        let count_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: count_val,
-                constant: count_const,
-            },
-        );
+        let children_val = self.lower_jsx_children(&jsx_el.children, block)?;
 
-        // 调用 jsx_create_element(tag, props, children_count)
+        // 调用 jsx_create_element(tag, props, children)
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::CallBuiltin {
                 dest: Some(dest),
                 builtin: Builtin::JsxCreateElement,
-                args: vec![tag_val, props_val, count_val],
+                args: vec![tag_val, props_val, children_val],
             },
         );
         Ok(dest)
@@ -8562,25 +8531,16 @@ impl Lowerer {
         );
 
         // 收集 children
-        let children_count = jsx_frag.children.len() as f64;
-        let count_const = self.module.add_constant(Constant::Number(children_count));
-        let count_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: count_val,
-                constant: count_const,
-            },
-        );
+        let children_val = self.lower_jsx_children(&jsx_frag.children, block)?;
 
-        // 调用 jsx_create_element(tag, null, children_count)
+        // 调用 jsx_create_element(tag, null, children)
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::CallBuiltin {
                 dest: Some(dest),
                 builtin: Builtin::JsxCreateElement,
-                args: vec![tag_val, props_val, count_val],
+                args: vec![tag_val, props_val, children_val],
             },
         );
         Ok(dest)
@@ -9594,15 +9554,15 @@ impl Lowerer {
                         let prop_name = ident.sym.to_string();
                         // 将 Symbol.dispose 等映射为 well-known symbol
                         let wk_index = match prop_name.as_str() {
-                            "iterator" => Some(0u32),
-                            "species" => Some(1u32),
-                            "toStringTag" => Some(2u32),
-                            "asyncIterator" => Some(3u32),
-                            "hasInstance" => Some(4u32),
-                            "toPrimitive" => Some(5u32),
-                            "dispose" => Some(6u32),
-                            "match" => Some(7u32),
-                            "asyncDispose" => Some(8u32),
+                            "iterator" => Some(WK_SYMBOL_ITERATOR),
+                            "species" => Some(WK_SYMBOL_SPECIES),
+                            "toStringTag" => Some(WK_SYMBOL_TO_STRING_TAG),
+                            "asyncIterator" => Some(WK_SYMBOL_ASYNC_ITERATOR),
+                            "hasInstance" => Some(WK_SYMBOL_HAS_INSTANCE),
+                            "toPrimitive" => Some(WK_SYMBOL_TO_PRIMITIVE),
+                            "dispose" => Some(WK_SYMBOL_DISPOSE),
+                            "match" => Some(WK_SYMBOL_MATCH),
+                            "asyncDispose" => Some(WK_SYMBOL_ASYNC_DISPOSE),
                             _ => None,
                         };
                         if let Some(idx) = wk_index {
@@ -9637,9 +9597,9 @@ impl Lowerer {
                     },
                 );
             }
-            // Computed（计算属性）：字符串字面量用 GetProp，数字字面量用 GetElem
+            // Computed（计算属性）：数字字面量用 GetElem，其他用 GetProp
             swc_ast::MemberProp::Computed(_) => {
-                // 检查 computed key 是否为字符串字面量 → GetProp
+                // 检查 computed key 是否为数字字面量 → GetElem
                 let use_get_elem = matches!(
                     member.prop,
                     swc_ast::MemberProp::Computed(swc_ast::ComputedPropName { ref expr, .. })

@@ -725,9 +725,9 @@ impl Compiler {
         types
             .ty()
             .function(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
-        // Type 27: (i64, i64, i32) -> (i64)  — jsx_create_element (tag, props, children_count)
+        // Type 27: (i64, i64, i64) -> (i64)  — jsx_create_element (tag, props, children)
         types.ty().function(
-            vec![ValType::I64, ValType::I64, ValType::I32],
+            vec![ValType::I64, ValType::I64, ValType::I64],
             vec![ValType::I64],
         );
         // Type 28: (i64, i64) -> (i64)  — proxy_create, proxy_revocable, reflect_has, etc.
@@ -906,7 +906,7 @@ impl Compiler {
         // Import index 149: eval_indirect: (i64 code) -> i64
         imports.import("env", "eval_indirect", EntityType::Function(3));
 
-        // Import index 150: jsx_create_element: (i64 tag, i64 props, i32 children_count) -> i64
+        // Import index 150: jsx_create_element: (i64 tag, i64 props, i64 children) -> i64
         imports.import("env", "jsx_create_element", EntityType::Function(27));
         // Import index 151: proxy_create: (i64 target, i64 handler) -> i64
         imports.import("env", "proxy_create", EntityType::Function(28));
@@ -6379,15 +6379,13 @@ impl Compiler {
             }
             // ── JSX builtins ───────────────────────────────────────────────────
             Builtin::JsxCreateElement => {
-                // jsx_create_element(tag: i64, props: i64, children_count: i32) -> i64
+                // jsx_create_element(tag: i64, props: i64, children: i64) -> i64
                 let a_tag = args.first().context("JsxCreateElement expects tag arg")?;
                 let a_props = args.get(1).context("JsxCreateElement expects props arg")?;
-                let a_count = args.get(2).context("JsxCreateElement expects children_count arg")?;
+                let a_children = args.get(2).context("JsxCreateElement expects children arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(a_tag.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(a_props.0)));
-                // children_count: i64 → i32.wrap_i64
-                self.emit(WasmInstruction::LocalGet(self.local_idx(a_count.0)));
-                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a_children.0)));
                 let func_idx = self
                     .builtin_func_indices
                     .get(builtin)

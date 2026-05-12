@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-NaN
-NaN
-NaN
-NaN
+Hello, World!
+number: 42
+42 is the answer
+foobar
 --- stderr ---
