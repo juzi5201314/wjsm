@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+div
+[object Object:<id>]
+--- stderr ---

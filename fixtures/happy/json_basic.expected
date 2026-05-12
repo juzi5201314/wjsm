@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-42
-"hello"
-true
-null
+NaN
+NaN
+NaN
+NaN
 --- stderr ---

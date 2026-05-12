@@ -79,6 +79,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             description: Some("Symbol(Symbol.match)".into()),
             global_key: None,
         }, // 7 = @@match
+        SymbolEntry {
+            description: Some("Symbol(Symbol.asyncDispose)".into()),
+            global_key: None,
+        }, // 8 = @@asyncDispose
     ]));
     let regex_table: Arc<Mutex<Vec<RegexEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -6806,6 +6810,79 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
+    let jsx_create_element_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, tag: i64, props: i64, children_count: i32| -> i64 {
+            // 创建 JSX 元素对象 { type: tag, props, children: [...] }
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let _ = define_host_data_property_from_caller(
+                &mut caller, obj, "type", tag,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller, obj, "props", props,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller, obj, "children", value::encode_f64(children_count as f64),
+            );
+            obj
+        },
+        );
+
+
+    // ── Stub functions for unimplemented Proxy/Reflect functions ────────
+    let reflect_stub_1 = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _a: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+    let reflect_stub_2 = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _a: i64, _b: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+    let reflect_stub_3 = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _a: i64, _b: i64, _c: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+    let reflect_stub_4 = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _a: i64, _b: i64, _c: i64, _d: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+    // ── Proxy / Reflect ────────────────────────────────────────────────────────
+    let proxy_create_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__proxy_target", target);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__proxy_handler", handler);
+            obj
+        },
+    );
+
+    let reflect_get_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64, _receiver: i64| -> i64 {
+            // Reflect.get(target, prop, receiver) → 简化为读取属性
+            // 暂时返回 undefined（完整实现需要到 $obj_get 的桥接）
+            alloc_host_object_from_caller(&mut caller, 0)
+        },
+    );
+
+    let proxy_revocable_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__proxy_target", target);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__proxy_handler", handler);
+            obj
+        },
+    );
     let imports = [
         console_log.into(),                    // 0
         f64_mod.into(),                        // 1
@@ -6962,6 +7039,22 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         dynamic_import_fn.into(),                  // 147
         eval_direct_fn.into(),                     // 148
         eval_indirect_fn.into(),                   // 149
+        jsx_create_element_fn.into(),               // 150
+        proxy_create_fn.into(),                     // 151
+        proxy_revocable_fn.into(),                  // 152
+        reflect_get_fn.into(),                      // 153
+        reflect_stub_4.into(),                      // 154 (reflect_set: 4-arg)
+        reflect_stub_2.into(),                      // 155 (reflect_has: 2-arg)
+        reflect_stub_2.into(),                      // 156 (reflect_delete_property: 2-arg)
+        reflect_stub_3.into(),                      // 157 (reflect_apply: 3-arg)
+        reflect_stub_3.into(),                      // 158 (reflect_construct: 3-arg)
+        reflect_stub_1.into(),                      // 159 (reflect_get_prototype_of: 1-arg)
+        reflect_stub_2.into(),                      // 160 (reflect_set_prototype_of: 2-arg)
+        reflect_stub_1.into(),                      // 161 (reflect_is_extensible: 1-arg)
+        reflect_stub_1.into(),                      // 162 (reflect_prevent_extensions: 1-arg)
+        reflect_stub_2.into(),                      // 163 (reflect_get_own_property_descriptor: 2-arg)
+        reflect_stub_3.into(),                      // 164 (reflect_define_property: 3-arg)
+        reflect_stub_1.into(),                      // 165 (reflect_own_keys: 1-arg)
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 

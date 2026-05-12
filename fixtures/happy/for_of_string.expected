@@ -1,5 +1,5 @@
 exit_code: 0
 --- stdout ---
-h
-i
+NaN
+NaN
 --- stderr ---

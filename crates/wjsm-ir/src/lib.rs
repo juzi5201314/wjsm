@@ -812,6 +812,24 @@ pub enum Builtin {
     // ── 动态 import ──────────────────────────────────────────────────
     DynamicImport,
     RegisterModuleNamespace,
+    // ── JSX ────────────────────────────────────────────────────────────
+    JsxCreateElement,
+    // ── Proxy / Reflect ────────────────────────────────────────────────
+    ProxyCreate,
+    ProxyRevocable,
+    ReflectGet,
+    ReflectSet,
+    ReflectHas,
+    ReflectDeleteProperty,
+    ReflectApply,
+    ReflectConstruct,
+    ReflectGetPrototypeOf,
+    ReflectSetPrototypeOf,
+    ReflectIsExtensible,
+    ReflectPreventExtensions,
+    ReflectGetOwnPropertyDescriptor,
+    ReflectDefineProperty,
+    ReflectOwnKeys,
 }
 
 impl fmt::Display for Builtin {
@@ -954,6 +972,22 @@ impl fmt::Display for Builtin {
             Self::AsyncGeneratorThrow => "async_generator.throw",
             Self::DynamicImport => "dynamic_import",
             Self::RegisterModuleNamespace => "register_module_namespace",
+            Self::JsxCreateElement => "jsx.create_element",
+            Self::ProxyCreate => "proxy.create",
+            Self::ProxyRevocable => "proxy.revocable",
+            Self::ReflectGet => "reflect.get",
+            Self::ReflectSet => "reflect.set",
+            Self::ReflectHas => "reflect.has",
+            Self::ReflectDeleteProperty => "reflect.delete_property",
+            Self::ReflectApply => "reflect.apply",
+            Self::ReflectConstruct => "reflect.construct",
+            Self::ReflectGetPrototypeOf => "reflect.get_prototype_of",
+            Self::ReflectSetPrototypeOf => "reflect.set_prototype_of",
+            Self::ReflectIsExtensible => "reflect.is_extensible",
+            Self::ReflectPreventExtensions => "reflect.prevent_extensions",
+            Self::ReflectGetOwnPropertyDescriptor => "reflect.get_own_property_descriptor",
+            Self::ReflectDefineProperty => "reflect.define_property",
+            Self::ReflectOwnKeys => "reflect.own_keys",
         })
     }
 }

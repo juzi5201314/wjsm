@@ -1236,6 +1236,15 @@ struct Lowerer {
     eval_has_scope_bridge: bool,
     eval_var_writes_to_scope: bool,
     eval_completion: Option<ValueId>,
+    /// 当前作用域中活跃的 using 变量（用于作用域退出时自动 dispose）
+    active_using_vars: Vec<ActiveUsingVar>,
+}
+
+/// 追踪当前作用域中的 using 变量，用于在作用域退出时自动 dispose。
+#[derive(Debug, Clone)]
+struct ActiveUsingVar {
+    ir_name: String,
+    is_async: bool,
 }
 
 #[derive(Clone)]
@@ -1308,6 +1317,7 @@ impl Lowerer {
         let _ = scopes.declare("undefined", VarKind::Var, true);
         let _ = scopes.declare("NaN", VarKind::Var, true);
         let _ = scopes.declare("Infinity", VarKind::Var, true);
+        let _ = scopes.declare("Symbol", VarKind::Var, true);
 
         Self {
             module: Module::new(),
@@ -1361,6 +1371,7 @@ impl Lowerer {
             eval_mode: false,
             eval_has_scope_bridge: false,
             eval_var_writes_to_scope: false,
+            active_using_vars: Vec::new(),
             eval_completion: None,
         }
     }
@@ -1800,6 +1811,12 @@ impl Lowerer {
                 swc_ast::Decl::Fn(fn_decl) => self.lower_fn_decl(fn_decl, flow),
                 swc_ast::Decl::Var(var_decl) => self.lower_var_decl(var_decl, flow),
                 swc_ast::Decl::Class(class_decl) => self.lower_class_decl(class_decl, flow),
+                swc_ast::Decl::TsInterface(_) => self.lower_empty(flow),
+                swc_ast::Decl::TsTypeAlias(_) => self.lower_empty(flow),
+                swc_ast::Decl::TsEnum(ts_enum) => self.lower_ts_enum(ts_enum, flow),
+                swc_ast::Decl::TsModule(ts_module) => self.lower_ts_module(ts_module, flow),
+                swc_ast::Decl::Using(using_decl) => self.lower_using_decl(using_decl, flow),
+                #[allow(unreachable_patterns)]
                 _ => Err(self.error(
                     stmt.span(),
                     format!("unsupported declaration kind `{}`", decl_kind(decl)),
@@ -1865,6 +1882,7 @@ impl Lowerer {
         block_stmt: &swc_ast::BlockStmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
+        let prev_using_count = self.active_using_vars.len();
         self.scopes.push_scope(ScopeKind::Block);
         self.predeclare_block_stmts(&block_stmt.stmts)?;
 
@@ -1875,6 +1893,17 @@ impl Lowerer {
                 continue;
             }
             flow = self.lower_stmt(stmt, flow)?;
+        }
+
+        // 在块退出时，对块内声明的 using 变量执行 dispose
+        if let StmtFlow::Open(block) = flow {
+            let new_using_count = self.active_using_vars.len();
+            if new_using_count > prev_using_count {
+                let merged = self.emit_using_disposal(block);
+                // 移除已 dispose 的 using 变量
+                self.active_using_vars.truncate(prev_using_count);
+                flow = StmtFlow::Open(merged);
+            }
         }
 
         self.scopes.pop_scope();
@@ -7930,6 +7959,934 @@ impl Lowerer {
 
         Ok(ctor_dest)
     }
+    // ── TypeScript declarations ──────────────────────────────────────────
+
+    fn lower_ts_enum(
+        &mut self,
+        ts_enum: &swc_ast::TsEnumDecl,
+        flow: StmtFlow,
+    ) -> Result<StmtFlow, LoweringError> {
+        let block = self.ensure_open(flow)?;
+        let enum_name = ts_enum.id.sym.to_string();
+
+        // 创建枚举对象
+        let capacity = std::cmp::max(4, ts_enum.members.len() as u32);
+        let obj_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: obj_dest,
+                capacity,
+            },
+        );
+
+        // 遍历成员，生成正向和反向映射
+        let mut implicit_value: f64 = 0.0;
+        for member in &ts_enum.members {
+            // 获取成员名（字符串）
+            let member_name = match &member.id {
+                swc_ast::TsEnumMemberId::Ident(ident) => ident.sym.to_string(),
+                swc_ast::TsEnumMemberId::Str(s) => s.value.to_string_lossy().into_owned(),
+            };
+
+            // 计算成员值
+            let member_value = if let Some(init_expr) = &member.init {
+                // 有显式初始化表达式
+                let val = self.lower_expr(init_expr, block)?;
+                // 尝试从数值常量读取隐式递增值起点
+                if let swc_ast::Expr::Lit(swc_ast::Lit::Num(num)) = init_expr.as_ref() {
+                    implicit_value = num.value + 1.0;
+                }
+                val
+            } else {
+                // 无初始化表达式，使用隐式递增值
+                let const_id = self.module.add_constant(Constant::Number(implicit_value));
+                let val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: val,
+                        constant: const_id,
+                    },
+                );
+                implicit_value += 1.0;
+                val
+            };
+
+            // 正向映射：obj[memberName] = value
+            let key_const = self.module.add_constant(Constant::String(member_name.clone()));
+            let key_dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: key_dest,
+                    constant: key_const,
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp {
+                    object: obj_dest,
+                    key: key_dest,
+                    value: member_value,
+                },
+            );
+
+            // 如果值是数字，添加反向映射：obj[value] = memberName
+            if let Some(init_expr) = &member.init {
+                if let swc_ast::Expr::Lit(swc_ast::Lit::Num(num)) = init_expr.as_ref() {
+                    let num_str = if num.value == num.value.trunc() {
+                        format!("{}", num.value as i64)
+                    } else {
+                        format!("{}", num.value)
+                    };
+                    let rev_key_const = self.module.add_constant(Constant::String(num_str));
+                    let rev_key_dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: rev_key_dest,
+                            constant: rev_key_const,
+                        },
+                    );
+                    let rev_val_const = self.module.add_constant(Constant::String(member_name));
+                    let rev_val_dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: rev_val_dest,
+                            constant: rev_val_const,
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::SetProp {
+                            object: obj_dest,
+                            key: rev_key_dest,
+                            value: rev_val_dest,
+                        },
+                    );
+                }
+            } else {
+                // 隐式递增值，始终是整数
+                let num_str = format!("{}", (implicit_value - 1.0) as i64);
+                let rev_key_const = self.module.add_constant(Constant::String(num_str));
+                let rev_key_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: rev_key_dest,
+                        constant: rev_key_const,
+                    },
+                );
+                let rev_val_const = self.module.add_constant(Constant::String(member_name));
+                let rev_val_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: rev_val_dest,
+                        constant: rev_val_const,
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::SetProp {
+                        object: obj_dest,
+                        key: rev_key_dest,
+                        value: rev_val_dest,
+                    },
+                );
+            }
+        }
+
+        // StoreVar: 将枚举对象赋给枚举名
+        let scope_id = self
+            .scopes
+            .resolve_scope_id(&enum_name)
+            .map_err(|msg| self.error(ts_enum.span(), msg))?;
+        let ir_name = format!("${scope_id}.{enum_name}");
+        self.current_function.append_instruction(
+            block,
+            Instruction::StoreVar {
+                name: ir_name,
+                value: obj_dest,
+            },
+        );
+        let _ = self.scopes.mark_initialised(&enum_name);
+
+        Ok(StmtFlow::Open(block))
+    }
+
+    fn lower_ts_module(
+        &mut self,
+        ts_module: &swc_ast::TsModuleDecl,
+        flow: StmtFlow,
+    ) -> Result<StmtFlow, LoweringError> {
+        let block = self.ensure_open(flow)?;
+
+        // 检查 declare 标志：declare namespace 跳过（类型擦除）
+        if ts_module.declare {
+            return Ok(StmtFlow::Open(block));
+        }
+
+        // 获取 namespace 名称
+        let module_name = match &ts_module.id {
+            swc_ast::TsModuleName::Ident(ident) => ident.sym.to_string(),
+            swc_ast::TsModuleName::Str(s) => s.value.to_string_lossy().into_owned(),
+        };
+
+        // 创建 namespace 对象
+        let obj_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: obj_dest,
+                capacity: 4,
+            },
+        );
+
+        // 降低 body 中的声明
+        if let Some(body) = &ts_module.body {
+            match body {
+                swc_ast::TsNamespaceBody::TsModuleBlock(module_block) => {
+                    // 推入新作用域，确保 namespace 内的局部变量不泄漏
+                    self.scopes.push_scope(ScopeKind::Block);
+                    // 预声明 body 中的所有声明
+                    for item in &module_block.body {
+                        match item {
+                            swc_ast::ModuleItem::Stmt(stmt) => {
+                                self.predeclare_stmt_with_mode_and_eval_strings(
+                                    stmt,
+                                    LexicalMode::Include,
+                                    &mut std::collections::HashMap::new(),
+                                )?;
+                            }
+                            swc_ast::ModuleItem::ModuleDecl(module_decl) => {
+                                if let swc_ast::ModuleDecl::ExportDecl(export_decl) = module_decl {
+                                    self.predeclare_stmt_with_mode_and_eval_strings(
+                                        &swc_ast::Stmt::Decl(export_decl.decl.clone()),
+                                        LexicalMode::Include,
+                                        &mut std::collections::HashMap::new(),
+                                    )?;
+                                }
+                            }
+                        }
+                    }
+                    // 降低 body 中的声明
+                    for item in &module_block.body {
+                        match item {
+                            swc_ast::ModuleItem::Stmt(stmt) => {
+                                if let swc_ast::Stmt::Decl(_decl) = stmt {
+                                    self.lower_stmt(stmt, StmtFlow::Open(block))?;
+                                }
+                            }
+                            swc_ast::ModuleItem::ModuleDecl(module_decl) => {
+                                self.lower_module_decl_into_object(module_decl, obj_dest, block)?;
+                            }
+                        }
+                    }
+                    self.scopes.pop_scope();
+                }
+                swc_ast::TsNamespaceBody::TsNamespaceDecl(nested) => {
+                    // 嵌套 namespace：递归降低
+                    let nested_module = swc_ast::TsModuleDecl {
+                        span: nested.span,
+                        declare: false,
+                        global: false,
+                        namespace: true,
+                        id: swc_ast::TsModuleName::Ident(nested.id.clone()),
+                        body: Some(*nested.body.clone()),
+                    };
+                    // 递归处理
+                    let nested_obj = self.lower_ts_module_decl_inner(&nested_module, block)?;
+                    let nested_name = nested.id.sym.to_string();
+                    let key_const = self.module.add_constant(Constant::String(nested_name));
+                    let key_dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: key_dest,
+                            constant: key_const,
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::SetProp {
+                            object: obj_dest,
+                            key: key_dest,
+                            value: nested_obj,
+                        },
+                    );
+                }
+            }
+        }
+
+        // StoreVar: 将 namespace 对象赋给 namespace 名
+        let scope_id = self
+            .scopes
+            .resolve_scope_id(&module_name)
+            .map_err(|msg| self.error(ts_module.span(), msg))?;
+        let ir_name = format!("${scope_id}.{module_name}");
+        self.current_function.append_instruction(
+            block,
+            Instruction::StoreVar {
+                name: ir_name,
+                value: obj_dest,
+            },
+        );
+        let _ = self.scopes.mark_initialised(&module_name);
+
+        Ok(StmtFlow::Open(block))
+    }
+
+    fn lower_ts_module_decl_inner(
+        &mut self,
+        ts_module: &swc_ast::TsModuleDecl,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        // 创建 namespace 对象
+        let obj_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: obj_dest,
+                capacity: 4,
+            },
+        );
+
+        // 降低 body
+        if let Some(body) = &ts_module.body {
+            match body {
+                swc_ast::TsNamespaceBody::TsModuleBlock(module_block) => {
+                    for item in &module_block.body {
+                        match item {
+                            swc_ast::ModuleItem::Stmt(stmt) => {
+                                if let swc_ast::Stmt::Decl(_decl) = stmt {
+                                    self.lower_stmt(stmt, StmtFlow::Open(block))?;
+                                }
+                            }
+                            swc_ast::ModuleItem::ModuleDecl(module_decl) => {
+                                self.lower_module_decl_into_object(module_decl, obj_dest, block)?;
+                            }
+                        }
+                    }
+                }
+                swc_ast::TsNamespaceBody::TsNamespaceDecl(nested) => {
+                    let nested_obj = self.lower_ts_module_decl_inner(
+                        &swc_ast::TsModuleDecl {
+                            span: nested.span,
+                            declare: false,
+                            global: false,
+                            namespace: true,
+                            id: swc_ast::TsModuleName::Ident(nested.id.clone()),
+                            body: Some(*nested.body.clone()),
+                        },
+                        block,
+                    )?;
+                    let nested_name = nested.id.sym.to_string();
+                    let key_const = self.module.add_constant(Constant::String(nested_name));
+                    let key_dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: key_dest,
+                            constant: key_const,
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::SetProp {
+                            object: obj_dest,
+                            key: key_dest,
+                            value: nested_obj,
+                        },
+                    );
+                }
+            }
+        }
+
+        Ok(obj_dest)
+    }
+
+    fn lower_module_decl_into_object(
+        &mut self,
+        module_decl: &swc_ast::ModuleDecl,
+        _obj_dest: ValueId,
+        block: BasicBlockId,
+    ) -> Result<(), LoweringError> {
+        // 简化实现：降低声明但不设置到对象上
+        match module_decl {
+            swc_ast::ModuleDecl::ExportDecl(export_decl) => {
+                self.lower_stmt(
+                    &swc_ast::Stmt::Decl(export_decl.decl.clone()),
+                    StmtFlow::Open(block),
+                )?;
+            }
+            _ => {
+                // 其他 export 类型暂跳过
+            }
+        }
+        Ok(())
+    }
+
+    // ── using 声明 (Explicit Resource Management) ────────────────────────────
+
+    fn lower_using_decl(
+        &mut self,
+        using_decl: &swc_ast::UsingDecl,
+        flow: StmtFlow,
+    ) -> Result<StmtFlow, LoweringError> {
+        let block = self.ensure_open(flow)?;
+
+        for declarator in &using_decl.decls {
+            let mut names = Vec::new();
+            Self::extract_pat_bindings(&[declarator.name.clone()], &mut names);
+            for name in names {
+                let scope_id = self
+                    .scopes
+                    .resolve_scope_id(&name)
+                    .map_err(|msg| self.error(using_decl.span, msg))?;
+                let ir_name = format!("${scope_id}.{name}");
+
+                // 降低初始化表达式
+                if let Some(init_expr) = &declarator.init {
+                    let value = self.lower_expr(init_expr, block)?;
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::StoreVar {
+                            name: ir_name.clone(),
+                            value,
+                        },
+                    );
+                }
+
+                // 标记已初始化
+                let _ = self.scopes.mark_initialised(&name);
+
+                // 记录 using 变量
+                self.active_using_vars.push(ActiveUsingVar {
+                    ir_name,
+                    is_async: using_decl.is_await,
+                });
+            }
+        }
+
+        Ok(StmtFlow::Open(block))
+    }
+
+    fn emit_using_disposal(&mut self, block: BasicBlockId) -> BasicBlockId {
+        if self.active_using_vars.is_empty() {
+            return block;
+        }
+
+        // Clone vars to avoid borrow checker issues
+        let vars = self.active_using_vars.clone();
+        let mut current_block = block;
+        for var in vars.iter().rev() {
+            // 1. LoadVar
+            let val = self.alloc_value();
+            self.current_function.append_instruction(
+                current_block,
+                Instruction::LoadVar {
+                    dest: val,
+                    name: var.ir_name.clone(),
+                },
+            );
+
+            // 2. 检查值不是 null/undefined（用条件分支跳过 dispose）
+            let skip_block = self.current_function.new_block();
+            let dispose_block = self.current_function.new_block();
+            let merge_block = self.current_function.new_block();
+
+            // 检查是否为 null 或 undefined
+            let is_nullish = self.alloc_value();
+            let undef_const = self.module.add_constant(Constant::Undefined);
+            let undef_val = self.alloc_value();
+            self.current_function.append_instruction(
+                current_block,
+                Instruction::Const {
+                    dest: undef_val,
+                    constant: undef_const,
+                },
+            );
+            // Compare with undefined first
+            self.current_function.append_instruction(
+                current_block,
+                Instruction::Compare {
+                    dest: is_nullish,
+                    op: CompareOp::StrictEq,
+                    lhs: val,
+                    rhs: undef_val,
+                },
+            );
+            // Branch: if is_nullish → skip, else check null
+            self.current_function.set_terminator(
+                current_block,
+                Terminator::Branch {
+                    condition: is_nullish,
+                    true_block: skip_block,
+                    false_block: dispose_block,
+                },
+            );
+
+            // In dispose_block: get @@dispose / @@asyncDispose and call it
+            let symbol_idx = if var.is_async { 8u32 } else { 6u32 };
+            let symbol_const = self.module.add_constant(Constant::Number(symbol_idx as f64));
+            let symbol_val = self.alloc_value();
+            self.current_function.append_instruction(
+                dispose_block,
+                Instruction::Const {
+                    dest: symbol_val,
+                    constant: symbol_const,
+                },
+            );
+            let wk_sym = self.alloc_value();
+            self.current_function.append_instruction(
+                dispose_block,
+                Instruction::CallBuiltin {
+                    dest: Some(wk_sym),
+                    builtin: Builtin::SymbolWellKnown,
+                    args: vec![symbol_val],
+                },
+            );
+
+            // obj[Symbol.dispose]
+            let dispose_method = self.alloc_value();
+            self.current_function.append_instruction(
+                dispose_block,
+                Instruction::GetProp {
+                    dest: dispose_method,
+                    object: val,
+                    key: wk_sym,
+                },
+            );
+
+            // Call dispose method with obj as this
+            self.current_function.append_instruction(
+                dispose_block,
+                Instruction::Call {
+                    dest: None,
+                    callee: dispose_method,
+                    this_val: val,
+                    args: vec![],
+                },
+            );
+
+            self.current_function.set_terminator(
+                dispose_block,
+                Terminator::Jump {
+                    target: merge_block,
+                },
+            );
+
+            // skip_block: just jump to merge
+            self.current_function.set_terminator(
+                skip_block,
+                Terminator::Jump {
+                    target: merge_block,
+                },
+            );
+
+            current_block = merge_block;
+        }
+
+        current_block
+    }
+
+    // ── JSX lowering ─────────────────────────────────────────────────────────
+
+    fn lower_jsx_element(
+        &mut self,
+        jsx_el: &swc_ast::JSXElement,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        // 降低 tag 名
+        let tag_val = self.lower_jsx_element_name(&jsx_el.opening.name, block)?;
+
+        // 降低 props
+        let props_val = self.lower_jsx_attrs(&jsx_el.opening.attrs, block)?;
+
+        // 降低 children（作为数组）
+        let _children_val = self.lower_jsx_children(&jsx_el.children, block)?;
+        // 统计 children 数量
+        let children_count = jsx_el.children.len() as f64;
+        let count_const = self.module.add_constant(Constant::Number(children_count));
+        let count_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: count_val,
+                constant: count_const,
+            },
+        );
+
+        // 调用 jsx_create_element(tag, props, children_count)
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(dest),
+                builtin: Builtin::JsxCreateElement,
+                args: vec![tag_val, props_val, count_val],
+            },
+        );
+        Ok(dest)
+    }
+
+    fn lower_jsx_fragment(
+        &mut self,
+        jsx_frag: &swc_ast::JSXFragment,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        // Fragment 使用字符串标记 "$JsxFragment"
+        let tag_str = "$JsxFragment".to_string();
+        let tag_const = self.module.add_constant(Constant::String(tag_str));
+        let tag_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: tag_val,
+                constant: tag_const,
+            },
+        );
+
+        // Fragment 的 props 为 null
+        let null_const = self.module.add_constant(Constant::Null);
+        let props_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: props_val,
+                constant: null_const,
+            },
+        );
+
+        // 收集 children
+        let children_count = jsx_frag.children.len() as f64;
+        let count_const = self.module.add_constant(Constant::Number(children_count));
+        let count_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: count_val,
+                constant: count_const,
+            },
+        );
+
+        // 调用 jsx_create_element(tag, null, children_count)
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(dest),
+                builtin: Builtin::JsxCreateElement,
+                args: vec![tag_val, props_val, count_val],
+            },
+        );
+        Ok(dest)
+    }
+
+    fn lower_jsx_element_name(
+        &mut self,
+        name: &swc_ast::JSXElementName,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        match name {
+            swc_ast::JSXElementName::Ident(ident) => {
+                // HTML 标签名 → 字符串常量
+                let tag_str = ident.sym.to_string();
+                let tag_const = self.module.add_constant(Constant::String(tag_str));
+                let tag_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: tag_val,
+                        constant: tag_const,
+                    },
+                );
+                Ok(tag_val)
+            }
+            swc_ast::JSXElementName::JSXMemberExpr(member_expr) => {
+                // <Foo.Bar /> → 降低为成员表达式
+                let obj_val = self.lower_jsx_object(&member_expr.obj, block)?;
+                let prop_name = member_expr.prop.sym.to_string();
+                let prop_const = self.module.add_constant(Constant::String(prop_name));
+                let prop_key = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: prop_key,
+                        constant: prop_const,
+                    },
+                );
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest,
+                        object: obj_val,
+                        key: prop_key,
+                    },
+                );
+                Ok(dest)
+            }
+            swc_ast::JSXElementName::JSXNamespacedName(ns_name) => {
+                // <ns:tag /> → 字符串 "ns:tag"
+                let tag_str = format!("{}:{}", ns_name.ns.sym, ns_name.name.sym);
+                let tag_const = self.module.add_constant(Constant::String(tag_str));
+                let tag_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: tag_val,
+                        constant: tag_const,
+                    },
+                );
+                Ok(tag_val)
+            }
+        }
+    }
+
+    fn lower_jsx_object(
+        &mut self,
+        obj: &swc_ast::JSXObject,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        match obj {
+            swc_ast::JSXObject::JSXMemberExpr(member_expr) => {
+                let obj_val = self.lower_jsx_object(&member_expr.obj, block)?;
+                let prop_name = member_expr.prop.sym.to_string();
+                let prop_const = self.module.add_constant(Constant::String(prop_name));
+                let prop_key = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: prop_key,
+                        constant: prop_const,
+                    },
+                );
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest,
+                        object: obj_val,
+                        key: prop_key,
+                    },
+                );
+                Ok(dest)
+            }
+            swc_ast::JSXObject::Ident(ident) => {
+                self.lower_ident(ident, block)
+            }
+        }
+    }
+
+    fn lower_jsx_attrs(
+        &mut self,
+        attrs: &[swc_ast::JSXAttrOrSpread],
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        if attrs.is_empty() {
+            // 无属性 → null
+            let null_const = self.module.add_constant(Constant::Null);
+            let null_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: null_val,
+                    constant: null_const,
+                },
+            );
+            return Ok(null_val);
+        }
+
+        // 创建 props 对象
+        let capacity = std::cmp::max(4, attrs.len() as u32);
+        let obj_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: obj_dest,
+                capacity,
+            },
+        );
+
+        for attr_or_spread in attrs {
+            match attr_or_spread {
+                swc_ast::JSXAttrOrSpread::JSXAttr(attr) => {
+                    let attr_name = match &attr.name {
+                        swc_ast::JSXAttrName::Ident(ident) => ident.sym.to_string(),
+                        swc_ast::JSXAttrName::JSXNamespacedName(ns_name) => {
+                            format!("{}:{}", ns_name.ns.sym, ns_name.name.sym)
+                        }
+                    };
+
+                    let attr_value = if let Some(ref value) = attr.value {
+                        match &*value {
+                            swc_ast::JSXAttrValue::Str(s) => {
+                                let str_val = s.value.to_string_lossy().into_owned();
+                                let const_id = self.module.add_constant(Constant::String(str_val));
+                                let val = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::Const {
+                                        dest: val,
+                                        constant: const_id,
+                                    },
+                                );
+                                val
+                            }
+                            swc_ast::JSXAttrValue::JSXExprContainer(expr_container) => {
+                                match &expr_container.expr {
+                                    swc_ast::JSXExpr::Expr(expr) => {
+                                        self.lower_expr(expr, block)?
+                                    }
+                                    swc_ast::JSXExpr::JSXEmptyExpr(_) => {
+                                        // 空表达式 → true
+                                        let true_const =
+                                            self.module.add_constant(Constant::Bool(true));
+                                        let val = self.alloc_value();
+                                        self.current_function.append_instruction(
+                                            block,
+                                            Instruction::Const {
+                                                dest: val,
+                                                constant: true_const,
+                                            },
+                                        );
+                                        val
+                                    }
+                                }
+                            }
+                            swc_ast::JSXAttrValue::JSXElement(el) => {
+                                self.lower_jsx_element(&el, block)?
+                            }
+                            swc_ast::JSXAttrValue::JSXFragment(frag) => {
+                                self.lower_jsx_fragment(&frag, block)?
+                            }
+                        }
+                    } else {
+                        // 无值属性（如 <input disabled />）→ true
+                        let true_const = self.module.add_constant(Constant::Bool(true));
+                        let val = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest: val,
+                                constant: true_const,
+                            },
+                        );
+                        val
+                    };
+
+                    // SetProp(obj, attr_name, attr_value)
+                    let key_const = self.module.add_constant(Constant::String(attr_name));
+                    let key_dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: key_dest,
+                            constant: key_const,
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::SetProp {
+                            object: obj_dest,
+                            key: key_dest,
+                            value: attr_value,
+                        },
+                    );
+                }
+                swc_ast::JSXAttrOrSpread::SpreadElement(spread) => {
+                    let source = self.lower_expr(&spread.expr, block)?;
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::ObjectSpread {
+                            dest: obj_dest,
+                            source,
+                        },
+                    );
+                }
+            }
+        }
+
+        Ok(obj_dest)
+    }
+
+    fn lower_jsx_children(
+        &mut self,
+        children: &[swc_ast::JSXElementChild],
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        if children.is_empty() {
+            // 无 children → null
+            let null_const = self.module.add_constant(Constant::Null);
+            let null_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: null_val,
+                    constant: null_const,
+                },
+            );
+            return Ok(null_val);
+        }
+
+        // 创建 children 数组
+        let arr = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewArray {
+                dest: arr,
+                capacity: children.len() as u32,
+            },
+        );
+
+        for child in children {
+            let child_val = match child {
+                swc_ast::JSXElementChild::JSXText(text) => {
+                    let trimmed = text.value.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let str_const = self.module.add_constant(Constant::String(trimmed.to_string()));
+                    let val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: val,
+                            constant: str_const,
+                        },
+                    );
+                    val
+                }
+                swc_ast::JSXElementChild::JSXExprContainer(expr_container) => {
+                    match &expr_container.expr {
+                        swc_ast::JSXExpr::Expr(expr) => self.lower_expr(expr, block)?,
+                        swc_ast::JSXExpr::JSXEmptyExpr(_) => continue,
+                    }
+                }
+                swc_ast::JSXElementChild::JSXElement(el) => {
+                    self.lower_jsx_element(el, block)?
+                }
+                swc_ast::JSXElementChild::JSXFragment(frag) => {
+                    self.lower_jsx_fragment(frag, block)?
+                }
+                _ => continue,
+            };
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ArrayPush,
+                    args: vec![arr, child_val],
+                },
+            );
+        }
+
+        Ok(arr)
+    }
 
     // ── Expressions ─────────────────────────────────────────────────────────
 
@@ -7967,6 +8924,40 @@ impl Lowerer {
                 self.lower_await_expr(await_expr, block)
             }
             swc_ast::Expr::Yield(yield_expr) => self.lower_yield_expr(yield_expr, block),
+            // TS type assertion expressions — 编译时类型信息，透传内层表达式
+            swc_ast::Expr::TsTypeAssertion(ts_assert) => {
+                self.lower_expr(&ts_assert.expr, block)
+            }
+            swc_ast::Expr::TsConstAssertion(assert) => {
+                self.lower_expr(&assert.expr, block)
+            }
+            swc_ast::Expr::TsNonNull(ts_non_null) => {
+                self.lower_expr(&ts_non_null.expr, block)
+            }
+            swc_ast::Expr::TsAs(ts_as) => {
+                self.lower_expr(&ts_as.expr, block)
+            }
+            swc_ast::Expr::TsSatisfies(ts_satisfies) => {
+                self.lower_expr(&ts_satisfies.expr, block)
+            }
+            swc_ast::Expr::TsInstantiation(ts_inst) => {
+                self.lower_expr(&ts_inst.expr, block)
+            }
+            // JSX expressions
+            swc_ast::Expr::JSXElement(jsx_el) => self.lower_jsx_element(jsx_el, block),
+            swc_ast::Expr::JSXFragment(jsx_frag) => self.lower_jsx_fragment(jsx_frag, block),
+            swc_ast::Expr::JSXEmpty(_) => {
+                let null_const = self.module.add_constant(Constant::Null);
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest,
+                        constant: null_const,
+                    },
+                );
+                Ok(dest)
+            }
             _ => Err(self.error(
                 expr.span(),
                 format!("unsupported expression kind `{}`", expr_kind(expr)),
@@ -8595,7 +9586,48 @@ impl Lowerer {
         let dest = self.alloc_value();
         match &member.prop {
             // Ident（命名属性）→ GetProp（走原型链，或读取 length 等内置属性）
-            swc_ast::MemberProp::Ident(_) => {
+            // Ident（命名属性）→ 检查是否为 Symbol 的静态属性（如 Symbol.dispose）
+            swc_ast::MemberProp::Ident(ident) => {
+                // 检查对象是否为 Symbol（编译时已知的 well-known symbol 访问）
+                if let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                    if obj_ident.sym.to_string() == "Symbol" {
+                        let prop_name = ident.sym.to_string();
+                        // 将 Symbol.dispose 等映射为 well-known symbol
+                        let wk_index = match prop_name.as_str() {
+                            "iterator" => Some(0u32),
+                            "species" => Some(1u32),
+                            "toStringTag" => Some(2u32),
+                            "asyncIterator" => Some(3u32),
+                            "hasInstance" => Some(4u32),
+                            "toPrimitive" => Some(5u32),
+                            "dispose" => Some(6u32),
+                            "match" => Some(7u32),
+                            "asyncDispose" => Some(8u32),
+                            _ => None,
+                        };
+                        if let Some(idx) = wk_index {
+                            let idx_const = self.module.add_constant(Constant::Number(idx as f64));
+                            let idx_val = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::Const {
+                                    dest: idx_val,
+                                    constant: idx_const,
+                                },
+                            );
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: Builtin::SymbolWellKnown,
+                                    args: vec![idx_val],
+                                },
+                            );
+                            return Ok(dest);
+                        }
+                    }
+                }
+                // 默认走 GetProp 路径
                 self.current_function.append_instruction(
                     block,
                     Instruction::GetProp {
@@ -8605,16 +9637,33 @@ impl Lowerer {
                     },
                 );
             }
-            // Computed（计算属性）→ GetElem（从数组 elements 读取）
+            // Computed（计算属性）：字符串字面量用 GetProp，数字字面量用 GetElem
             swc_ast::MemberProp::Computed(_) => {
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::GetElem {
-                        dest,
-                        object: obj_val,
-                        index: key,
-                    },
+                // 检查 computed key 是否为字符串字面量 → GetProp
+                let use_get_elem = matches!(
+                    member.prop,
+                    swc_ast::MemberProp::Computed(swc_ast::ComputedPropName { ref expr, .. })
+                        if matches!(expr.as_ref(), swc_ast::Expr::Lit(swc_ast::Lit::Num(_)))
                 );
+                if use_get_elem {
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::GetElem {
+                            dest,
+                            object: obj_val,
+                            index: key,
+                        },
+                    );
+                } else {
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::GetProp {
+                            dest,
+                            object: obj_val,
+                            key,
+                        },
+                    );
+                }
             }
             _ => unreachable!(),
         }
@@ -9663,6 +10712,26 @@ impl Lowerer {
         if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
             if ident.sym == "Promise" && self.scopes.lookup(&ident.sym).is_err() {
                 return self.lower_new_promise(new_expr, block);
+            }
+            if ident.sym == "Proxy" && self.scopes.lookup(&ident.sym).is_err() {
+                // new Proxy(target, handler) → CallBuiltin(ProxyCreate, [target, handler])
+                let mut arg_vals = Vec::new();
+                if let Some(args) = &new_expr.args {
+                    for arg in args {
+                        let arg_val = self.lower_expr(&arg.expr, block)?;
+                        arg_vals.push(arg_val);
+                    }
+                }
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::ProxyCreate,
+                        args: arg_vals,
+                    },
+                );
+                return Ok(dest);
             }
         }
 
@@ -12179,6 +13248,34 @@ impl Lowerer {
                         .declare(&name, VarKind::Var, true)
                         .map_err(|msg| self.error(class_decl.span(), msg))?;
                 }
+                swc_ast::Decl::TsEnum(ts_enum) => {
+                    let name = ts_enum.id.sym.to_string();
+                    let _scope_id = self
+                        .scopes
+                        .declare(&name, VarKind::Let, false)
+                        .map_err(|msg| self.error(ts_enum.span(), msg))?;
+                }
+                swc_ast::Decl::TsModule(ts_module) => {
+                    if let swc_ast::TsModuleName::Ident(ident) = &ts_module.id {
+                        let name = ident.sym.to_string();
+                        let _scope_id = self
+                            .scopes
+                            .declare(&name, VarKind::Let, false)
+                            .map_err(|msg| self.error(ts_module.span(), msg))?;
+                    }
+                }
+                swc_ast::Decl::Using(using_decl) => {
+                    for declarator in &using_decl.decls {
+                        let mut names = Vec::new();
+                        Self::extract_pat_bindings(&[declarator.name.clone()], &mut names);
+                        for name in names {
+                            let _scope_id = self
+                                .scopes
+                                .declare(&name, VarKind::Const, false)
+                                .map_err(|msg| self.error(using_decl.span, msg))?;
+                        }
+                    }
+                }
                 _ => {}
             },
             swc_ast::Stmt::Block(block_stmt) => {
@@ -12478,6 +13575,7 @@ fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "eval" => Some(Builtin::Eval),
         "Symbol" => Some(Builtin::SymbolCreate),
         "queueMicrotask" => Some(Builtin::QueueMicrotask),
+        "Proxy" => Some(Builtin::ProxyCreate),
         _ => None,
     }
 }
@@ -12525,6 +13623,26 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
             "allSettled" => Some(Builtin::PromiseAllSettled),
             "any" => Some(Builtin::PromiseAny),
             "withResolvers" => Some(Builtin::PromiseWithResolvers),
+            _ => None,
+        },
+        "Proxy" => match property {
+            "revocable" => Some(Builtin::ProxyRevocable),
+            _ => None,
+        },
+        "Reflect" => match property {
+            "get" => Some(Builtin::ReflectGet),
+            "set" => Some(Builtin::ReflectSet),
+            "has" => Some(Builtin::ReflectHas),
+            "deleteProperty" => Some(Builtin::ReflectDeleteProperty),
+            "apply" => Some(Builtin::ReflectApply),
+            "construct" => Some(Builtin::ReflectConstruct),
+            "getPrototypeOf" => Some(Builtin::ReflectGetPrototypeOf),
+            "setPrototypeOf" => Some(Builtin::ReflectSetPrototypeOf),
+            "isExtensible" => Some(Builtin::ReflectIsExtensible),
+            "preventExtensions" => Some(Builtin::ReflectPreventExtensions),
+            "getOwnPropertyDescriptor" => Some(Builtin::ReflectGetOwnPropertyDescriptor),
+            "defineProperty" => Some(Builtin::ReflectDefineProperty),
+            "ownKeys" => Some(Builtin::ReflectOwnKeys),
             _ => None,
         },
         _ => None,

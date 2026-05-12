@@ -5,8 +5,10 @@ module {
     c2 = number(NaN)
     c3 = number(inf)
     c4 = string("1 + 2")
-    c5 = string("x")
+    c5 = string("Symbol")
     c6 = string("x")
+    c7 = string("Symbol")
+    c8 = string("x")
 
   fn @main [has_eval] [entry=bb0]:
     bb0:
@@ -19,16 +21,22 @@ module {
       %3 = const c3
       store var $0.Infinity, %3
       %4 = const c4
-      %5 = new_object(capacity=1)
+      %5 = new_object(capacity=2)
       %6 = const c5
-      %7 = load var $0.x
+      %7 = load var $0.Symbol
       set_prop %5, %6, %7
-      %8 = call builtin.eval(%4, %5)
-      %9 = const c6
-      %10 = get_prop %5, %9
+      %8 = const c6
+      %9 = load var $0.x
+      set_prop %5, %8, %9
+      %10 = call builtin.eval(%4, %5)
+      %11 = const c7
+      %12 = get_prop %5, %11
+      store var $0.Symbol, %12
+      %13 = const c8
+      %14 = get_prop %5, %13
+      store var $0.x, %14
       store var $0.x, %10
-      store var $0.x, %8
-      %11 = load var $0.x
-      %12 = call builtin.console.log(%11)
+      %15 = load var $0.x
+      %16 = call builtin.console.log(%15)
       return
 }

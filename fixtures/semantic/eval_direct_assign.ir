@@ -6,8 +6,10 @@ module {
     c3 = number(inf)
     c4 = number(1)
     c5 = string("x = 4")
-    c6 = string("x")
+    c6 = string("Symbol")
     c7 = string("x")
+    c8 = string("Symbol")
+    c9 = string("x")
 
   fn @main [has_eval] [entry=bb0]:
     bb0:
@@ -22,16 +24,22 @@ module {
       %4 = const c4
       store var $0.x, %4
       %5 = const c5
-      %6 = new_object(capacity=1)
+      %6 = new_object(capacity=2)
       %7 = const c6
-      %8 = load var $0.x
+      %8 = load var $0.Symbol
       set_prop %6, %7, %8
-      %9 = call builtin.eval(%5, %6)
-      %10 = const c7
-      %11 = get_prop %6, %10
-      store var $0.x, %11
-      %12 = call builtin.console.log(%9)
-      %13 = load var $0.x
-      %14 = call builtin.console.log(%13)
+      %9 = const c7
+      %10 = load var $0.x
+      set_prop %6, %9, %10
+      %11 = call builtin.eval(%5, %6)
+      %12 = const c8
+      %13 = get_prop %6, %12
+      store var $0.Symbol, %13
+      %14 = const c9
+      %15 = get_prop %6, %14
+      store var $0.x, %15
+      %16 = call builtin.console.log(%11)
+      %17 = load var $0.x
+      %18 = call builtin.console.log(%17)
       return
 }
