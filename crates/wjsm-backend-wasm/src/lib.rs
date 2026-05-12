@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 166] = [
+const HOST_IMPORT_NAMES: [&str; 193] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -180,6 +180,33 @@ const HOST_IMPORT_NAMES: [&str; 166] = [
     "reflect_get_own_property_descriptor",
     "reflect_define_property",
     "reflect_own_keys",
+    "string_at",
+    "string_char_at",
+    "string_char_code_at",
+    "string_code_point_at",
+    "string_proto_concat",
+    "string_ends_with",
+    "string_includes",
+    "string_index_of",
+    "string_last_index_of",
+    "string_match_all",
+    "string_pad_end",
+    "string_pad_start",
+    "string_repeat",
+    "string_replace_all",
+    "string_slice",
+    "string_starts_with",
+    "string_substring",
+    "string_to_lower_case",
+    "string_to_upper_case",
+    "string_trim",
+    "string_trim_end",
+    "string_trim_start",
+    "string_to_string",
+    "string_value_of",
+    "string_iterator",
+    "string_from_char_code",
+    "string_from_code_point",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -938,6 +965,60 @@ impl Compiler {
         imports.import("env", "reflect_define_property", EntityType::Function(29));
         // Import index 165: reflect_own_keys: (i64 target) -> i64
         imports.import("env", "reflect_own_keys", EntityType::Function(31));
+        // Import index 166: string_at: (i64, i64) -> i64
+        imports.import("env", "string_at", EntityType::Function(2));
+        // Import 167: string_char_at: (i64, i64) -> i64
+        imports.import("env", "string_char_at", EntityType::Function(2));
+        // Import 168: string_char_code_at: (i64, i64) -> i64
+        imports.import("env", "string_char_code_at", EntityType::Function(2));
+        // Import 169: string_code_point_at: (i64, i64) -> i64
+        imports.import("env", "string_code_point_at", EntityType::Function(2));
+        // Import 170: string_proto_concat: (i64, i64, i32, i32) -> i64
+        imports.import("env", "string_proto_concat", EntityType::Function(12));
+        // Import 171: string_ends_with: (i64, i64, i64) -> i64
+        imports.import("env", "string_ends_with", EntityType::Function(16));
+        // Import 172: string_includes: (i64, i64, i64) -> i64
+        imports.import("env", "string_includes", EntityType::Function(16));
+        // Import 173: string_index_of: (i64, i64, i64) -> i64
+        imports.import("env", "string_index_of", EntityType::Function(16));
+        // Import 174: string_last_index_of: (i64, i64, i64) -> i64
+        imports.import("env", "string_last_index_of", EntityType::Function(16));
+        // Import 175: string_match_all: (i64, i64, i32, i32) -> i64
+        imports.import("env", "string_match_all", EntityType::Function(12));
+        // Import 176: string_pad_end: (i64, i64, i64) -> i64
+        imports.import("env", "string_pad_end", EntityType::Function(16));
+        // Import 177: string_pad_start: (i64, i64, i64) -> i64
+        imports.import("env", "string_pad_start", EntityType::Function(16));
+        // Import 178: string_repeat: (i64, i64) -> i64
+        imports.import("env", "string_repeat", EntityType::Function(2));
+        // Import 179: string_replace_all: (i64, i64, i64) -> i64
+        imports.import("env", "string_replace_all", EntityType::Function(16));
+        // Import 180: string_slice: (i64, i64, i64) -> i64
+        imports.import("env", "string_slice", EntityType::Function(16));
+        // Import 181: string_starts_with: (i64, i64, i64) -> i64
+        imports.import("env", "string_starts_with", EntityType::Function(16));
+        // Import 182: string_substring: (i64, i64, i64) -> i64
+        imports.import("env", "string_substring", EntityType::Function(16));
+        // Import 183: string_to_lower_case: (i64) -> i64
+        imports.import("env", "string_to_lower_case", EntityType::Function(3));
+        // Import 184: string_to_upper_case: (i64) -> i64
+        imports.import("env", "string_to_upper_case", EntityType::Function(3));
+        // Import 185: string_trim: (i64) -> i64
+        imports.import("env", "string_trim", EntityType::Function(3));
+        // Import 186: string_trim_end: (i64) -> i64
+        imports.import("env", "string_trim_end", EntityType::Function(3));
+        // Import 187: string_trim_start: (i64) -> i64
+        imports.import("env", "string_trim_start", EntityType::Function(3));
+        // Import 188: string_to_string: (i64) -> i64
+        imports.import("env", "string_to_string", EntityType::Function(3));
+        // Import 189: string_value_of: (i64) -> i64
+        imports.import("env", "string_value_of", EntityType::Function(3));
+        // Import 190: string_iterator: (i64) -> i64
+        imports.import("env", "string_iterator", EntityType::Function(3));
+        // Import 191: string_from_char_code: (i64, i64, i32, i32) -> i64
+        imports.import("env", "string_from_char_code", EntityType::Function(12));
+        // Import 192: string_from_code_point: (i64, i64, i32, i32) -> i64
+        imports.import("env", "string_from_code_point", EntityType::Function(12));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1120,6 +1201,33 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::ReflectGetOwnPropertyDescriptor, 163);
         builtin_func_indices.insert(Builtin::ReflectDefineProperty, 164);
         builtin_func_indices.insert(Builtin::ReflectOwnKeys, 165);
+        builtin_func_indices.insert(Builtin::StringAt, 166);
+        builtin_func_indices.insert(Builtin::StringCharAt, 167);
+        builtin_func_indices.insert(Builtin::StringCharCodeAt, 168);
+        builtin_func_indices.insert(Builtin::StringCodePointAt, 169);
+        builtin_func_indices.insert(Builtin::StringConcatVa, 170);
+        builtin_func_indices.insert(Builtin::StringEndsWith, 171);
+        builtin_func_indices.insert(Builtin::StringIncludes, 172);
+        builtin_func_indices.insert(Builtin::StringIndexOf, 173);
+        builtin_func_indices.insert(Builtin::StringLastIndexOf, 174);
+        builtin_func_indices.insert(Builtin::StringMatchAll, 175);
+        builtin_func_indices.insert(Builtin::StringPadEnd, 176);
+        builtin_func_indices.insert(Builtin::StringPadStart, 177);
+        builtin_func_indices.insert(Builtin::StringRepeat, 178);
+        builtin_func_indices.insert(Builtin::StringReplaceAll, 179);
+        builtin_func_indices.insert(Builtin::StringSlice, 180);
+        builtin_func_indices.insert(Builtin::StringStartsWith, 181);
+        builtin_func_indices.insert(Builtin::StringSubstring, 182);
+        builtin_func_indices.insert(Builtin::StringToLowerCase, 183);
+        builtin_func_indices.insert(Builtin::StringToUpperCase, 184);
+        builtin_func_indices.insert(Builtin::StringTrim, 185);
+        builtin_func_indices.insert(Builtin::StringTrimEnd, 186);
+        builtin_func_indices.insert(Builtin::StringTrimStart, 187);
+        builtin_func_indices.insert(Builtin::StringToString, 188);
+        builtin_func_indices.insert(Builtin::StringValueOf, 189);
+        builtin_func_indices.insert(Builtin::StringIterator, 190);
+        builtin_func_indices.insert(Builtin::StringFromCharCode, 191);
+        builtin_func_indices.insert(Builtin::StringFromCodePoint, 192);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -6397,6 +6505,83 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── String prototype builtins (1-arg receiver) ──
+            Builtin::StringCharAt
+            | Builtin::StringCharCodeAt
+            | Builtin::StringCodePointAt
+            | Builtin::StringToLowerCase
+            | Builtin::StringToUpperCase
+            | Builtin::StringTrim
+            | Builtin::StringTrimEnd
+            | Builtin::StringTrimStart
+            | Builtin::StringToString
+            | Builtin::StringValueOf
+            | Builtin::StringIterator => {
+                let receiver = args.first().context("String method expects receiver")?;
+                let second = args.get(1);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(receiver.0)));
+                if let Some(arg) = second {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── String prototype builtins (receiver + 1 arg) ──
+            Builtin::StringRepeat
+            | Builtin::StringAt => {
+                let receiver = args.first().context("String method expects receiver")?;
+                let first = args.get(1).context("String method expects argument")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(receiver.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(first.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── String prototype builtins (receiver + 2 args, second optional) ──
+            Builtin::StringEndsWith
+            | Builtin::StringIncludes
+            | Builtin::StringIndexOf
+            | Builtin::StringLastIndexOf
+            | Builtin::StringPadEnd
+            | Builtin::StringPadStart
+            | Builtin::StringReplaceAll
+            | Builtin::StringSlice
+            | Builtin::StringStartsWith
+            | Builtin::StringSubstring => {
+                let receiver = args.first().context("String method expects receiver")?;
+                let first = args.get(1).context("String method expects argument")?;
+                let second = args.get(2);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(receiver.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(first.0)));
+                if let Some(arg) = second {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── String varargs builtins (shadow stack) ──
+            Builtin::StringConcatVa
+            | Builtin::StringFromCharCode
+            | Builtin::StringFromCodePoint
+            | Builtin::StringMatchAll => {
+                self.compile_proto_method_call(dest, builtin, args)
+            }
             // ── Proxy / Reflect builtins ──────────────────────────────────────────
             Builtin::ProxyCreate
             | Builtin::ProxyRevocable
@@ -6454,7 +6639,14 @@ impl Compiler {
             Constant::Null => Ok(value::encode_null()),
             Constant::Undefined => Ok(value::encode_undefined()),
             Constant::FunctionRef(function_id) => {
-                let table_idx = function_id.0;
+                let wasm_idx = function_id.0;
+                // Look up the table position for this WASM function index.
+                // The function_table is fully populated before any user function body is compiled.
+                let table_idx = self
+                    .function_table
+                    .iter()
+                    .position(|&f| f == wasm_idx)
+                    .unwrap_or(wasm_idx as usize) as u32;
                 Ok(value::encode_function_idx(table_idx))
             }
             Constant::NativeCallableEval => Ok(value::encode_native_callable_idx(0)),
@@ -7067,6 +7259,33 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ReflectGetOwnPropertyDescriptor => ("reflect.get_own_property_descriptor", 2),
         Builtin::ReflectDefineProperty => ("reflect.define_property", 3),
         Builtin::ReflectOwnKeys => ("reflect.own_keys", 1),
+        Builtin::StringAt => ("string.at", 2),
+        Builtin::StringCharAt => ("string.char_at", 2),
+        Builtin::StringCharCodeAt => ("string.char_code_at", 2),
+        Builtin::StringCodePointAt => ("string.code_point_at", 2),
+        Builtin::StringConcatVa => ("string.concat", 1),
+        Builtin::StringEndsWith => ("string.ends_with", 2),
+        Builtin::StringIncludes => ("string.includes", 2),
+        Builtin::StringIndexOf => ("string.index_of", 2),
+        Builtin::StringLastIndexOf => ("string.last_index_of", 2),
+        Builtin::StringMatchAll => ("string.match_all", 1),
+        Builtin::StringPadEnd => ("string.pad_end", 2),
+        Builtin::StringPadStart => ("string.pad_start", 2),
+        Builtin::StringRepeat => ("string.repeat", 2),
+        Builtin::StringReplaceAll => ("string.replace_all", 3),
+        Builtin::StringSlice => ("string.slice", 2),
+        Builtin::StringStartsWith => ("string.starts_with", 2),
+        Builtin::StringSubstring => ("string.substring", 2),
+        Builtin::StringToLowerCase => ("string.to_lower_case", 1),
+        Builtin::StringToUpperCase => ("string.to_upper_case", 1),
+        Builtin::StringTrim => ("string.trim", 1),
+        Builtin::StringTrimEnd => ("string.trim_end", 1),
+        Builtin::StringTrimStart => ("string.trim_start", 1),
+        Builtin::StringToString => ("string.to_string", 1),
+        Builtin::StringValueOf => ("string.value_of", 1),
+        Builtin::StringIterator => ("string.iterator", 1),
+        Builtin::StringFromCharCode => ("string.from_char_code", 1),
+        Builtin::StringFromCodePoint => ("string.from_code_point", 1),
     }
 }
 

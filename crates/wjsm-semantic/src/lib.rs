@@ -11024,6 +11024,33 @@ impl Lowerer {
                         }
                     }
 
+                    // String.prototype 方法调用优化（必须在 Array 之前，因为 at/slice/concat 等方法在 String 和 Array 上同名）
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
+                        if let Some(string_builtin) =
+                            builtin_from_string_proto_method(&prop_ident.sym)
+                        {
+                            let is_string = matches!(&*member_expr.obj, swc_ast::Expr::Lit(swc_ast::Lit::Str(_)));
+                            if is_string {
+                                let _ = builtin_call_signature(string_builtin);
+                                this_val = self.lower_expr(&member_expr.obj, block)?;
+                                let mut builtin_args = vec![this_val];
+                                for arg in &call.args {
+                                    builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                                }
+                                let dest = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::CallBuiltin {
+                                        dest: Some(dest),
+                                        builtin: string_builtin,
+                                        args: builtin_args,
+                                    },
+                                );
+                                return Ok(dest);
+                            }
+                        }
+                    }
+
                     // Array.prototype 方法调用优化：发出 CallBuiltin 代替 Call，
                     // 跳过运行时属性解析（原型链查找）。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
@@ -13585,6 +13612,11 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
             "withResolvers" => Some(Builtin::PromiseWithResolvers),
             _ => None,
         },
+        "String" => match property {
+            "fromCharCode" => Some(Builtin::StringFromCharCode),
+            "fromCodePoint" => Some(Builtin::StringFromCodePoint),
+            _ => None,
+        },
         "Proxy" => match property {
             "revocable" => Some(Builtin::ProxyRevocable),
             _ => None,
@@ -13667,6 +13699,30 @@ fn builtin_from_string_proto_method(name: &str) -> Option<Builtin> {
         "replace" => Some(StringReplace),
         "search" => Some(StringSearch),
         "split" => Some(StringSplit),
+        "at" => Some(StringAt),
+        "charAt" => Some(StringCharAt),
+        "charCodeAt" => Some(StringCharCodeAt),
+        "codePointAt" => Some(StringCodePointAt),
+        "concat" => Some(StringConcatVa),
+        "endsWith" => Some(StringEndsWith),
+        "includes" => Some(StringIncludes),
+        "indexOf" => Some(StringIndexOf),
+        "lastIndexOf" => Some(StringLastIndexOf),
+        "matchAll" => Some(StringMatchAll),
+        "padEnd" => Some(StringPadEnd),
+        "padStart" => Some(StringPadStart),
+        "repeat" => Some(StringRepeat),
+        "replaceAll" => Some(StringReplaceAll),
+        "slice" => Some(StringSlice),
+        "startsWith" => Some(StringStartsWith),
+        "substring" => Some(StringSubstring),
+        "toLowerCase" => Some(StringToLowerCase),
+        "toUpperCase" => Some(StringToUpperCase),
+        "trim" => Some(StringTrim),
+        "trimEnd" => Some(StringTrimEnd),
+        "trimStart" => Some(StringTrimStart),
+        "toString" => Some(StringToString),
+        "valueOf" => Some(StringValueOf),
         _ => None,
     }
 }
@@ -13749,6 +13805,33 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::StringReplace => ("String.prototype.replace", 3),
         Builtin::StringSearch => ("String.prototype.search", 2),
         Builtin::StringSplit => ("String.prototype.split", 3),
+        Builtin::StringAt => ("String.prototype.at", 2),
+        Builtin::StringCharAt => ("String.prototype.charAt", 2),
+        Builtin::StringCharCodeAt => ("String.prototype.charCodeAt", 2),
+        Builtin::StringCodePointAt => ("String.prototype.codePointAt", 2),
+        Builtin::StringConcatVa => ("String.prototype.concat", 1),
+        Builtin::StringEndsWith => ("String.prototype.endsWith", 2),
+        Builtin::StringIncludes => ("String.prototype.includes", 2),
+        Builtin::StringIndexOf => ("String.prototype.indexOf", 2),
+        Builtin::StringLastIndexOf => ("String.prototype.lastIndexOf", 2),
+        Builtin::StringMatchAll => ("String.prototype.matchAll", 2),
+        Builtin::StringPadEnd => ("String.prototype.padEnd", 2),
+        Builtin::StringPadStart => ("String.prototype.padStart", 2),
+        Builtin::StringRepeat => ("String.prototype.repeat", 2),
+        Builtin::StringReplaceAll => ("String.prototype.replaceAll", 3),
+        Builtin::StringSlice => ("String.prototype.slice", 2),
+        Builtin::StringStartsWith => ("String.prototype.startsWith", 2),
+        Builtin::StringSubstring => ("String.prototype.substring", 2),
+        Builtin::StringToLowerCase => ("String.prototype.toLowerCase", 1),
+        Builtin::StringToUpperCase => ("String.prototype.toUpperCase", 1),
+        Builtin::StringTrim => ("String.prototype.trim", 1),
+        Builtin::StringTrimEnd => ("String.prototype.trimEnd", 1),
+        Builtin::StringTrimStart => ("String.prototype.trimStart", 1),
+        Builtin::StringToString => ("String.prototype.toString", 1),
+        Builtin::StringValueOf => ("String.prototype.valueOf", 1),
+        Builtin::StringIterator => ("String.prototype[@@iterator]", 1),
+        Builtin::StringFromCharCode => ("String.fromCharCode", 1),
+        Builtin::StringFromCodePoint => ("String.fromCodePoint", 1),
         _ => ("builtin", 0),
     }
 }
