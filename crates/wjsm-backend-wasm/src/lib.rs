@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 150] = [
+const HOST_IMPORT_NAMES: [&str; 166] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -164,6 +164,22 @@ const HOST_IMPORT_NAMES: [&str; 150] = [
     "dynamic_import",
     "eval_direct",
     "eval_indirect",
+    "jsx_create_element",
+    "proxy_create",
+    "proxy_revocable",
+    "reflect_get",
+    "reflect_set",
+    "reflect_has",
+    "reflect_delete_property",
+    "reflect_apply",
+    "reflect_construct",
+    "reflect_get_prototype_of",
+    "reflect_set_prototype_of",
+    "reflect_is_extensible",
+    "reflect_prevent_extensions",
+    "reflect_get_own_property_descriptor",
+    "reflect_define_property",
+    "reflect_own_keys",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -709,6 +725,31 @@ impl Compiler {
         types
             .ty()
             .function(vec![ValType::I32, ValType::I32], vec![ValType::I32]);
+        // Type 27: (i64, i64, i32) -> (i64)  — jsx_create_element (tag, props, children_count)
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I32],
+            vec![ValType::I64],
+        );
+        // Type 28: (i64, i64) -> (i64)  — proxy_create, proxy_revocable, reflect_has, etc.
+        types.ty().function(
+            vec![ValType::I64, ValType::I64],
+            vec![ValType::I64],
+        );
+        // Type 29: (i64, i64, i64) -> (i64)  — reflect_get, reflect_apply, etc.
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I64],
+            vec![ValType::I64],
+        );
+        // Type 30: (i64, i64, i64, i64) -> (i64)  — reflect_set, reflect_define_property, etc.
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I64, ValType::I64],
+            vec![ValType::I64],
+        );
+        // Type 31: (i64) -> (i64)  — reflect_is_extensible, reflect_own_keys, etc.
+        types.ty().function(
+            vec![ValType::I64],
+            vec![ValType::I64],
+        );
         // Import index 78: func_call — Type 12 (uses shadow stack for args)
         imports.import("env", "func_call", EntityType::Function(12));
         // Import index 79: func_apply — Type 16 (i64 func, i64 this, i64 argsArray) -> i64
@@ -865,6 +906,38 @@ impl Compiler {
         // Import index 149: eval_indirect: (i64 code) -> i64
         imports.import("env", "eval_indirect", EntityType::Function(3));
 
+        // Import index 150: jsx_create_element: (i64 tag, i64 props, i32 children_count) -> i64
+        imports.import("env", "jsx_create_element", EntityType::Function(27));
+        // Import index 151: proxy_create: (i64 target, i64 handler) -> i64
+        imports.import("env", "proxy_create", EntityType::Function(28));
+        // Import index 152: proxy_revocable: (i64 target, i64 handler) -> i64
+        imports.import("env", "proxy_revocable", EntityType::Function(28));
+        // Import index 153: reflect_get: (i64 target, i64 prop, i64 receiver) -> i64
+        imports.import("env", "reflect_get", EntityType::Function(29));
+        // Import index 154: reflect_set: (i64 target, i64 prop, i64 value, i64 receiver) -> i64
+        imports.import("env", "reflect_set", EntityType::Function(30));
+        // Import index 155: reflect_has: (i64 target, i64 prop) -> i64
+        imports.import("env", "reflect_has", EntityType::Function(28));
+        // Import index 156: reflect_delete_property: (i64 target, i64 prop) -> i64
+        imports.import("env", "reflect_delete_property", EntityType::Function(28));
+        // Import index 157: reflect_apply: (i64 target, i64 this_arg, i64 args) -> i64
+        imports.import("env", "reflect_apply", EntityType::Function(29));
+        // Import index 158: reflect_construct: (i64 target, i64 args, i64 new_target) -> i64
+        imports.import("env", "reflect_construct", EntityType::Function(29));
+        // Import index 159: reflect_get_prototype_of: (i64 target) -> i64
+        imports.import("env", "reflect_get_prototype_of", EntityType::Function(31));
+        // Import index 160: reflect_set_prototype_of: (i64 target, i64 proto) -> i64
+        imports.import("env", "reflect_set_prototype_of", EntityType::Function(28));
+        // Import index 161: reflect_is_extensible: (i64 target) -> i64
+        imports.import("env", "reflect_is_extensible", EntityType::Function(31));
+        // Import index 162: reflect_prevent_extensions: (i64 target) -> i64
+        imports.import("env", "reflect_prevent_extensions", EntityType::Function(31));
+        // Import index 163: reflect_get_own_property_descriptor: (i64 target, i64 prop) -> i64
+        imports.import("env", "reflect_get_own_property_descriptor", EntityType::Function(28));
+        // Import index 164: reflect_define_property: (i64 target, i64 prop, i64 desc) -> i64
+        imports.import("env", "reflect_define_property", EntityType::Function(29));
+        // Import index 165: reflect_own_keys: (i64 target) -> i64
+        imports.import("env", "reflect_own_keys", EntityType::Function(31));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1031,6 +1104,22 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::DynamicImport, 147);
         builtin_func_indices.insert(Builtin::Eval, 148);
         builtin_func_indices.insert(Builtin::EvalIndirect, 149);
+        builtin_func_indices.insert(Builtin::JsxCreateElement, 150);
+        builtin_func_indices.insert(Builtin::ProxyCreate, 151);
+        builtin_func_indices.insert(Builtin::ProxyRevocable, 152);
+        builtin_func_indices.insert(Builtin::ReflectGet, 153);
+        builtin_func_indices.insert(Builtin::ReflectSet, 154);
+        builtin_func_indices.insert(Builtin::ReflectHas, 155);
+        builtin_func_indices.insert(Builtin::ReflectDeleteProperty, 156);
+        builtin_func_indices.insert(Builtin::ReflectApply, 157);
+        builtin_func_indices.insert(Builtin::ReflectConstruct, 158);
+        builtin_func_indices.insert(Builtin::ReflectGetPrototypeOf, 159);
+        builtin_func_indices.insert(Builtin::ReflectSetPrototypeOf, 160);
+        builtin_func_indices.insert(Builtin::ReflectIsExtensible, 161);
+        builtin_func_indices.insert(Builtin::ReflectPreventExtensions, 162);
+        builtin_func_indices.insert(Builtin::ReflectGetOwnPropertyDescriptor, 163);
+        builtin_func_indices.insert(Builtin::ReflectDefineProperty, 164);
+        builtin_func_indices.insert(Builtin::ReflectOwnKeys, 165);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -6288,6 +6377,58 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── JSX builtins ───────────────────────────────────────────────────
+            Builtin::JsxCreateElement => {
+                // jsx_create_element(tag: i64, props: i64, children_count: i32) -> i64
+                let a_tag = args.first().context("JsxCreateElement expects tag arg")?;
+                let a_props = args.get(1).context("JsxCreateElement expects props arg")?;
+                let a_count = args.get(2).context("JsxCreateElement expects children_count arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a_tag.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a_props.0)));
+                // children_count: i64 → i32.wrap_i64
+                self.emit(WasmInstruction::LocalGet(self.local_idx(a_count.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Proxy / Reflect builtins ──────────────────────────────────────────
+            Builtin::ProxyCreate
+            | Builtin::ProxyRevocable
+            | Builtin::ReflectGet
+            | Builtin::ReflectSet
+            | Builtin::ReflectHas
+            | Builtin::ReflectDeleteProperty
+            | Builtin::ReflectApply
+            | Builtin::ReflectConstruct
+            | Builtin::ReflectGetPrototypeOf
+            | Builtin::ReflectSetPrototypeOf
+            | Builtin::ReflectIsExtensible
+            | Builtin::ReflectPreventExtensions
+            | Builtin::ReflectGetOwnPropertyDescriptor
+            | Builtin::ReflectDefineProperty
+            | Builtin::ReflectOwnKeys => {
+                for arg in args {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
         }
     }
 
@@ -6912,6 +7053,22 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         // ── 动态 import builtins ──
         Builtin::DynamicImport => ("dynamic_import", 1),
         Builtin::RegisterModuleNamespace => ("register_module_namespace", 2),
+        Builtin::JsxCreateElement => ("jsx.create_element", 3),
+        Builtin::ProxyCreate => ("proxy.create", 2),
+        Builtin::ProxyRevocable => ("proxy.revocable", 2),
+        Builtin::ReflectGet => ("reflect.get", 3),
+        Builtin::ReflectSet => ("reflect.set", 4),
+        Builtin::ReflectHas => ("reflect.has", 2),
+        Builtin::ReflectDeleteProperty => ("reflect.delete_property", 2),
+        Builtin::ReflectApply => ("reflect.apply", 3),
+        Builtin::ReflectConstruct => ("reflect.construct", 3),
+        Builtin::ReflectGetPrototypeOf => ("reflect.get_prototype_of", 1),
+        Builtin::ReflectSetPrototypeOf => ("reflect.set_prototype_of", 2),
+        Builtin::ReflectIsExtensible => ("reflect.is_extensible", 1),
+        Builtin::ReflectPreventExtensions => ("reflect.prevent_extensions", 1),
+        Builtin::ReflectGetOwnPropertyDescriptor => ("reflect.get_own_property_descriptor", 2),
+        Builtin::ReflectDefineProperty => ("reflect.define_property", 3),
+        Builtin::ReflectOwnKeys => ("reflect.own_keys", 1),
     }
 }
 

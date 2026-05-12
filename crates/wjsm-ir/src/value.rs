@@ -20,6 +20,21 @@ pub const TAG_FUNCTION: u64 = 0x9;
 pub const TAG_CLOSURE: u64 = 0xA;
 
 // ── Array value ──────────────────────────────────────────────────────
+// ── Proxy value ────────────────────────────────────────────────────
+pub const TAG_PROXY: u64 = 0x10;
+
+pub fn encode_proxy_handle(handle: u32) -> i64 {
+    encode_handle(TAG_PROXY, handle)
+}
+
+pub fn is_proxy(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_PROXY
+}
+
+pub fn decode_proxy_handle(val: i64) -> u32 {
+    (val as u64 & 0xFFFF_FFFF) as u32
+}
 
 pub const TAG_ARRAY: u64 = 0xB;
 pub const TAG_BOUND: u64 = 0xC;
@@ -86,7 +101,7 @@ pub fn decode_array_handle(val: i64) -> u32 {
     (val as u64 & 0xFFFF_FFFF) as u32
 }
 
-pub const TAG_MASK: u64 = 0xF;
+pub const TAG_MASK: u64 = 0x1F;
 
 pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x10;
 pub const BOX_BASE: u64 = MASK_EXPONENT | MASK_QUIET_NAN;

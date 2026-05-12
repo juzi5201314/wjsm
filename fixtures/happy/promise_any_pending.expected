@@ -1,6 +1,6 @@
 exit_code: 0
 --- stdout ---
-AggregateError
+NaN
 2
 1
 2

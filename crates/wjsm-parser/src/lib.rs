@@ -12,7 +12,10 @@ pub fn parse_module(source: &str) -> Result<swc_ast::Module> {
     );
 
     let lexer = Lexer::new(
-        Syntax::Typescript(Default::default()),
+        Syntax::Typescript(swc_core::ecma::parser::TsSyntax {
+            tsx: true,
+            ..Default::default()
+        }),
         Default::default(),
         StringInput::from(&*fm),
         None,

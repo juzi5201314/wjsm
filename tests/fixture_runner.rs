@@ -322,7 +322,7 @@ fn normalize_object_handles(text: &str) -> String {
 fn is_fixture_file(path: &Path) -> bool {
     matches!(
         path.extension().and_then(OsStr::to_str),
-        Some("js") | Some("ts")
+        Some("js") | Some("ts") | Some("tsx")
     )
 }
 

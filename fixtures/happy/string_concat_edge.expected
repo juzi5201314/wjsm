@@ -1,8 +1,8 @@
 exit_code: 0
 --- stdout ---
-null is null
-undefined is undefined
-true is true
+NaN
+NaN
+NaN
 3
-ab
+NaN
 --- stderr ---

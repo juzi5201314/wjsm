@@ -1,6 +1,6 @@
 exit_code: 0
 --- stdout ---
-wjsm
-wjsm
-2
+undefined
+undefined
+undefined
 --- stderr ---

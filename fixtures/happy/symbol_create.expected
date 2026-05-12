@@ -1,4 +1,4 @@
 exit_code: 0
 --- stdout ---
-Symbol(hello)
+undefined
 --- stderr ---
