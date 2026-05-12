@@ -11029,25 +11029,22 @@ impl Lowerer {
                         if let Some(string_builtin) =
                             builtin_from_string_proto_method(&prop_ident.sym)
                         {
-                            let is_string = matches!(&*member_expr.obj, swc_ast::Expr::Lit(swc_ast::Lit::Str(_)));
-                            if is_string {
-                                let _ = builtin_call_signature(string_builtin);
-                                this_val = self.lower_expr(&member_expr.obj, block)?;
-                                let mut builtin_args = vec![this_val];
-                                for arg in &call.args {
-                                    builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                                }
-                                let dest = self.alloc_value();
-                                self.current_function.append_instruction(
-                                    block,
-                                    Instruction::CallBuiltin {
-                                        dest: Some(dest),
-                                        builtin: string_builtin,
-                                        args: builtin_args,
-                                    },
-                                );
-                                return Ok(dest);
+                            let _ = builtin_call_signature(string_builtin);
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
                             }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: string_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
                         }
                     }
 
@@ -11160,32 +11157,6 @@ impl Lowerer {
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin: obj_proto_builtin,
-                                    args: builtin_args,
-                                },
-                            );
-                            return Ok(dest);
-                        }
-
-                        // String.prototype 方法调用优化：match/replace/search/split
-                        if let Some(string_builtin) =
-                            builtin_from_string_proto_method(&prop_ident.sym)
-                        {
-                            // JavaScript 允许这些方法无参数调用（缺失参数默认为 undefined）
-                            // 因此不在此处做参数数量限制，由运行时处理
-                            let _ = builtin_call_signature(string_builtin); // 验证 builtin 有效
-
-                            // str.method() → str 是 this
-                            this_val = self.lower_expr(&member_expr.obj, block)?;
-                            let mut builtin_args = vec![this_val];
-                            for arg in &call.args {
-                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                            }
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: string_builtin,
                                     args: builtin_args,
                                 },
                             );
@@ -13810,18 +13781,18 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::StringCharCodeAt => ("String.prototype.charCodeAt", 2),
         Builtin::StringCodePointAt => ("String.prototype.codePointAt", 2),
         Builtin::StringConcatVa => ("String.prototype.concat", 1),
-        Builtin::StringEndsWith => ("String.prototype.endsWith", 2),
-        Builtin::StringIncludes => ("String.prototype.includes", 2),
-        Builtin::StringIndexOf => ("String.prototype.indexOf", 2),
-        Builtin::StringLastIndexOf => ("String.prototype.lastIndexOf", 2),
+        Builtin::StringEndsWith => ("String.prototype.endsWith", 3),
+        Builtin::StringIncludes => ("String.prototype.includes", 3),
+        Builtin::StringIndexOf => ("String.prototype.indexOf", 3),
+        Builtin::StringLastIndexOf => ("String.prototype.lastIndexOf", 3),
         Builtin::StringMatchAll => ("String.prototype.matchAll", 2),
-        Builtin::StringPadEnd => ("String.prototype.padEnd", 2),
-        Builtin::StringPadStart => ("String.prototype.padStart", 2),
+        Builtin::StringPadEnd => ("String.prototype.padEnd", 3),
+        Builtin::StringPadStart => ("String.prototype.padStart", 3),
         Builtin::StringRepeat => ("String.prototype.repeat", 2),
         Builtin::StringReplaceAll => ("String.prototype.replaceAll", 3),
-        Builtin::StringSlice => ("String.prototype.slice", 2),
-        Builtin::StringStartsWith => ("String.prototype.startsWith", 2),
-        Builtin::StringSubstring => ("String.prototype.substring", 2),
+        Builtin::StringSlice => ("String.prototype.slice", 3),
+        Builtin::StringStartsWith => ("String.prototype.startsWith", 3),
+        Builtin::StringSubstring => ("String.prototype.substring", 3),
         Builtin::StringToLowerCase => ("String.prototype.toLowerCase", 1),
         Builtin::StringToUpperCase => ("String.prototype.toUpperCase", 1),
         Builtin::StringTrim => ("String.prototype.trim", 1),
