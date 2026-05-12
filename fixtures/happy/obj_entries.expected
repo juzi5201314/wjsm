@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-NaN
+a
 1
-NaN
+b
 2
 --- stderr ---

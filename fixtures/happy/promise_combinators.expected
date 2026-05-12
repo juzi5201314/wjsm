@@ -2,7 +2,7 @@ exit_code: 0
 --- stdout ---
 [1, 2, 3]
 first
-NaN
-NaN
+fulfilled
+rejected
 win
 --- stderr ---
