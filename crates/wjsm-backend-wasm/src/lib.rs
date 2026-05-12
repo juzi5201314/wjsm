@@ -184,7 +184,7 @@ const HOST_IMPORT_NAMES: [&str; 193] = [
     "string_char_at",
     "string_char_code_at",
     "string_code_point_at",
-    "string_proto_concat",
+    "string_concat_proto",
     "string_ends_with",
     "string_includes",
     "string_index_of",
@@ -213,6 +213,11 @@ const HOST_IMPORT_NAMES: [&str; 193] = [
 // ── Public API ──────────────────────────────────────────────────────────
 
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
+    debug_assert_eq!(
+        HOST_IMPORT_NAMES.len(),
+        193,
+        "HOST_IMPORT_NAMES length must match expected import count"
+    );
     let mut compiler = Compiler::new(CompileMode::Normal);
     compiler.compile_module(program)?;
     Ok(compiler.finish())
@@ -266,6 +271,8 @@ struct Compiler {
     if_depth: u32,
     /// Function table: table index → WASM func index.
     function_table: Vec<u32>,
+    /// Reverse lookup: WASM func index → table position.
+    function_table_reverse: HashMap<u32, u32>,
     /// IR function name → WASM func index.
     function_name_to_wasm_idx: HashMap<String, u32>,
     /// WASM index of $obj_new helper.
@@ -480,6 +487,12 @@ impl RegionTree {
 }
 
 impl Compiler {
+    fn push_func_table(&mut self, wasm_idx: u32) {
+        let table_pos = self.function_table.len() as u32;
+        self.function_table_reverse.insert(wasm_idx, table_pos);
+        self.function_table.push(wasm_idx);
+    }
+
     fn new(mode: CompileMode) -> Self {
         Self::new_with_data_base(mode, 0)
     }
@@ -1273,6 +1286,7 @@ impl Compiler {
             _next_import_func: HOST_IMPORT_NAMES.len() as u32,
             builtin_func_indices,
             function_table: Vec::new(),
+            function_table_reverse: HashMap::new(),
             function_name_to_wasm_idx: HashMap::new(),
             obj_new_func_idx: 0,
             obj_get_func_idx: 0,
@@ -1390,7 +1404,7 @@ impl Compiler {
                 self.functions.function(12);
             }
 
-            self.function_table.push(wasm_idx);
+            self.push_func_table(wasm_idx);
             self._next_import_func += 1;
         }
 
@@ -1406,59 +1420,59 @@ impl Compiler {
         // Reserve indices for object helper functions (so they're known during user function compilation).
         self.obj_new_func_idx = self._next_import_func;
         self.functions.function(7);
-        self.function_table.push(self._next_import_func);
+        self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
 
         self.obj_get_func_idx = self._next_import_func;
         self.functions.function(8);
-        self.function_table.push(self._next_import_func);
+        self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
 
         self.obj_set_func_idx = self._next_import_func;
         self.functions.function(9);
-        self.function_table.push(self._next_import_func);
+        self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
 
         self.obj_delete_func_idx = self._next_import_func;
         self.functions.function(8); // Type 8: (i64, i32) -> (i64)
-        self.function_table.push(self._next_import_func);
+        self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
 
         self.to_int32_func_idx = self._next_import_func;
         self.functions.function(10); // Type 10: (i64) -> (i32)
-        self.function_table.push(self._next_import_func);
+        self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
 
         self.string_eq_func_idx = self._next_import_func;
         self.functions.function(26); // Type 26: (i32, i32) -> i32
-        self.function_table.push(self._next_import_func);
+        self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
 
         self.arr_new_func_idx = self._next_import_func;
         self.functions.function(7); // Type 7: (i32) -> i32
-        self.function_table.push(self._next_import_func);
+        self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
 
         self.elem_get_func_idx = self._next_import_func;
         self.functions.function(8); // Type 8: (i64, i32) -> i64
-        self.function_table.push(self._next_import_func);
+        self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
 
         self.elem_set_func_idx = self._next_import_func;
         self.functions.function(9); // Type 9: (i64, i32, i64) -> ()
-        self.function_table.push(self._next_import_func);
+        self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
         // 设置 obj_spread_func_idx 为 import index 82
         self.obj_spread_func_idx = 82;
 
         self.get_proto_from_ctor_func_idx = self._next_import_func;
         self.functions.function(3); // Type 3: (i64) -> (i64)
-        self.function_table.push(self._next_import_func);
+        self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
         // Register array prototype method imports in function table (imports 50-76)
         let arr_proto_base = self.function_table.len() as u32;
         for import_idx in 50u32..=76u32 {
-            self.function_table.push(import_idx);
+            self.push_func_table(import_idx);
         }
         self.arr_proto_table_base = arr_proto_base;
 
@@ -5211,7 +5225,7 @@ impl Compiler {
         // 确定 this_val 和影子栈参数
         // ArrayIsArray: this_val=undefined, 所有 args 走影子栈
         // 其他方法: this_val=args[0], args[1..] 走影子栈
-        let (this_val_idx, shadow_args) = if matches!(builtin, Builtin::ArrayIsArray) {
+        let (this_val_idx, shadow_args) = if matches!(builtin, Builtin::ArrayIsArray | Builtin::StringFromCharCode | Builtin::StringFromCodePoint) {
             (None, args)
         } else {
             let this = args
@@ -6640,13 +6654,11 @@ impl Compiler {
             Constant::Undefined => Ok(value::encode_undefined()),
             Constant::FunctionRef(function_id) => {
                 let wasm_idx = function_id.0;
-                // Look up the table position for this WASM function index.
-                // The function_table is fully populated before any user function body is compiled.
                 let table_idx = self
-                    .function_table
-                    .iter()
-                    .position(|&f| f == wasm_idx)
-                    .unwrap_or(wasm_idx as usize) as u32;
+                    .function_table_reverse
+                    .get(&wasm_idx)
+                    .copied()
+                    .unwrap_or(wasm_idx);
                 Ok(value::encode_function_idx(table_idx))
             }
             Constant::NativeCallableEval => Ok(value::encode_native_callable_idx(0)),
