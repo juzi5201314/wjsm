@@ -5,7 +5,7 @@
 `wjsm` is an AOT JavaScript/TypeScript runtime that compiles JS/TS to WebAssembly.
 It does **not** use V8 — it uses `swc_core` for parsing, `wasm-encoder` for codegen, and `wasmtime` for execution.
 
-Current state: PoC with basic arithmetic, string literals, `console.log`, variable declarations (var/let/const), block scoping, var hoisting, compound assignment, and semantic error diagnostics. Missing: control flow, functions, objects, arrays, modules, closures, async, most Node.js APIs.
+Current state: implements functions, closures (lexical capture, arrow this), async/await, async generators, Promises (all combinators + microtask ordering), classes (ctor, methods, getter/setter, static, static blocks, super), objects (property descriptors, prototype chains, computed props, spread), arrays (literal + all ES Array.prototype methods), template strings (tagged), destructuring (array, object, params, defaults), control flow (if/else, switch, while/do-while/for/for-in/for-of, break/continue/labeled, try/catch/finally/throw), modules (ES import/export, CommonJS require/exports, dynamic import()), eval (direct/indirect, strict), BigInt, Symbol, RegExp, Proxy (basic), JSX, TypeScript type annotations/enum/interface/namespace/type alias/type assertions, `using` declarations (explicit resource management), JSON, Object/Array/String built-in methods, console (log/error/warn/info/debug/trace), timer APIs (setTimeout/setInterval/clearTimeout/clearInterval), fetch (data: URL), mark-sweep GC, NaN-boxed value encoding. Missing: Proxy traps beyond basic, Reflect, weak references, SharedArrayBuffer, Atomics, some newer esproposals.
 
 ## Architecture & Data Flow
 
@@ -19,11 +19,22 @@ source (js/ts)
   → wjsm-runtime: wasmtime execution with host function linkage
 ```
 
+For multi-file projects, the module system (`wjsm-module`) sits between semantic and backend:
+
+```
+entry.js + dep1.js + ...
+  → wjsm-parser (per file) → swc_ast::Module[]
+  → wjsm-module: dependency graph resolution + bundling
+  → wjsm-backend-wasm: IR → WASM bytes (single binary)
+  → wjsm-runtime: execution
+```
+
 Each stage has a single public function following `fn transform(input) -> Result<output>`:
 - `wjsm_parser::parse_module(source: &str) -> Result<swc_ast::Module>`
 - `wjsm_semantic::lower_module(module: swc_ast::Module) -> Result<Program, LoweringError>`
 - `wjsm_backend_wasm::compile(program: &Program) -> Result<Vec<u8>>`
 - `wjsm_runtime::execute(wasm_bytes: &[u8]) -> Result<()>` / `execute_with_writer(wasm_bytes, writer)`
+- `wjsm_module::bundle(entry: &str, root_path: &Path) -> Result<Vec<u8>>`
 
 The CLI (`wjsm-cli`) chains these: `parse → lower → compile → execute|write`.
 
@@ -41,22 +52,26 @@ Cargo workspace (edition 2024, resolver 2). Root `src/main.rs` is a thin wrapper
 | `wjsm-backend-wasm` | IR → WASM bytes | `compile(&Program)` | wasm-encoder, wjsm-ir |
 | `wjsm-backend-jit` | Stub — `bail!("not implemented")` | `compile(&Program)` | wjsm-ir |
 | `wjsm-runtime` | Execute WASM via wasmtime, provide host functions | `execute(&[u8])`, `execute_with_writer(&[u8], W)` | wasmtime, wjsm-ir |
+| `wjsm-module` | ES module / CommonJS bundling | `bundle(entry, root_path)`, `is_es_module()`, `is_commonjs_module()` | swc_core, wjsm-parser, wjsm-semantic, wjsm-backend-wasm |
+| `wjsm-test262` | test262 conformance test runner | `config`, `exec`, `read` modules | clap, serde, walkdir, rayon |
 | `wjsm-cli` | CLI entry (`build`, `run` subcommands) | `main_entry()`, `execute(Cli)` | all above + clap |
 
-Dependency graph: `parser → semantic → ir ← backend-wasm → runtime → cli(root)`
+Dependency graph: `parser → semantic → ir ← backend-wasm → runtime → cli(root)`, with `wjsm-module` branching off `semantic → backend-wasm`, and `wjsm-test262` standalone.
 
 ## Key Directories
 
 ```
 crates/              # All crate source code
   wjsm-ir/docs/      # IR design docs (ir-design.md)
+  wjsm-module/       # ES module / CommonJS bundler
+  wjsm-test262/      # test262 runner
 fixtures/
-  happy/             # Happy-path JS fixtures (*.js + *.expected snapshots)
-  errors/            # Error-path JS fixtures (*.js + *.expected snapshots)
+  happy/             # Happy-path JS/TS fixtures (*.js/*.ts + *.expected snapshots)
+  errors/            # Error-path JS/TS fixtures (*.js/*.ts + *.expected snapshots)
   semantic/          # IR snapshot expected outputs (*.ir)
-  modules/           # Empty — module system not implemented yet
+  modules/           # Module system fixtures (ESM & CJS)
 tests/
-  integration/       # E2E fixture runner tests
+  integration/       # E2E fixture runner tests (happy, errors, modules)
   unit/              # Placeholder unit tests
   fixture_runner.rs  # FixtureRunner harness (shared across integration tests)
 src/
@@ -92,7 +107,10 @@ cargo nextest run
 # Run specific test function
 cargo test -p wjsm-semantic -- hello_fixture_matches_ir_snapshot
 
-# Update E2E snapshots (happy-path and error fixtures)
+# Run test262 conformance suite
+cargo run -p wjsm-test262
+
+# Update E2E snapshots (happy-path, error, and module fixtures)
 WJSM_UPDATE_FIXTURES=1 cargo test
 
 # Watch for changes and re-run tests
@@ -142,7 +160,7 @@ The root `Cargo.toml` defines workspace deps at shared versions; individual crat
 ### Architecture Patterns
 - **Single-function public API per crate**: each crate exposes one or two public functions; the rest is private.
 - **SSA-like IR**: instructions produce `ValueId` outputs consumed by later instructions. Not full SSA (no phi nodes), but the `dest`-based naming is SSA-style.
-- **NaN-boxed value encoding**: all JS values are carried as `i64`. Bits 52-63 store the IEEE 754 exponent; the quiet NaN space is used as a boxing base (`0x7FF8_0000_0000_0000`). Tags at bits 32-34 distinguish string pointers (tag=1) and undefined (tag=2). Raw f64 values fall through when exponent != all-1s or quiet bit not set.
+- **NaN-boxed value encoding**: all JS values are carried as `i64`. Bits 52-63 store the IEEE 754 exponent; the quiet NaN space is used as a boxing base (`0x7FF8_0000_0000_0000`). Tags at bits 32-37 (mask `0x1F`) distinguish value types: `TAG_STRING=1`, `TAG_UNDEFINED=2`, `TAG_NULL=3`, `TAG_BOOL=4`, `TAG_EXCEPTION=5`, `TAG_ITERATOR=6`, `TAG_ENUMERATOR=7`, `TAG_OBJECT=8`, `TAG_FUNCTION=9`, `TAG_CLOSURE=0xA`, `TAG_ARRAY=0xB`, `TAG_BOUND=0xC`, `TAG_BIGINT=0xD`, `TAG_SYMBOL=0xE`, `TAG_REGEXP=0xF`, `TAG_PROXY=0x10`. Raw f64 values fall through when exponent != all-1s or quiet bit not set.
 - **Two-phase lowering**: `wjsm-semantic` processes statements in two passes — (1) pre-declare: hoist `var` to function scope (initialised with `undefined`), register `let`/`const` in block scope (TDZ, uninitialised), (2) lower: walk AST emitting IR instructions. This ensures TDZ checks and hoisting semantics work correctly.
 - **Scope tree**: lexical scope tree with `ScopeKind::Block` / `ScopeKind::Function`, `VarKind::Var` / `Let` / `Const`. Names are scope-qualified in IR. Lookup walks the scope chain upward.
 - **WASM contract** (generated module): imports `env.console_log(i64)`, exports `main()`, exports `memory` (1 page initial, no max). String constants are embedded in a DataSection at offset 0, nul-terminated.
@@ -158,7 +176,6 @@ The root `Cargo.toml` defines workspace deps at shared versions; individual crat
         return
   }
   ```
-
 
 ### Problem Resolution
 
@@ -181,13 +198,13 @@ Three-tier test strategy:
 - Tests basic IR serialization
 
 ### 2. Semantic Snapshot Tests (`crates/wjsm-semantic/tests/lowering_snapshots.rs`)
-- 12 snapshot tests: read `fixtures/happy/<name>.js`, parse + lower, compare `dump_text()` against `fixtures/semantic/<name>.ir`
-- 5 inline error diagnostic tests: assert `LoweringError::Diagnostic` message content
+- 95+ snapshot tests: read `fixtures/happy/<name>.js`, parse + lower, compare `dump_text()` against `fixtures/semantic/<name>.ir`
+- 6 inline error diagnostic tests: assert `LoweringError::Diagnostic` message content
 - **No auto-bless** for `.ir` files — update them manually when lowering changes
 - Pattern: `assert_snapshot("name")` helper reads from `fixtures/happy/{name}.js` and compares against `fixtures/semantic/{name}.ir`
 
 ### 3. E2E Fixture Runner Tests (`tests/integration/fixtures.rs`)
-- Discovers all `.js`/`.ts` files under `fixtures/{happy,errors}/`
+- Discovers all `.js`/`.ts` files under `fixtures/{happy,errors,modules}/`
 - Runs `wjsm run <file>` as a subprocess
 - Compares exit code + stdout + stderr against `.expected` snapshot files
 - Snapshots format:
@@ -200,12 +217,12 @@ Three-tier test strategy:
 - Auto-update: `WJSM_UPDATE_FIXTURES=1 cargo test` writes new `.expected` files
 
 ### Covered by fixtures
-**Happy path** (13 fixtures): hello, arithmetic, let_decl, block_scope, assignment, compound_assign, compound_assign_nested, var_hoist, var_hoist_read_before_decl, var_no_init_redeclare, block_var_hoist_before_block, (plus tests/integration ones)
+**Happy path** (210+ fixtures): covers functions, closures, classes, async/await, promises, modules, objects, arrays, control flow, try/catch/finally, template strings, destructuring, eval, BigInt, Symbol, RegExp, Object/Array/String built-in methods, typeof, operators, TypeScript type annotations/enum/interface/namespace/type alias/type assertions, JSX, `using` declarations, proxy.
 
-**Error path** (6 fixtures): undeclared_var, const_reassign, tdz, let_redeclare, unsupported_stmt, syntax_error
+**Error path** (30 fixtures): undeclared_var, const_reassign, tdz, let_redeclare, redeclare combinations, unsupported statements/expressions, syntax_error, await/yield/for-await outside valid contexts, break/continue outside loop, unknown/duplicate labels, with statement, for-in/for-of bad LHS, for-of non-iterable, bigint JSON, regex_invalid, get_own_property_descriptor non-object, define_property_accessor non-callable, eval errors (strict var leak, syntax, throw, lexical redeclare, const reassign).
 
 ### Not yet tested
-Modules (`fixtures/modules/` is empty), `.ts` type annotations, loops, conditionals, function definitions/calls, string operations beyond literals, objects/arrays, WASM backend in isolation (has inline tests), JIT backend, CLI error paths.
+Full test262 conformance suite (via `wjsm-test262` crate), Proxy traps beyond basic, Reflect API, weak references, SharedArrayBuffer, Atomics.
 
 ## Important Files
 
@@ -214,12 +231,14 @@ Modules (`fixtures/modules/` is empty), `.ts` type annotations, loops, condition
 | `src/main.rs` | Workspace entry point (2 lines: `wjsm_cli::main_entry()`) |
 | `Cargo.toml` | Workspace root, shared dependency versions |
 | `crates/wjsm-ir/src/lib.rs` | IR types: `Module`, `Function`, `BasicBlock`, `Instruction`, `Terminator`, `Constant` |
-| `crates/wjsm-ir/src/value.rs` | NaN-boxed value encoding (`i64`): `encode_f64`, `encode_string_ptr`, `encode_undefined`, and their `is_*`/`decode_*` counterparts |
+| `crates/wjsm-ir/src/value.rs` | NaN-boxed value encoding (`i64`): encode/decode for all JS value types |
 | `crates/wjsm-ir/docs/ir-design.md` | Detailed IR design rationale and format specification |
 | `crates/wjsm-semantic/src/lib.rs` | Scope tree (`ScopeTree`, `Scope`, `VarInfo`), lowering logic (`Lowerer`), diagnostics (`LoweringError`) |
 | `crates/wjsm-backend-wasm/src/lib.rs` | WASM codegen: two-pass local assignment, f64 reinterpretation, string data segments |
 | `crates/wjsm-runtime/src/lib.rs` | wasmtime execution: imports `console_log`, reads strings from WASM memory, renders values |
 | `crates/wjsm-cli/src/lib.rs` | CLI entry: `build`/`run` subcommands, pipeline orchestration |
+| `crates/wjsm-module/src/lib.rs` | Module bundler: ES import/export + CommonJS require support |
+| `crates/wjsm-test262/src/` | test262 conformance test runner |
 | `tests/fixture_runner.rs` | Shared `FixtureRunner` harness for E2E snapshot tests |
 | `fixtures/semantic/*.ir` | Stable IR snapshots — must be manually updated when lowering changes |
 | `todo.md` | Gap analysis of missing language features |
@@ -227,6 +246,8 @@ Modules (`fixtures/modules/` is empty), `.ts` type annotations, loops, condition
 ## Adding a New Language Feature
 
 The typical flow:
+
+0. **Module considerations** (`wjsm-module`): If the feature involves cross-file interaction (import/export, module namespace), update the bundler, dependency graph, and/or CJS transform.
 
 1. **IR layer** (`wjsm-ir`): Add instructions/variants to `Instruction` enum and/or `Constant` enum if a new constant kind is needed. Update `Display` impls for dump format. Add helpers in `value.rs` if a new JS value type (e.g. boolean) is needed.
 
@@ -236,7 +257,7 @@ The typical flow:
 
 4. **Runtime** (`wjsm-runtime`): Add new host function imports (in `Linker` or `Func::wrap`). Update `render_value` for new value display.
 
-5. **Tests**: Add fixture to `fixtures/happy/` or `fixtures/errors/` with `.js` + `.expected`. Add snapshot test to `fixtures/semantic/<name>.ir` if lowering produces new IR shapes. Add integration test entry in `tests/integration/fixtures.rs`.
+5. **Tests**: Add fixture to `fixtures/happy/` or `fixtures/errors/` with `.js` + `.expected`. Add snapshot test to `fixtures/semantic/<name>.ir` if lowering produces new IR shapes. Add integration test entry in `tests/integration/fixtures.rs`. If the feature has test262 coverage, ensure the test262 runner works.
 
 ## Commit Conventions
 
@@ -249,14 +270,16 @@ The typical flow:
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **wjsm** (672 symbols, 1809 relationships, 58 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **wjsm** (270,283 nodes, 384,564 edges, 300 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze --skip-agents-md --embeddings` in terminal first.
+> 索引过期时，运行 `bunx gitnexus analyze --skip-agents-md --embeddings` 更新。
+> 初次索引或在大型影响分析前，建议先重建索引保证数据新鲜。
 
 ## Always Do
 
 - **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
 - **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
+- **MUST run `bunx gitnexus analyze --skip-agents-md --embeddings` after `git commit` or `git merge`** to update the index before proceeding with analysis or editing.
 - **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
 - When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
 - When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
@@ -271,7 +294,7 @@ This project is indexed by GitNexus as **wjsm** (672 symbols, 1809 relationships
 ## Resources
 
 | Resource | Use for |
-|----------|---------|
+|---|---|
 | `gitnexus://repo/wjsm/context` | Codebase overview, check index freshness |
 | `gitnexus://repo/wjsm/clusters` | All functional areas |
 | `gitnexus://repo/wjsm/processes` | All execution flows |
@@ -280,7 +303,7 @@ This project is indexed by GitNexus as **wjsm** (672 symbols, 1809 relationships
 ## CLI
 
 | Task | Read this skill file |
-|------|---------------------|
+|---|---|
 | Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
 | Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
 | Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
