@@ -1,6 +1,6 @@
 exit_code: 0
 --- stdout ---
-NaN
-NaN
+b
+c
 3
 --- stderr ---

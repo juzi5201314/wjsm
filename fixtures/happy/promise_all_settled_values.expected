@@ -1,10 +1,10 @@
 exit_code: 0
 --- stdout ---
 3
-NaN
+fulfilled
 1
-NaN
+rejected
 2
-NaN
+fulfilled
 3
 --- stderr ---

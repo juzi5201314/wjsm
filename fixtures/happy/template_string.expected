@@ -1,6 +1,6 @@
 exit_code: 0
 --- stdout ---
-NaN
-NaN
-NaN
+Hello, World!
+Hello, 2!
+A: 1, B: 2, C: 3
 --- stderr ---
