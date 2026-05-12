@@ -110,6 +110,10 @@ pub fn encode_f64(val: f64) -> i64 {
     val.to_bits() as i64
 }
 
+pub fn decode_f64(val: i64) -> f64 {
+    f64::from_bits(val as u64)
+}
+
 pub fn encode_string_ptr(ptr: u32) -> i64 {
     let payload = (TAG_STRING << 32) | (ptr as u64);
     (BOX_BASE | payload) as i64
