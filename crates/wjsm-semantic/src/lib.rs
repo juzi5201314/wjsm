@@ -10812,6 +10812,9 @@ impl Lowerer {
                             | Builtin::ReferenceErrorConstructor
                             | Builtin::URIErrorConstructor
                             | Builtin::EvalErrorConstructor
+                            | Builtin::MapConstructor
+                            | Builtin::SetConstructor
+                            | Builtin::DateConstructor
                     ) {
                         let mut arg_vals = Vec::new();
                         if let Some(args) = &new_expr.args {
@@ -13754,6 +13757,9 @@ fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "ReferenceError" => Some(Builtin::ReferenceErrorConstructor),
         "URIError" => Some(Builtin::URIErrorConstructor),
         "EvalError" => Some(Builtin::EvalErrorConstructor),
+        "Map" => Some(Builtin::MapConstructor),
+        "Set" => Some(Builtin::SetConstructor),
+        "Date" => Some(Builtin::DateConstructor),
         _ => None,
     }
 }
@@ -13873,6 +13879,12 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
             "isSafeInteger" => Some(Builtin::NumberIsSafeInteger),
             "parseInt" => Some(Builtin::NumberParseInt),
             "parseFloat" => Some(Builtin::NumberParseFloat),
+            _ => None,
+        },
+        "Date" => match property {
+            "now" => Some(Builtin::DateNow),
+            "parse" => Some(Builtin::DateParse),
+            "UTC" => Some(Builtin::DateUTC),
             _ => None,
         },
         _ => None,
@@ -14004,6 +14016,7 @@ fn builtin_from_error_proto_method(name: &str) -> Option<Builtin> {
     let _ = name;
     None
 }
+
 fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
     match builtin {
         Builtin::ConsoleLog => ("console.log", 1),
@@ -14116,6 +14129,15 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::URIErrorConstructor => ("URIError", 1),
         Builtin::EvalErrorConstructor => ("EvalError", 1),
         Builtin::ErrorProtoToString => ("Error.prototype.toString", 1),
+        // ── Map builtins ──
+        Builtin::MapConstructor => ("Map", 0),
+        // ── Set builtins ──
+        Builtin::SetConstructor => ("Set", 0),
+        // ── Date builtins ──
+        Builtin::DateConstructor => ("Date", 0),
+        Builtin::DateNow => ("Date.now", 0),
+        Builtin::DateParse => ("Date.parse", 1),
+        Builtin::DateUTC => ("Date.UTC", 2),
         _ => ("builtin", 0),
     }
 }

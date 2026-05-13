@@ -1,4 +1,5 @@
 use anyhow::Result;
+use chrono::{Datelike, DateTime, Local, TimeZone, Timelike, Utc};
 use num_traits::cast::ToPrimitive;
 use rand::Rng;
 use std::collections::hash_map::DefaultHasher;
@@ -96,6 +97,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>> =
         Arc::new(Mutex::new(HashMap::new()));
     let error_table: Arc<Mutex<Vec<ErrorEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let map_table: Arc<Mutex<Vec<MapEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let set_table: Arc<Mutex<Vec<SetEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
@@ -129,6 +132,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             combinator_contexts: Arc::clone(&combinator_contexts),
             module_namespace_cache: Arc::clone(&module_namespace_cache),
             error_table: Arc::clone(&error_table),
+            map_table: Arc::clone(&map_table),
+            set_table: Arc::clone(&set_table),
         },
     );
 
@@ -7009,14 +7014,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          callable: i64,
-         _this_val: i64,
+         this_val: i64,
          args_base: i32,
          args_count: i32|
          -> i64 {
             let args = (0..args_count.max(0))
                 .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
                 .collect();
-            call_native_callable_with_args_from_caller(&mut caller, callable, args)
+            call_native_callable_with_args_from_caller(&mut caller, callable, this_val, args)
                 .unwrap_or_else(value::encode_undefined)
         },
     );
@@ -7853,6 +7858,569 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
         },
     );
+
+    // ── Map / Set helper: SameValueZero equality ──────────────────────
+    let map_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+            let handle;
+            {
+                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                table.push(MapEntry { keys: Vec::new(), values: Vec::new() });
+                handle = table.len() as u32 - 1;
+            }
+            let (set_fn, get_fn, has_fn, delete_fn, clear_fn, size_fn, for_each_fn, keys_fn, values_fn, entries_fn) = {
+                let state = caller.data();
+                (
+                    create_map_set_method(state, MapSetMethodKind::MapSet),
+                    create_map_set_method(state, MapSetMethodKind::MapGet),
+                    create_map_set_method(state, MapSetMethodKind::Has),
+                    create_map_set_method(state, MapSetMethodKind::Delete),
+                    create_map_set_method(state, MapSetMethodKind::Clear),
+                    create_map_set_method(state, MapSetMethodKind::Size),
+                    create_map_set_method(state, MapSetMethodKind::ForEach),
+                    create_map_set_method(state, MapSetMethodKind::Keys),
+                    create_map_set_method(state, MapSetMethodKind::Values),
+                    create_map_set_method(state, MapSetMethodKind::Entries),
+                )
+            };
+            let obj = alloc_host_object_from_caller(&mut caller, 11);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__map_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "set", set_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "get", get_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "clear", clear_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "size", size_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "forEach", for_each_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "values", values_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "entries", entries_fn);
+            obj
+        },
+    );
+
+    let map_proto_set_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64, val: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_undefined();
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let mut table = caller.data().map_table.lock().expect("map table mutex");
+            if handle >= table.len() {
+                return value::encode_undefined();
+            }
+            let entry = &mut table[handle];
+            for i in 0..entry.keys.len() {
+                if same_value_zero(entry.keys[i], key) {
+                    entry.values[i] = val;
+                    return this_val;
+                }
+            }
+            entry.keys.push(key);
+            entry.values.push(val);
+            this_val
+        },
+    );
+
+    let map_proto_get_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_undefined();
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let table = caller.data().map_table.lock().expect("map table mutex");
+            if handle >= table.len() {
+                return value::encode_undefined();
+            }
+            let entry = &table[handle];
+            for i in 0..entry.keys.len() {
+                if same_value_zero(entry.keys[i], key) {
+                    return entry.values[i];
+                }
+            }
+            value::encode_undefined()
+        },
+    );
+
+    // ── Set host functions ────────────────────────────────────────────
+    let set_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+            let handle;
+            {
+                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                table.push(SetEntry { values: Vec::new() });
+                handle = table.len() as u32 - 1;
+            }
+            let (add_fn, has_fn, delete_fn, clear_fn, size_fn, for_each_fn, keys_fn, values_fn, entries_fn) = {
+                let state = caller.data();
+                (
+                    create_map_set_method(state, MapSetMethodKind::SetAdd),
+                    create_map_set_method(state, MapSetMethodKind::Has),
+                    create_map_set_method(state, MapSetMethodKind::Delete),
+                    create_map_set_method(state, MapSetMethodKind::Clear),
+                    create_map_set_method(state, MapSetMethodKind::Size),
+                    create_map_set_method(state, MapSetMethodKind::ForEach),
+                    create_map_set_method(state, MapSetMethodKind::Keys),
+                    create_map_set_method(state, MapSetMethodKind::Values),
+                    create_map_set_method(state, MapSetMethodKind::Entries),
+                )
+            };
+            let obj = alloc_host_object_from_caller(&mut caller, 10);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__set_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "add", add_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "clear", clear_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "size", size_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "forEach", for_each_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "values", values_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "entries", entries_fn);
+            obj
+        },
+    );
+
+    let set_proto_add_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, val: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_undefined();
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__set_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let mut table = caller.data().set_table.lock().expect("set table mutex");
+            if handle >= table.len() {
+                return value::encode_undefined();
+            }
+            let entry = &mut table[handle];
+            for i in 0..entry.values.len() {
+                if same_value_zero(entry.values[i], val) {
+                    return this_val;
+                }
+            }
+            entry.values.push(val);
+            this_val
+        },
+    );
+
+    // ── Map/Set shared host functions (dispatch at runtime) ──────────
+    let map_set_has_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            if let Some(op) = obj_ptr {
+                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
+                if let Some(mh) = map_handle {
+                    let handle = value::decode_f64(mh) as usize;
+                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    if handle < table.len() {
+                        let entry = &table[handle];
+                        for i in 0..entry.keys.len() {
+                            if same_value_zero(entry.keys[i], key) {
+                                return value::encode_bool(true);
+                            }
+                        }
+                    }
+                    return value::encode_bool(false);
+                }
+                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
+                if let Some(sh) = set_handle {
+                    let handle = value::decode_f64(sh) as usize;
+                    let table = caller.data().set_table.lock().expect("set table mutex");
+                    if handle < table.len() {
+                        let entry = &table[handle];
+                        for i in 0..entry.values.len() {
+                            if same_value_zero(entry.values[i], key) {
+                                return value::encode_bool(true);
+                            }
+                        }
+                    }
+                    return value::encode_bool(false);
+                }
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let map_set_delete_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            if let Some(op) = obj_ptr {
+                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
+                if let Some(mh) = map_handle {
+                    let handle = value::decode_f64(mh) as usize;
+                    let mut table = caller.data().map_table.lock().expect("map table mutex");
+                    if handle < table.len() {
+                        let entry = &mut table[handle];
+                        for i in 0..entry.keys.len() {
+                            if same_value_zero(entry.keys[i], key) {
+                                entry.keys.remove(i);
+                                entry.values.remove(i);
+                                return value::encode_bool(true);
+                            }
+                        }
+                    }
+                    return value::encode_bool(false);
+                }
+                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
+                if let Some(sh) = set_handle {
+                    let handle = value::decode_f64(sh) as usize;
+                    let mut table = caller.data().set_table.lock().expect("set table mutex");
+                    if handle < table.len() {
+                        let entry = &mut table[handle];
+                        for i in 0..entry.values.len() {
+                            if same_value_zero(entry.values[i], key) {
+                                entry.values.remove(i);
+                                return value::encode_bool(true);
+                            }
+                        }
+                    }
+                    return value::encode_bool(false);
+                }
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let map_set_clear_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_undefined();
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            if let Some(op) = obj_ptr {
+                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
+                if let Some(mh) = map_handle {
+                    let handle = value::decode_f64(mh) as usize;
+                    let mut table = caller.data().map_table.lock().expect("map table mutex");
+                    if handle < table.len() {
+                        table[handle].keys.clear();
+                        table[handle].values.clear();
+                    }
+                    return value::encode_undefined();
+                }
+                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
+                if let Some(sh) = set_handle {
+                    let handle = value::decode_f64(sh) as usize;
+                    let mut table = caller.data().set_table.lock().expect("set table mutex");
+                    if handle < table.len() {
+                        table[handle].values.clear();
+                    }
+                    return value::encode_undefined();
+                }
+            }
+            value::encode_undefined()
+        },
+    );
+
+    let map_set_get_size_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_f64(0.0);
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            if let Some(op) = obj_ptr {
+                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
+                if let Some(mh) = map_handle {
+                    let handle = value::decode_f64(mh) as usize;
+                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    if handle < table.len() {
+                        return value::encode_f64(table[handle].keys.len() as f64);
+                    }
+                    return value::encode_f64(0.0);
+                }
+                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
+                if let Some(sh) = set_handle {
+                    let handle = value::decode_f64(sh) as usize;
+                    let table = caller.data().set_table.lock().expect("set table mutex");
+                    if handle < table.len() {
+                        return value::encode_f64(table[handle].values.len() as f64);
+                    }
+                    return value::encode_f64(0.0);
+                }
+            }
+            value::encode_f64(0.0)
+        },
+    );
+
+    let map_set_for_each_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let map_set_keys_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let map_set_values_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let map_set_entries_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let date_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, _this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let args: Vec<i64> = if args_count > 0 {
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                    return value::encode_undefined();
+                };
+                let data = memory.data(&caller);
+                let base = args_base as usize;
+                let mut result = Vec::with_capacity(args_count as usize);
+                for i in 0..args_count as usize {
+                    let offset = base + i * 8;
+                    if offset + 8 <= data.len() {
+                        let mut bytes = [0u8; 8];
+                        bytes.copy_from_slice(&data[offset..offset + 8]);
+                        result.push(i64::from_le_bytes(bytes));
+                    } else {
+                        result.push(value::encode_undefined());
+                    }
+                }
+                result
+            } else {
+                vec![]
+            };
+
+            let ms = if args.is_empty() {
+                let now = chrono::Utc::now();
+                now.timestamp_millis() as f64
+            } else if args.len() == 1 {
+                let arg = args[0];
+                if value::is_undefined(arg) {
+                    let now = chrono::Utc::now();
+                    now.timestamp_millis() as f64
+                } else if value::is_f64(arg) {
+                    let val = value::decode_f64(arg);
+                    if val.is_nan() || val.is_infinite() {
+                        f64::NAN
+                    } else {
+                        val
+                    }
+                } else if value::is_string(arg) {
+                    let s = read_value_string_bytes(&mut caller, arg)
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_default();
+                    if s.is_empty() {
+                        f64::NAN
+                    } else {
+                        match DateTime::parse_from_rfc3339(&s) {
+                            Ok(dt) => dt.timestamp_millis() as f64,
+                            Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S") {
+                                Ok(ndt) => ndt.and_utc().timestamp_millis() as f64,
+                                Err(_) => match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                    Ok(nd) => nd.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis() as f64,
+                                    Err(_) => f64::NAN,
+                                },
+                            },
+                        }
+                    }
+                } else {
+                    f64::NAN
+                }
+            } else {
+                date_args_to_ms(&args, false)
+            };
+
+            let state = caller.data();
+            let (get_date_fn, get_day_fn, get_full_year_fn, get_hours_fn, get_milliseconds_fn,
+                 get_minutes_fn, get_month_fn, get_seconds_fn, get_time_fn, get_timezone_offset_fn,
+                 get_utc_date_fn, get_utc_day_fn, get_utc_full_year_fn, get_utc_hours_fn,
+                 get_utc_milliseconds_fn, get_utc_minutes_fn, get_utc_month_fn, get_utc_seconds_fn,
+                 set_date_fn, set_full_year_fn, set_hours_fn, set_milliseconds_fn,
+                 set_minutes_fn, set_month_fn, set_seconds_fn, set_time_fn,
+                 set_utc_date_fn, set_utc_full_year_fn, set_utc_hours_fn, set_utc_milliseconds_fn,
+                 set_utc_minutes_fn, set_utc_month_fn, set_utc_seconds_fn,
+                 to_string_fn, to_date_string_fn, to_time_string_fn, to_iso_string_fn,
+                 to_utc_string_fn, to_json_fn, value_of_fn) = {
+                (
+                    create_date_method(state, DateMethodKind::GetDate),
+                    create_date_method(state, DateMethodKind::GetDay),
+                    create_date_method(state, DateMethodKind::GetFullYear),
+                    create_date_method(state, DateMethodKind::GetHours),
+                    create_date_method(state, DateMethodKind::GetMilliseconds),
+                    create_date_method(state, DateMethodKind::GetMinutes),
+                    create_date_method(state, DateMethodKind::GetMonth),
+                    create_date_method(state, DateMethodKind::GetSeconds),
+                    create_date_method(state, DateMethodKind::GetTime),
+                    create_date_method(state, DateMethodKind::GetTimezoneOffset),
+                    create_date_method(state, DateMethodKind::GetUTCDate),
+                    create_date_method(state, DateMethodKind::GetUTCDay),
+                    create_date_method(state, DateMethodKind::GetUTCFullYear),
+                    create_date_method(state, DateMethodKind::GetUTCHours),
+                    create_date_method(state, DateMethodKind::GetUTCMilliseconds),
+                    create_date_method(state, DateMethodKind::GetUTCMinutes),
+                    create_date_method(state, DateMethodKind::GetUTCMonth),
+                    create_date_method(state, DateMethodKind::GetUTCSeconds),
+                    create_date_method(state, DateMethodKind::SetDate),
+                    create_date_method(state, DateMethodKind::SetFullYear),
+                    create_date_method(state, DateMethodKind::SetHours),
+                    create_date_method(state, DateMethodKind::SetMilliseconds),
+                    create_date_method(state, DateMethodKind::SetMinutes),
+                    create_date_method(state, DateMethodKind::SetMonth),
+                    create_date_method(state, DateMethodKind::SetSeconds),
+                    create_date_method(state, DateMethodKind::SetTime),
+                    create_date_method(state, DateMethodKind::SetUTCDate),
+                    create_date_method(state, DateMethodKind::SetUTCFullYear),
+                    create_date_method(state, DateMethodKind::SetUTCHours),
+                    create_date_method(state, DateMethodKind::SetUTCMilliseconds),
+                    create_date_method(state, DateMethodKind::SetUTCMinutes),
+                    create_date_method(state, DateMethodKind::SetUTCMonth),
+                    create_date_method(state, DateMethodKind::SetUTCSeconds),
+                    create_date_method(state, DateMethodKind::ToString),
+                    create_date_method(state, DateMethodKind::ToDateString),
+                    create_date_method(state, DateMethodKind::ToTimeString),
+                    create_date_method(state, DateMethodKind::ToISOString),
+                    create_date_method(state, DateMethodKind::ToUTCString),
+                    create_date_method(state, DateMethodKind::ToJSON),
+                    create_date_method(state, DateMethodKind::ValueOf),
+                )
+            };
+
+            let obj = alloc_host_object_from_caller(&mut caller, 40);
+            let ms_val = value::encode_f64(ms);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__date_ms__", ms_val);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getDate", get_date_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getDay", get_day_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getFullYear", get_full_year_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getHours", get_hours_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getMilliseconds", get_milliseconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getMinutes", get_minutes_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getMonth", get_month_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getSeconds", get_seconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getTime", get_time_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getTimezoneOffset", get_timezone_offset_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCDate", get_utc_date_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCDay", get_utc_day_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCFullYear", get_utc_full_year_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCHours", get_utc_hours_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCMilliseconds", get_utc_milliseconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCMinutes", get_utc_minutes_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCMonth", get_utc_month_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCSeconds", get_utc_seconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setDate", set_date_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setFullYear", set_full_year_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setHours", set_hours_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setMilliseconds", set_milliseconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setMinutes", set_minutes_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setMonth", set_month_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setSeconds", set_seconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setTime", set_time_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCDate", set_utc_date_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCFullYear", set_utc_full_year_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCHours", set_utc_hours_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCMilliseconds", set_utc_milliseconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCMinutes", set_utc_minutes_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCMonth", set_utc_month_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCSeconds", set_utc_seconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toString", to_string_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toDateString", to_date_string_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toTimeString", to_time_string_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toISOString", to_iso_string_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toUTCString", to_utc_string_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toJSON", to_json_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "valueOf", value_of_fn);
+            obj
+        },
+    );
+
+    let date_now_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>| -> i64 {
+            let now = chrono::Utc::now();
+            value::encode_f64(now.timestamp_millis() as f64)
+        },
+    );
+
+    let date_parse_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let s = if value::is_string(arg) {
+                read_value_string_bytes(&mut caller, arg)
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            if s.is_empty() {
+                return value::encode_f64(f64::NAN);
+            }
+            match DateTime::parse_from_rfc3339(&s) {
+                Ok(dt) => value::encode_f64(dt.timestamp_millis() as f64),
+                Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S") {
+                    Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
+                    Err(_) => match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                        Ok(nd) => value::encode_f64(nd.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis() as f64),
+                        Err(_) => value::encode_f64(f64::NAN),
+                    },
+                },
+            }
+        },
+    );
+
+    let date_utc_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let args = vec![arg];
+            let ms = date_args_to_ms(&args, true);
+            value::encode_f64(ms)
+        },
+    );
     let imports = [
         console_log.into(),                    // 0
         f64_mod.into(),                        // 1
@@ -8114,6 +8682,24 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         uri_error_constructor_fn.into(),       // 248
         eval_error_constructor_fn.into(),      // 249
         error_proto_to_string_fn.into(),       // 250
+        // ── Map imports ──
+        map_constructor_fn.into(),              // 251
+        map_proto_set_fn.into(),                // 252
+        map_proto_get_fn.into(),                // 253
+        set_constructor_fn.into(),              // 254
+        set_proto_add_fn.into(),                // 255
+        map_set_has_fn.into(),                  // 256
+        map_set_delete_fn.into(),               // 257
+        map_set_clear_fn.into(),                // 258
+        map_set_get_size_fn.into(),             // 259
+        map_set_for_each_fn.into(),             // 260
+        map_set_keys_fn.into(),                 // 261
+        map_set_values_fn.into(),               // 262
+        map_set_entries_fn.into(),              // 263
+        date_constructor_fn.into(),             // 264
+        date_now_fn.into(),                     // 265
+        date_parse_fn.into(),                   // 266
+        date_utc_fn.into(),                     // 267
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -8327,6 +8913,10 @@ struct RuntimeState {
     module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>>,
     /// Error 侧表：存储 error 对象的 name 和 message
     error_table: Arc<Mutex<Vec<ErrorEntry>>>,
+    /// Map 侧表：存储 Map 对象的键值对
+    map_table: Arc<Mutex<Vec<MapEntry>>>,
+    /// Set 侧表：存储 Set 对象的值
+    set_table: Arc<Mutex<Vec<SetEntry>>>,
 }
 
 /// 绑定函数记录
@@ -8347,6 +8937,15 @@ struct SymbolEntry {
 struct ErrorEntry {
     name: String,
     message: String,
+}
+
+struct MapEntry {
+    keys: Vec<i64>,
+    values: Vec<i64>,
+}
+
+struct SetEntry {
+    values: Vec<i64>,
 }
 
 /// RegExp 条目
@@ -8385,6 +8984,71 @@ enum NativeCallable {
     AsyncGeneratorIdentity {
         generator: i64,
     },
+    MapSetMethod {
+        kind: MapSetMethodKind,
+    },
+    DateMethod {
+        kind: DateMethodKind,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum MapSetMethodKind {
+    MapSet,
+    MapGet,
+    SetAdd,
+    Has,
+    Delete,
+    Clear,
+    Size,
+    ForEach,
+    Keys,
+    Values,
+    Entries,
+}
+
+#[derive(Clone, Copy)]
+enum DateMethodKind {
+    GetDate,
+    GetDay,
+    GetFullYear,
+    GetHours,
+    GetMilliseconds,
+    GetMinutes,
+    GetMonth,
+    GetSeconds,
+    GetTime,
+    GetTimezoneOffset,
+    GetUTCDate,
+    GetUTCDay,
+    GetUTCFullYear,
+    GetUTCHours,
+    GetUTCMilliseconds,
+    GetUTCMinutes,
+    GetUTCMonth,
+    GetUTCSeconds,
+    SetDate,
+    SetFullYear,
+    SetHours,
+    SetMilliseconds,
+    SetMinutes,
+    SetMonth,
+    SetSeconds,
+    SetTime,
+    SetUTCDate,
+    SetUTCFullYear,
+    SetUTCHours,
+    SetUTCMilliseconds,
+    SetUTCMinutes,
+    SetUTCMonth,
+    SetUTCSeconds,
+    ToString,
+    ToDateString,
+    ToTimeString,
+    ToISOString,
+    ToUTCString,
+    ToJSON,
+    ValueOf,
 }
 
 #[derive(Clone, Copy)]
@@ -8698,6 +9362,50 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
 
     if value::is_object(val) {
         let ptr = value::decode_object_handle(val);
+        let obj_ptr = resolve_handle_idx(caller, ptr as usize);
+        if let Some(op) = obj_ptr {
+            let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let keys_values = {
+                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    if handle < table.len() {
+                        let entry = &table[handle];
+                        Some((entry.keys.clone(), entry.values.clone()))
+                    } else {
+                        None
+                    }
+                };
+                if let Some((keys, values)) = keys_values {
+                    let mut parts = Vec::new();
+                    for i in 0..keys.len() {
+                        let k = render_value(caller, keys[i]).unwrap_or_else(|_| "?".to_string());
+                        let v = render_value(caller, values[i]).unwrap_or_else(|_| "?".to_string());
+                        parts.push(format!("{k} => {v}"));
+                    }
+                    return Ok(format!("Map {{{}}}", parts.join(", ")));
+                }
+            }
+            let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let vals = {
+                    let table = caller.data().set_table.lock().expect("set table mutex");
+                    if handle < table.len() {
+                        Some(table[handle].values.clone())
+                    } else {
+                        None
+                    }
+                };
+                if let Some(values) = vals {
+                    let mut parts = Vec::new();
+                    for v in &values {
+                        parts.push(render_value(caller, *v).unwrap_or_else(|_| "?".to_string()));
+                    }
+                    return Ok(format!("Set {{{}}}", parts.join(", ")));
+                }
+            }
+        }
         return Ok(format!("[object Object:{ptr}]"));
     }
 
@@ -9169,6 +9877,16 @@ fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> 
             caller,
             value::decode_object_handle(obj) as usize,
         );
+        if let Some(op) = obj_ptr {
+            let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
+            if map_handle.is_some() {
+                return store_runtime_string(caller, "[object Map]".to_string());
+            }
+            let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+            if set_handle.is_some() {
+                return store_runtime_string(caller, "[object Set]".to_string());
+            }
+        }
         let name_val = obj_ptr
             .and_then(|p| read_object_property_by_name(caller, p, "name"));
         let msg_val = obj_ptr
@@ -9826,6 +10544,20 @@ fn mark_object_recursive(
 fn resolve_handle(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
     let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
     resolve_handle_idx(caller, handle_idx)
+}
+
+fn same_value_zero(a: i64, b: i64) -> bool {
+    if a == b {
+        return true;
+    }
+    if value::is_f64(a) && value::is_f64(b) {
+        let fa = value::decode_f64(a);
+        let fb = value::decode_f64(b);
+        if fa.is_nan() && fb.is_nan() {
+            return true;
+        }
+    }
+    false
 }
 
 /// 通过 handle_idx 解析真实对象指针。
@@ -10852,17 +11584,745 @@ fn create_async_generator_identity(state: &RuntimeState, generator: i64) -> i64 
     value::encode_native_callable_idx(handle)
 }
 
+fn create_map_set_method(state: &RuntimeState, kind: MapSetMethodKind) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::MapSetMethod { kind });
+    value::encode_native_callable_idx(handle)
+}
+
+fn create_date_method(state: &RuntimeState, kind: DateMethodKind) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::DateMethod { kind });
+    value::encode_native_callable_idx(handle)
+}
+
+fn read_date_ms(caller: &mut Caller<'_, RuntimeState>, this_val: i64) -> f64 {
+    if !value::is_object(this_val) {
+        return f64::NAN;
+    }
+    let obj_ptr = resolve_handle_idx(
+        caller,
+        value::decode_object_handle(this_val) as usize,
+    );
+    let Some(op) = obj_ptr else {
+        return f64::NAN;
+    };
+    let ms_val = read_object_property_by_name(caller, op, "__date_ms__");
+    ms_val.map(|v| value::decode_f64(v)).unwrap_or(f64::NAN)
+}
+
+fn write_date_ms(caller: &mut Caller<'_, RuntimeState>, this_val: i64, ms: f64) {
+    if !value::is_object(this_val) {
+        return;
+    }
+    let obj_ptr = resolve_handle_idx(
+        caller,
+        value::decode_object_handle(this_val) as usize,
+    );
+    let Some(op) = obj_ptr else {
+        return;
+    };
+    let name_id = match find_memory_c_string_global(caller, "__date_ms__") {
+        Some(id) => id,
+        None => return,
+    };
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return;
+    };
+    let data = memory.data(&*caller);
+    if op + 16 > data.len() {
+        return;
+    }
+    let num_props = u32::from_le_bytes([
+        data[op + 12],
+        data[op + 13],
+        data[op + 14],
+        data[op + 15],
+    ]) as usize;
+    for i in 0..num_props {
+        let slot_offset = op + 16 + i * 32;
+        if slot_offset + 32 > data.len() {
+            break;
+        }
+        let slot_name_id = u32::from_le_bytes([
+            data[slot_offset],
+            data[slot_offset + 1],
+            data[slot_offset + 2],
+            data[slot_offset + 3],
+        ]);
+        if slot_name_id == name_id {
+            let val = value::encode_f64(ms);
+            let _ = data;
+            let data = memory.data_mut(&mut *caller);
+            data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+            return;
+        }
+    }
+}
+
+fn ms_to_datetime_utc(ms: f64) -> Option<DateTime<Utc>> {
+    if ms.is_nan() || ms.is_infinite() {
+        return None;
+    }
+    Utc.timestamp_millis_opt(ms as i64).single()
+}
+
+fn ms_to_datetime_local(ms: f64) -> Option<DateTime<Local>> {
+    if ms.is_nan() || ms.is_infinite() {
+        return None;
+    }
+    let utc_dt = ms_to_datetime_utc(ms)?;
+    Some(utc_dt.with_timezone(&Local))
+}
+
+fn date_args_to_ms(args: &[i64], is_utc: bool) -> f64 {
+    if args.is_empty() {
+        return f64::NAN;
+    }
+    let first = value::decode_f64(args[0]);
+    if first.is_nan() {
+        return f64::NAN;
+    }
+    if args.len() == 1 {
+        if first.is_infinite() {
+            return f64::NAN;
+        }
+        return first;
+    }
+    let year = first;
+    let month_val = if args.len() > 1 { value::decode_f64(args[1]) } else { 0.0 };
+    let day = if args.len() > 2 { value::decode_f64(args[2]) } else { 1.0 };
+    let hour = if args.len() > 3 { value::decode_f64(args[3]) } else { 0.0 };
+    let minute = if args.len() > 4 { value::decode_f64(args[4]) } else { 0.0 };
+    let second = if args.len() > 5 { value::decode_f64(args[5]) } else { 0.0 };
+    let millisecond = if args.len() > 6 { value::decode_f64(args[6]) } else { 0.0 };
+
+    if year.is_nan() || month_val.is_nan() || day.is_nan()
+        || hour.is_nan() || minute.is_nan() || second.is_nan() || millisecond.is_nan()
+    {
+        return f64::NAN;
+    }
+
+    let y = year as i32;
+    let m = month_val as u32;
+    let d = day as u32;
+    let h = hour as u32;
+    let min = minute as u32;
+    let s = second as u32;
+    let ms = millisecond as u32;
+
+    let adjusted_year = if y >= 0 && y <= 99 { 1900 + y } else { y };
+
+    if is_utc {
+        Utc.with_ymd_and_hms(adjusted_year, m + 1, d.max(1), h, min, s)
+            .single()
+            .map(|dt: DateTime<Utc>| dt.timestamp_millis() as f64 + ms as f64)
+            .unwrap_or(f64::NAN)
+    } else {
+        Local.with_ymd_and_hms(adjusted_year, m + 1, d.max(1), h, min, s)
+            .single()
+            .map(|dt: DateTime<Local>| dt.timestamp_millis() as f64 + ms as f64)
+            .unwrap_or(f64::NAN)
+    }
+}
+
+fn call_date_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: DateMethodKind,
+    args: Vec<i64>,
+) -> i64 {
+    let ms = read_date_ms(caller, this_val);
+
+    match kind {
+        DateMethodKind::GetTime => value::encode_f64(ms),
+        DateMethodKind::ValueOf => value::encode_f64(ms),
+        DateMethodKind::GetTimezoneOffset => {
+            if ms.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            let utc_dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let local_dt = utc_dt.with_timezone(&Local);
+            let offset_secs = local_dt.offset().local_minus_utc();
+            value::encode_f64(-(offset_secs as f64) / 60.0)
+        }
+        DateMethodKind::GetFullYear => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.year() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetMonth => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64((dt.month0()) as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetDate => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.day() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetDay => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.weekday().num_days_from_sunday() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetHours => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.hour() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetMinutes => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.minute() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetSeconds => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.second() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetMilliseconds => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64((dt.nanosecond() / 1_000_000) as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCFullYear => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.year() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCMonth => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64((dt.month0()) as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCDate => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.day() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCDay => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.weekday().num_days_from_sunday() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCHours => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.hour() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCMinutes => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.minute() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCSeconds => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.second() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCMilliseconds => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64((dt.nanosecond() / 1_000_000) as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::SetTime => {
+            let new_ms = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetDate => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let d = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if d.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_day(d as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetMonth => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let m = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if m.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_month0(m as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetFullYear => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let y = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if y.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_year(y as i32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetHours => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let h = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if h.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_hour(h as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetMinutes => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let m = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if m.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_minute(m as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetSeconds => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let s = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if s.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_second(s as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetMilliseconds => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let ms_arg = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if ms_arg.is_nan() { return value::encode_f64(f64::NAN); }
+            let base_ms = (ms / 1000.0).trunc() * 1000.0;
+            let new_ms = base_ms + ms_arg.trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCDate => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let d = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if d.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_day(d as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCMonth => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let m = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if m.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_month0(m as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCFullYear => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let y = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if y.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_year(y as i32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCHours => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let h = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if h.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_hour(h as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCMinutes => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let m = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if m.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_minute(m as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCSeconds => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let s = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if s.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_second(s as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCMilliseconds => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let ms_arg = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if ms_arg.is_nan() { return value::encode_f64(f64::NAN); }
+            let base_ms = (ms / 1000.0).trunc() * 1000.0;
+            let new_ms = base_ms + ms_arg.trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::ToString => {
+            if ms.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            match ms_to_datetime_local(ms) {
+                Some(dt) => {
+                    let s = dt.format("%a %b %e %Y %H:%M:%S GMT%:z").to_string();
+                    store_runtime_string(&caller, s)
+                }
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::ToDateString => {
+            if ms.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            match ms_to_datetime_local(ms) {
+                Some(dt) => {
+                    let s = dt.format("%Y-%m-%d").to_string();
+                    store_runtime_string(&caller, s)
+                }
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::ToTimeString => {
+            if ms.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            match ms_to_datetime_local(ms) {
+                Some(dt) => {
+                    let s = dt.format("%H:%M:%S GMT%:z").to_string();
+                    store_runtime_string(&caller, s)
+                }
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::ToISOString => {
+            if ms.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => {
+                    let frac_sec = (ms % 1000.0).trunc().abs() as u32;
+                    let s = format!(
+                        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                        dt.year(),
+                        dt.month(),
+                        dt.day(),
+                        dt.hour(),
+                        dt.minute(),
+                        dt.second(),
+                        frac_sec
+                    );
+                    store_runtime_string(&caller, s)
+                }
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::ToUTCString => {
+            if ms.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => {
+                    let s = dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+                    store_runtime_string(&caller, s)
+                }
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::ToJSON => {
+            if ms.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => {
+                    let frac_sec = (ms % 1000.0).trunc().abs() as u32;
+                    let s = format!(
+                        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                        dt.year(),
+                        dt.month(),
+                        dt.day(),
+                        dt.hour(),
+                        dt.minute(),
+                        dt.second(),
+                        frac_sec
+                    );
+                    store_runtime_string(&caller, s)
+                }
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+    }
+}
+
+fn call_map_set_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: MapSetMethodKind,
+    args: Vec<i64>,
+) -> i64 {
+    if !value::is_object(this_val) {
+        return value::encode_undefined();
+    }
+    let obj_ptr = resolve_handle_idx(
+        caller,
+        value::decode_object_handle(this_val) as usize,
+    );
+    let Some(op) = obj_ptr else {
+        return value::encode_undefined();
+    };
+    let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
+    let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+
+    match kind {
+        MapSetMethodKind::MapSet => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            entry.values[i] = val;
+                            return this_val;
+                        }
+                    }
+                    entry.keys.push(key);
+                    entry.values.push(val);
+                }
+            }
+            this_val
+        }
+        MapSetMethodKind::MapGet => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            return entry.values[i];
+                        }
+                    }
+                }
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::SetAdd => {
+            let val = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.values.len() {
+                        if same_value_zero(entry.values[i], val) {
+                            return this_val;
+                        }
+                    }
+                    entry.values.push(val);
+                }
+            }
+            this_val
+        }
+        MapSetMethodKind::Has => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    let entry = &table[handle];
+                    for i in 0..entry.values.len() {
+                        if same_value_zero(entry.values[i], key) {
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            value::encode_bool(false)
+        }
+        MapSetMethodKind::Delete => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            entry.keys.remove(i);
+                            entry.values.remove(i);
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.values.len() {
+                        if same_value_zero(entry.values[i], key) {
+                            entry.values.remove(i);
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            value::encode_bool(false)
+        }
+        MapSetMethodKind::Clear => {
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    table[handle].keys.clear();
+                    table[handle].values.clear();
+                }
+                return value::encode_undefined();
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    table[handle].values.clear();
+                }
+                return value::encode_undefined();
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::Size => {
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    return value::encode_f64(table[handle].keys.len() as f64);
+                }
+                return value::encode_f64(0.0);
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    return value::encode_f64(table[handle].values.len() as f64);
+                }
+                return value::encode_f64(0.0);
+            }
+            value::encode_f64(0.0)
+        }
+        MapSetMethodKind::ForEach
+        | MapSetMethodKind::Keys
+        | MapSetMethodKind::Values
+        | MapSetMethodKind::Entries => {
+            value::encode_undefined()
+        }
+    }
+}
+
 fn call_native_callable_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     callable: i64,
     argument: Option<i64>,
 ) -> Option<i64> {
-    call_native_callable_with_args_from_caller(caller, callable, argument.into_iter().collect())
+    call_native_callable_with_args_from_caller(caller, callable, value::encode_undefined(), argument.into_iter().collect())
 }
 
 fn call_native_callable_with_args_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     callable: i64,
+    this_val: i64,
     args: Vec<i64>,
 ) -> Option<i64> {
     if !value::is_native_callable(callable) {
@@ -10951,6 +12411,12 @@ fn call_native_callable_with_args_from_caller(
                 pump_async_generator_from_caller(caller, generator);
             }
             Some(result_promise)
+        }
+        NativeCallable::MapSetMethod { kind } => {
+            Some(call_map_set_method_from_caller(caller, this_val, kind, args))
+        }
+        NativeCallable::DateMethod { kind } => {
+            Some(call_date_method_from_caller(caller, this_val, kind, args))
         }
     }
 }
@@ -11583,7 +13049,7 @@ fn eval_call(
         for arg in &call.args {
             args.push(eval_expr(caller, &arg.expr, scope_env, eval_locals)?);
         }
-        return call_native_callable_with_args_from_caller(caller, callee, args)
+        return call_native_callable_with_args_from_caller(caller, callee, value::encode_undefined(), args)
             .ok_or_else(|| "TypeError: eval callee is not callable".to_string());
     }
     Err("SyntaxError: unsupported eval call".to_string())
