@@ -908,6 +908,7 @@ pub enum Builtin {
     // ── TypedArray prototype methods ───────────────────────────────────
     TypedArrayProtoLength, TypedArrayProtoByteLength, TypedArrayProtoByteOffset,
     TypedArrayProtoSet, TypedArrayProtoSlice, TypedArrayProtoSubarray,
+    GetBuiltinGlobal,
 }
 
 impl fmt::Display for Builtin {
@@ -1212,6 +1213,7 @@ impl fmt::Display for Builtin {
             Self::TypedArrayProtoSet => "TypedArray.prototype.set",
             Self::TypedArrayProtoSlice => "TypedArray.prototype.slice",
             Self::TypedArrayProtoSubarray => "TypedArray.prototype.subarray",
+            Self::GetBuiltinGlobal => "get_builtin_global",
         })
     }
 }

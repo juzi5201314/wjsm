@@ -11759,6 +11759,27 @@ impl Lowerer {
             {
                 return Ok(self.lower_eval_env_read(&name, block));
             }
+            Err(msg) if msg.starts_with("undeclared identifier") && is_builtin_global(&name) => {
+                let name_const = self.module.add_constant(Constant::String(name));
+                let name_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: name_val,
+                        constant: name_const,
+                    },
+                );
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::GetBuiltinGlobal,
+                        args: vec![name_val],
+                    },
+                );
+                return Ok(dest);
+            }
             Err(msg) => return Err(self.error(ident.span, msg)),
         };
 
@@ -13750,6 +13771,64 @@ impl std::fmt::Display for Diagnostic {
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
+const BUILTIN_GLOBALS: &[&str] = &[
+    "Array",
+    "Object",
+    "Function",
+    "String",
+    "Boolean",
+    "Number",
+    "Symbol",
+    "BigInt",
+    "RegExp",
+    "Error",
+    "TypeError",
+    "RangeError",
+    "SyntaxError",
+    "ReferenceError",
+    "URIError",
+    "EvalError",
+    "Map",
+    "Set",
+    "WeakMap",
+    "WeakSet",
+    "Date",
+    "Promise",
+    "ArrayBuffer",
+    "DataView",
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float32Array",
+    "Float64Array",
+    "Proxy",
+    "Math",
+    "JSON",
+    "Reflect",
+    "globalThis",
+    "parseInt",
+    "parseFloat",
+    "isNaN",
+    "isFinite",
+    "decodeURI",
+    "decodeURIComponent",
+    "encodeURI",
+    "encodeURIComponent",
+    "AggregateError",
+    "SharedArrayBuffer",
+    "Atomics",
+    "FinalizationRegistry",
+    "WeakRef",
+];
+
+fn is_builtin_global(name: &str) -> bool {
+    BUILTIN_GLOBALS.contains(&name)
+}
+
 fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
     match name {
         "setTimeout" => Some(Builtin::SetTimeout),
@@ -13799,6 +13878,10 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
             "info" => Some(Builtin::ConsoleInfo),
             "debug" => Some(Builtin::ConsoleDebug),
             "trace" => Some(Builtin::ConsoleTrace),
+            _ => None,
+        },
+        "Array" => match property {
+            "isArray" => Some(Builtin::ArrayIsArray),
             _ => None,
         },
         "Object" => match property {

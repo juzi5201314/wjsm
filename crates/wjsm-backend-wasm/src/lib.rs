@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 312] = [
+const HOST_IMPORT_NAMES: [&str; 313] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -336,6 +336,7 @@ const HOST_IMPORT_NAMES: [&str; 312] = [
     "typedarray_proto_set",
     "typedarray_proto_slice",
     "typedarray_proto_subarray",
+    "get_builtin_global",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -344,7 +345,7 @@ const HOST_IMPORT_NAMES: [&str; 312] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        312,
+        313,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1390,6 +1391,8 @@ impl Compiler {
         imports.import("env", "typedarray_proto_slice", EntityType::Function(16));
         // Import index 311: typedarray_proto_subarray: (i64, i64, i64) -> i64
         imports.import("env", "typedarray_proto_subarray", EntityType::Function(16));
+        // Import index 312: get_builtin_global: (i64) -> i64
+        imports.import("env", "get_builtin_global", EntityType::Function(3));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1732,6 +1735,7 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::TypedArrayProtoSet, 309);
         builtin_func_indices.insert(Builtin::TypedArrayProtoSlice, 310);
         builtin_func_indices.insert(Builtin::TypedArrayProtoSubarray, 311);
+        builtin_func_indices.insert(Builtin::GetBuiltinGlobal, 312);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -7387,10 +7391,22 @@ impl Compiler {
                 }
                 Ok(())
             }
+            Builtin::GetBuiltinGlobal => {
+                let name_val = args.first().context("GetBuiltinGlobal expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(name_val.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
         }
     }
-
-    // ── Constant encoding ────────────────────────────────────────────────────
 
     fn encode_constant(&mut self, constant: &Constant, _module: &IrModule) -> Result<i64> {
         match constant {
@@ -8192,6 +8208,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::TypedArrayProtoSet => ("TypedArray.prototype.set", 3),
         Builtin::TypedArrayProtoSlice => ("TypedArray.prototype.slice", 3),
         Builtin::TypedArrayProtoSubarray => ("TypedArray.prototype.subarray", 3),
+        Builtin::GetBuiltinGlobal => ("get_builtin_global", 1),
     }
 }
 
