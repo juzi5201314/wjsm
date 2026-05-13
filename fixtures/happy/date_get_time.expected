@@ -1,6 +1,4 @@
 exit_code: 0
 --- stdout ---
-undefined
-NaN
-Infinity
+1673740800000
 --- stderr ---

@@ -1,0 +1,16 @@
+console.log(Number.isNaN(NaN));
+console.log(Number.isNaN(0));
+console.log(Number.isNaN(Infinity));
+console.log(Number.isFinite(42));
+console.log(Number.isFinite(Infinity));
+console.log(Number.isFinite(NaN));
+console.log(Number.isInteger(5));
+console.log(Number.isInteger(5.5));
+console.log(Number.isInteger(NaN));
+console.log(Number.isSafeInteger(9007199254740991));
+console.log(Number.isSafeInteger(9007199254740992));
+console.log(Number.parseInt("42"));
+console.log(Number.parseInt("0xFF"));
+console.log(Number.parseInt("101", 2));
+console.log(Number.parseFloat("3.14"));
+console.log(Number.parseFloat("1e5"));

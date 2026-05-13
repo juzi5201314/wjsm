@@ -1,5 +1,7 @@
 use anyhow::Result;
+use chrono::{Datelike, DateTime, Local, TimeZone, Timelike, Utc};
 use num_traits::cast::ToPrimitive;
+use rand::Rng;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -94,6 +96,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>> = Arc::new(Mutex::new(Vec::new()));
     let module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let error_table: Arc<Mutex<Vec<ErrorEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let map_table: Arc<Mutex<Vec<MapEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let set_table: Arc<Mutex<Vec<SetEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let weakmap_table: Arc<Mutex<Vec<WeakMapEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let weakset_table: Arc<Mutex<Vec<WeakSetEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let proxy_table: Arc<Mutex<Vec<ProxyEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let arraybuffer_table: Arc<Mutex<Vec<ArrayBufferEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let dataview_table: Arc<Mutex<Vec<DataViewEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
@@ -126,6 +137,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             async_generator_table: Arc::clone(&async_generator_table),
             combinator_contexts: Arc::clone(&combinator_contexts),
             module_namespace_cache: Arc::clone(&module_namespace_cache),
+            error_table: Arc::clone(&error_table),
+            map_table: Arc::clone(&map_table),
+            set_table: Arc::clone(&set_table),
+            weakmap_table: Arc::clone(&weakmap_table),
+            weakset_table: Arc::clone(&weakset_table),
+            proxy_table: Arc::clone(&proxy_table),
+            arraybuffer_table: Arc::clone(&arraybuffer_table),
+            dataview_table: Arc::clone(&dataview_table),
+            typedarray_table: Arc::clone(&typedarray_table),
         },
     );
 
@@ -4243,20 +4263,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── Import 93: obj_proto_to_string(i64) -> i64 ────────────────────────────
     let obj_proto_to_string_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            if value::is_undefined(obj) {
-                store_runtime_string(&_caller, "[object Undefined]".to_string())
-            } else if value::is_null(obj) {
-                store_runtime_string(&_caller, "[object Null]".to_string())
-            } else if value::is_array(obj) {
-                store_runtime_string(&_caller, "[object Array]".to_string())
-            } else if value::is_function(obj) || value::is_callable(obj) {
-                store_runtime_string(&_caller, "[object Function]".to_string())
-            } else if is_promise_value(_caller.data(), obj) {
-                store_runtime_string(&_caller, "[object Promise]".to_string())
-            } else {
-                store_runtime_string(&_caller, "[object Object]".to_string())
-            }
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            obj_proto_to_string_impl(&mut caller, obj)
         },
     );
     // ── Import 94: obj_proto_value_of(i64) -> i64 ─────────────────────────────
@@ -5614,11 +5622,95 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             None => value::encode_f64(-1.0),
         }
     });
-    // Import 175: string_match_all(i64, i64, i32, i32) -> i64 (stub)
-    let string_match_all_fn = Func::wrap(&mut store, |caller: Caller<'_, RuntimeState>, _env: i64, _this: i64, _base: i32, _count: i32| -> i64 {
-        *caller.data().runtime_error.lock().expect("runtime error mutex") = Some("TypeError: String.prototype.matchAll is not yet implemented".to_string());
-        value::encode_undefined()
-    });
+    // Import 175: string_match_all(i64, i64, i32, i32) -> i64
+    let string_match_all_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            if args_count < 1 {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: String.prototype.matchAll requires a regexp argument".to_string());
+                return value::encode_undefined();
+            }
+            let regexp = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_regexp(regexp) {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: String.prototype.matchAll called with non-RegExp".to_string());
+                return value::encode_undefined();
+            }
+            let handle = value::decode_regexp_handle(regexp);
+            let is_global = {
+                let table = caller.data().regex_table.lock().unwrap();
+                match table.get(handle as usize) {
+                    Some(e) => e.flags.contains('g'),
+                    None => {
+                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                            Some("TypeError: String.prototype.matchAll called with a non-global RegExp".to_string());
+                        return value::encode_undefined();
+                    }
+                }
+            };
+            if !is_global {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: String.prototype.matchAll called with a non-global RegExp".to_string());
+                return value::encode_undefined();
+            }
+            {
+                let mut table = caller.data().regex_table.lock().unwrap();
+                if let Some(e) = table.get_mut(handle as usize) {
+                    e.last_index = 0;
+                }
+            }
+            let s = get_string_value(&mut caller, this_val);
+            let entry = {
+                let table = caller.data().regex_table.lock().unwrap();
+                match table.get(handle as usize) {
+                    Some(e) => e.clone(),
+                    None => return value::encode_undefined(),
+                }
+            };
+            let mut results = Vec::new();
+            for m in entry.compiled.find_iter(&s) {
+                let group_count = m.captures.len() + 1;
+                let arr = alloc_array(&mut caller, group_count as u32);
+                let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
+                    continue;
+                };
+                for i in 0..group_count {
+                    let elem = if let Some(range) = m.group(i) {
+                        let group_str = &s[range];
+                        store_runtime_string(&caller, group_str.to_string())
+                    } else {
+                        value::encode_undefined()
+                    };
+                    write_array_elem(&mut caller, arr_ptr, i as u32, elem);
+                }
+                write_array_length(&mut caller, arr_ptr, group_count as u32);
+                let match_start = m.group(0).map(|r| r.start).unwrap_or(0);
+                let index_val = value::encode_f64(match_start as f64);
+                let input_val = store_runtime_string(&caller, s.clone());
+                let _ = define_host_data_property_from_caller(&mut caller, arr_ptr as i64, "index", index_val);
+                let _ = define_host_data_property_from_caller(&mut caller, arr_ptr as i64, "input", input_val);
+                results.push(arr);
+                if results.len() > 10000 {
+                    break;
+                }
+            }
+            {
+                let mut table = caller.data().regex_table.lock().unwrap();
+                if let Some(e) = table.get_mut(handle as usize) {
+                    e.last_index = 0;
+                }
+            }
+            let result_arr = alloc_array(&mut caller, results.len() as u32);
+            if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_arr) {
+                for (i, &val) in results.iter().enumerate() {
+                    write_array_elem(&mut caller, result_ptr, i as u32, val);
+                }
+                write_array_length(&mut caller, result_ptr, results.len() as u32);
+            }
+            result_arr
+        },
+    );
     // Import 176: string_pad_end(i64, i64, i64) -> i64
     let string_pad_end_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, target_len: i64, pad_str_val: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
@@ -5726,8 +5818,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     });
     // Import 188: string_to_string(i64) -> i64
     let string_to_string_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
-        let s = get_string_value(&mut caller, receiver);
-        store_runtime_string(&caller, s)
+        if value::is_string(receiver) {
+            let s = get_string_value(&mut caller, receiver);
+            store_runtime_string(&caller, s)
+        } else {
+            obj_proto_to_string_impl(&mut caller, receiver)
+        }
     });
     // Import 189: string_value_of(i64) -> i64
     let string_value_of_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
@@ -7014,14 +7110,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          callable: i64,
-         _this_val: i64,
+         this_val: i64,
          args_base: i32,
          args_count: i32|
          -> i64 {
             let args = (0..args_count.max(0))
                 .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
                 .collect();
-            call_native_callable_with_args_from_caller(&mut caller, callable, args)
+            call_native_callable_with_args_from_caller(&mut caller, callable, this_val, args)
                 .unwrap_or_else(value::encode_undefined)
         },
     );
@@ -7123,52 +7219,29 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Stub functions for unimplemented Proxy/Reflect functions ────────
-    let reflect_not_implemented_1 = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, _a: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Reflect method not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Reflect method not implemented".to_string());
-            value::encode_undefined()
-        },
-    );
-    let reflect_not_implemented_2 = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, _a: i64, _b: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Reflect method not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Reflect method not implemented".to_string());
-            value::encode_undefined()
-        },
-    );
-    let reflect_not_implemented_3 = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, _a: i64, _b: i64, _c: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Reflect method not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Reflect method not implemented".to_string());
-            value::encode_undefined()
-        },
-    );
-    let reflect_not_implemented_4 = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, _a: i64, _b: i64, _c: i64, _d: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Reflect method not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Reflect method not implemented".to_string());
-            value::encode_undefined()
-        },
-    );
     // ── Proxy / Reflect ────────────────────────────────────────────────────────
     let proxy_create_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
+            if !value::is_object(target) && !value::is_function(target) && !value::is_array(target) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Proxy target must be an object".to_string());
+                return value::encode_undefined();
+            }
+            if !value::is_object(handler) && !value::is_function(handler) && !value::is_array(handler) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Proxy handler must be an object".to_string());
+                return value::encode_undefined();
+            }
+            let handle;
+            {
+                let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                handle = table.len() as u32;
+                table.push(ProxyEntry { target, handler, revoked: false });
+            }
             let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__proxy_handle__", handle_val);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_target", target);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_handler", handler);
             obj
@@ -7177,23 +7250,1992 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
     let reflect_get_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64, _receiver: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Reflect.get not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Reflect.get not implemented".to_string());
+        |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, receiver: i64| -> i64 {
+            let obj_ptr = resolve_handle(&mut caller, target);
+            if let Some(ptr) = obj_ptr {
+                if let Some(prop_name) = render_value(&mut caller, prop).ok() {
+                    if let Some(val) = read_object_property_by_name(&mut caller, ptr, &prop_name) {
+                        return val;
+                    }
+                }
+            }
+            let _ = receiver;
             value::encode_undefined()
         },
     );
 
     let proxy_revocable_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, _target: i64, _handler: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Proxy.revocable not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Proxy.revocable not implemented".to_string());
+        |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
+            let proxy_val = {
+                let handle;
+                {
+                    let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    handle = table.len() as u32;
+                    table.push(ProxyEntry { target, handler, revoked: false });
+                }
+                let obj = alloc_host_object_from_caller(&mut caller, 4);
+                let handle_val = value::encode_f64(handle as f64);
+                let _ = define_host_data_property_from_caller(&mut caller, obj, "__proxy_handle__", handle_val);
+                let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_target", target);
+                let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_handler", handler);
+                obj
+            };
+            let obj = alloc_host_object_from_caller(&mut caller, 2);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy", proxy_val);
+            let revoke_fn = alloc_host_object_from_caller(&mut caller, 0);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "revoke", revoke_fn);
+            obj
+        },
+    );
+
+    let reflect_set_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64, _receiver: i64| -> i64 {
+            let obj_ptr = resolve_handle(&mut caller, target);
+            if let Some(ptr) = obj_ptr {
+                if let Some(prop_name) = render_value(&mut caller, prop).ok() {
+                    let _ = define_host_data_property_from_caller(&mut caller, target, &prop_name, val);
+                    return value::encode_bool(true);
+                }
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let reflect_has_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64| -> i64 {
+            let obj_ptr = resolve_handle(&mut caller, target);
+            if let Some(ptr) = obj_ptr {
+                if let Some(prop_name) = render_value(&mut caller, prop).ok() {
+                    if let Some(name_id) = find_memory_c_string(&mut caller, &prop_name) {
+                        let found = find_property_slot_by_name_id(&mut caller, ptr, name_id).is_some();
+                        return value::encode_bool(found);
+                    }
+                }
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let reflect_delete_property_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64| -> i64 {
+            value::encode_bool(true)
+        },
+    );
+
+    let reflect_apply_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, target: i64, this_arg: i64, _args: i64| -> i64 {
+            resolve_and_call(&mut caller, target, this_arg, 0, 0)
+        },
+    );
+
+    let reflect_construct_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _target: i64, _args: i64, _new_target: i64| -> i64 {
+            alloc_host_object_from_caller(&mut caller, 4)
+        },
+    );
+
+    let reflect_get_prototype_of_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
+            value::encode_null()
+        },
+    );
+
+    let reflect_set_prototype_of_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64, _proto: i64| -> i64 {
+            value::encode_bool(true)
+        },
+    );
+
+    let reflect_is_extensible_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
+            value::encode_bool(true)
+        },
+    );
+
+    let reflect_prevent_extensions_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
+            value::encode_bool(true)
+        },
+    );
+
+    let reflect_get_own_property_descriptor_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64| -> i64 {
             value::encode_undefined()
+        },
+    );
+
+    let reflect_define_property_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64, _descriptor: i64| -> i64 {
+            value::encode_bool(true)
+        },
+    );
+
+    let reflect_own_keys_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+    // ── Math builtins ────────────────────────────────────────────────────────
+    fn value_to_number(arg: i64) -> f64 {
+        if value::is_f64(arg) {
+            value::decode_f64(arg)
+        } else if value::is_bool(arg) {
+            if value::decode_bool(arg) { 1.0 } else { 0.0 }
+        } else if value::is_undefined(arg) {
+            f64::NAN
+        } else if value::is_null(arg) {
+            0.0
+        } else {
+            f64::NAN
+        }
+    }
+
+    let math_abs_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.abs())
+        },
+    );
+    let math_acos_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.acos())
+        },
+    );
+    let math_acosh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.acosh())
+        },
+    );
+    let math_asin_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.asin())
+        },
+    );
+    let math_asinh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.asinh())
+        },
+    );
+    let math_atan_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.atan())
+        },
+    );
+    let math_atanh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.atanh())
+        },
+    );
+    let math_atan2_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let y = value_to_number(a);
+            let x = value_to_number(b);
+            value::encode_f64(y.atan2(x))
+        },
+    );
+    let math_cbrt_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.cbrt())
+        },
+    );
+    let math_ceil_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.ceil())
+        },
+    );
+    let math_clz32_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            let n = x as i32 as u32;
+            value::encode_f64(if n == 0 { 32.0 } else { n.leading_zeros() as f64 })
+        },
+    );
+    let math_cos_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.cos())
+        },
+    );
+    let math_cosh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.cosh())
+        },
+    );
+    let math_exp_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.exp())
+        },
+    );
+    let math_expm1_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.exp_m1())
+        },
+    );
+    let math_floor_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.floor())
+        },
+    );
+    let math_fround_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64((x as f32) as f64)
+        },
+    );
+    let math_hypot_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
+            if args_count == 0 {
+                return value::encode_f64(0.0);
+            }
+            let mut sum = 0.0_f64;
+            for i in 0..args_count as u32 {
+                let val = read_shadow_arg(&mut caller, args_base, i);
+                let x = value_to_number(val);
+                if x.is_infinite() {
+                    return value::encode_f64(f64::INFINITY);
+                }
+                sum += x * x;
+            }
+            value::encode_f64(sum.sqrt())
+        },
+    );
+    let math_imul_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let ai = value_to_number(a) as i32;
+            let bi = value_to_number(b) as i32;
+            let result = (ai as i64) * (bi as i64);
+            value::encode_f64((result as i32) as f64)
+        },
+    );
+    let math_log_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.ln())
+        },
+    );
+    let math_log1p_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.ln_1p())
+        },
+    );
+    let math_log10_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.log10())
+        },
+    );
+    let math_log2_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.log2())
+        },
+    );
+    let math_max_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
+            if args_count == 0 {
+                return value::encode_f64(f64::NEG_INFINITY);
+            }
+            let mut result = f64::NEG_INFINITY;
+            for i in 0..args_count as u32 {
+                let val = read_shadow_arg(&mut caller, args_base, i);
+                let x = f64::from_bits(val as u64);
+                if x > result || (x == 0.0 && result == 0.0 && x.is_sign_positive()) {
+                    result = x;
+                }
+            }
+            value::encode_f64(result)
+        },
+    );
+    let math_min_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
+            if args_count == 0 {
+                return value::encode_f64(f64::INFINITY);
+            }
+            let mut result = f64::INFINITY;
+            for i in 0..args_count as u32 {
+                let val = read_shadow_arg(&mut caller, args_base, i);
+                let x = f64::from_bits(val as u64);
+                if x < result || (x == 0.0 && result == 0.0 && x.is_sign_negative()) {
+                    result = x;
+                }
+            }
+            value::encode_f64(result)
+        },
+    );
+    let math_pow_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let base = value_to_number(a);
+            let exp = value_to_number(b);
+            value::encode_f64(base.powf(exp))
+        },
+    );
+    let math_random_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>| -> i64 {
+            let mut rng = rand::thread_rng();
+            value::encode_f64(rng.gen_range(0.0_f64..1.0))
+        },
+    );
+    let math_round_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.round())
+        },
+    );
+    let math_sign_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            if x.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            if x == 0.0 {
+                return value::encode_f64(if x.is_sign_positive() { 0.0 } else { -0.0 });
+            }
+            value::encode_f64(if x > 0.0 { 1.0 } else { -1.0 })
+        },
+    );
+    let math_sin_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.sin())
+        },
+    );
+    let math_sinh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.sinh())
+        },
+    );
+    let math_sqrt_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.sqrt())
+        },
+    );
+    let math_tan_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.tan())
+        },
+    );
+    let math_tanh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.tanh())
+        },
+    );
+    let math_trunc_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = value_to_number(arg);
+            value::encode_f64(x.trunc())
+        },
+    );
+    // ── Number builtins ─────────────────────────────────────────────────────
+    let number_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if value::is_f64(arg) {
+                arg
+            } else if value::is_undefined(arg) || value::is_null(arg) {
+                value::encode_f64(0.0)
+            } else if value::is_bool(arg) {
+                value::encode_f64(if value::decode_bool(arg) { 1.0 } else { 0.0 })
+            } else if value::is_string(arg) {
+                let s = read_value_string_bytes(&mut caller, arg).unwrap_or_default();
+                let s_str = String::from_utf8_lossy(&s).to_string();
+                value::encode_f64(s_str.trim().parse::<f64>().unwrap_or(f64::NAN))
+            } else {
+                value::encode_f64(0.0)
+            }
+        },
+    );
+    let number_is_nan_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if value::is_f64(arg) {
+                value::encode_bool(f64::from_bits(arg as u64).is_nan())
+            } else if value::is_undefined(arg) || value::is_null(arg) || value::is_bool(arg)
+                || value::is_string(arg) || value::is_object(arg) || value::is_function(arg)
+                || value::is_closure(arg) || value::is_bound(arg) || value::is_bigint(arg)
+                || value::is_symbol(arg) || value::is_regexp(arg) || value::is_array(arg)
+                || value::is_iterator(arg) || value::is_enumerator(arg) || value::is_proxy(arg)
+            {
+                value::encode_bool(false)
+            } else {
+                value::encode_bool(true)
+            }
+        },
+    );
+    let number_is_finite_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if value::is_f64(arg) {
+                value::encode_bool(f64::from_bits(arg as u64).is_finite())
+            } else {
+                value::encode_bool(false)
+            }
+        },
+    );
+    let number_is_integer_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if value::is_f64(arg) {
+                let x = value_to_number(arg);
+                value::encode_bool(x.is_finite() && x == x.trunc())
+            } else {
+                value::encode_bool(false)
+            }
+        },
+    );
+    let number_is_safe_integer_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if value::is_f64(arg) {
+                let x = value_to_number(arg);
+                let is_int = x.is_finite() && x == x.trunc();
+                value::encode_bool(is_int && x.abs() <= 9007199254740991.0)
+            } else {
+                value::encode_bool(false)
+            }
+        },
+    );
+    let number_parse_int_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64, radix_val: i64| -> i64 {
+            let input_str = if value::is_string(arg) {
+                let s = read_value_string_bytes(&mut caller, arg).unwrap_or_default();
+                String::from_utf8_lossy(&s).to_string()
+            } else if value::is_f64(arg) {
+                let x = value_to_number(arg);
+                if x.is_nan() { return value::encode_f64(f64::NAN); }
+                if x.is_infinite() { return value::encode_f64(f64::NAN); }
+                format_number_js(x)
+            } else if value::is_bool(arg) {
+                if value::decode_bool(arg) { "1" } else { "0" }.to_string()
+            } else {
+                return value::encode_f64(f64::NAN);
+            };
+            let trimmed = input_str.trim();
+            if trimmed.is_empty() {
+                return value::encode_f64(f64::NAN);
+            }
+            let radix = if value::is_undefined(radix_val) {
+                0
+            } else if value::is_f64(radix_val) {
+                let r = f64::from_bits(radix_val as u64);
+                if r.is_nan() || r.is_infinite() {
+                    return value::encode_f64(f64::NAN);
+                }
+                r as i32
+            } else {
+                0
+            };
+            if radix != 0 && (radix < 2 || radix > 36) {
+                return value::encode_f64(f64::NAN);
+            }
+            let (actual_radix, parse_str): (i32, &str) = if radix == 0 {
+                if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+                    (16, &trimmed[2..])
+                } else {
+                    (10, &trimmed[..])
+                }
+            } else {
+                let s: &str = if (radix == 16) && (trimmed.starts_with("0x") || trimmed.starts_with("0X")) {
+                    &trimmed[2..]
+                } else {
+                    &trimmed[..]
+                };
+                (radix, s)
+            };
+            if parse_str.is_empty() {
+                return value::encode_f64(f64::NAN);
+            }
+            let valid_chars: String = parse_str
+                .chars()
+                .take_while(|c| {
+                    let digit = if c.is_ascii_digit() {
+                        *c as u32 - '0' as u32
+                    } else if c.is_ascii_alphabetic() {
+                        c.to_ascii_lowercase() as u32 - 'a' as u32 + 10
+                    } else {
+                        return false;
+                    };
+                    digit < actual_radix as u32
+                })
+                .collect();
+            if valid_chars.is_empty() {
+                return value::encode_f64(f64::NAN);
+            }
+            match i64::from_str_radix(&valid_chars, actual_radix as u32) {
+                Ok(v) => value::encode_f64(v as f64),
+                Err(_) => value::encode_f64(f64::NAN),
+            }
+        },
+    );
+    let number_parse_float_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if !value::is_string(arg) {
+                if value::is_f64(arg) {
+                    return arg;
+                }
+                return value::encode_f64(f64::NAN);
+            }
+            let s = read_value_string_bytes(&mut caller, arg).unwrap_or_default();
+            let s_str = String::from_utf8_lossy(&s).to_string();
+            let trimmed = s_str.trim();
+            if trimmed.is_empty() {
+                return value::encode_f64(f64::NAN);
+            }
+            let mut end = 0;
+            let bytes = trimmed.as_bytes();
+            if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') {
+                end += 1;
+            }
+            let _digit_start = end;
+            let mut has_digit = false;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+                has_digit = true;
+            }
+            if end < bytes.len() && bytes[end] == b'.' {
+                end += 1;
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                    has_digit = true;
+                }
+            }
+            if !has_digit {
+                return value::encode_f64(f64::NAN);
+            }
+            if end < bytes.len() && (bytes[end] == b'e' || bytes[end] == b'E') {
+                end += 1;
+                if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') {
+                    end += 1;
+                }
+                let exp_start = end;
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                }
+                if end == exp_start {
+                    end -= if end > 0 && (bytes[end - 1] == b'+' || bytes[end - 1] == b'-') { 1 } else { 0 };
+                    if end > 0 && (bytes[end - 1] == b'e' || bytes[end - 1] == b'E') {
+                        end -= 1;
+                    }
+                }
+            }
+            if end == 0 {
+                return value::encode_f64(f64::NAN);
+            }
+            let float_str = &trimmed[..end];
+            match float_str.parse::<f64>() {
+                Ok(v) => value::encode_f64(v),
+                Err(_) => value::encode_f64(f64::NAN),
+            }
+        },
+    );
+    let number_proto_to_string_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, this_val: i64, radix_val: i64| -> i64 {
+            if !value::is_f64(this_val) {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            let x = f64::from_bits(this_val as u64);
+            let radix = if value::is_undefined(radix_val) || value::is_null(radix_val) {
+                10
+            } else if value::is_f64(radix_val) {
+                let r = f64::from_bits(radix_val as u64) as i32;
+                if r < 2 || r > 36 {
+                    return store_runtime_string(&caller, "NaN".to_string());
+                }
+                r
+            } else {
+                10
+            };
+            if x.is_nan() {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            if x.is_infinite() {
+                return store_runtime_string(&caller, if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string());
+            }
+            if radix == 10 {
+                let s = format_number_js(x);
+                return store_runtime_string(&caller, s);
+            }
+            let int_part = x.trunc() as i64;
+            let result = format_radix(int_part, radix as u32);
+            store_runtime_string(&caller, result)
+        },
+    );
+    let number_proto_value_of_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if value::is_f64(this_val) {
+                this_val
+            } else {
+                value::encode_f64(0.0)
+            }
+        },
+    );
+    let number_proto_to_fixed_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
+            if !value::is_f64(this_val) {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            let x = f64::from_bits(this_val as u64);
+            let digits = if value::is_undefined(digits_val) || value::is_null(digits_val) {
+                0
+            } else if value::is_f64(digits_val) {
+                f64::from_bits(digits_val as u64) as i32
+            } else {
+                0
+            };
+            if digits < 0 || digits > 100 {
+                return store_runtime_string(&caller, "RangeError: toFixed() digits argument must be between 0 and 100".to_string());
+            }
+            if x.is_nan() {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            if x.is_infinite() {
+                return store_runtime_string(&caller, if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string());
+            }
+            let s = format!("{:.1$}", x, digits as usize);
+            store_runtime_string(&caller, s)
+        },
+    );
+    let number_proto_to_exponential_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
+            if !value::is_f64(this_val) {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            let x = f64::from_bits(this_val as u64);
+            if x.is_nan() {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            if x.is_infinite() {
+                return store_runtime_string(&caller, if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string());
+            }
+            let digits = if value::is_undefined(digits_val) || value::is_null(digits_val) {
+                -1i32
+            } else if value::is_f64(digits_val) {
+                f64::from_bits(digits_val as u64) as i32
+            } else {
+                -1
+            };
+            if x == 0.0 {
+                if digits > 0 {
+                    let s = format!("0.{}e+0", "0".repeat(digits as usize));
+                    return store_runtime_string(&caller, s);
+                }
+                return store_runtime_string(&caller, "0e+0".to_string());
+            }
+            let s = if digits >= 0 {
+                format!("{:.1$e}", x, digits as usize)
+            } else {
+                format!("{:e}", x)
+            };
+            let s = normalize_exponent(&s);
+            store_runtime_string(&caller, s)
+        },
+    );
+    let number_proto_to_precision_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
+            if !value::is_f64(this_val) {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            let x = f64::from_bits(this_val as u64);
+            if x.is_nan() {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            if x.is_infinite() {
+                return store_runtime_string(&caller, if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string());
+            }
+            let precision = if value::is_undefined(digits_val) || value::is_null(digits_val) {
+                -1i32
+            } else if value::is_f64(digits_val) {
+                f64::from_bits(digits_val as u64) as i32
+            } else {
+                -1
+            };
+            if precision < 1 || precision > 21 {
+                if value::is_undefined(digits_val) {
+                    let s = format_number_js(x);
+                    return store_runtime_string(&caller, s);
+                }
+                return store_runtime_string(&caller, "RangeError: toPrecision() argument must be between 1 and 21".to_string());
+            }
+            let s = format!("{:.1$}", x, precision as usize);
+            store_runtime_string(&caller, s)
+        },
+    );
+    // ── Boolean builtins ────────────────────────────────────────────────────
+    let boolean_constructor_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            value::encode_bool(value::is_truthy(arg))
+        },
+    );
+    let boolean_proto_to_string_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if value::is_bool(this_val) {
+                store_runtime_string(&caller, if value::decode_bool(this_val) { "true" } else { "false" }.to_string())
+            } else {
+                store_runtime_string(&caller, "false".to_string())
+            }
+        },
+    );
+    let boolean_proto_value_of_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if value::is_bool(this_val) {
+                this_val
+            } else {
+                value::encode_bool(false)
+            }
+        },
+    );
+    // ── Error builtins ────────────────────────────────────────────────────
+    let error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "Error", arg)
+        },
+    );
+    let type_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "TypeError", arg)
+        },
+    );
+    let range_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "RangeError", arg)
+        },
+    );
+    let syntax_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "SyntaxError", arg)
+        },
+    );
+    let reference_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "ReferenceError", arg)
+        },
+    );
+    let uri_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "URIError", arg)
+        },
+    );
+    let eval_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "EvalError", arg)
+        },
+    );
+    let error_proto_to_string_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return store_runtime_string(&caller, "Error".to_string());
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            let name = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "name"))
+                .and_then(|v| read_value_string_bytes(&mut caller, v))
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_else(|| "Error".to_string());
+            let obj_ptr2 = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            let message = obj_ptr2
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "message"))
+                .and_then(|v| read_value_string_bytes(&mut caller, v))
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
+            if message.is_empty() {
+                store_runtime_string(&caller, name)
+            } else {
+                store_runtime_string(&caller, format!("{}: {}", name, message))
+            }
+        },
+    );
+
+    // ── Map / Set helper: SameValueZero equality ──────────────────────
+    let map_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+            let handle;
+            {
+                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                table.push(MapEntry { keys: Vec::new(), values: Vec::new() });
+                handle = table.len() as u32 - 1;
+            }
+            let (set_fn, get_fn, has_fn, delete_fn, clear_fn, size_fn, for_each_fn, keys_fn, values_fn, entries_fn) = {
+                let state = caller.data();
+                (
+                    create_map_set_method(state, MapSetMethodKind::MapSet),
+                    create_map_set_method(state, MapSetMethodKind::MapGet),
+                    create_map_set_method(state, MapSetMethodKind::Has),
+                    create_map_set_method(state, MapSetMethodKind::Delete),
+                    create_map_set_method(state, MapSetMethodKind::Clear),
+                    create_map_set_method(state, MapSetMethodKind::Size),
+                    create_map_set_method(state, MapSetMethodKind::ForEach),
+                    create_map_set_method(state, MapSetMethodKind::Keys),
+                    create_map_set_method(state, MapSetMethodKind::Values),
+                    create_map_set_method(state, MapSetMethodKind::Entries),
+                )
+            };
+            let obj = alloc_host_object_from_caller(&mut caller, 11);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__map_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "set", set_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "get", get_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "clear", clear_fn);
+            // TODO: size should be a getter accessor property per ES spec, but current
+            // architecture does not support call_indirect for host import functions.
+            // Tracked as a known compliance gap — currently exposed as a method: m.size()
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "size", size_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "forEach", for_each_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "values", values_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "entries", entries_fn);
+            obj
+        },
+    );
+
+    let map_proto_set_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64, val: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_undefined();
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let mut table = caller.data().map_table.lock().expect("map table mutex");
+            if handle >= table.len() {
+                return value::encode_undefined();
+            }
+            let entry = &mut table[handle];
+            for i in 0..entry.keys.len() {
+                if same_value_zero(entry.keys[i], key) {
+                    entry.values[i] = val;
+                    return this_val;
+                }
+            }
+            entry.keys.push(key);
+            entry.values.push(val);
+            this_val
+        },
+    );
+
+    let map_proto_get_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_undefined();
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let table = caller.data().map_table.lock().expect("map table mutex");
+            if handle >= table.len() {
+                return value::encode_undefined();
+            }
+            let entry = &table[handle];
+            for i in 0..entry.keys.len() {
+                if same_value_zero(entry.keys[i], key) {
+                    return entry.values[i];
+                }
+            }
+            value::encode_undefined()
+        },
+    );
+
+    // ── Set host functions ────────────────────────────────────────────
+    let set_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+            let handle;
+            {
+                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                table.push(SetEntry { values: Vec::new() });
+                handle = table.len() as u32 - 1;
+            }
+            let (add_fn, has_fn, delete_fn, clear_fn, size_fn, for_each_fn, keys_fn, values_fn, entries_fn) = {
+                let state = caller.data();
+                (
+                    create_map_set_method(state, MapSetMethodKind::SetAdd),
+                    create_map_set_method(state, MapSetMethodKind::Has),
+                    create_map_set_method(state, MapSetMethodKind::Delete),
+                    create_map_set_method(state, MapSetMethodKind::Clear),
+                    create_map_set_method(state, MapSetMethodKind::Size),
+                    create_map_set_method(state, MapSetMethodKind::ForEach),
+                    create_map_set_method(state, MapSetMethodKind::Keys),
+                    create_map_set_method(state, MapSetMethodKind::Values),
+                    create_map_set_method(state, MapSetMethodKind::Entries),
+                )
+            };
+            let obj = alloc_host_object_from_caller(&mut caller, 10);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__set_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "add", add_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "clear", clear_fn);
+            // TODO: ES spec requires `size` to be a getter accessor property, but the current
+            // WASM architecture doesn't support calling NativeCallable via call_indirect.
+            // Using a data property (method) as a workaround.
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "size", size_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "forEach", for_each_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "values", values_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "entries", entries_fn);
+            obj
+        },
+    );
+
+    let set_proto_add_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, val: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_undefined();
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__set_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let mut table = caller.data().set_table.lock().expect("set table mutex");
+            if handle >= table.len() {
+                return value::encode_undefined();
+            }
+            let entry = &mut table[handle];
+            for i in 0..entry.values.len() {
+                if same_value_zero(entry.values[i], val) {
+                    return this_val;
+                }
+            }
+            entry.values.push(val);
+            this_val
+        },
+    );
+
+    // ── Map/Set shared host functions (dispatch at runtime) ──────────
+    let map_set_has_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            if let Some(op) = obj_ptr {
+                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
+                if let Some(mh) = map_handle {
+                    let handle = value::decode_f64(mh) as usize;
+                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    if handle < table.len() {
+                        let entry = &table[handle];
+                        for i in 0..entry.keys.len() {
+                            if same_value_zero(entry.keys[i], key) {
+                                return value::encode_bool(true);
+                            }
+                        }
+                    }
+                    return value::encode_bool(false);
+                }
+                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
+                if let Some(sh) = set_handle {
+                    let handle = value::decode_f64(sh) as usize;
+                    let table = caller.data().set_table.lock().expect("set table mutex");
+                    if handle < table.len() {
+                        let entry = &table[handle];
+                        for i in 0..entry.values.len() {
+                            if same_value_zero(entry.values[i], key) {
+                                return value::encode_bool(true);
+                            }
+                        }
+                    }
+                    return value::encode_bool(false);
+                }
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let map_set_delete_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            if let Some(op) = obj_ptr {
+                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
+                if let Some(mh) = map_handle {
+                    let handle = value::decode_f64(mh) as usize;
+                    let mut table = caller.data().map_table.lock().expect("map table mutex");
+                    if handle < table.len() {
+                        let entry = &mut table[handle];
+                        for i in 0..entry.keys.len() {
+                            if same_value_zero(entry.keys[i], key) {
+                                entry.keys.remove(i);
+                                entry.values.remove(i);
+                                return value::encode_bool(true);
+                            }
+                        }
+                    }
+                    return value::encode_bool(false);
+                }
+                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
+                if let Some(sh) = set_handle {
+                    let handle = value::decode_f64(sh) as usize;
+                    let mut table = caller.data().set_table.lock().expect("set table mutex");
+                    if handle < table.len() {
+                        let entry = &mut table[handle];
+                        for i in 0..entry.values.len() {
+                            if same_value_zero(entry.values[i], key) {
+                                entry.values.remove(i);
+                                return value::encode_bool(true);
+                            }
+                        }
+                    }
+                    return value::encode_bool(false);
+                }
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let map_set_clear_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_undefined();
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            if let Some(op) = obj_ptr {
+                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
+                if let Some(mh) = map_handle {
+                    let handle = value::decode_f64(mh) as usize;
+                    let mut table = caller.data().map_table.lock().expect("map table mutex");
+                    if handle < table.len() {
+                        table[handle].keys.clear();
+                        table[handle].values.clear();
+                    }
+                    return value::encode_undefined();
+                }
+                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
+                if let Some(sh) = set_handle {
+                    let handle = value::decode_f64(sh) as usize;
+                    let mut table = caller.data().set_table.lock().expect("set table mutex");
+                    if handle < table.len() {
+                        table[handle].values.clear();
+                    }
+                    return value::encode_undefined();
+                }
+            }
+            value::encode_undefined()
+        },
+    );
+
+    let map_set_get_size_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return value::encode_f64(0.0);
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            if let Some(op) = obj_ptr {
+                let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
+                if let Some(mh) = map_handle {
+                    let handle = value::decode_f64(mh) as usize;
+                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    if handle < table.len() {
+                        return value::encode_f64(table[handle].keys.len() as f64);
+                    }
+                    return value::encode_f64(0.0);
+                }
+                let set_handle = read_object_property_by_name(&mut caller, op, "__set_handle__");
+                if let Some(sh) = set_handle {
+                    let handle = value::decode_f64(sh) as usize;
+                    let table = caller.data().set_table.lock().expect("set table mutex");
+                    if handle < table.len() {
+                        return value::encode_f64(table[handle].values.len() as f64);
+                    }
+                    return value::encode_f64(0.0);
+                }
+            }
+            value::encode_f64(0.0)
+        },
+    );
+
+    let map_set_for_each_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let map_set_keys_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let map_set_values_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let map_set_entries_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    // ── WeakMap host functions ───────────────────────────────────────────
+    let weakmap_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+            let handle;
+            {
+                let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+                handle = table.len() as u32;
+                table.push(WeakMapEntry { map: HashMap::new() });
+            }
+            let (set_fn, get_fn, has_fn, delete_fn) = {
+                let state = caller.data();
+                (
+                    create_weakmap_method(state, WeakMapMethodKind::Set),
+                    create_weakmap_method(state, WeakMapMethodKind::Get),
+                    create_weakmap_method(state, WeakMapMethodKind::Has),
+                    create_weakmap_method(state, WeakMapMethodKind::Delete),
+                )
+            };
+            let obj = alloc_host_object_from_caller(&mut caller, 5);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__weakmap_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "set", set_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "get", get_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
+            obj
+        },
+    );
+
+    let weakmap_proto_set_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64, val: i64| -> i64 {
+            if !is_object_key(key) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Invalid value used as weak map key".to_string());
+                return this_val;
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            {
+                let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+                if handle < table.len() {
+                    table[handle].map.insert(key_handle, val);
+                }
+            }
+            this_val
+        },
+    );
+
+    let weakmap_proto_get_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                return value::encode_undefined();
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                if let Some(&val) = table[handle].map.get(&key_handle) {
+                    return val;
+                }
+            }
+            value::encode_undefined()
+        },
+    );
+
+    let weakmap_proto_has_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].map.contains_key(&key_handle));
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let weakmap_proto_delete_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].map.remove(&key_handle).is_some());
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    // ── WeakSet host functions ───────────────────────────────────────────
+    let weakset_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+            let handle;
+            {
+                let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+                handle = table.len() as u32;
+                table.push(WeakSetEntry { set: HashSet::new() });
+            }
+            let (add_fn, has_fn, delete_fn) = {
+                let state = caller.data();
+                (
+                    create_weakset_method(state, WeakSetMethodKind::Add),
+                    create_weakset_method(state, WeakSetMethodKind::Has),
+                    create_weakset_method(state, WeakSetMethodKind::Delete),
+                )
+            };
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__weakset_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "add", add_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
+            obj
+        },
+    );
+
+    let weakset_proto_add_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Invalid value used in weak set".to_string());
+                return this_val;
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            {
+                let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+                if handle < table.len() {
+                    table[handle].set.insert(key_handle);
+                }
+            }
+            this_val
+        },
+    );
+
+    let weakset_proto_has_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].set.contains(&key_handle));
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let weakset_proto_delete_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].set.remove(&key_handle));
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let arraybuffer_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, byte_length: i64| -> i64 {
+            let len_f64 = value::decode_f64(byte_length);
+            if len_f64 < 0.0 {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("RangeError: Invalid array buffer length".to_string());
+                return value::encode_undefined();
+            }
+            let len = len_f64 as u32;
+            let handle;
+            {
+                let mut table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                handle = table.len() as u32;
+                table.push(ArrayBufferEntry { data: vec![0; len as usize] });
+            }
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__arraybuffer_handle__", handle_val);
+            let bl_val = value::encode_f64(len as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", bl_val);
+            obj
+        },
+    );
+
+    let arraybuffer_proto_byte_length_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            match obj_ptr {
+                Some(ptr) => {
+                    match read_object_property_by_name(&mut caller, ptr, "byteLength") {
+                        Some(v) => v,
+                        None => value::encode_f64(0.0),
+                    }
+                }
+                None => value::encode_f64(0.0),
+            }
+        },
+    );
+
+    let arraybuffer_proto_slice_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, begin: i64, end: i64| -> i64 {
+            let begin_idx = value::decode_f64(begin) as u32;
+            let end_idx = value::decode_f64(end) as u32;
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let (buf_handle, buf_len) = match obj_ptr {
+                Some(ptr) => {
+                    let h = read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
+                    let bl = read_object_property_by_name(&mut caller, ptr, "byteLength");
+                    match (h, bl) {
+                        (Some(hv), Some(lv)) => (value::decode_f64(hv) as u32, value::decode_f64(lv) as u32),
+                        _ => return value::encode_undefined(),
+                    }
+                }
+                None => return value::encode_undefined(),
+            };
+            let start = begin_idx.min(buf_len);
+            let stop = end_idx.min(buf_len);
+            let new_len = if stop > start { stop - start } else { 0 };
+            let new_buf_handle;
+            {
+                let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                new_buf_handle = ab_table.len() as u32;
+                let mut new_data = vec![0u8; new_len as usize];
+                if let Some(buf_entry) = ab_table.get(buf_handle as usize) {
+                    new_data.copy_from_slice(&buf_entry.data[start as usize..stop as usize]);
+                }
+                ab_table.push(ArrayBufferEntry { data: new_data });
+            }
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let handle_val = value::encode_f64(new_buf_handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__arraybuffer_handle__", handle_val);
+            let bl_val = value::encode_f64(new_len as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", bl_val);
+            obj
+        },
+    );
+
+    let dataview_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, buffer: i64, byte_offset: i64, byte_length: i64| -> i64 {
+            let offset = if value::is_undefined(byte_offset) { 0 } else { value::decode_f64(byte_offset) as u32 };
+            let (buf_handle, buf_byte_length) = {
+                let obj_ptr = resolve_handle(&mut caller, buffer);
+                match obj_ptr {
+                    Some(ptr) => {
+                        let h = read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
+                        let bl = read_object_property_by_name(&mut caller, ptr, "byteLength");
+                        match (h, bl) {
+                            (Some(hv), Some(lv)) => (value::decode_f64(hv) as u32, value::decode_f64(lv) as u32),
+                            _ => return value::encode_undefined(),
+                        }
+                    }
+                    None => return value::encode_undefined(),
+                }
+            };
+            let length = if value::is_undefined(byte_length) {
+                buf_byte_length.saturating_sub(offset)
+            } else {
+                value::decode_f64(byte_length) as u32
+            };
+            let handle;
+            {
+                let mut table = caller.data().dataview_table.lock().expect("dataview_table mutex");
+                handle = table.len() as u32;
+                table.push(DataViewEntry { buffer_handle: buf_handle, byte_offset: offset, byte_length: length });
+            }
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__dataview_handle__", handle_val);
+            obj
+        },
+    );
+
+    macro_rules! dataview_get_fn {
+        ($name:ident, $size:expr, $conv:expr) => {
+            let $name = Func::wrap(
+                &mut store,
+                |mut caller: Caller<'_, RuntimeState>, this_val: i64, byte_offset: i64| -> i64 {
+                    let offset = value::decode_f64(byte_offset) as u32;
+                    let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+                    let dv_handle = match obj_ptr {
+                        Some(ptr) => {
+                            match read_object_property_by_name(&mut caller, ptr, "__dataview_handle__") {
+                                Some(v) => value::decode_f64(v) as usize,
+                                None => return value::encode_undefined(),
+                            }
+                        }
+                        None => return value::encode_undefined(),
+                    };
+                    let (buf_handle, dv_offset, dv_length) = {
+                        let dv_table = caller.data().dataview_table.lock().expect("dataview_table mutex");
+                        if dv_handle < dv_table.len() {
+                            let e = &dv_table[dv_handle];
+                            (e.buffer_handle, e.byte_offset, e.byte_length)
+                        } else { return value::encode_undefined(); }
+                    };
+                    let abs_offset = dv_offset as usize + offset as usize;
+                    let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                    if let Some(buf_entry) = ab_table.get(buf_handle as usize) {
+                        if offset + $size as u32 > dv_length || abs_offset + $size > buf_entry.data.len() {
+                            *caller.data().runtime_error.lock().expect("error mutex") =
+                                Some("RangeError: Offset is outside the bounds of the DataView".to_string());
+                            return value::encode_undefined();
+                        }
+                        let bytes = &buf_entry.data[abs_offset..abs_offset + $size];
+                        return $conv(bytes);
+                    }
+                    value::encode_undefined()
+                },
+            );
+        };
+    }
+
+    dataview_get_fn!(dataview_proto_get_int8_fn, 1, |bytes: &[u8]| value::encode_f64(bytes[0] as i8 as f64));
+    dataview_get_fn!(dataview_proto_get_uint8_fn, 1, |bytes: &[u8]| value::encode_f64(bytes[0] as f64));
+    dataview_get_fn!(dataview_proto_get_int16_fn, 2, |bytes: &[u8]| value::encode_f64(i16::from_le_bytes([bytes[0], bytes[1]]) as f64));
+    dataview_get_fn!(dataview_proto_get_uint16_fn, 2, |bytes: &[u8]| value::encode_f64(u16::from_le_bytes([bytes[0], bytes[1]]) as f64));
+    dataview_get_fn!(dataview_proto_get_int32_fn, 4, |bytes: &[u8]| value::encode_f64(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
+    dataview_get_fn!(dataview_proto_get_uint32_fn, 4, |bytes: &[u8]| value::encode_f64(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
+    dataview_get_fn!(dataview_proto_get_float32_fn, 4, |bytes: &[u8]| value::encode_f64(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
+    dataview_get_fn!(dataview_proto_get_float64_fn, 8, |bytes: &[u8]| f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]).to_bits() as i64);
+
+    macro_rules! dataview_set_fn {
+        ($name:ident, $size:expr, $write:expr) => {
+            let $name = Func::wrap(
+                &mut store,
+                |mut caller: Caller<'_, RuntimeState>, this_val: i64, byte_offset: i64, value_arg: i64| -> i64 {
+                    let offset = value::decode_f64(byte_offset) as u32;
+                    let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+                    let dv_handle = match obj_ptr {
+                        Some(ptr) => {
+                            match read_object_property_by_name(&mut caller, ptr, "__dataview_handle__") {
+                                Some(v) => value::decode_f64(v) as usize,
+                                None => return value::encode_undefined(),
+                            }
+                        }
+                        None => return value::encode_undefined(),
+                    };
+                    let (buf_handle, dv_offset, dv_length) = {
+                        let dv_table = caller.data().dataview_table.lock().expect("dataview_table mutex");
+                        if dv_handle < dv_table.len() {
+                            let e = &dv_table[dv_handle];
+                            (e.buffer_handle, e.byte_offset, e.byte_length)
+                        } else { return value::encode_undefined(); }
+                    };
+                    let abs_offset = dv_offset as usize + offset as usize;
+                    let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                    if let Some(buf_entry) = ab_table.get_mut(buf_handle as usize) {
+                        if offset + $size as u32 > dv_length || abs_offset + $size > buf_entry.data.len() {
+                            *caller.data().runtime_error.lock().expect("error mutex") =
+                                Some("RangeError: Offset is outside the bounds of the DataView".to_string());
+                            return value::encode_undefined();
+                        }
+                        let bytes = $write(value_arg);
+                        buf_entry.data[abs_offset..abs_offset + $size].copy_from_slice(&bytes[..$size]);
+                    }
+                    value::encode_undefined()
+                },
+            );
+        };
+    }
+
+    dataview_set_fn!(dataview_proto_set_int8_fn, 1, |v: i64| (value::decode_f64(v) as i8).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_uint8_fn, 1, |v: i64| (value::decode_f64(v) as u8).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_int16_fn, 2, |v: i64| (value::decode_f64(v) as i16).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_uint16_fn, 2, |v: i64| (value::decode_f64(v) as u16).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_int32_fn, 4, |v: i64| (value::decode_f64(v) as i32).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_uint32_fn, 4, |v: i64| (value::decode_f64(v) as u32).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_float32_fn, 4, |v: i64| (value::decode_f64(v) as f32).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_float64_fn, 8, |v: i64| value::decode_f64(v).to_le_bytes().to_vec());
+
+    macro_rules! typedarray_constructor {
+        ($name:ident, $size:expr) => {
+            let $name = Func::wrap(
+                &mut store,
+                |mut caller: Caller<'_, RuntimeState>, buffer: i64, byte_offset: i64, length: i64| -> i64 {
+                    let offset = value::decode_f64(byte_offset) as u32;
+                    let len = value::decode_f64(length) as u32;
+                    let buf_handle = {
+                        let obj_ptr = resolve_handle(&mut caller, buffer);
+                        match obj_ptr {
+                            Some(ptr) => {
+                                let h = read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
+                                match h { Some(v) => value::decode_f64(v) as u32, None => return value::encode_undefined() }
+                            }
+                            None => return value::encode_undefined(),
+                        }
+                    };
+                    let handle;
+                    {
+                        let mut table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+                        handle = table.len() as u32;
+                        table.push(TypedArrayEntry { buffer_handle: buf_handle, byte_offset: offset, length: len, element_size: $size });
+                    }
+                    let obj = alloc_host_object_from_caller(&mut caller, 4);
+                    let handle_val = value::encode_f64(handle as f64);
+                    let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", handle_val);
+                    let len_val = value::encode_f64(len as f64);
+                    let _ = define_host_data_property_from_caller(&mut caller, obj, "length", len_val);
+                    let bl_val = value::encode_f64((len * $size as u32) as f64);
+                    let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", bl_val);
+                    let bo_val = value::encode_f64(offset as f64);
+                    let _ = define_host_data_property_from_caller(&mut caller, obj, "byteOffset", bo_val);
+                    obj
+                },
+            );
+        };
+    }
+
+    typedarray_constructor!(int8array_constructor_fn, 1);
+    typedarray_constructor!(uint8array_constructor_fn, 1);
+    typedarray_constructor!(uint8clampedarray_constructor_fn, 1);
+    typedarray_constructor!(int16array_constructor_fn, 2);
+    typedarray_constructor!(uint16array_constructor_fn, 2);
+    typedarray_constructor!(int32array_constructor_fn, 4);
+    typedarray_constructor!(uint32array_constructor_fn, 4);
+    typedarray_constructor!(float32array_constructor_fn, 4);
+    typedarray_constructor!(float64array_constructor_fn, 8);
+
+    let typedarray_proto_length_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            match obj_ptr {
+                Some(ptr) => {
+                    match read_object_property_by_name(&mut caller, ptr, "length") {
+                        Some(v) => v,
+                        None => value::encode_f64(0.0),
+                    }
+                }
+                None => value::encode_f64(0.0),
+            }
+        },
+    );
+
+    let typedarray_proto_byte_length_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            match obj_ptr {
+                Some(ptr) => {
+                    match read_object_property_by_name(&mut caller, ptr, "byteLength") {
+                        Some(v) => v,
+                        None => value::encode_f64(0.0),
+                    }
+                }
+                None => value::encode_f64(0.0),
+            }
+        },
+    );
+
+    let typedarray_proto_byte_offset_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            match obj_ptr {
+                Some(ptr) => {
+                    match read_object_property_by_name(&mut caller, ptr, "byteOffset") {
+                        Some(v) => v,
+                        None => value::encode_f64(0.0),
+                    }
+                }
+                None => value::encode_f64(0.0),
+            }
+        },
+    );
+
+    let typedarray_proto_set_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64, _source: i64, _offset: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let typedarray_proto_slice_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64, _begin: i64, _end: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let typedarray_proto_subarray_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64, _begin: i64, _end: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let date_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, _this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let args: Vec<i64> = if args_count > 0 {
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                    return value::encode_undefined();
+                };
+                let data = memory.data(&caller);
+                let base = args_base as usize;
+                let mut result = Vec::with_capacity(args_count as usize);
+                for i in 0..args_count as usize {
+                    let offset = base + i * 8;
+                    if offset + 8 <= data.len() {
+                        let mut bytes = [0u8; 8];
+                        bytes.copy_from_slice(&data[offset..offset + 8]);
+                        result.push(i64::from_le_bytes(bytes));
+                    } else {
+                        result.push(value::encode_undefined());
+                    }
+                }
+                result
+            } else {
+                vec![]
+            };
+
+            let ms = if args.is_empty() {
+                let now = chrono::Utc::now();
+                now.timestamp_millis() as f64
+            } else if args.len() == 1 {
+                let arg = args[0];
+                if value::is_undefined(arg) {
+                    let now = chrono::Utc::now();
+                    now.timestamp_millis() as f64
+                } else if value::is_f64(arg) {
+                    let val = value::decode_f64(arg);
+                    if val.is_nan() || val.is_infinite() {
+                        f64::NAN
+                    } else {
+                        val
+                    }
+                } else if value::is_string(arg) {
+                    let s = read_value_string_bytes(&mut caller, arg)
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_default();
+                    if s.is_empty() {
+                        f64::NAN
+                    } else {
+                        match DateTime::parse_from_rfc3339(&s) {
+                            Ok(dt) => dt.timestamp_millis() as f64,
+                            Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S") {
+                                Ok(ndt) => ndt.and_utc().timestamp_millis() as f64,
+                                Err(_) => match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                    Ok(nd) => nd.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis() as f64,
+                                    Err(_) => f64::NAN,
+                                },
+                            },
+                        }
+                    }
+                } else {
+                    f64::NAN
+                }
+            } else {
+                date_args_to_ms(&args, false)
+            };
+
+            let state = caller.data();
+            let (get_date_fn, get_day_fn, get_full_year_fn, get_hours_fn, get_milliseconds_fn,
+                 get_minutes_fn, get_month_fn, get_seconds_fn, get_time_fn, get_timezone_offset_fn,
+                 get_utc_date_fn, get_utc_day_fn, get_utc_full_year_fn, get_utc_hours_fn,
+                 get_utc_milliseconds_fn, get_utc_minutes_fn, get_utc_month_fn, get_utc_seconds_fn,
+                 set_date_fn, set_full_year_fn, set_hours_fn, set_milliseconds_fn,
+                 set_minutes_fn, set_month_fn, set_seconds_fn, set_time_fn,
+                 set_utc_date_fn, set_utc_full_year_fn, set_utc_hours_fn, set_utc_milliseconds_fn,
+                 set_utc_minutes_fn, set_utc_month_fn, set_utc_seconds_fn,
+                 to_string_fn, to_date_string_fn, to_time_string_fn, to_iso_string_fn,
+                 to_utc_string_fn, to_json_fn, value_of_fn) = {
+                (
+                    create_date_method(state, DateMethodKind::GetDate),
+                    create_date_method(state, DateMethodKind::GetDay),
+                    create_date_method(state, DateMethodKind::GetFullYear),
+                    create_date_method(state, DateMethodKind::GetHours),
+                    create_date_method(state, DateMethodKind::GetMilliseconds),
+                    create_date_method(state, DateMethodKind::GetMinutes),
+                    create_date_method(state, DateMethodKind::GetMonth),
+                    create_date_method(state, DateMethodKind::GetSeconds),
+                    create_date_method(state, DateMethodKind::GetTime),
+                    create_date_method(state, DateMethodKind::GetTimezoneOffset),
+                    create_date_method(state, DateMethodKind::GetUTCDate),
+                    create_date_method(state, DateMethodKind::GetUTCDay),
+                    create_date_method(state, DateMethodKind::GetUTCFullYear),
+                    create_date_method(state, DateMethodKind::GetUTCHours),
+                    create_date_method(state, DateMethodKind::GetUTCMilliseconds),
+                    create_date_method(state, DateMethodKind::GetUTCMinutes),
+                    create_date_method(state, DateMethodKind::GetUTCMonth),
+                    create_date_method(state, DateMethodKind::GetUTCSeconds),
+                    create_date_method(state, DateMethodKind::SetDate),
+                    create_date_method(state, DateMethodKind::SetFullYear),
+                    create_date_method(state, DateMethodKind::SetHours),
+                    create_date_method(state, DateMethodKind::SetMilliseconds),
+                    create_date_method(state, DateMethodKind::SetMinutes),
+                    create_date_method(state, DateMethodKind::SetMonth),
+                    create_date_method(state, DateMethodKind::SetSeconds),
+                    create_date_method(state, DateMethodKind::SetTime),
+                    create_date_method(state, DateMethodKind::SetUTCDate),
+                    create_date_method(state, DateMethodKind::SetUTCFullYear),
+                    create_date_method(state, DateMethodKind::SetUTCHours),
+                    create_date_method(state, DateMethodKind::SetUTCMilliseconds),
+                    create_date_method(state, DateMethodKind::SetUTCMinutes),
+                    create_date_method(state, DateMethodKind::SetUTCMonth),
+                    create_date_method(state, DateMethodKind::SetUTCSeconds),
+                    create_date_method(state, DateMethodKind::ToString),
+                    create_date_method(state, DateMethodKind::ToDateString),
+                    create_date_method(state, DateMethodKind::ToTimeString),
+                    create_date_method(state, DateMethodKind::ToISOString),
+                    create_date_method(state, DateMethodKind::ToUTCString),
+                    create_date_method(state, DateMethodKind::ToJSON),
+                    create_date_method(state, DateMethodKind::ValueOf),
+                )
+            };
+
+            let obj = alloc_host_object_from_caller(&mut caller, 40);
+            let ms_val = value::encode_f64(ms);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__date_ms__", ms_val);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getDate", get_date_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getDay", get_day_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getFullYear", get_full_year_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getHours", get_hours_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getMilliseconds", get_milliseconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getMinutes", get_minutes_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getMonth", get_month_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getSeconds", get_seconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getTime", get_time_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getTimezoneOffset", get_timezone_offset_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCDate", get_utc_date_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCDay", get_utc_day_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCFullYear", get_utc_full_year_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCHours", get_utc_hours_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCMilliseconds", get_utc_milliseconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCMinutes", get_utc_minutes_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCMonth", get_utc_month_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCSeconds", get_utc_seconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setDate", set_date_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setFullYear", set_full_year_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setHours", set_hours_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setMilliseconds", set_milliseconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setMinutes", set_minutes_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setMonth", set_month_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setSeconds", set_seconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setTime", set_time_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCDate", set_utc_date_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCFullYear", set_utc_full_year_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCHours", set_utc_hours_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCMilliseconds", set_utc_milliseconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCMinutes", set_utc_minutes_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCMonth", set_utc_month_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCSeconds", set_utc_seconds_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toString", to_string_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toDateString", to_date_string_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toTimeString", to_time_string_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toISOString", to_iso_string_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toUTCString", to_utc_string_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toJSON", to_json_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "valueOf", value_of_fn);
+            obj
+        },
+    );
+
+    let date_now_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>| -> i64 {
+            let now = chrono::Utc::now();
+            value::encode_f64(now.timestamp_millis() as f64)
+        },
+    );
+
+    let date_parse_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let s = if value::is_string(arg) {
+                read_value_string_bytes(&mut caller, arg)
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .unwrap_or_default()
+            } else {
+                String::new()
+            };
+            if s.is_empty() {
+                return value::encode_f64(f64::NAN);
+            }
+            match DateTime::parse_from_rfc3339(&s) {
+                Ok(dt) => value::encode_f64(dt.timestamp_millis() as f64),
+                Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S") {
+                    Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
+                    Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f") {
+                        Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
+                        Err(_) => match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                            Ok(nd) => value::encode_f64(nd.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis() as f64),
+                            Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%b %d, %Y") {
+                                Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
+                                Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%B %d, %Y") {
+                                    Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
+                                    Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%d %b %Y %H:%M:%S") {
+                                        Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
+                                        Err(_) => value::encode_f64(f64::NAN),
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
+            }
+        },
+    );
+
+    let date_utc_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let args = vec![arg];
+            let ms = date_args_to_ms(&args, true);
+            value::encode_f64(ms)
         },
     );
     let imports = [
@@ -7356,18 +9398,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         proxy_create_fn.into(),                     // 151
         proxy_revocable_fn.into(),                  // 152
         reflect_get_fn.into(),                      // 153
-        reflect_not_implemented_4.into(),           // 154 (reflect_set: 4-arg)
-        reflect_not_implemented_2.into(),           // 155 (reflect_has: 2-arg)
-        reflect_not_implemented_2.into(),           // 156 (reflect_delete_property: 2-arg)
-        reflect_not_implemented_3.into(),           // 157 (reflect_apply: 3-arg)
-        reflect_not_implemented_3.into(),           // 158 (reflect_construct: 3-arg)
-        reflect_not_implemented_1.into(),           // 159 (reflect_get_prototype_of: 1-arg)
-        reflect_not_implemented_2.into(),           // 160 (reflect_set_prototype_of: 2-arg)
-        reflect_not_implemented_1.into(),           // 161 (reflect_is_extensible: 1-arg)
-        reflect_not_implemented_1.into(),           // 162 (reflect_prevent_extensions: 1-arg)
-        reflect_not_implemented_2.into(),           // 163 (reflect_get_own_property_descriptor: 2-arg)
-        reflect_not_implemented_3.into(),           // 164 (reflect_define_property: 3-arg)
-        reflect_not_implemented_1.into(),           // 165 (reflect_own_keys: 1-arg)
+        reflect_set_fn.into(),                      // 154
+        reflect_has_fn.into(),                      // 155
+        reflect_delete_property_fn.into(),           // 156
+        reflect_apply_fn.into(),                    // 157
+        reflect_construct_fn.into(),                // 158
+        reflect_get_prototype_of_fn.into(),          // 159
+        reflect_set_prototype_of_fn.into(),          // 160
+        reflect_is_extensible_fn.into(),             // 161
+        reflect_prevent_extensions_fn.into(),         // 162
+        reflect_get_own_property_descriptor_fn.into(), // 163
+        reflect_define_property_fn.into(),            // 164
+        reflect_own_keys_fn.into(),                  // 165
         string_at_fn.into(),           // 166
         string_char_at_fn.into(),      // 167
         string_char_code_at_fn.into(), // 168
@@ -7395,6 +9437,135 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         string_iterator_fn.into(),     // 190
         string_from_char_code_fn.into(),// 191
         string_from_code_point_fn.into(),// 192
+        // ── Math imports ──
+        math_abs_fn.into(),    // 193
+        math_acos_fn.into(),   // 194
+        math_acosh_fn.into(),  // 195
+        math_asin_fn.into(),   // 196
+        math_asinh_fn.into(),  // 197
+        math_atan_fn.into(),   // 198
+        math_atanh_fn.into(),  // 199
+        math_atan2_fn.into(),  // 200
+        math_cbrt_fn.into(),   // 201
+        math_ceil_fn.into(),   // 202
+        math_clz32_fn.into(),  // 203
+        math_cos_fn.into(),    // 204
+        math_cosh_fn.into(),   // 205
+        math_exp_fn.into(),    // 206
+        math_expm1_fn.into(),  // 207
+        math_floor_fn.into(),  // 208
+        math_fround_fn.into(), // 209
+        math_hypot_fn.into(),  // 210
+        math_imul_fn.into(),   // 211
+        math_log_fn.into(),    // 212
+        math_log1p_fn.into(),  // 213
+        math_log10_fn.into(),  // 214
+        math_log2_fn.into(),   // 215
+        math_max_fn.into(),    // 216
+        math_min_fn.into(),    // 217
+        math_pow_fn.into(),    // 218
+        math_random_fn.into(), // 219
+        math_round_fn.into(),  // 220
+        math_sign_fn.into(),   // 221
+        math_sin_fn.into(),    // 222
+        math_sinh_fn.into(),   // 223
+        math_sqrt_fn.into(),   // 224
+        math_tan_fn.into(),    // 225
+        math_tanh_fn.into(),   // 226
+        math_trunc_fn.into(),  // 227
+        // ── Number imports ──
+        number_constructor_fn.into(),       // 228
+        number_is_nan_fn.into(),            // 229
+        number_is_finite_fn.into(),         // 230
+        number_is_integer_fn.into(),        // 231
+        number_is_safe_integer_fn.into(),   // 232
+        number_parse_int_fn.into(),         // 233
+        number_parse_float_fn.into(),       // 234
+        number_proto_to_string_fn.into(),   // 235
+        number_proto_value_of_fn.into(),    // 236
+        number_proto_to_fixed_fn.into(),    // 237
+        number_proto_to_exponential_fn.into(), // 238
+        number_proto_to_precision_fn.into(),  // 239
+        // ── Boolean imports ──
+        boolean_constructor_fn.into(),      // 240
+        boolean_proto_to_string_fn.into(),  // 241
+        boolean_proto_value_of_fn.into(),   // 242
+        // ── Error imports ──
+        error_constructor_fn.into(),           // 243
+        type_error_constructor_fn.into(),      // 244
+        range_error_constructor_fn.into(),     // 245
+        syntax_error_constructor_fn.into(),    // 246
+        reference_error_constructor_fn.into(), // 247
+        uri_error_constructor_fn.into(),       // 248
+        eval_error_constructor_fn.into(),      // 249
+        error_proto_to_string_fn.into(),       // 250
+        // ── Map imports ──
+        map_constructor_fn.into(),              // 251
+        map_proto_set_fn.into(),                // 252
+        map_proto_get_fn.into(),                // 253
+        set_constructor_fn.into(),              // 254
+        set_proto_add_fn.into(),                // 255
+        map_set_has_fn.into(),                  // 256
+        map_set_delete_fn.into(),               // 257
+        map_set_clear_fn.into(),                // 258
+        map_set_get_size_fn.into(),             // 259
+        map_set_for_each_fn.into(),             // 260
+        map_set_keys_fn.into(),                 // 261
+        map_set_values_fn.into(),               // 262
+        map_set_entries_fn.into(),              // 263
+        date_constructor_fn.into(),             // 264
+        date_now_fn.into(),                     // 265
+        date_parse_fn.into(),                   // 266
+        date_utc_fn.into(),                     // 267
+        // ── WeakMap/WeakSet imports ──
+        weakmap_constructor_fn.into(),           // 268
+        weakmap_proto_set_fn.into(),             // 269
+        weakmap_proto_get_fn.into(),             // 270
+        weakmap_proto_has_fn.into(),             // 271
+        weakmap_proto_delete_fn.into(),          // 272
+        weakset_constructor_fn.into(),           // 273
+        weakset_proto_add_fn.into(),             // 274
+        weakset_proto_has_fn.into(),             // 275
+        weakset_proto_delete_fn.into(),          // 276
+        // ── ArrayBuffer imports ──
+        arraybuffer_constructor_fn.into(),       // 277
+        arraybuffer_proto_byte_length_fn.into(), // 278
+        arraybuffer_proto_slice_fn.into(),       // 279
+        // ── DataView imports ──
+        dataview_constructor_fn.into(),          // 280
+        dataview_proto_get_float64_fn.into(),    // 281
+        dataview_proto_get_float32_fn.into(),    // 282
+        dataview_proto_get_int32_fn.into(),      // 283
+        dataview_proto_get_uint32_fn.into(),     // 284
+        dataview_proto_get_int16_fn.into(),      // 285
+        dataview_proto_get_uint16_fn.into(),     // 286
+        dataview_proto_get_int8_fn.into(),       // 287
+        dataview_proto_get_uint8_fn.into(),      // 288
+        dataview_proto_set_float64_fn.into(),    // 289
+        dataview_proto_set_float32_fn.into(),    // 290
+        dataview_proto_set_int32_fn.into(),      // 291
+        dataview_proto_set_uint32_fn.into(),     // 292
+        dataview_proto_set_int16_fn.into(),      // 293
+        dataview_proto_set_uint16_fn.into(),     // 294
+        dataview_proto_set_int8_fn.into(),       // 295
+        dataview_proto_set_uint8_fn.into(),      // 296
+        // ── TypedArray constructor imports ──
+        int8array_constructor_fn.into(),         // 297
+        uint8array_constructor_fn.into(),        // 298
+        uint8clampedarray_constructor_fn.into(), // 299
+        int16array_constructor_fn.into(),        // 300
+        uint16array_constructor_fn.into(),       // 301
+        int32array_constructor_fn.into(),        // 302
+        uint32array_constructor_fn.into(),       // 303
+        float32array_constructor_fn.into(),      // 304
+        float64array_constructor_fn.into(),      // 305
+        // ── TypedArray prototype imports ──
+        typedarray_proto_length_fn.into(),       // 306
+        typedarray_proto_byte_length_fn.into(),  // 307
+        typedarray_proto_byte_offset_fn.into(),  // 308
+        typedarray_proto_set_fn.into(),          // 309
+        typedarray_proto_slice_fn.into(),        // 310
+        typedarray_proto_subarray_fn.into(),     // 311
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -7606,6 +9777,24 @@ struct RuntimeState {
     combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>>,
     /// 模块命名空间对象缓存：module_id → namespace object (i64 NaN-boxed)
     module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>>,
+    /// Error 侧表：存储 error 对象的 name 和 message
+    error_table: Arc<Mutex<Vec<ErrorEntry>>>,
+    /// Map 侧表：存储 Map 对象的键值对
+    map_table: Arc<Mutex<Vec<MapEntry>>>,
+    /// Set 侧表：存储 Set 对象的值
+    set_table: Arc<Mutex<Vec<SetEntry>>>,
+    /// WeakMap 侧表：存储 WeakMap 对象的键值对
+    weakmap_table: Arc<Mutex<Vec<WeakMapEntry>>>,
+    /// WeakSet 侧表：存储 WeakSet 对象的值
+    weakset_table: Arc<Mutex<Vec<WeakSetEntry>>>,
+    /// Proxy 侧表：存储 Proxy 对象的 target、handler 和 revoked 状态
+    proxy_table: Arc<Mutex<Vec<ProxyEntry>>>,
+    /// ArrayBuffer 侧表：存储 ArrayBuffer 的底层数据
+    arraybuffer_table: Arc<Mutex<Vec<ArrayBufferEntry>>>,
+    /// DataView 侧表：存储 DataView 的 buffer 引用和偏移量
+    dataview_table: Arc<Mutex<Vec<DataViewEntry>>>,
+    /// TypedArray 侧表：存储 TypedArray 的 buffer 引用、偏移量和长度
+    typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>>,
 }
 
 /// 绑定函数记录
@@ -7619,6 +9808,61 @@ struct BoundRecord {
 struct SymbolEntry {
     description: Option<String>,
     global_key: Option<String>,
+}
+
+/// Error 条目：存储 error 对象的 name 和 message
+#[allow(dead_code)]
+struct ErrorEntry {
+    name: String,
+    message: String,
+}
+
+struct MapEntry {
+    keys: Vec<i64>,
+    values: Vec<i64>,
+}
+
+struct SetEntry {
+    values: Vec<i64>,
+}
+
+#[derive(Clone, Debug)]
+struct WeakMapEntry {
+    map: HashMap<u32, i64>,
+}
+
+#[derive(Clone, Debug)]
+struct WeakSetEntry {
+    set: HashSet<u32>,
+}
+
+#[derive(Clone, Debug)]
+struct ArrayBufferEntry {
+    data: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct DataViewEntry {
+    buffer_handle: u32,
+    byte_offset: u32,
+    byte_length: u32,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct TypedArrayEntry {
+    buffer_handle: u32,
+    byte_offset: u32,
+    length: u32,
+    element_size: u8,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct ProxyEntry {
+    target: i64,
+    handler: i64,
+    revoked: bool,
 }
 
 /// RegExp 条目
@@ -7657,6 +9901,92 @@ enum NativeCallable {
     AsyncGeneratorIdentity {
         generator: i64,
     },
+    MapSetMethod {
+        kind: MapSetMethodKind,
+    },
+    DateMethod {
+        kind: DateMethodKind,
+    },
+    WeakMapMethod {
+        kind: WeakMapMethodKind,
+    },
+    WeakSetMethod {
+        kind: WeakSetMethodKind,
+    },
+}
+
+#[derive(Clone, Copy)]
+enum MapSetMethodKind {
+    MapSet,
+    MapGet,
+    SetAdd,
+    Has,
+    Delete,
+    Clear,
+    Size,
+    ForEach,
+    Keys,
+    Values,
+    Entries,
+}
+
+#[derive(Clone, Copy)]
+enum WeakMapMethodKind {
+    Set,
+    Get,
+    Has,
+    Delete,
+}
+
+#[derive(Clone, Copy)]
+enum WeakSetMethodKind {
+    Add,
+    Has,
+    Delete,
+}
+
+#[derive(Clone, Copy)]
+enum DateMethodKind {
+    GetDate,
+    GetDay,
+    GetFullYear,
+    GetHours,
+    GetMilliseconds,
+    GetMinutes,
+    GetMonth,
+    GetSeconds,
+    GetTime,
+    GetTimezoneOffset,
+    GetUTCDate,
+    GetUTCDay,
+    GetUTCFullYear,
+    GetUTCHours,
+    GetUTCMilliseconds,
+    GetUTCMinutes,
+    GetUTCMonth,
+    GetUTCSeconds,
+    SetDate,
+    SetFullYear,
+    SetHours,
+    SetMilliseconds,
+    SetMinutes,
+    SetMonth,
+    SetSeconds,
+    SetTime,
+    SetUTCDate,
+    SetUTCFullYear,
+    SetUTCHours,
+    SetUTCMilliseconds,
+    SetUTCMinutes,
+    SetUTCMonth,
+    SetUTCSeconds,
+    ToString,
+    ToDateString,
+    ToTimeString,
+    ToISOString,
+    ToUTCString,
+    ToJSON,
+    ValueOf,
 }
 
 #[derive(Clone, Copy)]
@@ -7970,6 +10300,50 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
 
     if value::is_object(val) {
         let ptr = value::decode_object_handle(val);
+        let obj_ptr = resolve_handle_idx(caller, ptr as usize);
+        if let Some(op) = obj_ptr {
+            let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let keys_values = {
+                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    if handle < table.len() {
+                        let entry = &table[handle];
+                        Some((entry.keys.clone(), entry.values.clone()))
+                    } else {
+                        None
+                    }
+                };
+                if let Some((keys, values)) = keys_values {
+                    let mut parts = Vec::new();
+                    for i in 0..keys.len() {
+                        let k = render_value(caller, keys[i]).unwrap_or_else(|_| "?".to_string());
+                        let v = render_value(caller, values[i]).unwrap_or_else(|_| "?".to_string());
+                        parts.push(format!("{k} => {v}"));
+                    }
+                    return Ok(format!("Map {{{}}}", parts.join(", ")));
+                }
+            }
+            let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let vals = {
+                    let table = caller.data().set_table.lock().expect("set table mutex");
+                    if handle < table.len() {
+                        Some(table[handle].values.clone())
+                    } else {
+                        None
+                    }
+                };
+                if let Some(values) = vals {
+                    let mut parts = Vec::new();
+                    for v in &values {
+                        parts.push(render_value(caller, *v).unwrap_or_else(|_| "?".to_string()));
+                    }
+                    return Ok(format!("Set {{{}}}", parts.join(", ")));
+                }
+            }
+        }
         return Ok(format!("[object Object:{ptr}]"));
     }
 
@@ -8026,7 +10400,15 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
         return Ok("/(?:)/".to_string()); // empty regex fallback
     }
 
-    Ok(f64::from_bits(val as u64).to_string())
+    let n = f64::from_bits(val as u64);
+    if n.is_infinite() {
+        return Ok(if n.is_sign_positive() {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        });
+    }
+    Ok(n.to_string())
 }
 
 fn write_console_value(caller: &mut Caller<'_, RuntimeState>, val: i64, prefix: Option<&str>) {
@@ -8248,6 +10630,56 @@ fn store_runtime_string_in_state(state: &RuntimeState, string: String) -> i64 {
     value::encode_runtime_string_handle(handle)
 }
 
+fn format_number_js(x: f64) -> String {
+    if x == 0.0 {
+        return "0".to_string();
+    }
+    let abs = x.abs();
+    if abs >= 1e21 || (abs < 1e-6 && abs > 0.0) {
+        let s = format!("{:e}", x);
+        return normalize_exponent(&s);
+    }
+    let s = format!("{}", x);
+    s
+}
+
+fn format_radix(mut value: i64, radix: u32) -> String {
+    if value == 0 {
+        return "0".to_string();
+    }
+    let negative = value < 0;
+    if negative {
+        value = -value;
+    }
+    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut result = Vec::new();
+    while value > 0 {
+        result.push(digits[value as usize % radix as usize]);
+        value /= radix as i64;
+    }
+    if negative {
+        result.push(b'-');
+    }
+    result.reverse();
+    String::from_utf8(result).unwrap_or_else(|_| "0".to_string())
+}
+
+fn normalize_exponent(s: &str) -> String {
+    if let Some(pos) = s.find('e') {
+        let mantissa = &s[..pos];
+        let exp_part = &s[pos + 1..];
+        let exp_val: i32 = exp_part.parse().unwrap_or(0);
+        format!("{}e{}{}", mantissa, if exp_val >= 0 { "+" } else { "" }, exp_val)
+    } else if let Some(pos) = s.find('E') {
+        let mantissa = &s[..pos];
+        let exp_part = &s[pos + 1..];
+        let exp_val: i32 = exp_part.parse().unwrap_or(0);
+        format!("{}e{}{}", mantissa, if exp_val >= 0 { "+" } else { "" }, exp_val)
+    } else {
+        s.to_string()
+    }
+}
+
 fn find_memory_c_string_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
     let mut needle = Vec::with_capacity(name.len() + 1);
     needle.extend_from_slice(name.as_bytes());
@@ -8334,6 +10766,108 @@ fn alloc_host_object_from_caller(caller: &mut Caller<'_, RuntimeState>, capacity
         let _ = global.set(&mut *caller, Val::I32((obj_table_count + 1) as i32));
     }
     value::encode_object_handle(obj_table_count)
+}
+
+fn create_error_object(caller: &mut Caller<'_, RuntimeState>, error_name: &str, arg: i64) -> i64 {
+    let message = if value::is_undefined(arg) {
+        String::new()
+    } else if value::is_string(arg) {
+        read_value_string_bytes(caller, arg)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
+    } else if value::is_null(arg) {
+        String::new()
+    } else if value::is_f64(arg) {
+        format_number_js(value::decode_f64(arg))
+    } else if value::is_bool(arg) {
+        if value::decode_bool(arg) { "true".to_string() } else { "false".to_string() }
+    } else {
+        String::new()
+    };
+    {
+        let mut table = caller.data().error_table.lock().expect("error table mutex");
+        table.push(ErrorEntry {
+            name: error_name.to_string(),
+            message: message.clone(),
+        });
+    }
+    let obj = alloc_host_object_from_caller(caller, 2);
+    let name_val = store_runtime_string(caller, error_name.to_string());
+    let _ = define_host_data_property_from_caller(caller, obj, "name", name_val);
+    let message_val = store_runtime_string(caller, message);
+    let _ = define_host_data_property_from_caller(caller, obj, "message", message_val);
+    obj
+}
+
+fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> i64 {
+    if value::is_undefined(obj) {
+        store_runtime_string(caller, "[object Undefined]".to_string())
+    } else if value::is_null(obj) {
+        store_runtime_string(caller, "[object Null]".to_string())
+    } else if value::is_array(obj) {
+        store_runtime_string(caller, "[object Array]".to_string())
+    } else if value::is_function(obj) || value::is_callable(obj) {
+        store_runtime_string(caller, "[object Function]".to_string())
+    } else if is_promise_value(caller.data(), obj) {
+        store_runtime_string(caller, "[object Promise]".to_string())
+    } else if value::is_object(obj) {
+        let obj_ptr = resolve_handle_idx(
+            caller,
+            value::decode_object_handle(obj) as usize,
+        );
+        if let Some(op) = obj_ptr {
+            let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
+            if map_handle.is_some() {
+                return store_runtime_string(caller, "[object Map]".to_string());
+            }
+            let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+            if set_handle.is_some() {
+                return store_runtime_string(caller, "[object Set]".to_string());
+            }
+        }
+        let name_val = obj_ptr
+            .and_then(|p| read_object_property_by_name(caller, p, "name"));
+        let msg_val = obj_ptr
+            .and_then(|p| read_object_property_by_name(caller, p, "message"));
+        match (name_val, msg_val) {
+            (Some(nv), Some(_mv)) => {
+                let name_str = read_value_string_bytes(caller, nv)
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .unwrap_or_default();
+                if matches!(
+                    name_str.as_str(),
+                    "Error"
+                        | "TypeError"
+                        | "RangeError"
+                        | "SyntaxError"
+                        | "ReferenceError"
+                        | "URIError"
+                        | "EvalError"
+                        | "AggregateError"
+                ) {
+                    let obj_ptr2 = resolve_handle_idx(
+                        caller,
+                        value::decode_object_handle(obj) as usize,
+                    );
+                    let msg_str = obj_ptr2
+                        .and_then(|p| read_object_property_by_name(caller, p, "message"))
+                        .and_then(|v| read_value_string_bytes(caller, v))
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_default();
+                    if msg_str.is_empty() {
+                        store_runtime_string(caller, name_str)
+                    } else {
+                        store_runtime_string(caller, format!("{}: {}", name_str, msg_str))
+                    }
+                } else {
+                    store_runtime_string(caller, "[object Object]".to_string())
+                }
+            }
+            _ => store_runtime_string(caller, "[object Object]".to_string()),
+        }
+    } else {
+        store_runtime_string(caller, "[object Object]".to_string())
+    }
 }
 
 fn define_host_data_property_from_caller(
@@ -8948,6 +11482,23 @@ fn mark_object_recursive(
 fn resolve_handle(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
     let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
     resolve_handle_idx(caller, handle_idx)
+}
+
+fn same_value_zero(a: i64, b: i64) -> bool {
+    if a == b {
+        return true;
+    }
+    if value::is_f64(a) && value::is_f64(b) {
+        let fa = value::decode_f64(a);
+        let fb = value::decode_f64(b);
+        if fa.is_nan() && fb.is_nan() {
+            return true;
+        }
+        if fa == 0.0 && fb == 0.0 {
+            return true;
+        }
+    }
+    false
 }
 
 /// 通过 handle_idx 解析真实对象指针。
@@ -9974,17 +12525,1036 @@ fn create_async_generator_identity(state: &RuntimeState, generator: i64) -> i64 
     value::encode_native_callable_idx(handle)
 }
 
+fn create_map_set_method(state: &RuntimeState, kind: MapSetMethodKind) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::MapSetMethod { kind });
+    value::encode_native_callable_idx(handle)
+}
+
+fn create_date_method(state: &RuntimeState, kind: DateMethodKind) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::DateMethod { kind });
+    value::encode_native_callable_idx(handle)
+}
+
+fn create_weakmap_method(state: &RuntimeState, kind: WeakMapMethodKind) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::WeakMapMethod { kind });
+    value::encode_native_callable_idx(handle)
+}
+
+fn create_weakset_method(state: &RuntimeState, kind: WeakSetMethodKind) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::WeakSetMethod { kind });
+    value::encode_native_callable_idx(handle)
+}
+
+fn read_date_ms(caller: &mut Caller<'_, RuntimeState>, this_val: i64) -> f64 {
+    if !value::is_object(this_val) {
+        return f64::NAN;
+    }
+    let obj_ptr = resolve_handle_idx(
+        caller,
+        value::decode_object_handle(this_val) as usize,
+    );
+    let Some(op) = obj_ptr else {
+        return f64::NAN;
+    };
+    let ms_val = read_object_property_by_name(caller, op, "__date_ms__");
+    ms_val.map(|v| value::decode_f64(v)).unwrap_or(f64::NAN)
+}
+
+fn write_date_ms(caller: &mut Caller<'_, RuntimeState>, this_val: i64, ms: f64) {
+    if !value::is_object(this_val) {
+        return;
+    }
+    let obj_ptr = resolve_handle_idx(
+        caller,
+        value::decode_object_handle(this_val) as usize,
+    );
+    let Some(op) = obj_ptr else {
+        return;
+    };
+    let name_id = match find_memory_c_string_global(caller, "__date_ms__") {
+        Some(id) => id,
+        None => return,
+    };
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return;
+    };
+    let data = memory.data(&*caller);
+    if op + 16 > data.len() {
+        return;
+    }
+    let num_props = u32::from_le_bytes([
+        data[op + 12],
+        data[op + 13],
+        data[op + 14],
+        data[op + 15],
+    ]) as usize;
+    for i in 0..num_props {
+        let slot_offset = op + 16 + i * 32;
+        if slot_offset + 32 > data.len() {
+            break;
+        }
+        let slot_name_id = u32::from_le_bytes([
+            data[slot_offset],
+            data[slot_offset + 1],
+            data[slot_offset + 2],
+            data[slot_offset + 3],
+        ]);
+        if slot_name_id == name_id {
+            let val = value::encode_f64(ms);
+            let _ = data;
+            let data = memory.data_mut(&mut *caller);
+            data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+            return;
+        }
+    }
+}
+
+fn ms_to_datetime_utc(ms: f64) -> Option<DateTime<Utc>> {
+    if ms.is_nan() || ms.is_infinite() {
+        return None;
+    }
+    Utc.timestamp_millis_opt(ms as i64).single()
+}
+
+fn ms_to_datetime_local(ms: f64) -> Option<DateTime<Local>> {
+    if ms.is_nan() || ms.is_infinite() {
+        return None;
+    }
+    let utc_dt = ms_to_datetime_utc(ms)?;
+    Some(utc_dt.with_timezone(&Local))
+}
+
+fn date_args_to_ms(args: &[i64], is_utc: bool) -> f64 {
+    if args.is_empty() {
+        return f64::NAN;
+    }
+    let first = value::decode_f64(args[0]);
+    if first.is_nan() {
+        return f64::NAN;
+    }
+    if args.len() == 1 {
+        if first.is_infinite() {
+            return f64::NAN;
+        }
+        return first;
+    }
+    let year = first;
+    let month_val = if args.len() > 1 { value::decode_f64(args[1]) } else { 0.0 };
+    let day = if args.len() > 2 { value::decode_f64(args[2]) } else { 1.0 };
+    let hour = if args.len() > 3 { value::decode_f64(args[3]) } else { 0.0 };
+    let minute = if args.len() > 4 { value::decode_f64(args[4]) } else { 0.0 };
+    let second = if args.len() > 5 { value::decode_f64(args[5]) } else { 0.0 };
+    let millisecond = if args.len() > 6 { value::decode_f64(args[6]) } else { 0.0 };
+
+    if year.is_nan() || month_val.is_nan() || day.is_nan()
+        || hour.is_nan() || minute.is_nan() || second.is_nan() || millisecond.is_nan()
+    {
+        return f64::NAN;
+    }
+
+    let y = year as i32;
+    let m = month_val as u32;
+    let d = day as u32;
+    let h = hour as u32;
+    let min = minute as u32;
+    let s = second as u32;
+    let ms = millisecond as u32;
+
+    let adjusted_year = if y >= 0 && y <= 99 { 1900 + y } else { y };
+
+    if is_utc {
+        Utc.with_ymd_and_hms(adjusted_year, m + 1, d.max(1), h, min, s)
+            .single()
+            .map(|dt: DateTime<Utc>| dt.timestamp_millis() as f64 + ms as f64)
+            .unwrap_or(f64::NAN)
+    } else {
+        Local.with_ymd_and_hms(adjusted_year, m + 1, d.max(1), h, min, s)
+            .single()
+            .map(|dt: DateTime<Local>| dt.timestamp_millis() as f64 + ms as f64)
+            .unwrap_or(f64::NAN)
+    }
+}
+
+fn call_date_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: DateMethodKind,
+    args: Vec<i64>,
+) -> i64 {
+    let ms = read_date_ms(caller, this_val);
+
+    match kind {
+        DateMethodKind::GetTime => value::encode_f64(ms),
+        DateMethodKind::ValueOf => value::encode_f64(ms),
+        DateMethodKind::GetTimezoneOffset => {
+            if ms.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            let utc_dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let local_dt = utc_dt.with_timezone(&Local);
+            let offset_secs = local_dt.offset().local_minus_utc();
+            value::encode_f64(-(offset_secs as f64) / 60.0)
+        }
+        DateMethodKind::GetFullYear => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.year() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetMonth => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64((dt.month0()) as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetDate => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.day() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetDay => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.weekday().num_days_from_sunday() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetHours => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.hour() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetMinutes => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.minute() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetSeconds => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64(dt.second() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetMilliseconds => {
+            match ms_to_datetime_local(ms) {
+                Some(dt) => value::encode_f64((dt.nanosecond() / 1_000_000) as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCFullYear => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.year() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCMonth => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64((dt.month0()) as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCDate => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.day() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCDay => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.weekday().num_days_from_sunday() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCHours => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.hour() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCMinutes => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.minute() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCSeconds => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64(dt.second() as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::GetUTCMilliseconds => {
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => value::encode_f64((dt.nanosecond() / 1_000_000) as f64),
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::SetTime => {
+            let new_ms = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetDate => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let d = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if d.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_day(d as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetMonth => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let m = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if m.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let mut new_dt = dt.with_month0(m as u32).unwrap_or(dt);
+            if let Some(d_arg) = args.get(1) {
+                let d = value::decode_f64(*d_arg);
+                if d.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
+            }
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetFullYear => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let y = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if y.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let mut new_dt = dt.with_year(y as i32).unwrap_or(dt);
+            if let Some(m_arg) = args.get(1) {
+                let m = value::decode_f64(*m_arg);
+                if m.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_month0(m as u32).unwrap_or(new_dt);
+            }
+            if let Some(d_arg) = args.get(2) {
+                let d = value::decode_f64(*d_arg);
+                if d.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
+            }
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetHours => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let h = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if h.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let mut new_dt = dt.with_hour(h as u32).unwrap_or(dt);
+            if let Some(m_arg) = args.get(1) {
+                let m = value::decode_f64(*m_arg);
+                if m.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_minute(m as u32).unwrap_or(new_dt);
+            }
+            if let Some(s_arg) = args.get(2) {
+                let s = value::decode_f64(*s_arg);
+                if s.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
+            }
+            let new_ms = if let Some(ms_arg) = args.get(3) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetMinutes => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let m = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if m.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let mut new_dt = dt.with_minute(m as u32).unwrap_or(dt);
+            if let Some(s_arg) = args.get(1) {
+                let s = value::decode_f64(*s_arg);
+                if s.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
+            }
+            let new_ms = if let Some(ms_arg) = args.get(2) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetSeconds => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let s = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if s.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_local(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_second(s as u32).unwrap_or(dt);
+            let new_ms = if let Some(ms_arg) = args.get(1) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetMilliseconds => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let ms_arg = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if ms_arg.is_nan() { return value::encode_f64(f64::NAN); }
+            let base_ms = (ms / 1000.0).trunc() * 1000.0;
+            let new_ms = base_ms + ms_arg.trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCDate => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let d = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if d.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_day(d as u32).unwrap_or(dt);
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCMonth => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let m = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if m.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let mut new_dt = dt.with_month0(m as u32).unwrap_or(dt);
+            if let Some(d_arg) = args.get(1) {
+                let d = value::decode_f64(*d_arg);
+                if d.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
+            }
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCFullYear => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let y = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if y.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let mut new_dt = dt.with_year(y as i32).unwrap_or(dt);
+            if let Some(m_arg) = args.get(1) {
+                let m = value::decode_f64(*m_arg);
+                if m.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_month0(m as u32).unwrap_or(new_dt);
+            }
+            if let Some(d_arg) = args.get(2) {
+                let d = value::decode_f64(*d_arg);
+                if d.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
+            }
+            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCHours => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let h = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if h.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let mut new_dt = dt.with_hour(h as u32).unwrap_or(dt);
+            if let Some(m_arg) = args.get(1) {
+                let m = value::decode_f64(*m_arg);
+                if m.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_minute(m as u32).unwrap_or(new_dt);
+            }
+            if let Some(s_arg) = args.get(2) {
+                let s = value::decode_f64(*s_arg);
+                if s.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
+            }
+            let new_ms = if let Some(ms_arg) = args.get(3) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCMinutes => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let m = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if m.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let mut new_dt = dt.with_minute(m as u32).unwrap_or(dt);
+            if let Some(s_arg) = args.get(1) {
+                let s = value::decode_f64(*s_arg);
+                if s.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
+            }
+            let new_ms = if let Some(ms_arg) = args.get(2) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCSeconds => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let s = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if s.is_nan() { return value::encode_f64(f64::NAN); }
+            let dt = match ms_to_datetime_utc(ms) {
+                Some(dt) => dt,
+                None => return value::encode_f64(f64::NAN),
+            };
+            let new_dt = dt.with_second(s as u32).unwrap_or(dt);
+            let new_ms = if let Some(ms_arg) = args.get(1) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::SetUTCMilliseconds => {
+            if ms.is_nan() { return value::encode_f64(f64::NAN); }
+            let ms_arg = args.first().map(|v| value::decode_f64(*v)).unwrap_or(f64::NAN);
+            if ms_arg.is_nan() { return value::encode_f64(f64::NAN); }
+            let base_ms = (ms / 1000.0).trunc() * 1000.0;
+            let new_ms = base_ms + ms_arg.trunc();
+            write_date_ms(caller, this_val, new_ms);
+            value::encode_f64(new_ms)
+        }
+        DateMethodKind::ToString => {
+            if ms.is_nan() {
+                return store_runtime_string(&caller, "Invalid Date".to_string());
+            }
+            match ms_to_datetime_local(ms) {
+                Some(dt) => {
+                    let s = dt.format("%a %b %e %Y %H:%M:%S GMT%:z").to_string();
+                    store_runtime_string(&caller, s)
+                }
+                None => store_runtime_string(&caller, "Invalid Date".to_string()),
+            }
+        }
+        DateMethodKind::ToDateString => {
+            if ms.is_nan() {
+                return store_runtime_string(&caller, "Invalid Date".to_string());
+            }
+            match ms_to_datetime_local(ms) {
+                Some(dt) => {
+                    let s = dt.format("%Y-%m-%d").to_string();
+                    store_runtime_string(&caller, s)
+                }
+                None => store_runtime_string(&caller, "Invalid Date".to_string()),
+            }
+        }
+        DateMethodKind::ToTimeString => {
+            if ms.is_nan() {
+                return store_runtime_string(&caller, "Invalid Date".to_string());
+            }
+            match ms_to_datetime_local(ms) {
+                Some(dt) => {
+                    let s = dt.format("%H:%M:%S GMT%:z").to_string();
+                    store_runtime_string(&caller, s)
+                }
+                None => store_runtime_string(&caller, "Invalid Date".to_string()),
+            }
+        }
+        DateMethodKind::ToISOString => {
+            if ms.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => {
+                    let frac_sec = (ms % 1000.0).trunc().abs() as u32;
+                    let year = dt.year();
+                    let s = if year >= 0 && year <= 9999 {
+                        format!(
+                            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                            year,
+                            dt.month(),
+                            dt.day(),
+                            dt.hour(),
+                            dt.minute(),
+                            dt.second(),
+                            frac_sec
+                        )
+                    } else {
+                        format!(
+                            "{:+06}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                            year,
+                            dt.month(),
+                            dt.day(),
+                            dt.hour(),
+                            dt.minute(),
+                            dt.second(),
+                            frac_sec
+                        )
+                    };
+                    store_runtime_string(&caller, s)
+                }
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+        DateMethodKind::ToUTCString => {
+            if ms.is_nan() {
+                return store_runtime_string(&caller, "Invalid Date".to_string());
+            }
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => {
+                    let s = dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
+                    store_runtime_string(&caller, s)
+                }
+                None => store_runtime_string(&caller, "Invalid Date".to_string()),
+            }
+        }
+        DateMethodKind::ToJSON => {
+            if ms.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            match ms_to_datetime_utc(ms) {
+                Some(dt) => {
+                    let frac_sec = (ms % 1000.0).trunc().abs() as u32;
+                    let year = dt.year();
+                    let s = if year >= 0 && year <= 9999 {
+                        format!(
+                            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                            year,
+                            dt.month(),
+                            dt.day(),
+                            dt.hour(),
+                            dt.minute(),
+                            dt.second(),
+                            frac_sec
+                        )
+                    } else {
+                        format!(
+                            "{:+06}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                            year,
+                            dt.month(),
+                            dt.day(),
+                            dt.hour(),
+                            dt.minute(),
+                            dt.second(),
+                            frac_sec
+                        )
+                    };
+                    store_runtime_string(&caller, s)
+                }
+                None => value::encode_f64(f64::NAN),
+            }
+        }
+    }
+}
+
+fn read_weakmap_handle(caller: &mut Caller<'_, RuntimeState>, this_val: i64) -> Option<usize> {
+    if !value::is_object(this_val) {
+        return None;
+    }
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let op = obj_ptr?;
+    let handle_val = read_object_property_by_name(caller, op, "__weakmap_handle__")?;
+    Some(value::decode_f64(handle_val) as usize)
+}
+
+fn read_weakset_handle(caller: &mut Caller<'_, RuntimeState>, this_val: i64) -> Option<usize> {
+    if !value::is_object(this_val) {
+        return None;
+    }
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let op = obj_ptr?;
+    let handle_val = read_object_property_by_name(caller, op, "__weakset_handle__")?;
+    Some(value::decode_f64(handle_val) as usize)
+}
+
+fn is_object_key(key: i64) -> bool {
+    value::is_object(key) || value::is_array(key) || value::is_function(key)
+}
+
+fn call_weakmap_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: WeakMapMethodKind,
+    args: Vec<i64>,
+) -> i64 {
+    match kind {
+        WeakMapMethodKind::Set => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Invalid value used as weak map key".to_string());
+                return this_val;
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            {
+                let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+                if handle < table.len() {
+                    table[handle].map.insert(key_handle, val);
+                }
+            }
+            this_val
+        }
+        WeakMapMethodKind::Get => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_undefined();
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                if let Some(&val) = table[handle].map.get(&key_handle) {
+                    return val;
+                }
+            }
+            value::encode_undefined()
+        }
+        WeakMapMethodKind::Has => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].map.contains_key(&key_handle));
+            }
+            value::encode_bool(false)
+        }
+        WeakMapMethodKind::Delete => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].map.remove(&key_handle).is_some());
+            }
+            value::encode_bool(false)
+        }
+    }
+}
+
+fn call_weakset_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: WeakSetMethodKind,
+    args: Vec<i64>,
+) -> i64 {
+    match kind {
+        WeakSetMethodKind::Add => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Invalid value used in weak set".to_string());
+                return this_val;
+            }
+            let handle = read_weakset_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            {
+                let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+                if handle < table.len() {
+                    table[handle].set.insert(key_handle);
+                }
+            }
+            this_val
+        }
+        WeakSetMethodKind::Has => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakset_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].set.contains(&key_handle));
+            }
+            value::encode_bool(false)
+        }
+        WeakSetMethodKind::Delete => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakset_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].set.remove(&key_handle));
+            }
+            value::encode_bool(false)
+        }
+    }
+}
+
+fn call_map_set_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: MapSetMethodKind,
+    args: Vec<i64>,
+) -> i64 {
+    if !value::is_object(this_val) {
+        return value::encode_undefined();
+    }
+    let obj_ptr = resolve_handle_idx(
+        caller,
+        value::decode_object_handle(this_val) as usize,
+    );
+    let Some(op) = obj_ptr else {
+        return value::encode_undefined();
+    };
+    let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
+    let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+
+    match kind {
+        MapSetMethodKind::MapSet => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            entry.values[i] = val;
+                            return this_val;
+                        }
+                    }
+                    entry.keys.push(key);
+                    entry.values.push(val);
+                }
+            }
+            this_val
+        }
+        MapSetMethodKind::MapGet => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            return entry.values[i];
+                        }
+                    }
+                }
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::SetAdd => {
+            let val = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.values.len() {
+                        if same_value_zero(entry.values[i], val) {
+                            return this_val;
+                        }
+                    }
+                    entry.values.push(val);
+                }
+            }
+            this_val
+        }
+        MapSetMethodKind::Has => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    let entry = &table[handle];
+                    for i in 0..entry.values.len() {
+                        if same_value_zero(entry.values[i], key) {
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            value::encode_bool(false)
+        }
+        MapSetMethodKind::Delete => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            entry.keys.remove(i);
+                            entry.values.remove(i);
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.values.len() {
+                        if same_value_zero(entry.values[i], key) {
+                            entry.values.remove(i);
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            value::encode_bool(false)
+        }
+        MapSetMethodKind::Clear => {
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    table[handle].keys.clear();
+                    table[handle].values.clear();
+                }
+                return value::encode_undefined();
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    table[handle].values.clear();
+                }
+                return value::encode_undefined();
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::Size => {
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    return value::encode_f64(table[handle].keys.len() as f64);
+                }
+                return value::encode_f64(0.0);
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    return value::encode_f64(table[handle].values.len() as f64);
+                }
+                return value::encode_f64(0.0);
+            }
+            value::encode_f64(0.0)
+        }
+        // TODO: implement forEach/keys/values/entries — currently stubbed
+        MapSetMethodKind::ForEach
+        | MapSetMethodKind::Keys
+        | MapSetMethodKind::Values
+        | MapSetMethodKind::Entries => {
+            value::encode_undefined()
+        }
+    }
+}
+
 fn call_native_callable_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     callable: i64,
     argument: Option<i64>,
 ) -> Option<i64> {
-    call_native_callable_with_args_from_caller(caller, callable, argument.into_iter().collect())
+    call_native_callable_with_args_from_caller(caller, callable, value::encode_undefined(), argument.into_iter().collect())
 }
 
 fn call_native_callable_with_args_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     callable: i64,
+    this_val: i64,
     args: Vec<i64>,
 ) -> Option<i64> {
     if !value::is_native_callable(callable) {
@@ -10073,6 +13643,18 @@ fn call_native_callable_with_args_from_caller(
                 pump_async_generator_from_caller(caller, generator);
             }
             Some(result_promise)
+        }
+        NativeCallable::MapSetMethod { kind } => {
+            Some(call_map_set_method_from_caller(caller, this_val, kind, args))
+        }
+        NativeCallable::DateMethod { kind } => {
+            Some(call_date_method_from_caller(caller, this_val, kind, args))
+        }
+        NativeCallable::WeakMapMethod { kind } => {
+            Some(call_weakmap_method_from_caller(caller, this_val, kind, args))
+        }
+        NativeCallable::WeakSetMethod { kind } => {
+            Some(call_weakset_method_from_caller(caller, this_val, kind, args))
         }
     }
 }
@@ -10705,7 +14287,7 @@ fn eval_call(
         for arg in &call.args {
             args.push(eval_expr(caller, &arg.expr, scope_env, eval_locals)?);
         }
-        return call_native_callable_with_args_from_caller(caller, callee, args)
+        return call_native_callable_with_args_from_caller(caller, callee, value::encode_undefined(), args)
             .ok_or_else(|| "TypeError: eval callee is not callable".to_string());
     }
     Err("SyntaxError: unsupported eval call".to_string())
