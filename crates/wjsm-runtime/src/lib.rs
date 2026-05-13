@@ -7295,12 +7295,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let obj_ptr = resolve_handle(&mut caller, target);
             if let Some(ptr) = obj_ptr {
                 if let Some(prop_name) = render_value(&mut caller, prop).ok() {
-                    if let Some(name_id) = find_memory_c_string(&mut caller, &prop_name).or_else(|| alloc_heap_c_string(&mut caller, &prop_name)) {
-                        if let Some((_slot_offset, _, _)) = find_property_slot_by_name_id(&mut caller, ptr, name_id) {
-                            let _ = define_host_data_property_from_caller(&mut caller, target, &prop_name, val);
-                            return value::encode_bool(true);
-                        }
-                    }
+                    let _ = define_host_data_property_from_caller(&mut caller, target, &prop_name, val);
+                    return value::encode_bool(true);
                 }
             }
             value::encode_bool(false)
@@ -8693,7 +8689,13 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let arraybuffer_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, byte_length: i64| -> i64 {
-            let len = value::decode_f64(byte_length) as u32;
+            let len_f64 = value::decode_f64(byte_length);
+            if len_f64 < 0.0 {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("RangeError: Invalid array buffer length".to_string());
+                return value::encode_undefined();
+            }
+            let len = len_f64 as u32;
             let handle;
             {
                 let mut table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
@@ -8767,20 +8769,25 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let dataview_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, buffer: i64, byte_offset: i64, byte_length: i64| -> i64 {
-            let offset = value::decode_f64(byte_offset) as u32;
-            let length = value::decode_f64(byte_length) as u32;
-            let buf_handle = {
+            let offset = if value::is_undefined(byte_offset) { 0 } else { value::decode_f64(byte_offset) as u32 };
+            let (buf_handle, buf_byte_length) = {
                 let obj_ptr = resolve_handle(&mut caller, buffer);
                 match obj_ptr {
                     Some(ptr) => {
                         let h = read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
-                        match h {
-                            Some(v) => value::decode_f64(v) as u32,
-                            None => return value::encode_undefined(),
+                        let bl = read_object_property_by_name(&mut caller, ptr, "byteLength");
+                        match (h, bl) {
+                            (Some(hv), Some(lv)) => (value::decode_f64(hv) as u32, value::decode_f64(lv) as u32),
+                            _ => return value::encode_undefined(),
                         }
                     }
                     None => return value::encode_undefined(),
                 }
+            };
+            let length = if value::is_undefined(byte_length) {
+                buf_byte_length.saturating_sub(offset)
+            } else {
+                value::decode_f64(byte_length) as u32
             };
             let handle;
             {
@@ -8818,18 +8825,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             (e.buffer_handle, e.byte_offset, e.byte_length)
                         } else { return value::encode_undefined(); }
                     };
-                    if offset + $size as u32 > dv_length {
-                        *caller.data().runtime_error.lock().expect("error mutex") =
-                            Some("RangeError: Offset is outside the bounds of the DataView".to_string());
-                        return value::encode_undefined();
-                    }
+                    let abs_offset = dv_offset as usize + offset as usize;
                     let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
                     if let Some(buf_entry) = ab_table.get(buf_handle as usize) {
-                        let abs_offset = (dv_offset + offset) as usize;
-                        if abs_offset + $size <= buf_entry.data.len() {
-                            let bytes = &buf_entry.data[abs_offset..abs_offset + $size];
-                            return $conv(bytes);
+                        if offset + $size as u32 > dv_length || abs_offset + $size > buf_entry.data.len() {
+                            *caller.data().runtime_error.lock().expect("error mutex") =
+                                Some("RangeError: Offset is outside the bounds of the DataView".to_string());
+                            return value::encode_undefined();
                         }
+                        let bytes = &buf_entry.data[abs_offset..abs_offset + $size];
+                        return $conv(bytes);
                     }
                     value::encode_undefined()
                 },
@@ -8869,18 +8874,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             (e.buffer_handle, e.byte_offset, e.byte_length)
                         } else { return value::encode_undefined(); }
                     };
-                    if offset + $size as u32 > dv_length {
-                        *caller.data().runtime_error.lock().expect("error mutex") =
-                            Some("RangeError: Offset is outside the bounds of the DataView".to_string());
-                        return value::encode_undefined();
-                    }
+                    let abs_offset = dv_offset as usize + offset as usize;
                     let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
                     if let Some(buf_entry) = ab_table.get_mut(buf_handle as usize) {
-                        let abs_offset = (dv_offset + offset) as usize;
-                        if abs_offset + $size <= buf_entry.data.len() {
-                            let bytes = $write(value_arg);
-                            buf_entry.data[abs_offset..abs_offset + $size].copy_from_slice(&bytes[..$size]);
+                        if offset + $size as u32 > dv_length || abs_offset + $size > buf_entry.data.len() {
+                            *caller.data().runtime_error.lock().expect("error mutex") =
+                                Some("RangeError: Offset is outside the bounds of the DataView".to_string());
+                            return value::encode_undefined();
                         }
+                        let bytes = $write(value_arg);
+                        buf_entry.data[abs_offset..abs_offset + $size].copy_from_slice(&bytes[..$size]);
                     }
                     value::encode_undefined()
                 },
@@ -8895,7 +8898,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     dataview_set_fn!(dataview_proto_set_int32_fn, 4, |v: i64| (value::decode_f64(v) as i32).to_le_bytes().to_vec());
     dataview_set_fn!(dataview_proto_set_uint32_fn, 4, |v: i64| (value::decode_f64(v) as u32).to_le_bytes().to_vec());
     dataview_set_fn!(dataview_proto_set_float32_fn, 4, |v: i64| (value::decode_f64(v) as f32).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_float64_fn, 8, |v: i64| f64::from_bits(v as u64).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_float64_fn, 8, |v: i64| value::decode_f64(v).to_le_bytes().to_vec());
 
     macro_rules! typedarray_constructor {
         ($name:ident, $size:expr) => {
