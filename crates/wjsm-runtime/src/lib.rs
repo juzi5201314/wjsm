@@ -1,5 +1,6 @@
 use anyhow::Result;
 use num_traits::cast::ToPrimitive;
+use rand::Rng;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -7196,6 +7197,294 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_undefined()
         },
     );
+    // ── Math builtins ────────────────────────────────────────────────────────
+    let math_abs_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.abs())
+        },
+    );
+    let math_acos_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.acos())
+        },
+    );
+    let math_acosh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.acosh())
+        },
+    );
+    let math_asin_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.asin())
+        },
+    );
+    let math_asinh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.asinh())
+        },
+    );
+    let math_atan_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.atan())
+        },
+    );
+    let math_atanh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.atanh())
+        },
+    );
+    let math_atan2_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let y = f64::from_bits(a as u64);
+            let x = f64::from_bits(b as u64);
+            value::encode_f64(y.atan2(x))
+        },
+    );
+    let math_cbrt_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.cbrt())
+        },
+    );
+    let math_ceil_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.ceil())
+        },
+    );
+    let math_clz32_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            let n = x as i32 as u32;
+            value::encode_f64(if n == 0 { 32.0 } else { n.leading_zeros() as f64 })
+        },
+    );
+    let math_cos_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.cos())
+        },
+    );
+    let math_cosh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.cosh())
+        },
+    );
+    let math_exp_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.exp())
+        },
+    );
+    let math_expm1_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.exp_m1())
+        },
+    );
+    let math_floor_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.floor())
+        },
+    );
+    let math_fround_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64((x as f32) as f64)
+        },
+    );
+    let math_hypot_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
+            if args_count == 0 {
+                return value::encode_f64(0.0);
+            }
+            let mut sum = 0.0_f64;
+            for i in 0..args_count as u32 {
+                let val = read_shadow_arg(&mut caller, args_base, i);
+                let x = f64::from_bits(val as u64);
+                if x.is_infinite() {
+                    return value::encode_f64(f64::INFINITY);
+                }
+                sum += x * x;
+            }
+            value::encode_f64(sum.sqrt())
+        },
+    );
+    let math_imul_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let ai = f64::from_bits(a as u64) as i32;
+            let bi = f64::from_bits(b as u64) as i32;
+            let result = (ai as i64) * (bi as i64);
+            value::encode_f64((result as i32) as f64)
+        },
+    );
+    let math_log_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.ln())
+        },
+    );
+    let math_log1p_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.ln_1p())
+        },
+    );
+    let math_log10_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.log10())
+        },
+    );
+    let math_log2_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.log2())
+        },
+    );
+    let math_max_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
+            if args_count == 0 {
+                return value::encode_f64(f64::NEG_INFINITY);
+            }
+            let mut result = f64::NEG_INFINITY;
+            for i in 0..args_count as u32 {
+                let val = read_shadow_arg(&mut caller, args_base, i);
+                let x = f64::from_bits(val as u64);
+                if x > result || (x == 0.0 && result == 0.0 && x.is_sign_positive()) {
+                    result = x;
+                }
+            }
+            value::encode_f64(result)
+        },
+    );
+    let math_min_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
+            if args_count == 0 {
+                return value::encode_f64(f64::INFINITY);
+            }
+            let mut result = f64::INFINITY;
+            for i in 0..args_count as u32 {
+                let val = read_shadow_arg(&mut caller, args_base, i);
+                let x = f64::from_bits(val as u64);
+                if x < result || (x == 0.0 && result == 0.0 && x.is_sign_negative()) {
+                    result = x;
+                }
+            }
+            value::encode_f64(result)
+        },
+    );
+    let math_pow_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            let base = f64::from_bits(a as u64);
+            let exp = f64::from_bits(b as u64);
+            value::encode_f64(base.powf(exp))
+        },
+    );
+    let math_random_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>| -> i64 {
+            let mut rng = rand::thread_rng();
+            value::encode_f64(rng.gen_range(0.0_f64..1.0))
+        },
+    );
+    let math_round_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.round())
+        },
+    );
+    let math_sign_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            if x.is_nan() {
+                return value::encode_f64(f64::NAN);
+            }
+            if x == 0.0 {
+                return value::encode_f64(if x.is_sign_positive() { 0.0 } else { -0.0 });
+            }
+            value::encode_f64(if x > 0.0 { 1.0 } else { -1.0 })
+        },
+    );
+    let math_sin_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.sin())
+        },
+    );
+    let math_sinh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.sinh())
+        },
+    );
+    let math_sqrt_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.sqrt())
+        },
+    );
+    let math_tan_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.tan())
+        },
+    );
+    let math_tanh_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.tanh())
+        },
+    );
+    let math_trunc_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            let x = f64::from_bits(arg as u64);
+            value::encode_f64(x.trunc())
+        },
+    );
     let imports = [
         console_log.into(),                    // 0
         f64_mod.into(),                        // 1
@@ -7395,6 +7684,42 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         string_iterator_fn.into(),     // 190
         string_from_char_code_fn.into(),// 191
         string_from_code_point_fn.into(),// 192
+        // ── Math imports ──
+        math_abs_fn.into(),    // 193
+        math_acos_fn.into(),   // 194
+        math_acosh_fn.into(),  // 195
+        math_asin_fn.into(),   // 196
+        math_asinh_fn.into(),  // 197
+        math_atan_fn.into(),   // 198
+        math_atanh_fn.into(),  // 199
+        math_atan2_fn.into(),  // 200
+        math_cbrt_fn.into(),   // 201
+        math_ceil_fn.into(),   // 202
+        math_clz32_fn.into(),  // 203
+        math_cos_fn.into(),    // 204
+        math_cosh_fn.into(),   // 205
+        math_exp_fn.into(),    // 206
+        math_expm1_fn.into(),  // 207
+        math_floor_fn.into(),  // 208
+        math_fround_fn.into(), // 209
+        math_hypot_fn.into(),  // 210
+        math_imul_fn.into(),   // 211
+        math_log_fn.into(),    // 212
+        math_log1p_fn.into(),  // 213
+        math_log10_fn.into(),  // 214
+        math_log2_fn.into(),   // 215
+        math_max_fn.into(),    // 216
+        math_min_fn.into(),    // 217
+        math_pow_fn.into(),    // 218
+        math_random_fn.into(), // 219
+        math_round_fn.into(),  // 220
+        math_sign_fn.into(),   // 221
+        math_sin_fn.into(),    // 222
+        math_sinh_fn.into(),   // 223
+        math_sqrt_fn.into(),   // 224
+        math_tan_fn.into(),    // 225
+        math_tanh_fn.into(),   // 226
+        math_trunc_fn.into(),  // 227
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -8026,7 +8351,15 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
         return Ok("/(?:)/".to_string()); // empty regex fallback
     }
 
-    Ok(f64::from_bits(val as u64).to_string())
+    let n = f64::from_bits(val as u64);
+    if n.is_infinite() {
+        return Ok(if n.is_sign_positive() {
+            "Infinity".to_string()
+        } else {
+            "-Infinity".to_string()
+        });
+    }
+    Ok(n.to_string())
 }
 
 fn write_console_value(caller: &mut Caller<'_, RuntimeState>, val: i64, prefix: Option<&str>) {

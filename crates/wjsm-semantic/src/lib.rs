@@ -1648,6 +1648,36 @@ impl Lowerer {
             },
         );
 
+        // Math constants
+        let math_constants: [(&str, f64); 8] = [
+            ("$0.Math.E", std::f64::consts::E),
+            ("$0.Math.LN10", std::f64::consts::LN_10),
+            ("$0.Math.LN2", std::f64::consts::LN_2),
+            ("$0.Math.LOG10E", std::f64::consts::LOG10_E),
+            ("$0.Math.LOG2E", std::f64::consts::LOG2_E),
+            ("$0.Math.PI", std::f64::consts::PI),
+            ("$0.Math.SQRT1_2", std::f64::consts::FRAC_1_SQRT_2),
+            ("$0.Math.SQRT2", std::f64::consts::SQRT_2),
+        ];
+        for (name, val) in math_constants {
+            let c = self.module.add_constant(Constant::Number(val));
+            let v = self.alloc_value();
+            self.current_function.append_instruction(
+                entry,
+                Instruction::Const {
+                    dest: v,
+                    constant: c,
+                },
+            );
+            self.current_function.append_instruction(
+                entry,
+                Instruction::StoreVar {
+                    name: name.to_string(),
+                    value: v,
+                },
+            );
+        }
+
         let mut flow = StmtFlow::Open(entry);
 
         for item in &module.body {
@@ -9522,6 +9552,31 @@ impl Lowerer {
         member: &swc_ast::MemberExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // 拦截 Math 常量属性访问（Math.PI, Math.E 等）
+        if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop {
+            if let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                if obj_ident.sym.to_string() == "Math" && self.scopes.lookup("Math").is_err() {
+                    let prop_name = prop_ident.sym.to_string();
+                    let is_math_const = matches!(
+                        prop_name.as_str(),
+                        "E" | "LN10" | "LN2" | "LOG10E" | "LOG2E" | "PI" | "SQRT1_2" | "SQRT2"
+                    );
+                    if is_math_const {
+                        let math_const_name = format!("$0.Math.{}", prop_name);
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::LoadVar {
+                                dest,
+                                name: math_const_name,
+                            },
+                        );
+                        return Ok(dest);
+                    }
+                }
+            }
+        }
+
         let obj_val = self.lower_expr(&member.obj, block)?;
 
         let key = match &member.prop {
@@ -13606,6 +13661,44 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
             "getOwnPropertyDescriptor" => Some(Builtin::ReflectGetOwnPropertyDescriptor),
             "defineProperty" => Some(Builtin::ReflectDefineProperty),
             "ownKeys" => Some(Builtin::ReflectOwnKeys),
+            _ => None,
+        },
+        "Math" => match property {
+            "abs" => Some(Builtin::MathAbs),
+            "acos" => Some(Builtin::MathAcos),
+            "acosh" => Some(Builtin::MathAcosh),
+            "asin" => Some(Builtin::MathAsin),
+            "asinh" => Some(Builtin::MathAsinh),
+            "atan" => Some(Builtin::MathAtan),
+            "atanh" => Some(Builtin::MathAtanh),
+            "atan2" => Some(Builtin::MathAtan2),
+            "cbrt" => Some(Builtin::MathCbrt),
+            "ceil" => Some(Builtin::MathCeil),
+            "clz32" => Some(Builtin::MathClz32),
+            "cos" => Some(Builtin::MathCos),
+            "cosh" => Some(Builtin::MathCosh),
+            "exp" => Some(Builtin::MathExp),
+            "expm1" => Some(Builtin::MathExpm1),
+            "floor" => Some(Builtin::MathFloor),
+            "fround" => Some(Builtin::MathFround),
+            "hypot" => Some(Builtin::MathHypot),
+            "imul" => Some(Builtin::MathImul),
+            "log" => Some(Builtin::MathLog),
+            "log1p" => Some(Builtin::MathLog1p),
+            "log10" => Some(Builtin::MathLog10),
+            "log2" => Some(Builtin::MathLog2),
+            "max" => Some(Builtin::MathMax),
+            "min" => Some(Builtin::MathMin),
+            "pow" => Some(Builtin::MathPow),
+            "random" => Some(Builtin::MathRandom),
+            "round" => Some(Builtin::MathRound),
+            "sign" => Some(Builtin::MathSign),
+            "sin" => Some(Builtin::MathSin),
+            "sinh" => Some(Builtin::MathSinh),
+            "sqrt" => Some(Builtin::MathSqrt),
+            "tan" => Some(Builtin::MathTan),
+            "tanh" => Some(Builtin::MathTanh),
+            "trunc" => Some(Builtin::MathTrunc),
             _ => None,
         },
         _ => None,
