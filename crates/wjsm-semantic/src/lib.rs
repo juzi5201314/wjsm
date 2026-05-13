@@ -10800,6 +10800,50 @@ impl Lowerer {
                 );
                 return Ok(dest);
             }
+            // Error constructors: new Error(msg), new TypeError(msg), etc.
+            if self.scopes.lookup(&ident.sym).is_err() {
+                if let Some(builtin) = builtin_from_global_ident(&ident.sym) {
+                    if matches!(
+                        builtin,
+                        Builtin::ErrorConstructor
+                            | Builtin::TypeErrorConstructor
+                            | Builtin::RangeErrorConstructor
+                            | Builtin::SyntaxErrorConstructor
+                            | Builtin::ReferenceErrorConstructor
+                            | Builtin::URIErrorConstructor
+                            | Builtin::EvalErrorConstructor
+                    ) {
+                        let mut arg_vals = Vec::new();
+                        if let Some(args) = &new_expr.args {
+                            for arg in args {
+                                let arg_val = self.lower_expr(&arg.expr, block)?;
+                                arg_vals.push(arg_val);
+                            }
+                        }
+                        if arg_vals.is_empty() {
+                            arg_vals.push({
+                                let c = self.module.add_constant(Constant::Undefined);
+                                let dest = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::Const { dest, constant: c },
+                                );
+                                dest
+                            });
+                        }
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin,
+                                args: arg_vals,
+                            },
+                        );
+                        return Ok(dest);
+                    }
+                }
+            }
         }
 
         let callee_val = self.lower_expr(&new_expr.callee, block)?;
@@ -11364,6 +11408,26 @@ impl Lowerer {
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin: boolean_proto_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+
+                        if let Some(error_proto_builtin) =
+                            builtin_from_error_proto_method(&prop_ident.sym)
+                        {
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: error_proto_builtin,
                                     args: builtin_args,
                                 },
                             );
@@ -13683,6 +13747,13 @@ fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "Proxy" => Some(Builtin::ProxyCreate),
         "Number" => Some(Builtin::NumberConstructor),
         "Boolean" => Some(Builtin::BooleanConstructor),
+        "Error" => Some(Builtin::ErrorConstructor),
+        "TypeError" => Some(Builtin::TypeErrorConstructor),
+        "RangeError" => Some(Builtin::RangeErrorConstructor),
+        "SyntaxError" => Some(Builtin::SyntaxErrorConstructor),
+        "ReferenceError" => Some(Builtin::ReferenceErrorConstructor),
+        "URIError" => Some(Builtin::URIErrorConstructor),
+        "EvalError" => Some(Builtin::EvalErrorConstructor),
         _ => None,
     }
 }
@@ -13928,6 +13999,11 @@ fn builtin_from_boolean_proto_method(name: &str) -> Option<Builtin> {
     let _ = name;
     None
 }
+
+fn builtin_from_error_proto_method(name: &str) -> Option<Builtin> {
+    let _ = name;
+    None
+}
 fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
     match builtin {
         Builtin::ConsoleLog => ("console.log", 1),
@@ -14031,6 +14107,15 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::BooleanConstructor => ("Boolean", 1),
         Builtin::BooleanProtoToString => ("Boolean.prototype.toString", 1),
         Builtin::BooleanProtoValueOf => ("Boolean.prototype.valueOf", 1),
+        // ── Error builtins ──
+        Builtin::ErrorConstructor => ("Error", 1),
+        Builtin::TypeErrorConstructor => ("TypeError", 1),
+        Builtin::RangeErrorConstructor => ("RangeError", 1),
+        Builtin::SyntaxErrorConstructor => ("SyntaxError", 1),
+        Builtin::ReferenceErrorConstructor => ("ReferenceError", 1),
+        Builtin::URIErrorConstructor => ("URIError", 1),
+        Builtin::EvalErrorConstructor => ("EvalError", 1),
+        Builtin::ErrorProtoToString => ("Error.prototype.toString", 1),
         _ => ("builtin", 0),
     }
 }
