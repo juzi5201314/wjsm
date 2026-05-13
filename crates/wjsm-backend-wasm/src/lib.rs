@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 193] = [
+const HOST_IMPORT_NAMES: [&str; 228] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -207,6 +207,41 @@ const HOST_IMPORT_NAMES: [&str; 193] = [
     "string_iterator",
     "string_from_char_code",
     "string_from_code_point",
+    "math_abs",
+    "math_acos",
+    "math_acosh",
+    "math_asin",
+    "math_asinh",
+    "math_atan",
+    "math_atanh",
+    "math_atan2",
+    "math_cbrt",
+    "math_ceil",
+    "math_clz32",
+    "math_cos",
+    "math_cosh",
+    "math_exp",
+    "math_expm1",
+    "math_floor",
+    "math_fround",
+    "math_hypot",
+    "math_imul",
+    "math_log",
+    "math_log1p",
+    "math_log10",
+    "math_log2",
+    "math_max",
+    "math_min",
+    "math_pow",
+    "math_random",
+    "math_round",
+    "math_sign",
+    "math_sin",
+    "math_sinh",
+    "math_sqrt",
+    "math_tan",
+    "math_tanh",
+    "math_trunc",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -215,7 +250,7 @@ const HOST_IMPORT_NAMES: [&str; 193] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        193,
+        228,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1032,6 +1067,77 @@ impl Compiler {
         imports.import("env", "string_from_char_code", EntityType::Function(12));
         // Import 192: string_from_code_point: (i64, i64, i32, i32) -> i64
         imports.import("env", "string_from_code_point", EntityType::Function(12));
+        // ── Math builtins ──
+        // Import index 193: math_abs: (i64) -> i64
+        imports.import("env", "math_abs", EntityType::Function(3));
+        // Import index 194: math_acos: (i64) -> i64
+        imports.import("env", "math_acos", EntityType::Function(3));
+        // Import index 195: math_acosh: (i64) -> i64
+        imports.import("env", "math_acosh", EntityType::Function(3));
+        // Import index 196: math_asin: (i64) -> i64
+        imports.import("env", "math_asin", EntityType::Function(3));
+        // Import index 197: math_asinh: (i64) -> i64
+        imports.import("env", "math_asinh", EntityType::Function(3));
+        // Import index 198: math_atan: (i64) -> i64
+        imports.import("env", "math_atan", EntityType::Function(3));
+        // Import index 199: math_atanh: (i64) -> i64
+        imports.import("env", "math_atanh", EntityType::Function(3));
+        // Import index 200: math_atan2: (i64, i64) -> i64
+        imports.import("env", "math_atan2", EntityType::Function(2));
+        // Import index 201: math_cbrt: (i64) -> i64
+        imports.import("env", "math_cbrt", EntityType::Function(3));
+        // Import index 202: math_ceil: (i64) -> i64
+        imports.import("env", "math_ceil", EntityType::Function(3));
+        // Import index 203: math_clz32: (i64) -> i64
+        imports.import("env", "math_clz32", EntityType::Function(3));
+        // Import index 204: math_cos: (i64) -> i64
+        imports.import("env", "math_cos", EntityType::Function(3));
+        // Import index 205: math_cosh: (i64) -> i64
+        imports.import("env", "math_cosh", EntityType::Function(3));
+        // Import index 206: math_exp: (i64) -> i64
+        imports.import("env", "math_exp", EntityType::Function(3));
+        // Import index 207: math_expm1: (i64) -> i64
+        imports.import("env", "math_expm1", EntityType::Function(3));
+        // Import index 208: math_floor: (i64) -> i64
+        imports.import("env", "math_floor", EntityType::Function(3));
+        // Import index 209: math_fround: (i64) -> i64
+        imports.import("env", "math_fround", EntityType::Function(3));
+        // Import index 210: math_hypot: (i32, i32) -> i64
+        imports.import("env", "math_hypot", EntityType::Function(19));
+        // Import index 211: math_imul: (i64, i64) -> i64
+        imports.import("env", "math_imul", EntityType::Function(2));
+        // Import index 212: math_log: (i64) -> i64
+        imports.import("env", "math_log", EntityType::Function(3));
+        // Import index 213: math_log1p: (i64) -> i64
+        imports.import("env", "math_log1p", EntityType::Function(3));
+        // Import index 214: math_log10: (i64) -> i64
+        imports.import("env", "math_log10", EntityType::Function(3));
+        // Import index 215: math_log2: (i64) -> i64
+        imports.import("env", "math_log2", EntityType::Function(3));
+        // Import index 216: math_max: (i32, i32) -> i64
+        imports.import("env", "math_max", EntityType::Function(19));
+        // Import index 217: math_min: (i32, i32) -> i64
+        imports.import("env", "math_min", EntityType::Function(19));
+        // Import index 218: math_pow: (i64, i64) -> i64
+        imports.import("env", "math_pow", EntityType::Function(2));
+        // Import index 219: math_random: () -> i64
+        imports.import("env", "math_random", EntityType::Function(4));
+        // Import index 220: math_round: (i64) -> i64
+        imports.import("env", "math_round", EntityType::Function(3));
+        // Import index 221: math_sign: (i64) -> i64
+        imports.import("env", "math_sign", EntityType::Function(3));
+        // Import index 222: math_sin: (i64) -> i64
+        imports.import("env", "math_sin", EntityType::Function(3));
+        // Import index 223: math_sinh: (i64) -> i64
+        imports.import("env", "math_sinh", EntityType::Function(3));
+        // Import index 224: math_sqrt: (i64) -> i64
+        imports.import("env", "math_sqrt", EntityType::Function(3));
+        // Import index 225: math_tan: (i64) -> i64
+        imports.import("env", "math_tan", EntityType::Function(3));
+        // Import index 226: math_tanh: (i64) -> i64
+        imports.import("env", "math_tanh", EntityType::Function(3));
+        // Import index 227: math_trunc: (i64) -> i64
+        imports.import("env", "math_trunc", EntityType::Function(3));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1241,6 +1347,42 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::StringIterator, 190);
         builtin_func_indices.insert(Builtin::StringFromCharCode, 191);
         builtin_func_indices.insert(Builtin::StringFromCodePoint, 192);
+        // ── Math builtins ──
+        builtin_func_indices.insert(Builtin::MathAbs, 193);
+        builtin_func_indices.insert(Builtin::MathAcos, 194);
+        builtin_func_indices.insert(Builtin::MathAcosh, 195);
+        builtin_func_indices.insert(Builtin::MathAsin, 196);
+        builtin_func_indices.insert(Builtin::MathAsinh, 197);
+        builtin_func_indices.insert(Builtin::MathAtan, 198);
+        builtin_func_indices.insert(Builtin::MathAtanh, 199);
+        builtin_func_indices.insert(Builtin::MathAtan2, 200);
+        builtin_func_indices.insert(Builtin::MathCbrt, 201);
+        builtin_func_indices.insert(Builtin::MathCeil, 202);
+        builtin_func_indices.insert(Builtin::MathClz32, 203);
+        builtin_func_indices.insert(Builtin::MathCos, 204);
+        builtin_func_indices.insert(Builtin::MathCosh, 205);
+        builtin_func_indices.insert(Builtin::MathExp, 206);
+        builtin_func_indices.insert(Builtin::MathExpm1, 207);
+        builtin_func_indices.insert(Builtin::MathFloor, 208);
+        builtin_func_indices.insert(Builtin::MathFround, 209);
+        builtin_func_indices.insert(Builtin::MathHypot, 210);
+        builtin_func_indices.insert(Builtin::MathImul, 211);
+        builtin_func_indices.insert(Builtin::MathLog, 212);
+        builtin_func_indices.insert(Builtin::MathLog1p, 213);
+        builtin_func_indices.insert(Builtin::MathLog10, 214);
+        builtin_func_indices.insert(Builtin::MathLog2, 215);
+        builtin_func_indices.insert(Builtin::MathMax, 216);
+        builtin_func_indices.insert(Builtin::MathMin, 217);
+        builtin_func_indices.insert(Builtin::MathPow, 218);
+        builtin_func_indices.insert(Builtin::MathRandom, 219);
+        builtin_func_indices.insert(Builtin::MathRound, 220);
+        builtin_func_indices.insert(Builtin::MathSign, 221);
+        builtin_func_indices.insert(Builtin::MathSin, 222);
+        builtin_func_indices.insert(Builtin::MathSinh, 223);
+        builtin_func_indices.insert(Builtin::MathSqrt, 224);
+        builtin_func_indices.insert(Builtin::MathTan, 225);
+        builtin_func_indices.insert(Builtin::MathTanh, 226);
+        builtin_func_indices.insert(Builtin::MathTrunc, 227);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -5225,7 +5367,7 @@ impl Compiler {
         // 确定 this_val 和影子栈参数
         // ArrayIsArray: this_val=undefined, 所有 args 走影子栈
         // 其他方法: this_val=args[0], args[1..] 走影子栈
-        let (this_val_idx, shadow_args) = if matches!(builtin, Builtin::ArrayIsArray | Builtin::StringFromCharCode | Builtin::StringFromCodePoint) {
+        let (this_val_idx, shadow_args) = if matches!(builtin, Builtin::ArrayIsArray | Builtin::StringFromCharCode | Builtin::StringFromCodePoint | Builtin::MathMax | Builtin::MathMin | Builtin::MathHypot) {
             (None, args)
         } else {
             let this = args
@@ -5879,6 +6021,88 @@ impl Compiler {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
                 Ok(())
+            }
+            // ── Math unary builtins (i64) -> i64 ──
+            Builtin::MathAbs
+            | Builtin::MathAcos
+            | Builtin::MathAcosh
+            | Builtin::MathAsin
+            | Builtin::MathAsinh
+            | Builtin::MathAtan
+            | Builtin::MathAtanh
+            | Builtin::MathCbrt
+            | Builtin::MathCeil
+            | Builtin::MathClz32
+            | Builtin::MathCos
+            | Builtin::MathCosh
+            | Builtin::MathExp
+            | Builtin::MathExpm1
+            | Builtin::MathFloor
+            | Builtin::MathFround
+            | Builtin::MathLog
+            | Builtin::MathLog1p
+            | Builtin::MathLog10
+            | Builtin::MathLog2
+            | Builtin::MathRound
+            | Builtin::MathSign
+            | Builtin::MathSin
+            | Builtin::MathSinh
+            | Builtin::MathSqrt
+            | Builtin::MathTan
+            | Builtin::MathTanh
+            | Builtin::MathTrunc => {
+                let val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Math binary builtins (i64, i64) -> i64 ──
+            Builtin::MathAtan2 | Builtin::MathImul | Builtin::MathPow => {
+                let lhs = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects 2 arguments"))?;
+                let rhs = args
+                    .get(1)
+                    .with_context(|| format!("{builtin} expects 2 arguments"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Math.random: () -> i64 ──
+            Builtin::MathRandom => {
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Math variadic builtins (shadow stack) ──
+            Builtin::MathMax | Builtin::MathMin | Builtin::MathHypot => {
+                self.compile_proto_method_call(dest, builtin, args)
             }
             Builtin::ArrayIndexOf | Builtin::ArraySlice | Builtin::ArrayFill => {
                 // 3+ arg functions: (i64, i64, i64) -> i64 etc
@@ -7298,6 +7522,42 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::StringIterator => ("string.iterator", 1),
         Builtin::StringFromCharCode => ("string.from_char_code", 1),
         Builtin::StringFromCodePoint => ("string.from_code_point", 1),
+        // ── Math builtins ──
+        Builtin::MathAbs => ("Math.abs", 1),
+        Builtin::MathAcos => ("Math.acos", 1),
+        Builtin::MathAcosh => ("Math.acosh", 1),
+        Builtin::MathAsin => ("Math.asin", 1),
+        Builtin::MathAsinh => ("Math.asinh", 1),
+        Builtin::MathAtan => ("Math.atan", 1),
+        Builtin::MathAtanh => ("Math.atanh", 1),
+        Builtin::MathAtan2 => ("Math.atan2", 2),
+        Builtin::MathCbrt => ("Math.cbrt", 1),
+        Builtin::MathCeil => ("Math.ceil", 1),
+        Builtin::MathClz32 => ("Math.clz32", 1),
+        Builtin::MathCos => ("Math.cos", 1),
+        Builtin::MathCosh => ("Math.cosh", 1),
+        Builtin::MathExp => ("Math.exp", 1),
+        Builtin::MathExpm1 => ("Math.expm1", 1),
+        Builtin::MathFloor => ("Math.floor", 1),
+        Builtin::MathFround => ("Math.fround", 1),
+        Builtin::MathHypot => ("Math.hypot", 1),
+        Builtin::MathImul => ("Math.imul", 2),
+        Builtin::MathLog => ("Math.log", 1),
+        Builtin::MathLog1p => ("Math.log1p", 1),
+        Builtin::MathLog10 => ("Math.log10", 1),
+        Builtin::MathLog2 => ("Math.log2", 1),
+        Builtin::MathMax => ("Math.max", 1),
+        Builtin::MathMin => ("Math.min", 1),
+        Builtin::MathPow => ("Math.pow", 2),
+        Builtin::MathRandom => ("Math.random", 0),
+        Builtin::MathRound => ("Math.round", 1),
+        Builtin::MathSign => ("Math.sign", 1),
+        Builtin::MathSin => ("Math.sin", 1),
+        Builtin::MathSinh => ("Math.sinh", 1),
+        Builtin::MathSqrt => ("Math.sqrt", 1),
+        Builtin::MathTan => ("Math.tan", 1),
+        Builtin::MathTanh => ("Math.tanh", 1),
+        Builtin::MathTrunc => ("Math.trunc", 1),
     }
 }
 
