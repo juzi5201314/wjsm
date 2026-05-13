@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 228] = [
+const HOST_IMPORT_NAMES: [&str; 243] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -242,6 +242,21 @@ const HOST_IMPORT_NAMES: [&str; 228] = [
     "math_tan",
     "math_tanh",
     "math_trunc",
+    "number_constructor",
+    "number_is_nan",
+    "number_is_finite",
+    "number_is_integer",
+    "number_is_safe_integer",
+    "number_parse_int",
+    "number_parse_float",
+    "number_proto_to_string",
+    "number_proto_value_of",
+    "number_proto_to_fixed",
+    "number_proto_to_exponential",
+    "number_proto_to_precision",
+    "boolean_constructor",
+    "boolean_proto_to_string",
+    "boolean_proto_value_of",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -250,7 +265,7 @@ const HOST_IMPORT_NAMES: [&str; 228] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        228,
+        243,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1138,6 +1153,38 @@ impl Compiler {
         imports.import("env", "math_tanh", EntityType::Function(3));
         // Import index 227: math_trunc: (i64) -> i64
         imports.import("env", "math_trunc", EntityType::Function(3));
+        // ── Number imports ──
+        // Import index 228: number_constructor: (i64) -> i64
+        imports.import("env", "number_constructor", EntityType::Function(3));
+        // Import index 229: number_is_nan: (i64) -> i64
+        imports.import("env", "number_is_nan", EntityType::Function(3));
+        // Import index 230: number_is_finite: (i64) -> i64
+        imports.import("env", "number_is_finite", EntityType::Function(3));
+        // Import index 231: number_is_integer: (i64) -> i64
+        imports.import("env", "number_is_integer", EntityType::Function(3));
+        // Import index 232: number_is_safe_integer: (i64) -> i64
+        imports.import("env", "number_is_safe_integer", EntityType::Function(3));
+        // Import index 233: number_parse_int: (i64, i64) -> i64
+        imports.import("env", "number_parse_int", EntityType::Function(2));
+        // Import index 234: number_parse_float: (i64) -> i64
+        imports.import("env", "number_parse_float", EntityType::Function(3));
+        // Import index 235: number_proto_to_string: (i64, i64) -> i64
+        imports.import("env", "number_proto_to_string", EntityType::Function(2));
+        // Import index 236: number_proto_value_of: (i64) -> i64
+        imports.import("env", "number_proto_value_of", EntityType::Function(3));
+        // Import index 237: number_proto_to_fixed: (i64, i64) -> i64
+        imports.import("env", "number_proto_to_fixed", EntityType::Function(2));
+        // Import index 238: number_proto_to_exponential: (i64, i64) -> i64
+        imports.import("env", "number_proto_to_exponential", EntityType::Function(2));
+        // Import index 239: number_proto_to_precision: (i64, i64) -> i64
+        imports.import("env", "number_proto_to_precision", EntityType::Function(2));
+        // ── Boolean imports ──
+        // Import index 240: boolean_constructor: (i64) -> i64
+        imports.import("env", "boolean_constructor", EntityType::Function(3));
+        // Import index 241: boolean_proto_to_string: (i64) -> i64
+        imports.import("env", "boolean_proto_to_string", EntityType::Function(3));
+        // Import index 242: boolean_proto_value_of: (i64) -> i64
+        imports.import("env", "boolean_proto_value_of", EntityType::Function(3));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1383,6 +1430,23 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::MathTan, 225);
         builtin_func_indices.insert(Builtin::MathTanh, 226);
         builtin_func_indices.insert(Builtin::MathTrunc, 227);
+        // ── Number builtins ──
+        builtin_func_indices.insert(Builtin::NumberConstructor, 228);
+        builtin_func_indices.insert(Builtin::NumberIsNaN, 229);
+        builtin_func_indices.insert(Builtin::NumberIsFinite, 230);
+        builtin_func_indices.insert(Builtin::NumberIsInteger, 231);
+        builtin_func_indices.insert(Builtin::NumberIsSafeInteger, 232);
+        builtin_func_indices.insert(Builtin::NumberParseInt, 233);
+        builtin_func_indices.insert(Builtin::NumberParseFloat, 234);
+        builtin_func_indices.insert(Builtin::NumberProtoToString, 235);
+        builtin_func_indices.insert(Builtin::NumberProtoValueOf, 236);
+        builtin_func_indices.insert(Builtin::NumberProtoToFixed, 237);
+        builtin_func_indices.insert(Builtin::NumberProtoToExponential, 238);
+        builtin_func_indices.insert(Builtin::NumberProtoToPrecision, 239);
+        // ── Boolean builtins ──
+        builtin_func_indices.insert(Builtin::BooleanConstructor, 240);
+        builtin_func_indices.insert(Builtin::BooleanProtoToString, 241);
+        builtin_func_indices.insert(Builtin::BooleanProtoValueOf, 242);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -6104,6 +6168,76 @@ impl Compiler {
             Builtin::MathMax | Builtin::MathMin | Builtin::MathHypot => {
                 self.compile_proto_method_call(dest, builtin, args)
             }
+            // ── Number builtins ──
+            Builtin::NumberConstructor
+            | Builtin::NumberIsNaN
+            | Builtin::NumberIsFinite
+            | Builtin::NumberIsInteger
+            | Builtin::NumberIsSafeInteger
+            | Builtin::NumberParseFloat
+            | Builtin::NumberProtoToString
+            | Builtin::NumberProtoValueOf
+            | Builtin::NumberProtoToFixed
+            | Builtin::NumberProtoToExponential
+            | Builtin::NumberProtoToPrecision => {
+                let val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects at least 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                if let Some(second) = args.get(1) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(second.0)));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::NumberParseInt => {
+                let val = args
+                    .first()
+                    .with_context(|| "Number.parseInt expects at least 1 argument")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                if let Some(second) = args.get(1) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(second.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Boolean builtins ──
+            Builtin::BooleanConstructor
+            | Builtin::BooleanProtoToString
+            | Builtin::BooleanProtoValueOf => {
+                let val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects at least 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
             Builtin::ArrayIndexOf | Builtin::ArraySlice | Builtin::ArrayFill => {
                 // 3+ arg functions: (i64, i64, i64) -> i64 etc
                 for arg in args {
@@ -7558,6 +7692,23 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::MathTan => ("Math.tan", 1),
         Builtin::MathTanh => ("Math.tanh", 1),
         Builtin::MathTrunc => ("Math.trunc", 1),
+        // ── Number builtins ──
+        Builtin::NumberConstructor => ("Number", 1),
+        Builtin::NumberIsNaN => ("Number.isNaN", 1),
+        Builtin::NumberIsFinite => ("Number.isFinite", 1),
+        Builtin::NumberIsInteger => ("Number.isInteger", 1),
+        Builtin::NumberIsSafeInteger => ("Number.isSafeInteger", 1),
+        Builtin::NumberParseInt => ("Number.parseInt", 2),
+        Builtin::NumberParseFloat => ("Number.parseFloat", 1),
+        Builtin::NumberProtoToString => ("Number.prototype.toString", 1),
+        Builtin::NumberProtoValueOf => ("Number.prototype.valueOf", 1),
+        Builtin::NumberProtoToFixed => ("Number.prototype.toFixed", 1),
+        Builtin::NumberProtoToExponential => ("Number.prototype.toExponential", 1),
+        Builtin::NumberProtoToPrecision => ("Number.prototype.toPrecision", 1),
+        // ── Boolean builtins ──
+        Builtin::BooleanConstructor => ("Boolean", 1),
+        Builtin::BooleanProtoToString => ("Boolean.prototype.toString", 1),
+        Builtin::BooleanProtoValueOf => ("Boolean.prototype.valueOf", 1),
     }
 }
 

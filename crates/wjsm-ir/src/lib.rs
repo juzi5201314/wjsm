@@ -864,6 +864,13 @@ pub enum Builtin {
     MathExpm1, MathFloor, MathFround, MathHypot, MathImul, MathLog, MathLog1p,
     MathLog10, MathLog2, MathMax, MathMin, MathPow, MathRandom, MathRound,
     MathSign, MathSin, MathSinh, MathSqrt, MathTan, MathTanh, MathTrunc,
+    // ── Number built-in ────────────────────────────────────────────────
+    NumberConstructor, NumberIsNaN, NumberIsFinite, NumberIsInteger, NumberIsSafeInteger,
+    NumberParseInt, NumberParseFloat,
+    NumberProtoToString, NumberProtoValueOf, NumberProtoToFixed,
+    NumberProtoToExponential, NumberProtoToPrecision,
+    // ── Boolean built-in ───────────────────────────────────────────────
+    BooleanConstructor, BooleanProtoToString, BooleanProtoValueOf,
 }
 
 impl fmt::Display for Builtin {
@@ -1084,6 +1091,21 @@ impl fmt::Display for Builtin {
             Self::MathTan => "Math.tan",
             Self::MathTanh => "Math.tanh",
             Self::MathTrunc => "Math.trunc",
+            Self::NumberConstructor => "Number",
+            Self::NumberIsNaN => "Number.isNaN",
+            Self::NumberIsFinite => "Number.isFinite",
+            Self::NumberIsInteger => "Number.isInteger",
+            Self::NumberIsSafeInteger => "Number.isSafeInteger",
+            Self::NumberParseInt => "Number.parseInt",
+            Self::NumberParseFloat => "Number.parseFloat",
+            Self::NumberProtoToString => "Number.prototype.toString",
+            Self::NumberProtoValueOf => "Number.prototype.valueOf",
+            Self::NumberProtoToFixed => "Number.prototype.toFixed",
+            Self::NumberProtoToExponential => "Number.prototype.toExponential",
+            Self::NumberProtoToPrecision => "Number.prototype.toPrecision",
+            Self::BooleanConstructor => "Boolean",
+            Self::BooleanProtoToString => "Boolean.prototype.toString",
+            Self::BooleanProtoValueOf => "Boolean.prototype.valueOf",
         })
     }
 }

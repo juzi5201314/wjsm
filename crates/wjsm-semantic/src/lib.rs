@@ -1678,6 +1678,36 @@ impl Lowerer {
             );
         }
 
+        // Number constants
+        let number_constants: [(&str, f64); 8] = [
+            ("$0.Number.EPSILON", f64::EPSILON),
+            ("$0.Number.MAX_VALUE", f64::MAX),
+            ("$0.Number.MIN_VALUE", f64::MIN_POSITIVE),
+            ("$0.Number.MAX_SAFE_INTEGER", (1i64 << 53) as f64 - 1.0),
+            ("$0.Number.MIN_SAFE_INTEGER", -((1i64 << 53) as f64 - 1.0)),
+            ("$0.Number.NaN", f64::NAN),
+            ("$0.Number.NEGATIVE_INFINITY", f64::NEG_INFINITY),
+            ("$0.Number.POSITIVE_INFINITY", f64::INFINITY),
+        ];
+        for (name, val) in number_constants {
+            let c = self.module.add_constant(Constant::Number(val));
+            let v = self.alloc_value();
+            self.current_function.append_instruction(
+                entry,
+                Instruction::Const {
+                    dest: v,
+                    constant: c,
+                },
+            );
+            self.current_function.append_instruction(
+                entry,
+                Instruction::StoreVar {
+                    name: name.to_string(),
+                    value: v,
+                },
+            );
+        }
+
         let mut flow = StmtFlow::Open(entry);
 
         for item in &module.body {
@@ -9574,6 +9604,28 @@ impl Lowerer {
                         return Ok(dest);
                     }
                 }
+
+                // 拦截 Number 常量属性访问（Number.EPSILON, Number.MAX_VALUE 等）
+                if obj_ident.sym.to_string() == "Number" && self.scopes.lookup("Number").is_err() {
+                    let prop_name = prop_ident.sym.to_string();
+                    let is_number_const = matches!(
+                        prop_name.as_str(),
+                        "EPSILON" | "MAX_VALUE" | "MIN_VALUE" | "MAX_SAFE_INTEGER"
+                            | "MIN_SAFE_INTEGER" | "NaN" | "NEGATIVE_INFINITY" | "POSITIVE_INFINITY"
+                    );
+                    if is_number_const {
+                        let number_const_name = format!("$0.Number.{}", prop_name);
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::LoadVar {
+                                dest,
+                                name: number_const_name,
+                            },
+                        );
+                        return Ok(dest);
+                    }
+                }
             }
         }
 
@@ -11272,6 +11324,46 @@ impl Lowerer {
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin: promise_proto_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+
+                        if let Some(number_proto_builtin) =
+                            builtin_from_number_proto_method(&prop_ident.sym)
+                        {
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: number_proto_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+
+                        if let Some(boolean_proto_builtin) =
+                            builtin_from_boolean_proto_method(&prop_ident.sym)
+                        {
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: boolean_proto_builtin,
                                     args: builtin_args,
                                 },
                             );
@@ -13589,6 +13681,8 @@ fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "Symbol" => Some(Builtin::SymbolCreate),
         "queueMicrotask" => Some(Builtin::QueueMicrotask),
         "Proxy" => Some(Builtin::ProxyCreate),
+        "Number" => Some(Builtin::NumberConstructor),
+        "Boolean" => Some(Builtin::BooleanConstructor),
         _ => None,
     }
 }
@@ -13701,6 +13795,15 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
             "trunc" => Some(Builtin::MathTrunc),
             _ => None,
         },
+        "Number" => match property {
+            "isNaN" => Some(Builtin::NumberIsNaN),
+            "isFinite" => Some(Builtin::NumberIsFinite),
+            "isInteger" => Some(Builtin::NumberIsInteger),
+            "isSafeInteger" => Some(Builtin::NumberIsSafeInteger),
+            "parseInt" => Some(Builtin::NumberParseInt),
+            "parseFloat" => Some(Builtin::NumberParseFloat),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -13810,6 +13913,21 @@ fn builtin_from_promise_proto_method(name: &str) -> Option<Builtin> {
         _ => None,
     }
 }
+
+fn builtin_from_number_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "toFixed" => Some(NumberProtoToFixed),
+        "toExponential" => Some(NumberProtoToExponential),
+        "toPrecision" => Some(NumberProtoToPrecision),
+        _ => None,
+    }
+}
+
+fn builtin_from_boolean_proto_method(name: &str) -> Option<Builtin> {
+    let _ = name;
+    None
+}
 fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
     match builtin {
         Builtin::ConsoleLog => ("console.log", 1),
@@ -13896,6 +14014,23 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::StringIterator => ("String.prototype[@@iterator]", 1),
         Builtin::StringFromCharCode => ("String.fromCharCode", 1),
         Builtin::StringFromCodePoint => ("String.fromCodePoint", 1),
+        // ── Number builtins ──
+        Builtin::NumberConstructor => ("Number", 1),
+        Builtin::NumberIsNaN => ("Number.isNaN", 1),
+        Builtin::NumberIsFinite => ("Number.isFinite", 1),
+        Builtin::NumberIsInteger => ("Number.isInteger", 1),
+        Builtin::NumberIsSafeInteger => ("Number.isSafeInteger", 1),
+        Builtin::NumberParseInt => ("Number.parseInt", 1),
+        Builtin::NumberParseFloat => ("Number.parseFloat", 1),
+        Builtin::NumberProtoToString => ("Number.prototype.toString", 1),
+        Builtin::NumberProtoValueOf => ("Number.prototype.valueOf", 1),
+        Builtin::NumberProtoToFixed => ("Number.prototype.toFixed", 1),
+        Builtin::NumberProtoToExponential => ("Number.prototype.toExponential", 1),
+        Builtin::NumberProtoToPrecision => ("Number.prototype.toPrecision", 1),
+        // ── Boolean builtins ──
+        Builtin::BooleanConstructor => ("Boolean", 1),
+        Builtin::BooleanProtoToString => ("Boolean.prototype.toString", 1),
+        Builtin::BooleanProtoValueOf => ("Boolean.prototype.valueOf", 1),
         _ => ("builtin", 0),
     }
 }

@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+true
+false
+true
+true
+true
+true
+--- stderr ---
