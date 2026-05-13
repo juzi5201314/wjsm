@@ -10814,7 +10814,20 @@ impl Lowerer {
                             | Builtin::EvalErrorConstructor
                             | Builtin::MapConstructor
                             | Builtin::SetConstructor
+                            | Builtin::WeakMapConstructor
+                            | Builtin::WeakSetConstructor
                             | Builtin::DateConstructor
+                            | Builtin::ArrayBufferConstructor
+                            | Builtin::DataViewConstructor
+                            | Builtin::Int8ArrayConstructor
+                            | Builtin::Uint8ArrayConstructor
+                            | Builtin::Uint8ClampedArrayConstructor
+                            | Builtin::Int16ArrayConstructor
+                            | Builtin::Uint16ArrayConstructor
+                            | Builtin::Int32ArrayConstructor
+                            | Builtin::Uint32ArrayConstructor
+                            | Builtin::Float32ArrayConstructor
+                            | Builtin::Float64ArrayConstructor
                     ) {
                         let mut arg_vals = Vec::new();
                         if let Some(args) = &new_expr.args {
@@ -13759,7 +13772,20 @@ fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "EvalError" => Some(Builtin::EvalErrorConstructor),
         "Map" => Some(Builtin::MapConstructor),
         "Set" => Some(Builtin::SetConstructor),
+        "WeakMap" => Some(Builtin::WeakMapConstructor),
+        "WeakSet" => Some(Builtin::WeakSetConstructor),
         "Date" => Some(Builtin::DateConstructor),
+        "ArrayBuffer" => Some(Builtin::ArrayBufferConstructor),
+        "DataView" => Some(Builtin::DataViewConstructor),
+        "Int8Array" => Some(Builtin::Int8ArrayConstructor),
+        "Uint8Array" => Some(Builtin::Uint8ArrayConstructor),
+        "Uint8ClampedArray" => Some(Builtin::Uint8ClampedArrayConstructor),
+        "Int16Array" => Some(Builtin::Int16ArrayConstructor),
+        "Uint16Array" => Some(Builtin::Uint16ArrayConstructor),
+        "Int32Array" => Some(Builtin::Int32ArrayConstructor),
+        "Uint32Array" => Some(Builtin::Uint32ArrayConstructor),
+        "Float32Array" => Some(Builtin::Float32ArrayConstructor),
+        "Float64Array" => Some(Builtin::Float64ArrayConstructor),
         _ => None,
     }
 }
@@ -14137,6 +14163,56 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::MapConstructor => ("Map", 0),
         // ── Set builtins ──
         Builtin::SetConstructor => ("Set", 0),
+        // ── WeakMap builtins ──
+        Builtin::WeakMapConstructor => ("WeakMap", 0),
+        Builtin::WeakMapProtoSet => ("WeakMap.prototype.set", 3),
+        Builtin::WeakMapProtoGet => ("WeakMap.prototype.get", 2),
+        Builtin::WeakMapProtoHas => ("WeakMap.prototype.has", 2),
+        Builtin::WeakMapProtoDelete => ("WeakMap.prototype.delete", 2),
+        // ── WeakSet builtins ──
+        Builtin::WeakSetConstructor => ("WeakSet", 0),
+        Builtin::WeakSetProtoAdd => ("WeakSet.prototype.add", 2),
+        Builtin::WeakSetProtoHas => ("WeakSet.prototype.has", 2),
+        Builtin::WeakSetProtoDelete => ("WeakSet.prototype.delete", 2),
+        // ── ArrayBuffer builtins ──
+        Builtin::ArrayBufferConstructor => ("ArrayBuffer", 1),
+        Builtin::ArrayBufferProtoByteLength => ("ArrayBuffer.prototype.byteLength", 1),
+        Builtin::ArrayBufferProtoSlice => ("ArrayBuffer.prototype.slice", 3),
+        // ── DataView builtins ──
+        Builtin::DataViewConstructor => ("DataView", 3),
+        Builtin::DataViewProtoGetFloat64 => ("DataView.prototype.getFloat64", 2),
+        Builtin::DataViewProtoGetFloat32 => ("DataView.prototype.getFloat32", 2),
+        Builtin::DataViewProtoGetInt32 => ("DataView.prototype.getInt32", 2),
+        Builtin::DataViewProtoGetUint32 => ("DataView.prototype.getUint32", 2),
+        Builtin::DataViewProtoGetInt16 => ("DataView.prototype.getInt16", 2),
+        Builtin::DataViewProtoGetUint16 => ("DataView.prototype.getUint16", 2),
+        Builtin::DataViewProtoGetInt8 => ("DataView.prototype.getInt8", 2),
+        Builtin::DataViewProtoGetUint8 => ("DataView.prototype.getUint8", 2),
+        Builtin::DataViewProtoSetFloat64 => ("DataView.prototype.setFloat64", 3),
+        Builtin::DataViewProtoSetFloat32 => ("DataView.prototype.setFloat32", 3),
+        Builtin::DataViewProtoSetInt32 => ("DataView.prototype.setInt32", 3),
+        Builtin::DataViewProtoSetUint32 => ("DataView.prototype.setUint32", 3),
+        Builtin::DataViewProtoSetInt16 => ("DataView.prototype.setInt16", 3),
+        Builtin::DataViewProtoSetUint16 => ("DataView.prototype.setUint16", 3),
+        Builtin::DataViewProtoSetInt8 => ("DataView.prototype.setInt8", 3),
+        Builtin::DataViewProtoSetUint8 => ("DataView.prototype.setUint8", 3),
+        // ── TypedArray constructors ──
+        Builtin::Int8ArrayConstructor => ("Int8Array", 3),
+        Builtin::Uint8ArrayConstructor => ("Uint8Array", 3),
+        Builtin::Uint8ClampedArrayConstructor => ("Uint8ClampedArray", 3),
+        Builtin::Int16ArrayConstructor => ("Int16Array", 3),
+        Builtin::Uint16ArrayConstructor => ("Uint16Array", 3),
+        Builtin::Int32ArrayConstructor => ("Int32Array", 3),
+        Builtin::Uint32ArrayConstructor => ("Uint32Array", 3),
+        Builtin::Float32ArrayConstructor => ("Float32Array", 3),
+        Builtin::Float64ArrayConstructor => ("Float64Array", 3),
+        // ── TypedArray prototype methods ──
+        Builtin::TypedArrayProtoLength => ("TypedArray.prototype.length", 1),
+        Builtin::TypedArrayProtoByteLength => ("TypedArray.prototype.byteLength", 1),
+        Builtin::TypedArrayProtoByteOffset => ("TypedArray.prototype.byteOffset", 1),
+        Builtin::TypedArrayProtoSet => ("TypedArray.prototype.set", 3),
+        Builtin::TypedArrayProtoSlice => ("TypedArray.prototype.slice", 3),
+        Builtin::TypedArrayProtoSubarray => ("TypedArray.prototype.subarray", 3),
         // ── Date builtins ──
         Builtin::DateConstructor => ("Date", 0),
         Builtin::DateNow => ("Date.now", 0),
