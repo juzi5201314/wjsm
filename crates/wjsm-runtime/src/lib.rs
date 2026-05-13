@@ -7485,6 +7485,306 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_f64(x.trunc())
         },
     );
+    // ── Number builtins ─────────────────────────────────────────────────────
+    let number_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if value::is_f64(arg) {
+                arg
+            } else if value::is_undefined(arg) || value::is_null(arg) {
+                value::encode_f64(0.0)
+            } else if value::is_bool(arg) {
+                value::encode_f64(if value::decode_bool(arg) { 1.0 } else { 0.0 })
+            } else if value::is_string(arg) {
+                let s = read_value_string_bytes(&mut caller, arg).unwrap_or_default();
+                let s_str = String::from_utf8_lossy(&s).to_string();
+                value::encode_f64(s_str.trim().parse::<f64>().unwrap_or(f64::NAN))
+            } else {
+                value::encode_f64(0.0)
+            }
+        },
+    );
+    let number_is_nan_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if value::is_f64(arg) {
+                value::encode_bool(f64::from_bits(arg as u64).is_nan())
+            } else if value::is_undefined(arg) || value::is_null(arg) || value::is_bool(arg)
+                || value::is_string(arg) || value::is_object(arg) || value::is_function(arg)
+                || value::is_closure(arg) || value::is_bound(arg) || value::is_bigint(arg)
+                || value::is_symbol(arg) || value::is_regexp(arg) || value::is_array(arg)
+                || value::is_iterator(arg) || value::is_enumerator(arg) || value::is_proxy(arg)
+            {
+                value::encode_bool(false)
+            } else {
+                value::encode_bool(true)
+            }
+        },
+    );
+    let number_is_finite_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if value::is_f64(arg) {
+                value::encode_bool(f64::from_bits(arg as u64).is_finite())
+            } else {
+                value::encode_bool(false)
+            }
+        },
+    );
+    let number_is_integer_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if value::is_f64(arg) {
+                let x = f64::from_bits(arg as u64);
+                value::encode_bool(x.is_finite() && x == x.trunc())
+            } else {
+                value::encode_bool(false)
+            }
+        },
+    );
+    let number_is_safe_integer_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if value::is_f64(arg) {
+                let x = f64::from_bits(arg as u64);
+                let is_int = x.is_finite() && x == x.trunc();
+                value::encode_bool(is_int && x.abs() <= 9007199254740991.0)
+            } else {
+                value::encode_bool(false)
+            }
+        },
+    );
+    let number_parse_int_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64, radix_val: i64| -> i64 {
+            if !value::is_string(arg) {
+                if value::is_f64(arg) {
+                    let x = f64::from_bits(arg as u64);
+                    if x.is_nan() || x.is_infinite() {
+                        return value::encode_f64(f64::NAN);
+                    }
+                    return value::encode_f64(x.trunc());
+                }
+                return value::encode_f64(f64::NAN);
+            }
+            let s = read_value_string_bytes(&mut caller, arg).unwrap_or_default();
+            let s_str = String::from_utf8_lossy(&s).to_string();
+            let trimmed = s_str.trim();
+            if trimmed.is_empty() {
+                return value::encode_f64(f64::NAN);
+            }
+            let radix = if value::is_undefined(radix_val) {
+                0
+            } else if value::is_f64(radix_val) {
+                f64::from_bits(radix_val as u64) as i32
+            } else {
+                0
+            };
+            let actual_radix = if radix == 0 {
+                if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+                    16
+                } else {
+                    10
+                }
+            } else {
+                radix
+            };
+            let parse_str = if (actual_radix == 16) && (trimmed.starts_with("0x") || trimmed.starts_with("0X")) {
+                &trimmed[2..]
+            } else {
+                trimmed
+            };
+            match i64::from_str_radix(parse_str, actual_radix as u32) {
+                Ok(v) => value::encode_f64(v as f64),
+                Err(_) => value::encode_f64(f64::NAN),
+            }
+        },
+    );
+    let number_parse_float_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            if !value::is_string(arg) {
+                if value::is_f64(arg) {
+                    return arg;
+                }
+                return value::encode_f64(f64::NAN);
+            }
+            let s = read_value_string_bytes(&mut caller, arg).unwrap_or_default();
+            let s_str = String::from_utf8_lossy(&s).to_string();
+            let trimmed = s_str.trim();
+            if trimmed.is_empty() {
+                return value::encode_f64(f64::NAN);
+            }
+            match trimmed.parse::<f64>() {
+                Ok(v) => value::encode_f64(v),
+                Err(_) => value::encode_f64(f64::NAN),
+            }
+        },
+    );
+    let number_proto_to_string_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, this_val: i64, radix_val: i64| -> i64 {
+            if !value::is_f64(this_val) {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            let x = f64::from_bits(this_val as u64);
+            let radix = if value::is_undefined(radix_val) || value::is_null(radix_val) {
+                10
+            } else if value::is_f64(radix_val) {
+                let r = f64::from_bits(radix_val as u64) as i32;
+                if r < 2 || r > 36 {
+                    return store_runtime_string(&caller, "NaN".to_string());
+                }
+                r
+            } else {
+                10
+            };
+            if x.is_nan() {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            if x.is_infinite() {
+                return store_runtime_string(&caller, if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string());
+            }
+            if radix == 10 {
+                let s = format_number_js(x);
+                return store_runtime_string(&caller, s);
+            }
+            let int_part = x.trunc() as i64;
+            let result = format_radix(int_part, radix as u32);
+            store_runtime_string(&caller, result)
+        },
+    );
+    let number_proto_value_of_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if value::is_f64(this_val) {
+                this_val
+            } else {
+                value::encode_f64(0.0)
+            }
+        },
+    );
+    let number_proto_to_fixed_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
+            if !value::is_f64(this_val) {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            let x = f64::from_bits(this_val as u64);
+            let digits = if value::is_undefined(digits_val) || value::is_null(digits_val) {
+                0
+            } else if value::is_f64(digits_val) {
+                f64::from_bits(digits_val as u64) as i32
+            } else {
+                0
+            };
+            if digits < 0 || digits > 100 {
+                return store_runtime_string(&caller, "RangeError: toFixed() digits argument must be between 0 and 100".to_string());
+            }
+            if x.is_nan() {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            if x.is_infinite() {
+                return store_runtime_string(&caller, if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string());
+            }
+            let s = format!("{:.1$}", x, digits as usize);
+            store_runtime_string(&caller, s)
+        },
+    );
+    let number_proto_to_exponential_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
+            if !value::is_f64(this_val) {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            let x = f64::from_bits(this_val as u64);
+            if x.is_nan() {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            if x.is_infinite() {
+                return store_runtime_string(&caller, if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string());
+            }
+            let digits = if value::is_undefined(digits_val) || value::is_null(digits_val) {
+                -1i32
+            } else if value::is_f64(digits_val) {
+                f64::from_bits(digits_val as u64) as i32
+            } else {
+                -1
+            };
+            if x == 0.0 {
+                if digits > 0 {
+                    let s = format!("0.{}e+0", "0".repeat(digits as usize));
+                    return store_runtime_string(&caller, s);
+                }
+                return store_runtime_string(&caller, "0e+0".to_string());
+            }
+            let s = if digits >= 0 {
+                format!("{:.1$e}", x, digits as usize)
+            } else {
+                format!("{:e}", x)
+            };
+            let s = normalize_exponent(&s);
+            store_runtime_string(&caller, s)
+        },
+    );
+    let number_proto_to_precision_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
+            if !value::is_f64(this_val) {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            let x = f64::from_bits(this_val as u64);
+            if x.is_nan() {
+                return store_runtime_string(&caller, "NaN".to_string());
+            }
+            if x.is_infinite() {
+                return store_runtime_string(&caller, if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string());
+            }
+            let precision = if value::is_undefined(digits_val) || value::is_null(digits_val) {
+                -1i32
+            } else if value::is_f64(digits_val) {
+                f64::from_bits(digits_val as u64) as i32
+            } else {
+                -1
+            };
+            if precision < 1 || precision > 21 {
+                if value::is_undefined(digits_val) {
+                    let s = format_number_js(x);
+                    return store_runtime_string(&caller, s);
+                }
+                return store_runtime_string(&caller, "RangeError: toPrecision() argument must be between 1 and 21".to_string());
+            }
+            let s = format!("{:.1$}", x, precision as usize);
+            store_runtime_string(&caller, s)
+        },
+    );
+    // ── Boolean builtins ────────────────────────────────────────────────────
+    let boolean_constructor_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            value::encode_bool(value::is_truthy(arg))
+        },
+    );
+    let boolean_proto_to_string_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if value::is_bool(this_val) {
+                store_runtime_string(&caller, if value::decode_bool(this_val) { "true" } else { "false" }.to_string())
+            } else {
+                store_runtime_string(&caller, "false".to_string())
+            }
+        },
+    );
+    let boolean_proto_value_of_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if value::is_bool(this_val) {
+                this_val
+            } else {
+                value::encode_bool(false)
+            }
+        },
+    );
     let imports = [
         console_log.into(),                    // 0
         f64_mod.into(),                        // 1
@@ -7720,6 +8020,23 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         math_tan_fn.into(),    // 225
         math_tanh_fn.into(),   // 226
         math_trunc_fn.into(),  // 227
+        // ── Number imports ──
+        number_constructor_fn.into(),       // 228
+        number_is_nan_fn.into(),            // 229
+        number_is_finite_fn.into(),         // 230
+        number_is_integer_fn.into(),        // 231
+        number_is_safe_integer_fn.into(),   // 232
+        number_parse_int_fn.into(),         // 233
+        number_parse_float_fn.into(),       // 234
+        number_proto_to_string_fn.into(),   // 235
+        number_proto_value_of_fn.into(),    // 236
+        number_proto_to_fixed_fn.into(),    // 237
+        number_proto_to_exponential_fn.into(), // 238
+        number_proto_to_precision_fn.into(),  // 239
+        // ── Boolean imports ──
+        boolean_constructor_fn.into(),      // 240
+        boolean_proto_to_string_fn.into(),  // 241
+        boolean_proto_value_of_fn.into(),   // 242
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -8579,6 +8896,56 @@ fn store_runtime_string_in_state(state: &RuntimeState, string: String) -> i64 {
     let handle = strings.len() as u32;
     strings.push(string);
     value::encode_runtime_string_handle(handle)
+}
+
+fn format_number_js(x: f64) -> String {
+    if x == 0.0 {
+        return "0".to_string();
+    }
+    let abs = x.abs();
+    if abs >= 1e21 || (abs < 1e-6 && abs > 0.0) {
+        let s = format!("{:e}", x);
+        return normalize_exponent(&s);
+    }
+    let s = format!("{}", x);
+    s
+}
+
+fn format_radix(mut value: i64, radix: u32) -> String {
+    if value == 0 {
+        return "0".to_string();
+    }
+    let negative = value < 0;
+    if negative {
+        value = -value;
+    }
+    let digits = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut result = Vec::new();
+    while value > 0 {
+        result.push(digits[value as usize % radix as usize]);
+        value /= radix as i64;
+    }
+    if negative {
+        result.push(b'-');
+    }
+    result.reverse();
+    String::from_utf8(result).unwrap_or_else(|_| "0".to_string())
+}
+
+fn normalize_exponent(s: &str) -> String {
+    if let Some(pos) = s.find('e') {
+        let mantissa = &s[..pos];
+        let exp_part = &s[pos + 1..];
+        let exp_val: i32 = exp_part.parse().unwrap_or(0);
+        format!("{}e{}{}", mantissa, if exp_val >= 0 { "+" } else { "" }, exp_val)
+    } else if let Some(pos) = s.find('E') {
+        let mantissa = &s[..pos];
+        let exp_part = &s[pos + 1..];
+        let exp_val: i32 = exp_part.parse().unwrap_or(0);
+        format!("{}e{}{}", mantissa, if exp_val >= 0 { "+" } else { "" }, exp_val)
+    } else {
+        s.to_string()
+    }
 }
 
 fn find_memory_c_string_global(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {

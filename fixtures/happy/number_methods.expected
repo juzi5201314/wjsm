@@ -1,0 +1,19 @@
+exit_code: 0
+--- stdout ---
+true
+false
+false
+true
+false
+false
+true
+false
+false
+true
+false
+42
+255
+5
+3.14
+100000
+--- stderr ---
