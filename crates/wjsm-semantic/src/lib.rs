@@ -2904,8 +2904,8 @@ impl Lowerer {
 
     fn find_nearest_break_context_index(&self, span: Span) -> Result<usize, LoweringError> {
         for (index, ctx) in self.label_stack.iter().enumerate().rev() {
-            match ctx.kind {
-                LabelKind::Loop | LabelKind::Switch | LabelKind::Block => return Ok(index),
+            if matches!(ctx.kind, LabelKind::Loop | LabelKind::Switch | LabelKind::Block) {
+                return Ok(index);
             }
         }
         Err(LoweringError::Diagnostic(Diagnostic::new(
