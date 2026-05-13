@@ -1,0 +1,17 @@
+exit_code: 0
+--- stdout ---
+TypeError
+type error msg
+TypeError: type error msg
+RangeError
+range error msg
+RangeError: range error msg
+SyntaxError
+SyntaxError: syntax error msg
+ReferenceError
+ReferenceError: ref error msg
+URIError
+URIError: uri error msg
+EvalError
+EvalError: eval error msg
+--- stderr ---

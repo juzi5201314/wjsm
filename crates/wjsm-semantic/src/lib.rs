@@ -1648,6 +1648,66 @@ impl Lowerer {
             },
         );
 
+        // Math constants
+        let math_constants: [(&str, f64); 8] = [
+            ("$0.Math.E", std::f64::consts::E),
+            ("$0.Math.LN10", std::f64::consts::LN_10),
+            ("$0.Math.LN2", std::f64::consts::LN_2),
+            ("$0.Math.LOG10E", std::f64::consts::LOG10_E),
+            ("$0.Math.LOG2E", std::f64::consts::LOG2_E),
+            ("$0.Math.PI", std::f64::consts::PI),
+            ("$0.Math.SQRT1_2", std::f64::consts::FRAC_1_SQRT_2),
+            ("$0.Math.SQRT2", std::f64::consts::SQRT_2),
+        ];
+        for (name, val) in math_constants {
+            let c = self.module.add_constant(Constant::Number(val));
+            let v = self.alloc_value();
+            self.current_function.append_instruction(
+                entry,
+                Instruction::Const {
+                    dest: v,
+                    constant: c,
+                },
+            );
+            self.current_function.append_instruction(
+                entry,
+                Instruction::StoreVar {
+                    name: name.to_string(),
+                    value: v,
+                },
+            );
+        }
+
+        // Number constants
+        let number_constants: [(&str, f64); 8] = [
+            ("$0.Number.EPSILON", f64::EPSILON),
+            ("$0.Number.MAX_VALUE", f64::MAX),
+            ("$0.Number.MIN_VALUE", f64::MIN_POSITIVE),
+            ("$0.Number.MAX_SAFE_INTEGER", (1i64 << 53) as f64 - 1.0),
+            ("$0.Number.MIN_SAFE_INTEGER", -((1i64 << 53) as f64 - 1.0)),
+            ("$0.Number.NaN", f64::NAN),
+            ("$0.Number.NEGATIVE_INFINITY", f64::NEG_INFINITY),
+            ("$0.Number.POSITIVE_INFINITY", f64::INFINITY),
+        ];
+        for (name, val) in number_constants {
+            let c = self.module.add_constant(Constant::Number(val));
+            let v = self.alloc_value();
+            self.current_function.append_instruction(
+                entry,
+                Instruction::Const {
+                    dest: v,
+                    constant: c,
+                },
+            );
+            self.current_function.append_instruction(
+                entry,
+                Instruction::StoreVar {
+                    name: name.to_string(),
+                    value: v,
+                },
+            );
+        }
+
         let mut flow = StmtFlow::Open(entry);
 
         for item in &module.body {
@@ -2844,8 +2904,8 @@ impl Lowerer {
 
     fn find_nearest_break_context_index(&self, span: Span) -> Result<usize, LoweringError> {
         for (index, ctx) in self.label_stack.iter().enumerate().rev() {
-            match ctx.kind {
-                LabelKind::Loop | LabelKind::Switch | LabelKind::Block => return Ok(index),
+            if matches!(ctx.kind, LabelKind::Loop | LabelKind::Switch | LabelKind::Block) {
+                return Ok(index);
             }
         }
         Err(LoweringError::Diagnostic(Diagnostic::new(
@@ -9522,6 +9582,53 @@ impl Lowerer {
         member: &swc_ast::MemberExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        // 拦截 Math 常量属性访问（Math.PI, Math.E 等）
+        if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop {
+            if let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+                if obj_ident.sym.to_string() == "Math" && self.scopes.lookup("Math").is_err() {
+                    let prop_name = prop_ident.sym.to_string();
+                    let is_math_const = matches!(
+                        prop_name.as_str(),
+                        "E" | "LN10" | "LN2" | "LOG10E" | "LOG2E" | "PI" | "SQRT1_2" | "SQRT2"
+                    );
+                    if is_math_const {
+                        let math_const_name = format!("$0.Math.{}", prop_name);
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::LoadVar {
+                                dest,
+                                name: math_const_name,
+                            },
+                        );
+                        return Ok(dest);
+                    }
+                }
+
+                // 拦截 Number 常量属性访问（Number.EPSILON, Number.MAX_VALUE 等）
+                if obj_ident.sym.to_string() == "Number" && self.scopes.lookup("Number").is_err() {
+                    let prop_name = prop_ident.sym.to_string();
+                    let is_number_const = matches!(
+                        prop_name.as_str(),
+                        "EPSILON" | "MAX_VALUE" | "MIN_VALUE" | "MAX_SAFE_INTEGER"
+                            | "MIN_SAFE_INTEGER" | "NaN" | "NEGATIVE_INFINITY" | "POSITIVE_INFINITY"
+                    );
+                    if is_number_const {
+                        let number_const_name = format!("$0.Number.{}", prop_name);
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::LoadVar {
+                                dest,
+                                name: number_const_name,
+                            },
+                        );
+                        return Ok(dest);
+                    }
+                }
+            }
+        }
+
         let obj_val = self.lower_expr(&member.obj, block)?;
 
         let key = match &member.prop {
@@ -10693,6 +10800,66 @@ impl Lowerer {
                 );
                 return Ok(dest);
             }
+            // Error constructors: new Error(msg), new TypeError(msg), etc.
+            if self.scopes.lookup(&ident.sym).is_err() {
+                if let Some(builtin) = builtin_from_global_ident(&ident.sym) {
+                    if matches!(
+                        builtin,
+                        Builtin::ErrorConstructor
+                            | Builtin::TypeErrorConstructor
+                            | Builtin::RangeErrorConstructor
+                            | Builtin::SyntaxErrorConstructor
+                            | Builtin::ReferenceErrorConstructor
+                            | Builtin::URIErrorConstructor
+                            | Builtin::EvalErrorConstructor
+                            | Builtin::MapConstructor
+                            | Builtin::SetConstructor
+                            | Builtin::WeakMapConstructor
+                            | Builtin::WeakSetConstructor
+                            | Builtin::DateConstructor
+                            | Builtin::ArrayBufferConstructor
+                            | Builtin::DataViewConstructor
+                            | Builtin::Int8ArrayConstructor
+                            | Builtin::Uint8ArrayConstructor
+                            | Builtin::Uint8ClampedArrayConstructor
+                            | Builtin::Int16ArrayConstructor
+                            | Builtin::Uint16ArrayConstructor
+                            | Builtin::Int32ArrayConstructor
+                            | Builtin::Uint32ArrayConstructor
+                            | Builtin::Float32ArrayConstructor
+                            | Builtin::Float64ArrayConstructor
+                    ) {
+                        let mut arg_vals = Vec::new();
+                        if let Some(args) = &new_expr.args {
+                            for arg in args {
+                                let arg_val = self.lower_expr(&arg.expr, block)?;
+                                arg_vals.push(arg_val);
+                            }
+                        }
+                        if arg_vals.is_empty() {
+                            arg_vals.push({
+                                let c = self.module.add_constant(Constant::Undefined);
+                                let dest = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::Const { dest, constant: c },
+                                );
+                                dest
+                            });
+                        }
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin,
+                                args: arg_vals,
+                            },
+                        );
+                        return Ok(dest);
+                    }
+                }
+            }
         }
 
         let callee_val = self.lower_expr(&new_expr.callee, block)?;
@@ -11217,6 +11384,66 @@ impl Lowerer {
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin: promise_proto_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+
+                        if let Some(number_proto_builtin) =
+                            builtin_from_number_proto_method(&prop_ident.sym)
+                        {
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: number_proto_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+
+                        if let Some(boolean_proto_builtin) =
+                            builtin_from_boolean_proto_method(&prop_ident.sym)
+                        {
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: boolean_proto_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+
+                        if let Some(error_proto_builtin) =
+                            builtin_from_error_proto_method(&prop_ident.sym)
+                        {
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: error_proto_builtin,
                                     args: builtin_args,
                                 },
                             );
@@ -13534,6 +13761,31 @@ fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "Symbol" => Some(Builtin::SymbolCreate),
         "queueMicrotask" => Some(Builtin::QueueMicrotask),
         "Proxy" => Some(Builtin::ProxyCreate),
+        "Number" => Some(Builtin::NumberConstructor),
+        "Boolean" => Some(Builtin::BooleanConstructor),
+        "Error" => Some(Builtin::ErrorConstructor),
+        "TypeError" => Some(Builtin::TypeErrorConstructor),
+        "RangeError" => Some(Builtin::RangeErrorConstructor),
+        "SyntaxError" => Some(Builtin::SyntaxErrorConstructor),
+        "ReferenceError" => Some(Builtin::ReferenceErrorConstructor),
+        "URIError" => Some(Builtin::URIErrorConstructor),
+        "EvalError" => Some(Builtin::EvalErrorConstructor),
+        "Map" => Some(Builtin::MapConstructor),
+        "Set" => Some(Builtin::SetConstructor),
+        "WeakMap" => Some(Builtin::WeakMapConstructor),
+        "WeakSet" => Some(Builtin::WeakSetConstructor),
+        "Date" => Some(Builtin::DateConstructor),
+        "ArrayBuffer" => Some(Builtin::ArrayBufferConstructor),
+        "DataView" => Some(Builtin::DataViewConstructor),
+        "Int8Array" => Some(Builtin::Int8ArrayConstructor),
+        "Uint8Array" => Some(Builtin::Uint8ArrayConstructor),
+        "Uint8ClampedArray" => Some(Builtin::Uint8ClampedArrayConstructor),
+        "Int16Array" => Some(Builtin::Int16ArrayConstructor),
+        "Uint16Array" => Some(Builtin::Uint16ArrayConstructor),
+        "Int32Array" => Some(Builtin::Int32ArrayConstructor),
+        "Uint32Array" => Some(Builtin::Uint32ArrayConstructor),
+        "Float32Array" => Some(Builtin::Float32ArrayConstructor),
+        "Float64Array" => Some(Builtin::Float64ArrayConstructor),
         _ => None,
     }
 }
@@ -13606,6 +13858,59 @@ fn builtin_from_static_member(object: &str, property: &str) -> Option<Builtin> {
             "getOwnPropertyDescriptor" => Some(Builtin::ReflectGetOwnPropertyDescriptor),
             "defineProperty" => Some(Builtin::ReflectDefineProperty),
             "ownKeys" => Some(Builtin::ReflectOwnKeys),
+            _ => None,
+        },
+        "Math" => match property {
+            "abs" => Some(Builtin::MathAbs),
+            "acos" => Some(Builtin::MathAcos),
+            "acosh" => Some(Builtin::MathAcosh),
+            "asin" => Some(Builtin::MathAsin),
+            "asinh" => Some(Builtin::MathAsinh),
+            "atan" => Some(Builtin::MathAtan),
+            "atanh" => Some(Builtin::MathAtanh),
+            "atan2" => Some(Builtin::MathAtan2),
+            "cbrt" => Some(Builtin::MathCbrt),
+            "ceil" => Some(Builtin::MathCeil),
+            "clz32" => Some(Builtin::MathClz32),
+            "cos" => Some(Builtin::MathCos),
+            "cosh" => Some(Builtin::MathCosh),
+            "exp" => Some(Builtin::MathExp),
+            "expm1" => Some(Builtin::MathExpm1),
+            "floor" => Some(Builtin::MathFloor),
+            "fround" => Some(Builtin::MathFround),
+            "hypot" => Some(Builtin::MathHypot),
+            "imul" => Some(Builtin::MathImul),
+            "log" => Some(Builtin::MathLog),
+            "log1p" => Some(Builtin::MathLog1p),
+            "log10" => Some(Builtin::MathLog10),
+            "log2" => Some(Builtin::MathLog2),
+            "max" => Some(Builtin::MathMax),
+            "min" => Some(Builtin::MathMin),
+            "pow" => Some(Builtin::MathPow),
+            "random" => Some(Builtin::MathRandom),
+            "round" => Some(Builtin::MathRound),
+            "sign" => Some(Builtin::MathSign),
+            "sin" => Some(Builtin::MathSin),
+            "sinh" => Some(Builtin::MathSinh),
+            "sqrt" => Some(Builtin::MathSqrt),
+            "tan" => Some(Builtin::MathTan),
+            "tanh" => Some(Builtin::MathTanh),
+            "trunc" => Some(Builtin::MathTrunc),
+            _ => None,
+        },
+        "Number" => match property {
+            "isNaN" => Some(Builtin::NumberIsNaN),
+            "isFinite" => Some(Builtin::NumberIsFinite),
+            "isInteger" => Some(Builtin::NumberIsInteger),
+            "isSafeInteger" => Some(Builtin::NumberIsSafeInteger),
+            "parseInt" => Some(Builtin::NumberParseInt),
+            "parseFloat" => Some(Builtin::NumberParseFloat),
+            _ => None,
+        },
+        "Date" => match property {
+            "now" => Some(Builtin::DateNow),
+            "parse" => Some(Builtin::DateParse),
+            "UTC" => Some(Builtin::DateUTC),
             _ => None,
         },
         _ => None,
@@ -13717,6 +14022,31 @@ fn builtin_from_promise_proto_method(name: &str) -> Option<Builtin> {
         _ => None,
     }
 }
+
+fn builtin_from_number_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "toFixed" => Some(NumberProtoToFixed),
+        "toExponential" => Some(NumberProtoToExponential),
+        "toPrecision" => Some(NumberProtoToPrecision),
+        _ => None,
+    }
+}
+
+fn builtin_from_boolean_proto_method(name: &str) -> Option<Builtin> {
+    // Boolean.prototype methods (toString, valueOf) are dispatched at runtime
+    // via property lookup on the Boolean prototype object, not via CallBuiltin.
+    let _ = name;
+    None
+}
+
+fn builtin_from_error_proto_method(name: &str) -> Option<Builtin> {
+    // Error.prototype methods (toString) are dispatched at runtime
+    // via property lookup on the Error prototype object, not via CallBuiltin.
+    let _ = name;
+    None
+}
+
 fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
     match builtin {
         Builtin::ConsoleLog => ("console.log", 1),
@@ -13803,6 +14133,91 @@ fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
         Builtin::StringIterator => ("String.prototype[@@iterator]", 1),
         Builtin::StringFromCharCode => ("String.fromCharCode", 1),
         Builtin::StringFromCodePoint => ("String.fromCodePoint", 1),
+        // ── Number builtins ──
+        Builtin::NumberConstructor => ("Number", 1),
+        Builtin::NumberIsNaN => ("Number.isNaN", 1),
+        Builtin::NumberIsFinite => ("Number.isFinite", 1),
+        Builtin::NumberIsInteger => ("Number.isInteger", 1),
+        Builtin::NumberIsSafeInteger => ("Number.isSafeInteger", 1),
+        Builtin::NumberParseInt => ("Number.parseInt", 1),
+        Builtin::NumberParseFloat => ("Number.parseFloat", 1),
+        Builtin::NumberProtoToString => ("Number.prototype.toString", 1),
+        Builtin::NumberProtoValueOf => ("Number.prototype.valueOf", 1),
+        Builtin::NumberProtoToFixed => ("Number.prototype.toFixed", 1),
+        Builtin::NumberProtoToExponential => ("Number.prototype.toExponential", 1),
+        Builtin::NumberProtoToPrecision => ("Number.prototype.toPrecision", 1),
+        // ── Boolean builtins ──
+        Builtin::BooleanConstructor => ("Boolean", 1),
+        Builtin::BooleanProtoToString => ("Boolean.prototype.toString", 1),
+        Builtin::BooleanProtoValueOf => ("Boolean.prototype.valueOf", 1),
+        // ── Error builtins ──
+        Builtin::ErrorConstructor => ("Error", 1),
+        Builtin::TypeErrorConstructor => ("TypeError", 1),
+        Builtin::RangeErrorConstructor => ("RangeError", 1),
+        Builtin::SyntaxErrorConstructor => ("SyntaxError", 1),
+        Builtin::ReferenceErrorConstructor => ("ReferenceError", 1),
+        Builtin::URIErrorConstructor => ("URIError", 1),
+        Builtin::EvalErrorConstructor => ("EvalError", 1),
+        Builtin::ErrorProtoToString => ("Error.prototype.toString", 1),
+        // ── Map builtins ──
+        Builtin::MapConstructor => ("Map", 0),
+        // ── Set builtins ──
+        Builtin::SetConstructor => ("Set", 0),
+        // ── WeakMap builtins ──
+        Builtin::WeakMapConstructor => ("WeakMap", 0),
+        Builtin::WeakMapProtoSet => ("WeakMap.prototype.set", 3),
+        Builtin::WeakMapProtoGet => ("WeakMap.prototype.get", 2),
+        Builtin::WeakMapProtoHas => ("WeakMap.prototype.has", 2),
+        Builtin::WeakMapProtoDelete => ("WeakMap.prototype.delete", 2),
+        // ── WeakSet builtins ──
+        Builtin::WeakSetConstructor => ("WeakSet", 0),
+        Builtin::WeakSetProtoAdd => ("WeakSet.prototype.add", 2),
+        Builtin::WeakSetProtoHas => ("WeakSet.prototype.has", 2),
+        Builtin::WeakSetProtoDelete => ("WeakSet.prototype.delete", 2),
+        // ── ArrayBuffer builtins ──
+        Builtin::ArrayBufferConstructor => ("ArrayBuffer", 1),
+        Builtin::ArrayBufferProtoByteLength => ("ArrayBuffer.prototype.byteLength", 1),
+        Builtin::ArrayBufferProtoSlice => ("ArrayBuffer.prototype.slice", 3),
+        // ── DataView builtins ──
+        Builtin::DataViewConstructor => ("DataView", 3),
+        Builtin::DataViewProtoGetFloat64 => ("DataView.prototype.getFloat64", 2),
+        Builtin::DataViewProtoGetFloat32 => ("DataView.prototype.getFloat32", 2),
+        Builtin::DataViewProtoGetInt32 => ("DataView.prototype.getInt32", 2),
+        Builtin::DataViewProtoGetUint32 => ("DataView.prototype.getUint32", 2),
+        Builtin::DataViewProtoGetInt16 => ("DataView.prototype.getInt16", 2),
+        Builtin::DataViewProtoGetUint16 => ("DataView.prototype.getUint16", 2),
+        Builtin::DataViewProtoGetInt8 => ("DataView.prototype.getInt8", 2),
+        Builtin::DataViewProtoGetUint8 => ("DataView.prototype.getUint8", 2),
+        Builtin::DataViewProtoSetFloat64 => ("DataView.prototype.setFloat64", 3),
+        Builtin::DataViewProtoSetFloat32 => ("DataView.prototype.setFloat32", 3),
+        Builtin::DataViewProtoSetInt32 => ("DataView.prototype.setInt32", 3),
+        Builtin::DataViewProtoSetUint32 => ("DataView.prototype.setUint32", 3),
+        Builtin::DataViewProtoSetInt16 => ("DataView.prototype.setInt16", 3),
+        Builtin::DataViewProtoSetUint16 => ("DataView.prototype.setUint16", 3),
+        Builtin::DataViewProtoSetInt8 => ("DataView.prototype.setInt8", 3),
+        Builtin::DataViewProtoSetUint8 => ("DataView.prototype.setUint8", 3),
+        // ── TypedArray constructors ──
+        Builtin::Int8ArrayConstructor => ("Int8Array", 3),
+        Builtin::Uint8ArrayConstructor => ("Uint8Array", 3),
+        Builtin::Uint8ClampedArrayConstructor => ("Uint8ClampedArray", 3),
+        Builtin::Int16ArrayConstructor => ("Int16Array", 3),
+        Builtin::Uint16ArrayConstructor => ("Uint16Array", 3),
+        Builtin::Int32ArrayConstructor => ("Int32Array", 3),
+        Builtin::Uint32ArrayConstructor => ("Uint32Array", 3),
+        Builtin::Float32ArrayConstructor => ("Float32Array", 3),
+        Builtin::Float64ArrayConstructor => ("Float64Array", 3),
+        // ── TypedArray prototype methods ──
+        Builtin::TypedArrayProtoLength => ("TypedArray.prototype.length", 1),
+        Builtin::TypedArrayProtoByteLength => ("TypedArray.prototype.byteLength", 1),
+        Builtin::TypedArrayProtoByteOffset => ("TypedArray.prototype.byteOffset", 1),
+        Builtin::TypedArrayProtoSet => ("TypedArray.prototype.set", 3),
+        Builtin::TypedArrayProtoSlice => ("TypedArray.prototype.slice", 3),
+        Builtin::TypedArrayProtoSubarray => ("TypedArray.prototype.subarray", 3),
+        // ── Date builtins ──
+        Builtin::DateConstructor => ("Date", 0),
+        Builtin::DateNow => ("Date.now", 0),
+        Builtin::DateParse => ("Date.parse", 1),
+        Builtin::DateUTC => ("Date.UTC", 2),
         _ => ("builtin", 0),
     }
 }

@@ -1,6 +1,9 @@
 exit_code: 0
 --- stdout ---
-undefined
-NaN
-Infinity
+true
+false
+true
+true
+true
+true
 --- stderr ---

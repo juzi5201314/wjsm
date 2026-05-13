@@ -1,0 +1,15 @@
+var m = new Map();
+console.log(m.size());
+m.set("a", 1);
+console.log(m.size());
+console.log(m.get("a"));
+console.log(m.has("a"));
+console.log(m.has("b"));
+m.set("b", 2);
+console.log(m.size());
+console.log(m.get("b"));
+m.delete("a");
+console.log(m.has("a"));
+console.log(m.size());
+m.clear();
+console.log(m.size());

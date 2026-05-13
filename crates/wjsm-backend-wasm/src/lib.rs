@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 193] = [
+const HOST_IMPORT_NAMES: [&str; 312] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -207,6 +207,135 @@ const HOST_IMPORT_NAMES: [&str; 193] = [
     "string_iterator",
     "string_from_char_code",
     "string_from_code_point",
+    "math_abs",
+    "math_acos",
+    "math_acosh",
+    "math_asin",
+    "math_asinh",
+    "math_atan",
+    "math_atanh",
+    "math_atan2",
+    "math_cbrt",
+    "math_ceil",
+    "math_clz32",
+    "math_cos",
+    "math_cosh",
+    "math_exp",
+    "math_expm1",
+    "math_floor",
+    "math_fround",
+    "math_hypot",
+    "math_imul",
+    "math_log",
+    "math_log1p",
+    "math_log10",
+    "math_log2",
+    "math_max",
+    "math_min",
+    "math_pow",
+    "math_random",
+    "math_round",
+    "math_sign",
+    "math_sin",
+    "math_sinh",
+    "math_sqrt",
+    "math_tan",
+    "math_tanh",
+    "math_trunc",
+    "number_constructor",
+    "number_is_nan",
+    "number_is_finite",
+    "number_is_integer",
+    "number_is_safe_integer",
+    "number_parse_int",
+    "number_parse_float",
+    "number_proto_to_string",
+    "number_proto_value_of",
+    "number_proto_to_fixed",
+    "number_proto_to_exponential",
+    "number_proto_to_precision",
+    "boolean_constructor",
+    "boolean_proto_to_string",
+    "boolean_proto_value_of",
+    "error_constructor",
+    "type_error_constructor",
+    "range_error_constructor",
+    "syntax_error_constructor",
+    "reference_error_constructor",
+    "uri_error_constructor",
+    "eval_error_constructor",
+    "error_proto_to_string",
+    // ── Map imports ──
+    "map_constructor",
+    "map_proto_set",
+    "map_proto_get",
+    // ── Set imports ──
+    "set_constructor",
+    "set_proto_add",
+    // ── Map/Set shared imports ──
+    "map_set_has",
+    "map_set_delete",
+    "map_set_clear",
+    "map_set_get_size",
+    "map_set_for_each",
+    "map_set_keys",
+    "map_set_values",
+    "map_set_entries",
+    // ── Date imports ──
+    "date_constructor",
+    "date_now",
+    "date_parse",
+    "date_utc",
+    // ── WeakMap imports ──
+    "weakmap_constructor",
+    "weakmap_proto_set",
+    "weakmap_proto_get",
+    "weakmap_proto_has",
+    "weakmap_proto_delete",
+    // ── WeakSet imports ──
+    "weakset_constructor",
+    "weakset_proto_add",
+    "weakset_proto_has",
+    "weakset_proto_delete",
+    // ── ArrayBuffer imports ──
+    "arraybuffer_constructor",
+    "arraybuffer_proto_byte_length",
+    "arraybuffer_proto_slice",
+    // ── DataView imports ──
+    "dataview_constructor",
+    "dataview_proto_get_float64",
+    "dataview_proto_get_float32",
+    "dataview_proto_get_int32",
+    "dataview_proto_get_uint32",
+    "dataview_proto_get_int16",
+    "dataview_proto_get_uint16",
+    "dataview_proto_get_int8",
+    "dataview_proto_get_uint8",
+    "dataview_proto_set_float64",
+    "dataview_proto_set_float32",
+    "dataview_proto_set_int32",
+    "dataview_proto_set_uint32",
+    "dataview_proto_set_int16",
+    "dataview_proto_set_uint16",
+    "dataview_proto_set_int8",
+    "dataview_proto_set_uint8",
+    // ── TypedArray constructor imports ──
+    "int8array_constructor",
+    "uint8array_constructor",
+    "uint8clampedarray_constructor",
+    "int16array_constructor",
+    "uint16array_constructor",
+    "int32array_constructor",
+    "uint32array_constructor",
+    "float32array_constructor",
+    "float64array_constructor",
+    // ── TypedArray prototype imports ──
+    "typedarray_proto_length",
+    "typedarray_proto_byte_length",
+    "typedarray_proto_byte_offset",
+    "typedarray_proto_set",
+    "typedarray_proto_slice",
+    "typedarray_proto_subarray",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -215,7 +344,7 @@ const HOST_IMPORT_NAMES: [&str; 193] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        193,
+        312,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1032,6 +1161,235 @@ impl Compiler {
         imports.import("env", "string_from_char_code", EntityType::Function(12));
         // Import 192: string_from_code_point: (i64, i64, i32, i32) -> i64
         imports.import("env", "string_from_code_point", EntityType::Function(12));
+        // ── Math builtins ──
+        // Import index 193: math_abs: (i64) -> i64
+        imports.import("env", "math_abs", EntityType::Function(3));
+        // Import index 194: math_acos: (i64) -> i64
+        imports.import("env", "math_acos", EntityType::Function(3));
+        // Import index 195: math_acosh: (i64) -> i64
+        imports.import("env", "math_acosh", EntityType::Function(3));
+        // Import index 196: math_asin: (i64) -> i64
+        imports.import("env", "math_asin", EntityType::Function(3));
+        // Import index 197: math_asinh: (i64) -> i64
+        imports.import("env", "math_asinh", EntityType::Function(3));
+        // Import index 198: math_atan: (i64) -> i64
+        imports.import("env", "math_atan", EntityType::Function(3));
+        // Import index 199: math_atanh: (i64) -> i64
+        imports.import("env", "math_atanh", EntityType::Function(3));
+        // Import index 200: math_atan2: (i64, i64) -> i64
+        imports.import("env", "math_atan2", EntityType::Function(2));
+        // Import index 201: math_cbrt: (i64) -> i64
+        imports.import("env", "math_cbrt", EntityType::Function(3));
+        // Import index 202: math_ceil: (i64) -> i64
+        imports.import("env", "math_ceil", EntityType::Function(3));
+        // Import index 203: math_clz32: (i64) -> i64
+        imports.import("env", "math_clz32", EntityType::Function(3));
+        // Import index 204: math_cos: (i64) -> i64
+        imports.import("env", "math_cos", EntityType::Function(3));
+        // Import index 205: math_cosh: (i64) -> i64
+        imports.import("env", "math_cosh", EntityType::Function(3));
+        // Import index 206: math_exp: (i64) -> i64
+        imports.import("env", "math_exp", EntityType::Function(3));
+        // Import index 207: math_expm1: (i64) -> i64
+        imports.import("env", "math_expm1", EntityType::Function(3));
+        // Import index 208: math_floor: (i64) -> i64
+        imports.import("env", "math_floor", EntityType::Function(3));
+        // Import index 209: math_fround: (i64) -> i64
+        imports.import("env", "math_fround", EntityType::Function(3));
+        // Import index 210: math_hypot: (i32, i32) -> i64
+        imports.import("env", "math_hypot", EntityType::Function(19));
+        // Import index 211: math_imul: (i64, i64) -> i64
+        imports.import("env", "math_imul", EntityType::Function(2));
+        // Import index 212: math_log: (i64) -> i64
+        imports.import("env", "math_log", EntityType::Function(3));
+        // Import index 213: math_log1p: (i64) -> i64
+        imports.import("env", "math_log1p", EntityType::Function(3));
+        // Import index 214: math_log10: (i64) -> i64
+        imports.import("env", "math_log10", EntityType::Function(3));
+        // Import index 215: math_log2: (i64) -> i64
+        imports.import("env", "math_log2", EntityType::Function(3));
+        // Import index 216: math_max: (i32, i32) -> i64
+        imports.import("env", "math_max", EntityType::Function(19));
+        // Import index 217: math_min: (i32, i32) -> i64
+        imports.import("env", "math_min", EntityType::Function(19));
+        // Import index 218: math_pow: (i64, i64) -> i64
+        imports.import("env", "math_pow", EntityType::Function(2));
+        // Import index 219: math_random: () -> i64
+        imports.import("env", "math_random", EntityType::Function(4));
+        // Import index 220: math_round: (i64) -> i64
+        imports.import("env", "math_round", EntityType::Function(3));
+        // Import index 221: math_sign: (i64) -> i64
+        imports.import("env", "math_sign", EntityType::Function(3));
+        // Import index 222: math_sin: (i64) -> i64
+        imports.import("env", "math_sin", EntityType::Function(3));
+        // Import index 223: math_sinh: (i64) -> i64
+        imports.import("env", "math_sinh", EntityType::Function(3));
+        // Import index 224: math_sqrt: (i64) -> i64
+        imports.import("env", "math_sqrt", EntityType::Function(3));
+        // Import index 225: math_tan: (i64) -> i64
+        imports.import("env", "math_tan", EntityType::Function(3));
+        // Import index 226: math_tanh: (i64) -> i64
+        imports.import("env", "math_tanh", EntityType::Function(3));
+        // Import index 227: math_trunc: (i64) -> i64
+        imports.import("env", "math_trunc", EntityType::Function(3));
+        // ── Number imports ──
+        // Import index 228: number_constructor: (i64) -> i64
+        imports.import("env", "number_constructor", EntityType::Function(3));
+        // Import index 229: number_is_nan: (i64) -> i64
+        imports.import("env", "number_is_nan", EntityType::Function(3));
+        // Import index 230: number_is_finite: (i64) -> i64
+        imports.import("env", "number_is_finite", EntityType::Function(3));
+        // Import index 231: number_is_integer: (i64) -> i64
+        imports.import("env", "number_is_integer", EntityType::Function(3));
+        // Import index 232: number_is_safe_integer: (i64) -> i64
+        imports.import("env", "number_is_safe_integer", EntityType::Function(3));
+        // Import index 233: number_parse_int: (i64, i64) -> i64
+        imports.import("env", "number_parse_int", EntityType::Function(2));
+        // Import index 234: number_parse_float: (i64) -> i64
+        imports.import("env", "number_parse_float", EntityType::Function(3));
+        // Import index 235: number_proto_to_string: (i64, i64) -> i64
+        imports.import("env", "number_proto_to_string", EntityType::Function(2));
+        // Import index 236: number_proto_value_of: (i64) -> i64
+        imports.import("env", "number_proto_value_of", EntityType::Function(3));
+        // Import index 237: number_proto_to_fixed: (i64, i64) -> i64
+        imports.import("env", "number_proto_to_fixed", EntityType::Function(2));
+        // Import index 238: number_proto_to_exponential: (i64, i64) -> i64
+        imports.import("env", "number_proto_to_exponential", EntityType::Function(2));
+        // Import index 239: number_proto_to_precision: (i64, i64) -> i64
+        imports.import("env", "number_proto_to_precision", EntityType::Function(2));
+        // ── Boolean imports ──
+        // Import index 240: boolean_constructor: (i64) -> i64
+        imports.import("env", "boolean_constructor", EntityType::Function(3));
+        // Import index 241: boolean_proto_to_string: (i64) -> i64
+        imports.import("env", "boolean_proto_to_string", EntityType::Function(3));
+        // Import index 242: boolean_proto_value_of: (i64) -> i64
+        imports.import("env", "boolean_proto_value_of", EntityType::Function(3));
+        // ── Error imports ──
+        // Import index 243: error_constructor: (i64) -> i64
+        imports.import("env", "error_constructor", EntityType::Function(3));
+        // Import index 244: type_error_constructor: (i64) -> i64
+        imports.import("env", "type_error_constructor", EntityType::Function(3));
+        // Import index 245: range_error_constructor: (i64) -> i64
+        imports.import("env", "range_error_constructor", EntityType::Function(3));
+        // Import index 246: syntax_error_constructor: (i64) -> i64
+        imports.import("env", "syntax_error_constructor", EntityType::Function(3));
+        // Import index 247: reference_error_constructor: (i64) -> i64
+        imports.import("env", "reference_error_constructor", EntityType::Function(3));
+        // Import index 248: uri_error_constructor: (i64) -> i64
+        imports.import("env", "uri_error_constructor", EntityType::Function(3));
+        // Import index 249: eval_error_constructor: (i64) -> i64
+        imports.import("env", "eval_error_constructor", EntityType::Function(3));
+        // Import index 250: error_proto_to_string: (i64) -> i64
+        imports.import("env", "error_proto_to_string", EntityType::Function(3));
+        // ── Map imports ──
+        // Import index 251: map_constructor: (i64) -> i64
+        imports.import("env", "map_constructor", EntityType::Function(3));
+        // Import index 252: map_proto_set: (i64, i64, i64) -> i64
+        imports.import("env", "map_proto_set", EntityType::Function(16));
+        // Import index 253: map_proto_get: (i64, i64) -> i64
+        imports.import("env", "map_proto_get", EntityType::Function(2));
+        // ── Set imports ──
+        // Import index 254: set_constructor: (i64) -> i64
+        imports.import("env", "set_constructor", EntityType::Function(3));
+        // Import index 255: set_proto_add: (i64, i64) -> i64
+        imports.import("env", "set_proto_add", EntityType::Function(2));
+        // ── Map/Set shared imports ──
+        // Import index 256: map_set_has: (i64, i64) -> i64
+        imports.import("env", "map_set_has", EntityType::Function(2));
+        // Import index 257: map_set_delete: (i64, i64) -> i64
+        imports.import("env", "map_set_delete", EntityType::Function(2));
+        // Import index 258: map_set_clear: (i64) -> i64
+        imports.import("env", "map_set_clear", EntityType::Function(3));
+        imports.import("env", "map_set_get_size", EntityType::Function(3));
+        // Import index 260: map_set_for_each: (i64) -> i64
+        imports.import("env", "map_set_for_each", EntityType::Function(3));
+        // Import index 261: map_set_keys: (i64) -> i64
+        imports.import("env", "map_set_keys", EntityType::Function(3));
+        // Import index 262: map_set_values: (i64) -> i64
+        imports.import("env", "map_set_values", EntityType::Function(3));
+        // Import index 263: map_set_entries: (i64) -> i64
+        imports.import("env", "map_set_entries", EntityType::Function(3));
+        // ── Date imports ──
+        // Import index 264: date_constructor: Type 12 (shadow stack, variadic args)
+        imports.import("env", "date_constructor", EntityType::Function(12));
+        // Import index 265: date_now: () -> i64
+        imports.import("env", "date_now", EntityType::Function(4));
+        // Import index 266: date_parse: (i64) -> i64
+        imports.import("env", "date_parse", EntityType::Function(3));
+        // Import index 267: date_utc: (i64) -> i64
+        imports.import("env", "date_utc", EntityType::Function(3));
+        // ── WeakMap imports ──
+        // Import index 268: weakmap_constructor: (i64) -> i64
+        imports.import("env", "weakmap_constructor", EntityType::Function(3));
+        // Import index 269: weakmap_proto_set: (i64, i64, i64) -> i64
+        imports.import("env", "weakmap_proto_set", EntityType::Function(16));
+        // Import index 270: weakmap_proto_get: (i64, i64) -> i64
+        imports.import("env", "weakmap_proto_get", EntityType::Function(2));
+        // Import index 271: weakmap_proto_has: (i64, i64) -> i64
+        imports.import("env", "weakmap_proto_has", EntityType::Function(2));
+        // Import index 272: weakmap_proto_delete: (i64, i64) -> i64
+        imports.import("env", "weakmap_proto_delete", EntityType::Function(2));
+        // ── WeakSet imports ──
+        // Import index 273: weakset_constructor: (i64) -> i64
+        imports.import("env", "weakset_constructor", EntityType::Function(3));
+        // Import index 274: weakset_proto_add: (i64, i64) -> i64
+        imports.import("env", "weakset_proto_add", EntityType::Function(2));
+        // Import index 275: weakset_proto_has: (i64, i64) -> i64
+        imports.import("env", "weakset_proto_has", EntityType::Function(2));
+        // Import index 276: weakset_proto_delete: (i64, i64) -> i64
+        imports.import("env", "weakset_proto_delete", EntityType::Function(2));
+        // ── ArrayBuffer imports ──
+        // Import index 277: arraybuffer_constructor: (i64) -> i64
+        imports.import("env", "arraybuffer_constructor", EntityType::Function(3));
+        // Import index 278: arraybuffer_proto_byte_length: (i64) -> i64
+        imports.import("env", "arraybuffer_proto_byte_length", EntityType::Function(3));
+        // Import index 279: arraybuffer_proto_slice: (i64, i64, i64) -> i64
+        imports.import("env", "arraybuffer_proto_slice", EntityType::Function(16));
+        // ── DataView imports ──
+        // Import index 280: dataview_constructor: (i64, i64, i64) -> i64
+        imports.import("env", "dataview_constructor", EntityType::Function(16));
+        // Import index 281-288: DataView get methods: (i64, i64) -> i64
+        imports.import("env", "dataview_proto_get_float64", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_float32", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_int32", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_uint32", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_int16", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_uint16", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_int8", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_uint8", EntityType::Function(2));
+        // Import index 289-296: DataView set methods: (i64, i64, i64) -> i64
+        imports.import("env", "dataview_proto_set_float64", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_float32", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_int32", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_uint32", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_int16", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_uint16", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_int8", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_uint8", EntityType::Function(16));
+        // ── TypedArray constructor imports ──
+        // Import index 297-305: TypedArray constructors: (i64, i64, i64) -> i64
+        imports.import("env", "int8array_constructor", EntityType::Function(16));
+        imports.import("env", "uint8array_constructor", EntityType::Function(16));
+        imports.import("env", "uint8clampedarray_constructor", EntityType::Function(16));
+        imports.import("env", "int16array_constructor", EntityType::Function(16));
+        imports.import("env", "uint16array_constructor", EntityType::Function(16));
+        imports.import("env", "int32array_constructor", EntityType::Function(16));
+        imports.import("env", "uint32array_constructor", EntityType::Function(16));
+        imports.import("env", "float32array_constructor", EntityType::Function(16));
+        imports.import("env", "float64array_constructor", EntityType::Function(16));
+        // ── TypedArray prototype imports ──
+        // Import index 306: typedarray_proto_length: (i64) -> i64
+        imports.import("env", "typedarray_proto_length", EntityType::Function(3));
+        // Import index 307: typedarray_proto_byte_length: (i64) -> i64
+        imports.import("env", "typedarray_proto_byte_length", EntityType::Function(3));
+        // Import index 308: typedarray_proto_byte_offset: (i64) -> i64
+        imports.import("env", "typedarray_proto_byte_offset", EntityType::Function(3));
+        // Import index 309: typedarray_proto_set: (i64, i64, i64) -> i64
+        imports.import("env", "typedarray_proto_set", EntityType::Function(16));
+        // Import index 310: typedarray_proto_slice: (i64, i64, i64) -> i64
+        imports.import("env", "typedarray_proto_slice", EntityType::Function(16));
+        // Import index 311: typedarray_proto_subarray: (i64, i64, i64) -> i64
+        imports.import("env", "typedarray_proto_subarray", EntityType::Function(16));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1241,6 +1599,139 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::StringIterator, 190);
         builtin_func_indices.insert(Builtin::StringFromCharCode, 191);
         builtin_func_indices.insert(Builtin::StringFromCodePoint, 192);
+        // ── Math builtins ──
+        builtin_func_indices.insert(Builtin::MathAbs, 193);
+        builtin_func_indices.insert(Builtin::MathAcos, 194);
+        builtin_func_indices.insert(Builtin::MathAcosh, 195);
+        builtin_func_indices.insert(Builtin::MathAsin, 196);
+        builtin_func_indices.insert(Builtin::MathAsinh, 197);
+        builtin_func_indices.insert(Builtin::MathAtan, 198);
+        builtin_func_indices.insert(Builtin::MathAtanh, 199);
+        builtin_func_indices.insert(Builtin::MathAtan2, 200);
+        builtin_func_indices.insert(Builtin::MathCbrt, 201);
+        builtin_func_indices.insert(Builtin::MathCeil, 202);
+        builtin_func_indices.insert(Builtin::MathClz32, 203);
+        builtin_func_indices.insert(Builtin::MathCos, 204);
+        builtin_func_indices.insert(Builtin::MathCosh, 205);
+        builtin_func_indices.insert(Builtin::MathExp, 206);
+        builtin_func_indices.insert(Builtin::MathExpm1, 207);
+        builtin_func_indices.insert(Builtin::MathFloor, 208);
+        builtin_func_indices.insert(Builtin::MathFround, 209);
+        builtin_func_indices.insert(Builtin::MathHypot, 210);
+        builtin_func_indices.insert(Builtin::MathImul, 211);
+        builtin_func_indices.insert(Builtin::MathLog, 212);
+        builtin_func_indices.insert(Builtin::MathLog1p, 213);
+        builtin_func_indices.insert(Builtin::MathLog10, 214);
+        builtin_func_indices.insert(Builtin::MathLog2, 215);
+        builtin_func_indices.insert(Builtin::MathMax, 216);
+        builtin_func_indices.insert(Builtin::MathMin, 217);
+        builtin_func_indices.insert(Builtin::MathPow, 218);
+        builtin_func_indices.insert(Builtin::MathRandom, 219);
+        builtin_func_indices.insert(Builtin::MathRound, 220);
+        builtin_func_indices.insert(Builtin::MathSign, 221);
+        builtin_func_indices.insert(Builtin::MathSin, 222);
+        builtin_func_indices.insert(Builtin::MathSinh, 223);
+        builtin_func_indices.insert(Builtin::MathSqrt, 224);
+        builtin_func_indices.insert(Builtin::MathTan, 225);
+        builtin_func_indices.insert(Builtin::MathTanh, 226);
+        builtin_func_indices.insert(Builtin::MathTrunc, 227);
+        // ── Number builtins ──
+        builtin_func_indices.insert(Builtin::NumberConstructor, 228);
+        builtin_func_indices.insert(Builtin::NumberIsNaN, 229);
+        builtin_func_indices.insert(Builtin::NumberIsFinite, 230);
+        builtin_func_indices.insert(Builtin::NumberIsInteger, 231);
+        builtin_func_indices.insert(Builtin::NumberIsSafeInteger, 232);
+        builtin_func_indices.insert(Builtin::NumberParseInt, 233);
+        builtin_func_indices.insert(Builtin::NumberParseFloat, 234);
+        builtin_func_indices.insert(Builtin::NumberProtoToString, 235);
+        builtin_func_indices.insert(Builtin::NumberProtoValueOf, 236);
+        builtin_func_indices.insert(Builtin::NumberProtoToFixed, 237);
+        builtin_func_indices.insert(Builtin::NumberProtoToExponential, 238);
+        builtin_func_indices.insert(Builtin::NumberProtoToPrecision, 239);
+        // ── Boolean builtins ──
+        builtin_func_indices.insert(Builtin::BooleanConstructor, 240);
+        builtin_func_indices.insert(Builtin::BooleanProtoToString, 241);
+        builtin_func_indices.insert(Builtin::BooleanProtoValueOf, 242);
+        // ── Error builtins ──
+        builtin_func_indices.insert(Builtin::ErrorConstructor, 243);
+        builtin_func_indices.insert(Builtin::TypeErrorConstructor, 244);
+        builtin_func_indices.insert(Builtin::RangeErrorConstructor, 245);
+        builtin_func_indices.insert(Builtin::SyntaxErrorConstructor, 246);
+        builtin_func_indices.insert(Builtin::ReferenceErrorConstructor, 247);
+        builtin_func_indices.insert(Builtin::URIErrorConstructor, 248);
+        builtin_func_indices.insert(Builtin::EvalErrorConstructor, 249);
+        builtin_func_indices.insert(Builtin::ErrorProtoToString, 250);
+        // ── Map builtins ──
+        builtin_func_indices.insert(Builtin::MapConstructor, 251);
+        builtin_func_indices.insert(Builtin::MapProtoSet, 252);
+        builtin_func_indices.insert(Builtin::MapProtoGet, 253);
+        // ── Set builtins ──
+        builtin_func_indices.insert(Builtin::SetConstructor, 254);
+        builtin_func_indices.insert(Builtin::SetProtoAdd, 255);
+        // ── Map/Set shared builtins ──
+        builtin_func_indices.insert(Builtin::MapSetHas, 256);
+        builtin_func_indices.insert(Builtin::MapSetDelete, 257);
+        builtin_func_indices.insert(Builtin::MapSetClear, 258);
+        builtin_func_indices.insert(Builtin::MapSetGetSize, 259);
+        builtin_func_indices.insert(Builtin::MapSetForEach, 260);
+        builtin_func_indices.insert(Builtin::MapSetKeys, 261);
+        builtin_func_indices.insert(Builtin::MapSetValues, 262);
+        builtin_func_indices.insert(Builtin::MapSetEntries, 263);
+        // ── Date builtins ──
+        builtin_func_indices.insert(Builtin::DateConstructor, 264);
+        builtin_func_indices.insert(Builtin::DateNow, 265);
+        builtin_func_indices.insert(Builtin::DateParse, 266);
+        builtin_func_indices.insert(Builtin::DateUTC, 267);
+        // ── WeakMap builtins ──
+        builtin_func_indices.insert(Builtin::WeakMapConstructor, 268);
+        builtin_func_indices.insert(Builtin::WeakMapProtoSet, 269);
+        builtin_func_indices.insert(Builtin::WeakMapProtoGet, 270);
+        builtin_func_indices.insert(Builtin::WeakMapProtoHas, 271);
+        builtin_func_indices.insert(Builtin::WeakMapProtoDelete, 272);
+        // ── WeakSet builtins ──
+        builtin_func_indices.insert(Builtin::WeakSetConstructor, 273);
+        builtin_func_indices.insert(Builtin::WeakSetProtoAdd, 274);
+        builtin_func_indices.insert(Builtin::WeakSetProtoHas, 275);
+        builtin_func_indices.insert(Builtin::WeakSetProtoDelete, 276);
+        // ── ArrayBuffer builtins ──
+        builtin_func_indices.insert(Builtin::ArrayBufferConstructor, 277);
+        builtin_func_indices.insert(Builtin::ArrayBufferProtoByteLength, 278);
+        builtin_func_indices.insert(Builtin::ArrayBufferProtoSlice, 279);
+        // ── DataView builtins ──
+        builtin_func_indices.insert(Builtin::DataViewConstructor, 280);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetFloat64, 281);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetFloat32, 282);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetInt32, 283);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetUint32, 284);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetInt16, 285);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetUint16, 286);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetInt8, 287);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetUint8, 288);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetFloat64, 289);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetFloat32, 290);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetInt32, 291);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetUint32, 292);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetInt16, 293);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetUint16, 294);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetInt8, 295);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetUint8, 296);
+        // ── TypedArray constructor builtins ──
+        builtin_func_indices.insert(Builtin::Int8ArrayConstructor, 297);
+        builtin_func_indices.insert(Builtin::Uint8ArrayConstructor, 298);
+        builtin_func_indices.insert(Builtin::Uint8ClampedArrayConstructor, 299);
+        builtin_func_indices.insert(Builtin::Int16ArrayConstructor, 300);
+        builtin_func_indices.insert(Builtin::Uint16ArrayConstructor, 301);
+        builtin_func_indices.insert(Builtin::Int32ArrayConstructor, 302);
+        builtin_func_indices.insert(Builtin::Uint32ArrayConstructor, 303);
+        builtin_func_indices.insert(Builtin::Float32ArrayConstructor, 304);
+        builtin_func_indices.insert(Builtin::Float64ArrayConstructor, 305);
+        // ── TypedArray prototype builtins ──
+        builtin_func_indices.insert(Builtin::TypedArrayProtoLength, 306);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoByteLength, 307);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoByteOffset, 308);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoSet, 309);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoSlice, 310);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoSubarray, 311);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -5225,7 +5716,7 @@ impl Compiler {
         // 确定 this_val 和影子栈参数
         // ArrayIsArray: this_val=undefined, 所有 args 走影子栈
         // 其他方法: this_val=args[0], args[1..] 走影子栈
-        let (this_val_idx, shadow_args) = if matches!(builtin, Builtin::ArrayIsArray | Builtin::StringFromCharCode | Builtin::StringFromCodePoint) {
+        let (this_val_idx, shadow_args) = if matches!(builtin, Builtin::ArrayIsArray | Builtin::StringFromCharCode | Builtin::StringFromCodePoint | Builtin::MathMax | Builtin::MathMin | Builtin::MathHypot | Builtin::DateConstructor) {
             (None, args)
         } else {
             let this = args
@@ -5880,6 +6371,191 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── Math unary builtins (i64) -> i64 ──
+            Builtin::MathAbs
+            | Builtin::MathAcos
+            | Builtin::MathAcosh
+            | Builtin::MathAsin
+            | Builtin::MathAsinh
+            | Builtin::MathAtan
+            | Builtin::MathAtanh
+            | Builtin::MathCbrt
+            | Builtin::MathCeil
+            | Builtin::MathClz32
+            | Builtin::MathCos
+            | Builtin::MathCosh
+            | Builtin::MathExp
+            | Builtin::MathExpm1
+            | Builtin::MathFloor
+            | Builtin::MathFround
+            | Builtin::MathLog
+            | Builtin::MathLog1p
+            | Builtin::MathLog10
+            | Builtin::MathLog2
+            | Builtin::MathRound
+            | Builtin::MathSign
+            | Builtin::MathSin
+            | Builtin::MathSinh
+            | Builtin::MathSqrt
+            | Builtin::MathTan
+            | Builtin::MathTanh
+            | Builtin::MathTrunc => {
+                let val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Math binary builtins (i64, i64) -> i64 ──
+            Builtin::MathAtan2 | Builtin::MathImul | Builtin::MathPow => {
+                let lhs = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects 2 arguments"))?;
+                let rhs = args
+                    .get(1)
+                    .with_context(|| format!("{builtin} expects 2 arguments"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Math.random: () -> i64 ──
+            Builtin::MathRandom
+            | Builtin::DateNow => {
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Math variadic builtins (shadow stack) ──
+            Builtin::MathMax | Builtin::MathMin | Builtin::MathHypot => {
+                self.compile_proto_method_call(dest, builtin, args)
+            }
+            // ── Number builtins ──
+            Builtin::NumberConstructor
+            | Builtin::NumberIsNaN
+            | Builtin::NumberIsFinite
+            | Builtin::NumberIsInteger
+            | Builtin::NumberIsSafeInteger
+            | Builtin::NumberParseFloat
+            | Builtin::NumberProtoToString
+            | Builtin::NumberProtoValueOf
+            | Builtin::NumberProtoToFixed
+            | Builtin::NumberProtoToExponential
+            | Builtin::NumberProtoToPrecision => {
+                let val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects at least 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                if let Some(second) = args.get(1) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(second.0)));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::NumberParseInt => {
+                let val = args
+                    .first()
+                    .with_context(|| "Number.parseInt expects at least 1 argument")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                if let Some(second) = args.get(1) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(second.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Boolean builtins ──
+            Builtin::BooleanConstructor
+            | Builtin::BooleanProtoToString
+            | Builtin::BooleanProtoValueOf
+            // ── Error builtins ──
+            | Builtin::ErrorConstructor
+            | Builtin::TypeErrorConstructor
+            | Builtin::RangeErrorConstructor
+            | Builtin::SyntaxErrorConstructor
+            | Builtin::ReferenceErrorConstructor
+            | Builtin::URIErrorConstructor
+            | Builtin::EvalErrorConstructor
+            | Builtin::ErrorProtoToString
+            // ── Map single-arg builtins ──
+            | Builtin::MapConstructor
+            | Builtin::MapSetClear
+            | Builtin::MapSetForEach
+            | Builtin::MapSetKeys
+            | Builtin::MapSetValues
+            | Builtin::MapSetEntries
+            // ── Set single-arg builtins ──
+            | Builtin::SetConstructor
+            // ── WeakMap single-arg builtins ──
+            | Builtin::WeakMapConstructor
+            // ── WeakSet single-arg builtins ──
+            | Builtin::WeakSetConstructor
+            // ── ArrayBuffer single-arg builtins ──
+            | Builtin::ArrayBufferConstructor
+            | Builtin::ArrayBufferProtoByteLength
+            // ── TypedArray prototype single-arg builtins ──
+            | Builtin::TypedArrayProtoLength
+            | Builtin::TypedArrayProtoByteLength
+            | Builtin::TypedArrayProtoByteOffset
+            // ── Date single-arg builtins (not constructor) ──
+            | Builtin::DateParse
+            | Builtin::DateUTC => {
+                let val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects at least 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
             Builtin::ArrayIndexOf | Builtin::ArraySlice | Builtin::ArrayFill => {
                 // 3+ arg functions: (i64, i64, i64) -> i64 etc
                 for arg in args {
@@ -5895,6 +6571,75 @@ impl Compiler {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
                 Ok(())
+            }
+            // ── Map/Set multi-arg builtins ──
+            Builtin::MapProtoSet
+            | Builtin::MapProtoGet
+            | Builtin::MapSetHas
+            | Builtin::MapSetDelete
+            | Builtin::SetProtoAdd
+            // ── WeakMap multi-arg builtins ──
+            | Builtin::WeakMapProtoSet
+            | Builtin::WeakMapProtoGet
+            | Builtin::WeakMapProtoHas
+            | Builtin::WeakMapProtoDelete
+            // ── WeakSet multi-arg builtins ──
+            | Builtin::WeakSetProtoAdd
+            | Builtin::WeakSetProtoHas
+            | Builtin::WeakSetProtoDelete
+            // ── ArrayBuffer multi-arg builtins ──
+            | Builtin::ArrayBufferProtoSlice
+            // ── DataView constructor ──
+            | Builtin::DataViewConstructor
+            // ── DataView get methods ──
+            | Builtin::DataViewProtoGetFloat64
+            | Builtin::DataViewProtoGetFloat32
+            | Builtin::DataViewProtoGetInt32
+            | Builtin::DataViewProtoGetUint32
+            | Builtin::DataViewProtoGetInt16
+            | Builtin::DataViewProtoGetUint16
+            | Builtin::DataViewProtoGetInt8
+            | Builtin::DataViewProtoGetUint8
+            // ── DataView set methods ──
+            | Builtin::DataViewProtoSetFloat64
+            | Builtin::DataViewProtoSetFloat32
+            | Builtin::DataViewProtoSetInt32
+            | Builtin::DataViewProtoSetUint32
+            | Builtin::DataViewProtoSetInt16
+            | Builtin::DataViewProtoSetUint16
+            | Builtin::DataViewProtoSetInt8
+            | Builtin::DataViewProtoSetUint8
+            // ── TypedArray constructors ──
+            | Builtin::Int8ArrayConstructor
+            | Builtin::Uint8ArrayConstructor
+            | Builtin::Uint8ClampedArrayConstructor
+            | Builtin::Int16ArrayConstructor
+            | Builtin::Uint16ArrayConstructor
+            | Builtin::Int32ArrayConstructor
+            | Builtin::Uint32ArrayConstructor
+            | Builtin::Float32ArrayConstructor
+            | Builtin::Float64ArrayConstructor
+            // ── TypedArray prototype multi-arg methods ──
+            | Builtin::TypedArrayProtoSet
+            | Builtin::TypedArrayProtoSlice
+            | Builtin::TypedArrayProtoSubarray => {
+                for arg in args {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Date constructor (shadow stack, variadic args) ──
+            Builtin::DateConstructor => {
+                self.compile_proto_method_call(dest, builtin, args)
             }
             // ── Array prototype method calls (Type 12 imports) ─────────────
             Builtin::ArrayShift
@@ -5922,6 +6667,22 @@ impl Compiler {
             Builtin::FuncCall | Builtin::FuncBind => {
                 // These use shadow stack: compile like array proto methods
                 self.compile_proto_method_call(dest, builtin, args)
+            }
+            Builtin::MapSetGetSize => {
+                let val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects at least 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or_else(|| panic!("no func idx for {builtin}"));
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
             }
             Builtin::GetPrototypeFromConstructor => {
                 let func_idx = self.get_proto_from_ctor_func_idx;
@@ -7298,6 +8059,139 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::StringIterator => ("string.iterator", 1),
         Builtin::StringFromCharCode => ("string.from_char_code", 1),
         Builtin::StringFromCodePoint => ("string.from_code_point", 1),
+        // ── Math builtins ──
+        Builtin::MathAbs => ("Math.abs", 1),
+        Builtin::MathAcos => ("Math.acos", 1),
+        Builtin::MathAcosh => ("Math.acosh", 1),
+        Builtin::MathAsin => ("Math.asin", 1),
+        Builtin::MathAsinh => ("Math.asinh", 1),
+        Builtin::MathAtan => ("Math.atan", 1),
+        Builtin::MathAtanh => ("Math.atanh", 1),
+        Builtin::MathAtan2 => ("Math.atan2", 2),
+        Builtin::MathCbrt => ("Math.cbrt", 1),
+        Builtin::MathCeil => ("Math.ceil", 1),
+        Builtin::MathClz32 => ("Math.clz32", 1),
+        Builtin::MathCos => ("Math.cos", 1),
+        Builtin::MathCosh => ("Math.cosh", 1),
+        Builtin::MathExp => ("Math.exp", 1),
+        Builtin::MathExpm1 => ("Math.expm1", 1),
+        Builtin::MathFloor => ("Math.floor", 1),
+        Builtin::MathFround => ("Math.fround", 1),
+        Builtin::MathHypot => ("Math.hypot", 0),
+        Builtin::MathImul => ("Math.imul", 2),
+        Builtin::MathLog => ("Math.log", 1),
+        Builtin::MathLog1p => ("Math.log1p", 1),
+        Builtin::MathLog10 => ("Math.log10", 1),
+        Builtin::MathLog2 => ("Math.log2", 1),
+        Builtin::MathMax => ("Math.max", 1),
+        Builtin::MathMin => ("Math.min", 1),
+        Builtin::MathPow => ("Math.pow", 2),
+        Builtin::MathRandom => ("Math.random", 0),
+        Builtin::MathRound => ("Math.round", 1),
+        Builtin::MathSign => ("Math.sign", 1),
+        Builtin::MathSin => ("Math.sin", 1),
+        Builtin::MathSinh => ("Math.sinh", 1),
+        Builtin::MathSqrt => ("Math.sqrt", 1),
+        Builtin::MathTan => ("Math.tan", 1),
+        Builtin::MathTanh => ("Math.tanh", 1),
+        Builtin::MathTrunc => ("Math.trunc", 1),
+        // ── Number builtins ──
+        Builtin::NumberConstructor => ("Number", 1),
+        Builtin::NumberIsNaN => ("Number.isNaN", 1),
+        Builtin::NumberIsFinite => ("Number.isFinite", 1),
+        Builtin::NumberIsInteger => ("Number.isInteger", 1),
+        Builtin::NumberIsSafeInteger => ("Number.isSafeInteger", 1),
+        Builtin::NumberParseInt => ("Number.parseInt", 2),
+        Builtin::NumberParseFloat => ("Number.parseFloat", 1),
+        Builtin::NumberProtoToString => ("Number.prototype.toString", 1),
+        Builtin::NumberProtoValueOf => ("Number.prototype.valueOf", 1),
+        Builtin::NumberProtoToFixed => ("Number.prototype.toFixed", 1),
+        Builtin::NumberProtoToExponential => ("Number.prototype.toExponential", 1),
+        Builtin::NumberProtoToPrecision => ("Number.prototype.toPrecision", 1),
+        // ── Boolean builtins ──
+        Builtin::BooleanConstructor => ("Boolean", 1),
+        Builtin::BooleanProtoToString => ("Boolean.prototype.toString", 1),
+        Builtin::BooleanProtoValueOf => ("Boolean.prototype.valueOf", 1),
+        // ── Error builtins ──
+        Builtin::ErrorConstructor => ("Error", 1),
+        Builtin::TypeErrorConstructor => ("TypeError", 1),
+        Builtin::RangeErrorConstructor => ("RangeError", 1),
+        Builtin::SyntaxErrorConstructor => ("SyntaxError", 1),
+        Builtin::ReferenceErrorConstructor => ("ReferenceError", 1),
+        Builtin::URIErrorConstructor => ("URIError", 1),
+        Builtin::EvalErrorConstructor => ("EvalError", 1),
+        Builtin::ErrorProtoToString => ("Error.prototype.toString", 1),
+        // ── Map builtins ──
+        Builtin::MapConstructor => ("Map", 1),
+        Builtin::MapProtoSet => ("Map.prototype.set", 3),
+        Builtin::MapProtoGet => ("Map.prototype.get", 2),
+        // ── Set builtins ──
+        Builtin::SetConstructor => ("Set", 1),
+        Builtin::SetProtoAdd => ("Set.prototype.add", 2),
+        // ── Map/Set shared builtins ──
+        Builtin::MapSetHas => ("MapSet.has", 2),
+        Builtin::MapSetDelete => ("MapSet.delete", 2),
+        Builtin::MapSetClear => ("MapSet.clear", 1),
+        Builtin::MapSetGetSize => ("MapSet.size", 1),
+        Builtin::MapSetForEach => ("MapSet.forEach", 1),
+        Builtin::MapSetKeys => ("MapSet.keys", 1),
+        Builtin::MapSetValues => ("MapSet.values", 1),
+        Builtin::MapSetEntries => ("MapSet.entries", 1),
+        // ── Date builtins ──
+        Builtin::DateConstructor => ("Date", 1),
+        Builtin::DateNow => ("Date.now", 0),
+        Builtin::DateParse => ("Date.parse", 1),
+        Builtin::DateUTC => ("Date.UTC", 1),
+        // ── WeakMap builtins ──
+        Builtin::WeakMapConstructor => ("WeakMap", 1),
+        Builtin::WeakMapProtoSet => ("WeakMap.prototype.set", 3),
+        Builtin::WeakMapProtoGet => ("WeakMap.prototype.get", 2),
+        Builtin::WeakMapProtoHas => ("WeakMap.prototype.has", 2),
+        Builtin::WeakMapProtoDelete => ("WeakMap.prototype.delete", 2),
+        // ── WeakSet builtins ──
+        Builtin::WeakSetConstructor => ("WeakSet", 1),
+        Builtin::WeakSetProtoAdd => ("WeakSet.prototype.add", 2),
+        Builtin::WeakSetProtoHas => ("WeakSet.prototype.has", 2),
+        Builtin::WeakSetProtoDelete => ("WeakSet.prototype.delete", 2),
+        // ── ArrayBuffer builtins ──
+        Builtin::ArrayBufferConstructor => ("ArrayBuffer", 1),
+        Builtin::ArrayBufferProtoByteLength => ("ArrayBuffer.prototype.byteLength", 1),
+        Builtin::ArrayBufferProtoSlice => ("ArrayBuffer.prototype.slice", 3),
+        // ── DataView builtins ──
+        Builtin::DataViewConstructor => ("DataView", 3),
+        Builtin::DataViewProtoGetFloat64 => ("DataView.prototype.getFloat64", 2),
+        Builtin::DataViewProtoGetFloat32 => ("DataView.prototype.getFloat32", 2),
+        Builtin::DataViewProtoGetInt32 => ("DataView.prototype.getInt32", 2),
+        Builtin::DataViewProtoGetUint32 => ("DataView.prototype.getUint32", 2),
+        Builtin::DataViewProtoGetInt16 => ("DataView.prototype.getInt16", 2),
+        Builtin::DataViewProtoGetUint16 => ("DataView.prototype.getUint16", 2),
+        Builtin::DataViewProtoGetInt8 => ("DataView.prototype.getInt8", 2),
+        Builtin::DataViewProtoGetUint8 => ("DataView.prototype.getUint8", 2),
+        Builtin::DataViewProtoSetFloat64 => ("DataView.prototype.setFloat64", 3),
+        Builtin::DataViewProtoSetFloat32 => ("DataView.prototype.setFloat32", 3),
+        Builtin::DataViewProtoSetInt32 => ("DataView.prototype.setInt32", 3),
+        Builtin::DataViewProtoSetUint32 => ("DataView.prototype.setUint32", 3),
+        Builtin::DataViewProtoSetInt16 => ("DataView.prototype.setInt16", 3),
+        Builtin::DataViewProtoSetUint16 => ("DataView.prototype.setUint16", 3),
+        Builtin::DataViewProtoSetInt8 => ("DataView.prototype.setInt8", 3),
+        Builtin::DataViewProtoSetUint8 => ("DataView.prototype.setUint8", 3),
+        // ── TypedArray constructors ──
+        Builtin::Int8ArrayConstructor => ("Int8Array", 3),
+        Builtin::Uint8ArrayConstructor => ("Uint8Array", 3),
+        Builtin::Uint8ClampedArrayConstructor => ("Uint8ClampedArray", 3),
+        Builtin::Int16ArrayConstructor => ("Int16Array", 3),
+        Builtin::Uint16ArrayConstructor => ("Uint16Array", 3),
+        Builtin::Int32ArrayConstructor => ("Int32Array", 3),
+        Builtin::Uint32ArrayConstructor => ("Uint32Array", 3),
+        Builtin::Float32ArrayConstructor => ("Float32Array", 3),
+        Builtin::Float64ArrayConstructor => ("Float64Array", 3),
+        // ── TypedArray prototype methods ──
+        Builtin::TypedArrayProtoLength => ("TypedArray.prototype.length", 1),
+        Builtin::TypedArrayProtoByteLength => ("TypedArray.prototype.byteLength", 1),
+        Builtin::TypedArrayProtoByteOffset => ("TypedArray.prototype.byteOffset", 1),
+        Builtin::TypedArrayProtoSet => ("TypedArray.prototype.set", 3),
+        Builtin::TypedArrayProtoSlice => ("TypedArray.prototype.slice", 3),
+        Builtin::TypedArrayProtoSubarray => ("TypedArray.prototype.subarray", 3),
     }
 }
 
