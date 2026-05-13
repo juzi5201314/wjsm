@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 268] = [
+const HOST_IMPORT_NAMES: [&str; 312] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -286,6 +286,56 @@ const HOST_IMPORT_NAMES: [&str; 268] = [
     "date_now",
     "date_parse",
     "date_utc",
+    // ── WeakMap imports ──
+    "weakmap_constructor",
+    "weakmap_proto_set",
+    "weakmap_proto_get",
+    "weakmap_proto_has",
+    "weakmap_proto_delete",
+    // ── WeakSet imports ──
+    "weakset_constructor",
+    "weakset_proto_add",
+    "weakset_proto_has",
+    "weakset_proto_delete",
+    // ── ArrayBuffer imports ──
+    "arraybuffer_constructor",
+    "arraybuffer_proto_byte_length",
+    "arraybuffer_proto_slice",
+    // ── DataView imports ──
+    "dataview_constructor",
+    "dataview_proto_get_float64",
+    "dataview_proto_get_float32",
+    "dataview_proto_get_int32",
+    "dataview_proto_get_uint32",
+    "dataview_proto_get_int16",
+    "dataview_proto_get_uint16",
+    "dataview_proto_get_int8",
+    "dataview_proto_get_uint8",
+    "dataview_proto_set_float64",
+    "dataview_proto_set_float32",
+    "dataview_proto_set_int32",
+    "dataview_proto_set_uint32",
+    "dataview_proto_set_int16",
+    "dataview_proto_set_uint16",
+    "dataview_proto_set_int8",
+    "dataview_proto_set_uint8",
+    // ── TypedArray constructor imports ──
+    "int8array_constructor",
+    "uint8array_constructor",
+    "uint8clampedarray_constructor",
+    "int16array_constructor",
+    "uint16array_constructor",
+    "int32array_constructor",
+    "uint32array_constructor",
+    "float32array_constructor",
+    "float64array_constructor",
+    // ── TypedArray prototype imports ──
+    "typedarray_proto_length",
+    "typedarray_proto_byte_length",
+    "typedarray_proto_byte_offset",
+    "typedarray_proto_set",
+    "typedarray_proto_slice",
+    "typedarray_proto_subarray",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -294,7 +344,7 @@ const HOST_IMPORT_NAMES: [&str; 268] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        268,
+        312,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1268,6 +1318,78 @@ impl Compiler {
         imports.import("env", "date_parse", EntityType::Function(3));
         // Import index 267: date_utc: (i64) -> i64
         imports.import("env", "date_utc", EntityType::Function(3));
+        // ── WeakMap imports ──
+        // Import index 268: weakmap_constructor: (i64) -> i64
+        imports.import("env", "weakmap_constructor", EntityType::Function(3));
+        // Import index 269: weakmap_proto_set: (i64, i64, i64) -> i64
+        imports.import("env", "weakmap_proto_set", EntityType::Function(16));
+        // Import index 270: weakmap_proto_get: (i64, i64) -> i64
+        imports.import("env", "weakmap_proto_get", EntityType::Function(2));
+        // Import index 271: weakmap_proto_has: (i64, i64) -> i64
+        imports.import("env", "weakmap_proto_has", EntityType::Function(2));
+        // Import index 272: weakmap_proto_delete: (i64, i64) -> i64
+        imports.import("env", "weakmap_proto_delete", EntityType::Function(2));
+        // ── WeakSet imports ──
+        // Import index 273: weakset_constructor: (i64) -> i64
+        imports.import("env", "weakset_constructor", EntityType::Function(3));
+        // Import index 274: weakset_proto_add: (i64, i64) -> i64
+        imports.import("env", "weakset_proto_add", EntityType::Function(2));
+        // Import index 275: weakset_proto_has: (i64, i64) -> i64
+        imports.import("env", "weakset_proto_has", EntityType::Function(2));
+        // Import index 276: weakset_proto_delete: (i64, i64) -> i64
+        imports.import("env", "weakset_proto_delete", EntityType::Function(2));
+        // ── ArrayBuffer imports ──
+        // Import index 277: arraybuffer_constructor: (i64) -> i64
+        imports.import("env", "arraybuffer_constructor", EntityType::Function(3));
+        // Import index 278: arraybuffer_proto_byte_length: (i64) -> i64
+        imports.import("env", "arraybuffer_proto_byte_length", EntityType::Function(3));
+        // Import index 279: arraybuffer_proto_slice: (i64, i64, i64) -> i64
+        imports.import("env", "arraybuffer_proto_slice", EntityType::Function(16));
+        // ── DataView imports ──
+        // Import index 280: dataview_constructor: (i64, i64, i64) -> i64
+        imports.import("env", "dataview_constructor", EntityType::Function(16));
+        // Import index 281-288: DataView get methods: (i64, i64) -> i64
+        imports.import("env", "dataview_proto_get_float64", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_float32", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_int32", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_uint32", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_int16", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_uint16", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_int8", EntityType::Function(2));
+        imports.import("env", "dataview_proto_get_uint8", EntityType::Function(2));
+        // Import index 289-296: DataView set methods: (i64, i64, i64) -> i64
+        imports.import("env", "dataview_proto_set_float64", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_float32", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_int32", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_uint32", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_int16", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_uint16", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_int8", EntityType::Function(16));
+        imports.import("env", "dataview_proto_set_uint8", EntityType::Function(16));
+        // ── TypedArray constructor imports ──
+        // Import index 297-305: TypedArray constructors: (i64, i64, i64) -> i64
+        imports.import("env", "int8array_constructor", EntityType::Function(16));
+        imports.import("env", "uint8array_constructor", EntityType::Function(16));
+        imports.import("env", "uint8clampedarray_constructor", EntityType::Function(16));
+        imports.import("env", "int16array_constructor", EntityType::Function(16));
+        imports.import("env", "uint16array_constructor", EntityType::Function(16));
+        imports.import("env", "int32array_constructor", EntityType::Function(16));
+        imports.import("env", "uint32array_constructor", EntityType::Function(16));
+        imports.import("env", "float32array_constructor", EntityType::Function(16));
+        imports.import("env", "float64array_constructor", EntityType::Function(16));
+        // ── TypedArray prototype imports ──
+        // Import index 306: typedarray_proto_length: (i64) -> i64
+        imports.import("env", "typedarray_proto_length", EntityType::Function(3));
+        // Import index 307: typedarray_proto_byte_length: (i64) -> i64
+        imports.import("env", "typedarray_proto_byte_length", EntityType::Function(3));
+        // Import index 308: typedarray_proto_byte_offset: (i64) -> i64
+        imports.import("env", "typedarray_proto_byte_offset", EntityType::Function(3));
+        // Import index 309: typedarray_proto_set: (i64, i64, i64) -> i64
+        imports.import("env", "typedarray_proto_set", EntityType::Function(16));
+        // Import index 310: typedarray_proto_slice: (i64, i64, i64) -> i64
+        imports.import("env", "typedarray_proto_slice", EntityType::Function(16));
+        // Import index 311: typedarray_proto_subarray: (i64, i64, i64) -> i64
+        imports.import("env", "typedarray_proto_subarray", EntityType::Function(16));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1560,6 +1682,56 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::DateNow, 265);
         builtin_func_indices.insert(Builtin::DateParse, 266);
         builtin_func_indices.insert(Builtin::DateUTC, 267);
+        // ── WeakMap builtins ──
+        builtin_func_indices.insert(Builtin::WeakMapConstructor, 268);
+        builtin_func_indices.insert(Builtin::WeakMapProtoSet, 269);
+        builtin_func_indices.insert(Builtin::WeakMapProtoGet, 270);
+        builtin_func_indices.insert(Builtin::WeakMapProtoHas, 271);
+        builtin_func_indices.insert(Builtin::WeakMapProtoDelete, 272);
+        // ── WeakSet builtins ──
+        builtin_func_indices.insert(Builtin::WeakSetConstructor, 273);
+        builtin_func_indices.insert(Builtin::WeakSetProtoAdd, 274);
+        builtin_func_indices.insert(Builtin::WeakSetProtoHas, 275);
+        builtin_func_indices.insert(Builtin::WeakSetProtoDelete, 276);
+        // ── ArrayBuffer builtins ──
+        builtin_func_indices.insert(Builtin::ArrayBufferConstructor, 277);
+        builtin_func_indices.insert(Builtin::ArrayBufferProtoByteLength, 278);
+        builtin_func_indices.insert(Builtin::ArrayBufferProtoSlice, 279);
+        // ── DataView builtins ──
+        builtin_func_indices.insert(Builtin::DataViewConstructor, 280);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetFloat64, 281);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetFloat32, 282);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetInt32, 283);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetUint32, 284);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetInt16, 285);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetUint16, 286);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetInt8, 287);
+        builtin_func_indices.insert(Builtin::DataViewProtoGetUint8, 288);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetFloat64, 289);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetFloat32, 290);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetInt32, 291);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetUint32, 292);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetInt16, 293);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetUint16, 294);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetInt8, 295);
+        builtin_func_indices.insert(Builtin::DataViewProtoSetUint8, 296);
+        // ── TypedArray constructor builtins ──
+        builtin_func_indices.insert(Builtin::Int8ArrayConstructor, 297);
+        builtin_func_indices.insert(Builtin::Uint8ArrayConstructor, 298);
+        builtin_func_indices.insert(Builtin::Uint8ClampedArrayConstructor, 299);
+        builtin_func_indices.insert(Builtin::Int16ArrayConstructor, 300);
+        builtin_func_indices.insert(Builtin::Uint16ArrayConstructor, 301);
+        builtin_func_indices.insert(Builtin::Int32ArrayConstructor, 302);
+        builtin_func_indices.insert(Builtin::Uint32ArrayConstructor, 303);
+        builtin_func_indices.insert(Builtin::Float32ArrayConstructor, 304);
+        builtin_func_indices.insert(Builtin::Float64ArrayConstructor, 305);
+        // ── TypedArray prototype builtins ──
+        builtin_func_indices.insert(Builtin::TypedArrayProtoLength, 306);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoByteLength, 307);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoByteOffset, 308);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoSet, 309);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoSlice, 310);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoSubarray, 311);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -6355,6 +6527,17 @@ impl Compiler {
             | Builtin::MapSetEntries
             // ── Set single-arg builtins ──
             | Builtin::SetConstructor
+            // ── WeakMap single-arg builtins ──
+            | Builtin::WeakMapConstructor
+            // ── WeakSet single-arg builtins ──
+            | Builtin::WeakSetConstructor
+            // ── ArrayBuffer single-arg builtins ──
+            | Builtin::ArrayBufferConstructor
+            | Builtin::ArrayBufferProtoByteLength
+            // ── TypedArray prototype single-arg builtins ──
+            | Builtin::TypedArrayProtoLength
+            | Builtin::TypedArrayProtoByteLength
+            | Builtin::TypedArrayProtoByteOffset
             // ── Date single-arg builtins (not constructor) ──
             | Builtin::DateParse
             | Builtin::DateUTC => {
@@ -6394,7 +6577,52 @@ impl Compiler {
             | Builtin::MapProtoGet
             | Builtin::MapSetHas
             | Builtin::MapSetDelete
-            | Builtin::SetProtoAdd => {
+            | Builtin::SetProtoAdd
+            // ── WeakMap multi-arg builtins ──
+            | Builtin::WeakMapProtoSet
+            | Builtin::WeakMapProtoGet
+            | Builtin::WeakMapProtoHas
+            | Builtin::WeakMapProtoDelete
+            // ── WeakSet multi-arg builtins ──
+            | Builtin::WeakSetProtoAdd
+            | Builtin::WeakSetProtoHas
+            | Builtin::WeakSetProtoDelete
+            // ── ArrayBuffer multi-arg builtins ──
+            | Builtin::ArrayBufferProtoSlice
+            // ── DataView constructor ──
+            | Builtin::DataViewConstructor
+            // ── DataView get methods ──
+            | Builtin::DataViewProtoGetFloat64
+            | Builtin::DataViewProtoGetFloat32
+            | Builtin::DataViewProtoGetInt32
+            | Builtin::DataViewProtoGetUint32
+            | Builtin::DataViewProtoGetInt16
+            | Builtin::DataViewProtoGetUint16
+            | Builtin::DataViewProtoGetInt8
+            | Builtin::DataViewProtoGetUint8
+            // ── DataView set methods ──
+            | Builtin::DataViewProtoSetFloat64
+            | Builtin::DataViewProtoSetFloat32
+            | Builtin::DataViewProtoSetInt32
+            | Builtin::DataViewProtoSetUint32
+            | Builtin::DataViewProtoSetInt16
+            | Builtin::DataViewProtoSetUint16
+            | Builtin::DataViewProtoSetInt8
+            | Builtin::DataViewProtoSetUint8
+            // ── TypedArray constructors ──
+            | Builtin::Int8ArrayConstructor
+            | Builtin::Uint8ArrayConstructor
+            | Builtin::Uint8ClampedArrayConstructor
+            | Builtin::Int16ArrayConstructor
+            | Builtin::Uint16ArrayConstructor
+            | Builtin::Int32ArrayConstructor
+            | Builtin::Uint32ArrayConstructor
+            | Builtin::Float32ArrayConstructor
+            | Builtin::Float64ArrayConstructor
+            // ── TypedArray prototype multi-arg methods ──
+            | Builtin::TypedArrayProtoSet
+            | Builtin::TypedArrayProtoSlice
+            | Builtin::TypedArrayProtoSubarray => {
                 for arg in args {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 }
@@ -7914,6 +8142,56 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::DateNow => ("Date.now", 0),
         Builtin::DateParse => ("Date.parse", 1),
         Builtin::DateUTC => ("Date.UTC", 1),
+        // ── WeakMap builtins ──
+        Builtin::WeakMapConstructor => ("WeakMap", 1),
+        Builtin::WeakMapProtoSet => ("WeakMap.prototype.set", 3),
+        Builtin::WeakMapProtoGet => ("WeakMap.prototype.get", 2),
+        Builtin::WeakMapProtoHas => ("WeakMap.prototype.has", 2),
+        Builtin::WeakMapProtoDelete => ("WeakMap.prototype.delete", 2),
+        // ── WeakSet builtins ──
+        Builtin::WeakSetConstructor => ("WeakSet", 1),
+        Builtin::WeakSetProtoAdd => ("WeakSet.prototype.add", 2),
+        Builtin::WeakSetProtoHas => ("WeakSet.prototype.has", 2),
+        Builtin::WeakSetProtoDelete => ("WeakSet.prototype.delete", 2),
+        // ── ArrayBuffer builtins ──
+        Builtin::ArrayBufferConstructor => ("ArrayBuffer", 1),
+        Builtin::ArrayBufferProtoByteLength => ("ArrayBuffer.prototype.byteLength", 1),
+        Builtin::ArrayBufferProtoSlice => ("ArrayBuffer.prototype.slice", 3),
+        // ── DataView builtins ──
+        Builtin::DataViewConstructor => ("DataView", 3),
+        Builtin::DataViewProtoGetFloat64 => ("DataView.prototype.getFloat64", 2),
+        Builtin::DataViewProtoGetFloat32 => ("DataView.prototype.getFloat32", 2),
+        Builtin::DataViewProtoGetInt32 => ("DataView.prototype.getInt32", 2),
+        Builtin::DataViewProtoGetUint32 => ("DataView.prototype.getUint32", 2),
+        Builtin::DataViewProtoGetInt16 => ("DataView.prototype.getInt16", 2),
+        Builtin::DataViewProtoGetUint16 => ("DataView.prototype.getUint16", 2),
+        Builtin::DataViewProtoGetInt8 => ("DataView.prototype.getInt8", 2),
+        Builtin::DataViewProtoGetUint8 => ("DataView.prototype.getUint8", 2),
+        Builtin::DataViewProtoSetFloat64 => ("DataView.prototype.setFloat64", 3),
+        Builtin::DataViewProtoSetFloat32 => ("DataView.prototype.setFloat32", 3),
+        Builtin::DataViewProtoSetInt32 => ("DataView.prototype.setInt32", 3),
+        Builtin::DataViewProtoSetUint32 => ("DataView.prototype.setUint32", 3),
+        Builtin::DataViewProtoSetInt16 => ("DataView.prototype.setInt16", 3),
+        Builtin::DataViewProtoSetUint16 => ("DataView.prototype.setUint16", 3),
+        Builtin::DataViewProtoSetInt8 => ("DataView.prototype.setInt8", 3),
+        Builtin::DataViewProtoSetUint8 => ("DataView.prototype.setUint8", 3),
+        // ── TypedArray constructors ──
+        Builtin::Int8ArrayConstructor => ("Int8Array", 3),
+        Builtin::Uint8ArrayConstructor => ("Uint8Array", 3),
+        Builtin::Uint8ClampedArrayConstructor => ("Uint8ClampedArray", 3),
+        Builtin::Int16ArrayConstructor => ("Int16Array", 3),
+        Builtin::Uint16ArrayConstructor => ("Uint16Array", 3),
+        Builtin::Int32ArrayConstructor => ("Int32Array", 3),
+        Builtin::Uint32ArrayConstructor => ("Uint32Array", 3),
+        Builtin::Float32ArrayConstructor => ("Float32Array", 3),
+        Builtin::Float64ArrayConstructor => ("Float64Array", 3),
+        // ── TypedArray prototype methods ──
+        Builtin::TypedArrayProtoLength => ("TypedArray.prototype.length", 1),
+        Builtin::TypedArrayProtoByteLength => ("TypedArray.prototype.byteLength", 1),
+        Builtin::TypedArrayProtoByteOffset => ("TypedArray.prototype.byteOffset", 1),
+        Builtin::TypedArrayProtoSet => ("TypedArray.prototype.set", 3),
+        Builtin::TypedArrayProtoSlice => ("TypedArray.prototype.slice", 3),
+        Builtin::TypedArrayProtoSubarray => ("TypedArray.prototype.subarray", 3),
     }
 }
 
