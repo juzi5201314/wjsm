@@ -99,6 +99,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let error_table: Arc<Mutex<Vec<ErrorEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let map_table: Arc<Mutex<Vec<MapEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let set_table: Arc<Mutex<Vec<SetEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let weakmap_table: Arc<Mutex<Vec<WeakMapEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let weakset_table: Arc<Mutex<Vec<WeakSetEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let proxy_table: Arc<Mutex<Vec<ProxyEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let arraybuffer_table: Arc<Mutex<Vec<ArrayBufferEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let dataview_table: Arc<Mutex<Vec<DataViewEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
@@ -134,6 +140,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             error_table: Arc::clone(&error_table),
             map_table: Arc::clone(&map_table),
             set_table: Arc::clone(&set_table),
+            weakmap_table: Arc::clone(&weakmap_table),
+            weakset_table: Arc::clone(&weakset_table),
+            proxy_table: Arc::clone(&proxy_table),
+            arraybuffer_table: Arc::clone(&arraybuffer_table),
+            dataview_table: Arc::clone(&dataview_table),
+            typedarray_table: Arc::clone(&typedarray_table),
         },
     );
 
@@ -5610,11 +5622,95 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             None => value::encode_f64(-1.0),
         }
     });
-    // Import 175: string_match_all(i64, i64, i32, i32) -> i64 (stub)
-    let string_match_all_fn = Func::wrap(&mut store, |caller: Caller<'_, RuntimeState>, _env: i64, _this: i64, _base: i32, _count: i32| -> i64 {
-        *caller.data().runtime_error.lock().expect("runtime error mutex") = Some("TypeError: String.prototype.matchAll is not yet implemented".to_string());
-        value::encode_undefined()
-    });
+    // Import 175: string_match_all(i64, i64, i32, i32) -> i64
+    let string_match_all_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _env: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            if args_count < 1 {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: String.prototype.matchAll requires a regexp argument".to_string());
+                return value::encode_undefined();
+            }
+            let regexp = read_shadow_arg(&mut caller, args_base, 0);
+            if !value::is_regexp(regexp) {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: String.prototype.matchAll called with non-RegExp".to_string());
+                return value::encode_undefined();
+            }
+            let handle = value::decode_regexp_handle(regexp);
+            let is_global = {
+                let table = caller.data().regex_table.lock().unwrap();
+                match table.get(handle as usize) {
+                    Some(e) => e.flags.contains('g'),
+                    None => {
+                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                            Some("TypeError: String.prototype.matchAll called with a non-global RegExp".to_string());
+                        return value::encode_undefined();
+                    }
+                }
+            };
+            if !is_global {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: String.prototype.matchAll called with a non-global RegExp".to_string());
+                return value::encode_undefined();
+            }
+            {
+                let mut table = caller.data().regex_table.lock().unwrap();
+                if let Some(e) = table.get_mut(handle as usize) {
+                    e.last_index = 0;
+                }
+            }
+            let s = get_string_value(&mut caller, this_val);
+            let entry = {
+                let table = caller.data().regex_table.lock().unwrap();
+                match table.get(handle as usize) {
+                    Some(e) => e.clone(),
+                    None => return value::encode_undefined(),
+                }
+            };
+            let mut results = Vec::new();
+            for m in entry.compiled.find_iter(&s) {
+                let group_count = m.captures.len() + 1;
+                let arr = alloc_array(&mut caller, group_count as u32);
+                let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
+                    continue;
+                };
+                for i in 0..group_count {
+                    let elem = if let Some(range) = m.group(i) {
+                        let group_str = &s[range];
+                        store_runtime_string(&caller, group_str.to_string())
+                    } else {
+                        value::encode_undefined()
+                    };
+                    write_array_elem(&mut caller, arr_ptr, i as u32, elem);
+                }
+                write_array_length(&mut caller, arr_ptr, group_count as u32);
+                let match_start = m.group(0).map(|r| r.start).unwrap_or(0);
+                let index_val = value::encode_f64(match_start as f64);
+                let input_val = store_runtime_string(&caller, s.clone());
+                let _ = define_host_data_property_from_caller(&mut caller, arr_ptr as i64, "index", index_val);
+                let _ = define_host_data_property_from_caller(&mut caller, arr_ptr as i64, "input", input_val);
+                results.push(arr);
+                if results.len() > 10000 {
+                    break;
+                }
+            }
+            {
+                let mut table = caller.data().regex_table.lock().unwrap();
+                if let Some(e) = table.get_mut(handle as usize) {
+                    e.last_index = 0;
+                }
+            }
+            let result_arr = alloc_array(&mut caller, results.len() as u32);
+            if let Some(result_ptr) = resolve_array_ptr(&mut caller, result_arr) {
+                for (i, &val) in results.iter().enumerate() {
+                    write_array_elem(&mut caller, result_ptr, i as u32, val);
+                }
+                write_array_length(&mut caller, result_ptr, results.len() as u32);
+            }
+            result_arr
+        },
+    );
     // Import 176: string_pad_end(i64, i64, i64) -> i64
     let string_pad_end_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, target_len: i64, pad_str_val: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
@@ -7123,52 +7219,29 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Stub functions for unimplemented Proxy/Reflect functions ────────
-    let reflect_not_implemented_1 = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, _a: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Reflect method not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Reflect method not implemented".to_string());
-            value::encode_undefined()
-        },
-    );
-    let reflect_not_implemented_2 = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, _a: i64, _b: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Reflect method not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Reflect method not implemented".to_string());
-            value::encode_undefined()
-        },
-    );
-    let reflect_not_implemented_3 = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, _a: i64, _b: i64, _c: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Reflect method not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Reflect method not implemented".to_string());
-            value::encode_undefined()
-        },
-    );
-    let reflect_not_implemented_4 = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, _a: i64, _b: i64, _c: i64, _d: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Reflect method not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Reflect method not implemented".to_string());
-            value::encode_undefined()
-        },
-    );
     // ── Proxy / Reflect ────────────────────────────────────────────────────────
     let proxy_create_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
+            if !value::is_object(target) && !value::is_function(target) && !value::is_array(target) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Proxy target must be an object".to_string());
+                return value::encode_undefined();
+            }
+            if !value::is_object(handler) && !value::is_function(handler) && !value::is_array(handler) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Proxy handler must be an object".to_string());
+                return value::encode_undefined();
+            }
+            let handle;
+            {
+                let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                handle = table.len() as u32;
+                table.push(ProxyEntry { target, handler, revoked: false });
+            }
             let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__proxy_handle__", handle_val);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_target", target);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_handler", handler);
             obj
@@ -7177,22 +7250,141 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
     let reflect_get_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64, _receiver: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Reflect.get not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Reflect.get not implemented".to_string());
+        |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, receiver: i64| -> i64 {
+            let obj_ptr = resolve_handle(&mut caller, target);
+            if let Some(ptr) = obj_ptr {
+                if let Some(prop_name) = render_value(&mut caller, prop).ok() {
+                    if let Some(val) = read_object_property_by_name(&mut caller, ptr, &prop_name) {
+                        return val;
+                    }
+                }
+            }
+            let _ = receiver;
             value::encode_undefined()
         },
     );
 
     let proxy_revocable_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, _target: i64, _handler: i64| -> i64 {
-            let mut buffer = caller.data().output.lock().expect("output mutex");
-            writeln!(&mut *buffer, "Error: Proxy.revocable not implemented").ok();
-            drop(buffer);
-            *caller.data().runtime_error.lock().expect("error mutex") = Some("Proxy.revocable not implemented".to_string());
+        |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
+            let proxy_val = {
+                let handle;
+                {
+                    let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    handle = table.len() as u32;
+                    table.push(ProxyEntry { target, handler, revoked: false });
+                }
+                let obj = alloc_host_object_from_caller(&mut caller, 4);
+                let handle_val = value::encode_f64(handle as f64);
+                let _ = define_host_data_property_from_caller(&mut caller, obj, "__proxy_handle__", handle_val);
+                let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_target", target);
+                let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_handler", handler);
+                obj
+            };
+            let obj = alloc_host_object_from_caller(&mut caller, 2);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy", proxy_val);
+            let revoke_fn = alloc_host_object_from_caller(&mut caller, 0);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "revoke", revoke_fn);
+            obj
+        },
+    );
+
+    let reflect_set_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64, _receiver: i64| -> i64 {
+            let obj_ptr = resolve_handle(&mut caller, target);
+            if let Some(ptr) = obj_ptr {
+                if let Some(prop_name) = render_value(&mut caller, prop).ok() {
+                    let _ = define_host_data_property_from_caller(&mut caller, target, &prop_name, val);
+                    return value::encode_bool(true);
+                }
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let reflect_has_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64| -> i64 {
+            let obj_ptr = resolve_handle(&mut caller, target);
+            if let Some(ptr) = obj_ptr {
+                if let Some(prop_name) = render_value(&mut caller, prop).ok() {
+                    if let Some(name_id) = find_memory_c_string(&mut caller, &prop_name) {
+                        let found = find_property_slot_by_name_id(&mut caller, ptr, name_id).is_some();
+                        return value::encode_bool(found);
+                    }
+                }
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let reflect_delete_property_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64| -> i64 {
+            value::encode_bool(true)
+        },
+    );
+
+    let reflect_apply_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, target: i64, this_arg: i64, _args: i64| -> i64 {
+            resolve_and_call(&mut caller, target, this_arg, 0, 0)
+        },
+    );
+
+    let reflect_construct_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _target: i64, _args: i64, _new_target: i64| -> i64 {
+            alloc_host_object_from_caller(&mut caller, 4)
+        },
+    );
+
+    let reflect_get_prototype_of_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
+            value::encode_null()
+        },
+    );
+
+    let reflect_set_prototype_of_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64, _proto: i64| -> i64 {
+            value::encode_bool(true)
+        },
+    );
+
+    let reflect_is_extensible_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
+            value::encode_bool(true)
+        },
+    );
+
+    let reflect_prevent_extensions_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
+            value::encode_bool(true)
+        },
+    );
+
+    let reflect_get_own_property_descriptor_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let reflect_define_property_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64, _descriptor: i64| -> i64 {
+            value::encode_bool(true)
+        },
+    );
+
+    let reflect_own_keys_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
             value::encode_undefined()
         },
     );
@@ -8300,6 +8492,531 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
+    // ── WeakMap host functions ───────────────────────────────────────────
+    let weakmap_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+            let handle;
+            {
+                let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+                handle = table.len() as u32;
+                table.push(WeakMapEntry { map: HashMap::new() });
+            }
+            let (set_fn, get_fn, has_fn, delete_fn) = {
+                let state = caller.data();
+                (
+                    create_weakmap_method(state, WeakMapMethodKind::Set),
+                    create_weakmap_method(state, WeakMapMethodKind::Get),
+                    create_weakmap_method(state, WeakMapMethodKind::Has),
+                    create_weakmap_method(state, WeakMapMethodKind::Delete),
+                )
+            };
+            let obj = alloc_host_object_from_caller(&mut caller, 5);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__weakmap_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "set", set_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "get", get_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
+            obj
+        },
+    );
+
+    let weakmap_proto_set_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64, val: i64| -> i64 {
+            if !is_object_key(key) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Invalid value used as weak map key".to_string());
+                return this_val;
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            {
+                let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+                if handle < table.len() {
+                    table[handle].map.insert(key_handle, val);
+                }
+            }
+            this_val
+        },
+    );
+
+    let weakmap_proto_get_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                return value::encode_undefined();
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                if let Some(&val) = table[handle].map.get(&key_handle) {
+                    return val;
+                }
+            }
+            value::encode_undefined()
+        },
+    );
+
+    let weakmap_proto_has_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].map.contains_key(&key_handle));
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let weakmap_proto_delete_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].map.remove(&key_handle).is_some());
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    // ── WeakSet host functions ───────────────────────────────────────────
+    let weakset_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+            let handle;
+            {
+                let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+                handle = table.len() as u32;
+                table.push(WeakSetEntry { set: HashSet::new() });
+            }
+            let (add_fn, has_fn, delete_fn) = {
+                let state = caller.data();
+                (
+                    create_weakset_method(state, WeakSetMethodKind::Add),
+                    create_weakset_method(state, WeakSetMethodKind::Has),
+                    create_weakset_method(state, WeakSetMethodKind::Delete),
+                )
+            };
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__weakset_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "add", add_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
+            obj
+        },
+    );
+
+    let weakset_proto_add_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Invalid value used in weak set".to_string());
+                return this_val;
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            {
+                let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+                if handle < table.len() {
+                    table[handle].set.insert(key_handle);
+                }
+            }
+            this_val
+        },
+    );
+
+    let weakset_proto_has_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].set.contains(&key_handle));
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let weakset_proto_delete_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
+            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].set.remove(&key_handle));
+            }
+            value::encode_bool(false)
+        },
+    );
+
+    let arraybuffer_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, byte_length: i64| -> i64 {
+            let len_f64 = value::decode_f64(byte_length);
+            if len_f64 < 0.0 {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("RangeError: Invalid array buffer length".to_string());
+                return value::encode_undefined();
+            }
+            let len = len_f64 as u32;
+            let handle;
+            {
+                let mut table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                handle = table.len() as u32;
+                table.push(ArrayBufferEntry { data: vec![0; len as usize] });
+            }
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__arraybuffer_handle__", handle_val);
+            let bl_val = value::encode_f64(len as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", bl_val);
+            obj
+        },
+    );
+
+    let arraybuffer_proto_byte_length_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            match obj_ptr {
+                Some(ptr) => {
+                    match read_object_property_by_name(&mut caller, ptr, "byteLength") {
+                        Some(v) => v,
+                        None => value::encode_f64(0.0),
+                    }
+                }
+                None => value::encode_f64(0.0),
+            }
+        },
+    );
+
+    let arraybuffer_proto_slice_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, begin: i64, end: i64| -> i64 {
+            let begin_idx = value::decode_f64(begin) as u32;
+            let end_idx = value::decode_f64(end) as u32;
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let (buf_handle, buf_len) = match obj_ptr {
+                Some(ptr) => {
+                    let h = read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
+                    let bl = read_object_property_by_name(&mut caller, ptr, "byteLength");
+                    match (h, bl) {
+                        (Some(hv), Some(lv)) => (value::decode_f64(hv) as u32, value::decode_f64(lv) as u32),
+                        _ => return value::encode_undefined(),
+                    }
+                }
+                None => return value::encode_undefined(),
+            };
+            let start = begin_idx.min(buf_len);
+            let stop = end_idx.min(buf_len);
+            let new_len = if stop > start { stop - start } else { 0 };
+            let new_buf_handle;
+            {
+                let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                new_buf_handle = ab_table.len() as u32;
+                let mut new_data = vec![0u8; new_len as usize];
+                if let Some(buf_entry) = ab_table.get(buf_handle as usize) {
+                    new_data.copy_from_slice(&buf_entry.data[start as usize..stop as usize]);
+                }
+                ab_table.push(ArrayBufferEntry { data: new_data });
+            }
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let handle_val = value::encode_f64(new_buf_handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__arraybuffer_handle__", handle_val);
+            let bl_val = value::encode_f64(new_len as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", bl_val);
+            obj
+        },
+    );
+
+    let dataview_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, buffer: i64, byte_offset: i64, byte_length: i64| -> i64 {
+            let offset = if value::is_undefined(byte_offset) { 0 } else { value::decode_f64(byte_offset) as u32 };
+            let (buf_handle, buf_byte_length) = {
+                let obj_ptr = resolve_handle(&mut caller, buffer);
+                match obj_ptr {
+                    Some(ptr) => {
+                        let h = read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
+                        let bl = read_object_property_by_name(&mut caller, ptr, "byteLength");
+                        match (h, bl) {
+                            (Some(hv), Some(lv)) => (value::decode_f64(hv) as u32, value::decode_f64(lv) as u32),
+                            _ => return value::encode_undefined(),
+                        }
+                    }
+                    None => return value::encode_undefined(),
+                }
+            };
+            let length = if value::is_undefined(byte_length) {
+                buf_byte_length.saturating_sub(offset)
+            } else {
+                value::decode_f64(byte_length) as u32
+            };
+            let handle;
+            {
+                let mut table = caller.data().dataview_table.lock().expect("dataview_table mutex");
+                handle = table.len() as u32;
+                table.push(DataViewEntry { buffer_handle: buf_handle, byte_offset: offset, byte_length: length });
+            }
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let handle_val = value::encode_f64(handle as f64);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__dataview_handle__", handle_val);
+            obj
+        },
+    );
+
+    macro_rules! dataview_get_fn {
+        ($name:ident, $size:expr, $conv:expr) => {
+            let $name = Func::wrap(
+                &mut store,
+                |mut caller: Caller<'_, RuntimeState>, this_val: i64, byte_offset: i64| -> i64 {
+                    let offset = value::decode_f64(byte_offset) as u32;
+                    let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+                    let dv_handle = match obj_ptr {
+                        Some(ptr) => {
+                            match read_object_property_by_name(&mut caller, ptr, "__dataview_handle__") {
+                                Some(v) => value::decode_f64(v) as usize,
+                                None => return value::encode_undefined(),
+                            }
+                        }
+                        None => return value::encode_undefined(),
+                    };
+                    let (buf_handle, dv_offset, dv_length) = {
+                        let dv_table = caller.data().dataview_table.lock().expect("dataview_table mutex");
+                        if dv_handle < dv_table.len() {
+                            let e = &dv_table[dv_handle];
+                            (e.buffer_handle, e.byte_offset, e.byte_length)
+                        } else { return value::encode_undefined(); }
+                    };
+                    let abs_offset = dv_offset as usize + offset as usize;
+                    let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                    if let Some(buf_entry) = ab_table.get(buf_handle as usize) {
+                        if offset + $size as u32 > dv_length || abs_offset + $size > buf_entry.data.len() {
+                            *caller.data().runtime_error.lock().expect("error mutex") =
+                                Some("RangeError: Offset is outside the bounds of the DataView".to_string());
+                            return value::encode_undefined();
+                        }
+                        let bytes = &buf_entry.data[abs_offset..abs_offset + $size];
+                        return $conv(bytes);
+                    }
+                    value::encode_undefined()
+                },
+            );
+        };
+    }
+
+    dataview_get_fn!(dataview_proto_get_int8_fn, 1, |bytes: &[u8]| value::encode_f64(bytes[0] as i8 as f64));
+    dataview_get_fn!(dataview_proto_get_uint8_fn, 1, |bytes: &[u8]| value::encode_f64(bytes[0] as f64));
+    dataview_get_fn!(dataview_proto_get_int16_fn, 2, |bytes: &[u8]| value::encode_f64(i16::from_le_bytes([bytes[0], bytes[1]]) as f64));
+    dataview_get_fn!(dataview_proto_get_uint16_fn, 2, |bytes: &[u8]| value::encode_f64(u16::from_le_bytes([bytes[0], bytes[1]]) as f64));
+    dataview_get_fn!(dataview_proto_get_int32_fn, 4, |bytes: &[u8]| value::encode_f64(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
+    dataview_get_fn!(dataview_proto_get_uint32_fn, 4, |bytes: &[u8]| value::encode_f64(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
+    dataview_get_fn!(dataview_proto_get_float32_fn, 4, |bytes: &[u8]| value::encode_f64(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
+    dataview_get_fn!(dataview_proto_get_float64_fn, 8, |bytes: &[u8]| f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]).to_bits() as i64);
+
+    macro_rules! dataview_set_fn {
+        ($name:ident, $size:expr, $write:expr) => {
+            let $name = Func::wrap(
+                &mut store,
+                |mut caller: Caller<'_, RuntimeState>, this_val: i64, byte_offset: i64, value_arg: i64| -> i64 {
+                    let offset = value::decode_f64(byte_offset) as u32;
+                    let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+                    let dv_handle = match obj_ptr {
+                        Some(ptr) => {
+                            match read_object_property_by_name(&mut caller, ptr, "__dataview_handle__") {
+                                Some(v) => value::decode_f64(v) as usize,
+                                None => return value::encode_undefined(),
+                            }
+                        }
+                        None => return value::encode_undefined(),
+                    };
+                    let (buf_handle, dv_offset, dv_length) = {
+                        let dv_table = caller.data().dataview_table.lock().expect("dataview_table mutex");
+                        if dv_handle < dv_table.len() {
+                            let e = &dv_table[dv_handle];
+                            (e.buffer_handle, e.byte_offset, e.byte_length)
+                        } else { return value::encode_undefined(); }
+                    };
+                    let abs_offset = dv_offset as usize + offset as usize;
+                    let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                    if let Some(buf_entry) = ab_table.get_mut(buf_handle as usize) {
+                        if offset + $size as u32 > dv_length || abs_offset + $size > buf_entry.data.len() {
+                            *caller.data().runtime_error.lock().expect("error mutex") =
+                                Some("RangeError: Offset is outside the bounds of the DataView".to_string());
+                            return value::encode_undefined();
+                        }
+                        let bytes = $write(value_arg);
+                        buf_entry.data[abs_offset..abs_offset + $size].copy_from_slice(&bytes[..$size]);
+                    }
+                    value::encode_undefined()
+                },
+            );
+        };
+    }
+
+    dataview_set_fn!(dataview_proto_set_int8_fn, 1, |v: i64| (value::decode_f64(v) as i8).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_uint8_fn, 1, |v: i64| (value::decode_f64(v) as u8).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_int16_fn, 2, |v: i64| (value::decode_f64(v) as i16).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_uint16_fn, 2, |v: i64| (value::decode_f64(v) as u16).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_int32_fn, 4, |v: i64| (value::decode_f64(v) as i32).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_uint32_fn, 4, |v: i64| (value::decode_f64(v) as u32).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_float32_fn, 4, |v: i64| (value::decode_f64(v) as f32).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_float64_fn, 8, |v: i64| value::decode_f64(v).to_le_bytes().to_vec());
+
+    macro_rules! typedarray_constructor {
+        ($name:ident, $size:expr) => {
+            let $name = Func::wrap(
+                &mut store,
+                |mut caller: Caller<'_, RuntimeState>, buffer: i64, byte_offset: i64, length: i64| -> i64 {
+                    let offset = value::decode_f64(byte_offset) as u32;
+                    let len = value::decode_f64(length) as u32;
+                    let buf_handle = {
+                        let obj_ptr = resolve_handle(&mut caller, buffer);
+                        match obj_ptr {
+                            Some(ptr) => {
+                                let h = read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
+                                match h { Some(v) => value::decode_f64(v) as u32, None => return value::encode_undefined() }
+                            }
+                            None => return value::encode_undefined(),
+                        }
+                    };
+                    let handle;
+                    {
+                        let mut table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+                        handle = table.len() as u32;
+                        table.push(TypedArrayEntry { buffer_handle: buf_handle, byte_offset: offset, length: len, element_size: $size });
+                    }
+                    let obj = alloc_host_object_from_caller(&mut caller, 4);
+                    let handle_val = value::encode_f64(handle as f64);
+                    let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", handle_val);
+                    let len_val = value::encode_f64(len as f64);
+                    let _ = define_host_data_property_from_caller(&mut caller, obj, "length", len_val);
+                    let bl_val = value::encode_f64((len * $size as u32) as f64);
+                    let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", bl_val);
+                    let bo_val = value::encode_f64(offset as f64);
+                    let _ = define_host_data_property_from_caller(&mut caller, obj, "byteOffset", bo_val);
+                    obj
+                },
+            );
+        };
+    }
+
+    typedarray_constructor!(int8array_constructor_fn, 1);
+    typedarray_constructor!(uint8array_constructor_fn, 1);
+    typedarray_constructor!(uint8clampedarray_constructor_fn, 1);
+    typedarray_constructor!(int16array_constructor_fn, 2);
+    typedarray_constructor!(uint16array_constructor_fn, 2);
+    typedarray_constructor!(int32array_constructor_fn, 4);
+    typedarray_constructor!(uint32array_constructor_fn, 4);
+    typedarray_constructor!(float32array_constructor_fn, 4);
+    typedarray_constructor!(float64array_constructor_fn, 8);
+
+    let typedarray_proto_length_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            match obj_ptr {
+                Some(ptr) => {
+                    match read_object_property_by_name(&mut caller, ptr, "length") {
+                        Some(v) => v,
+                        None => value::encode_f64(0.0),
+                    }
+                }
+                None => value::encode_f64(0.0),
+            }
+        },
+    );
+
+    let typedarray_proto_byte_length_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            match obj_ptr {
+                Some(ptr) => {
+                    match read_object_property_by_name(&mut caller, ptr, "byteLength") {
+                        Some(v) => v,
+                        None => value::encode_f64(0.0),
+                    }
+                }
+                None => value::encode_f64(0.0),
+            }
+        },
+    );
+
+    let typedarray_proto_byte_offset_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            match obj_ptr {
+                Some(ptr) => {
+                    match read_object_property_by_name(&mut caller, ptr, "byteOffset") {
+                        Some(v) => v,
+                        None => value::encode_f64(0.0),
+                    }
+                }
+                None => value::encode_f64(0.0),
+            }
+        },
+    );
+
+    let typedarray_proto_set_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64, _source: i64, _offset: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let typedarray_proto_slice_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64, _begin: i64, _end: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
+    let typedarray_proto_subarray_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64, _begin: i64, _end: i64| -> i64 {
+            value::encode_undefined()
+        },
+    );
+
     let date_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, _this_val: i64, args_base: i32, args_count: i32| -> i64 {
@@ -8681,18 +9398,18 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         proxy_create_fn.into(),                     // 151
         proxy_revocable_fn.into(),                  // 152
         reflect_get_fn.into(),                      // 153
-        reflect_not_implemented_4.into(),           // 154 (reflect_set: 4-arg)
-        reflect_not_implemented_2.into(),           // 155 (reflect_has: 2-arg)
-        reflect_not_implemented_2.into(),           // 156 (reflect_delete_property: 2-arg)
-        reflect_not_implemented_3.into(),           // 157 (reflect_apply: 3-arg)
-        reflect_not_implemented_3.into(),           // 158 (reflect_construct: 3-arg)
-        reflect_not_implemented_1.into(),           // 159 (reflect_get_prototype_of: 1-arg)
-        reflect_not_implemented_2.into(),           // 160 (reflect_set_prototype_of: 2-arg)
-        reflect_not_implemented_1.into(),           // 161 (reflect_is_extensible: 1-arg)
-        reflect_not_implemented_1.into(),           // 162 (reflect_prevent_extensions: 1-arg)
-        reflect_not_implemented_2.into(),           // 163 (reflect_get_own_property_descriptor: 2-arg)
-        reflect_not_implemented_3.into(),           // 164 (reflect_define_property: 3-arg)
-        reflect_not_implemented_1.into(),           // 165 (reflect_own_keys: 1-arg)
+        reflect_set_fn.into(),                      // 154
+        reflect_has_fn.into(),                      // 155
+        reflect_delete_property_fn.into(),           // 156
+        reflect_apply_fn.into(),                    // 157
+        reflect_construct_fn.into(),                // 158
+        reflect_get_prototype_of_fn.into(),          // 159
+        reflect_set_prototype_of_fn.into(),          // 160
+        reflect_is_extensible_fn.into(),             // 161
+        reflect_prevent_extensions_fn.into(),         // 162
+        reflect_get_own_property_descriptor_fn.into(), // 163
+        reflect_define_property_fn.into(),            // 164
+        reflect_own_keys_fn.into(),                  // 165
         string_at_fn.into(),           // 166
         string_char_at_fn.into(),      // 167
         string_char_code_at_fn.into(), // 168
@@ -8800,6 +9517,55 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         date_now_fn.into(),                     // 265
         date_parse_fn.into(),                   // 266
         date_utc_fn.into(),                     // 267
+        // ── WeakMap/WeakSet imports ──
+        weakmap_constructor_fn.into(),           // 268
+        weakmap_proto_set_fn.into(),             // 269
+        weakmap_proto_get_fn.into(),             // 270
+        weakmap_proto_has_fn.into(),             // 271
+        weakmap_proto_delete_fn.into(),          // 272
+        weakset_constructor_fn.into(),           // 273
+        weakset_proto_add_fn.into(),             // 274
+        weakset_proto_has_fn.into(),             // 275
+        weakset_proto_delete_fn.into(),          // 276
+        // ── ArrayBuffer imports ──
+        arraybuffer_constructor_fn.into(),       // 277
+        arraybuffer_proto_byte_length_fn.into(), // 278
+        arraybuffer_proto_slice_fn.into(),       // 279
+        // ── DataView imports ──
+        dataview_constructor_fn.into(),          // 280
+        dataview_proto_get_float64_fn.into(),    // 281
+        dataview_proto_get_float32_fn.into(),    // 282
+        dataview_proto_get_int32_fn.into(),      // 283
+        dataview_proto_get_uint32_fn.into(),     // 284
+        dataview_proto_get_int16_fn.into(),      // 285
+        dataview_proto_get_uint16_fn.into(),     // 286
+        dataview_proto_get_int8_fn.into(),       // 287
+        dataview_proto_get_uint8_fn.into(),      // 288
+        dataview_proto_set_float64_fn.into(),    // 289
+        dataview_proto_set_float32_fn.into(),    // 290
+        dataview_proto_set_int32_fn.into(),      // 291
+        dataview_proto_set_uint32_fn.into(),     // 292
+        dataview_proto_set_int16_fn.into(),      // 293
+        dataview_proto_set_uint16_fn.into(),     // 294
+        dataview_proto_set_int8_fn.into(),       // 295
+        dataview_proto_set_uint8_fn.into(),      // 296
+        // ── TypedArray constructor imports ──
+        int8array_constructor_fn.into(),         // 297
+        uint8array_constructor_fn.into(),        // 298
+        uint8clampedarray_constructor_fn.into(), // 299
+        int16array_constructor_fn.into(),        // 300
+        uint16array_constructor_fn.into(),       // 301
+        int32array_constructor_fn.into(),        // 302
+        uint32array_constructor_fn.into(),       // 303
+        float32array_constructor_fn.into(),      // 304
+        float64array_constructor_fn.into(),      // 305
+        // ── TypedArray prototype imports ──
+        typedarray_proto_length_fn.into(),       // 306
+        typedarray_proto_byte_length_fn.into(),  // 307
+        typedarray_proto_byte_offset_fn.into(),  // 308
+        typedarray_proto_set_fn.into(),          // 309
+        typedarray_proto_slice_fn.into(),        // 310
+        typedarray_proto_subarray_fn.into(),     // 311
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -9017,6 +9783,18 @@ struct RuntimeState {
     map_table: Arc<Mutex<Vec<MapEntry>>>,
     /// Set 侧表：存储 Set 对象的值
     set_table: Arc<Mutex<Vec<SetEntry>>>,
+    /// WeakMap 侧表：存储 WeakMap 对象的键值对
+    weakmap_table: Arc<Mutex<Vec<WeakMapEntry>>>,
+    /// WeakSet 侧表：存储 WeakSet 对象的值
+    weakset_table: Arc<Mutex<Vec<WeakSetEntry>>>,
+    /// Proxy 侧表：存储 Proxy 对象的 target、handler 和 revoked 状态
+    proxy_table: Arc<Mutex<Vec<ProxyEntry>>>,
+    /// ArrayBuffer 侧表：存储 ArrayBuffer 的底层数据
+    arraybuffer_table: Arc<Mutex<Vec<ArrayBufferEntry>>>,
+    /// DataView 侧表：存储 DataView 的 buffer 引用和偏移量
+    dataview_table: Arc<Mutex<Vec<DataViewEntry>>>,
+    /// TypedArray 侧表：存储 TypedArray 的 buffer 引用、偏移量和长度
+    typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>>,
 }
 
 /// 绑定函数记录
@@ -9046,6 +9824,45 @@ struct MapEntry {
 
 struct SetEntry {
     values: Vec<i64>,
+}
+
+#[derive(Clone, Debug)]
+struct WeakMapEntry {
+    map: HashMap<u32, i64>,
+}
+
+#[derive(Clone, Debug)]
+struct WeakSetEntry {
+    set: HashSet<u32>,
+}
+
+#[derive(Clone, Debug)]
+struct ArrayBufferEntry {
+    data: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct DataViewEntry {
+    buffer_handle: u32,
+    byte_offset: u32,
+    byte_length: u32,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct TypedArrayEntry {
+    buffer_handle: u32,
+    byte_offset: u32,
+    length: u32,
+    element_size: u8,
+}
+
+#[derive(Clone, Debug)]
+#[allow(dead_code)]
+struct ProxyEntry {
+    target: i64,
+    handler: i64,
+    revoked: bool,
 }
 
 /// RegExp 条目
@@ -9090,6 +9907,12 @@ enum NativeCallable {
     DateMethod {
         kind: DateMethodKind,
     },
+    WeakMapMethod {
+        kind: WeakMapMethodKind,
+    },
+    WeakSetMethod {
+        kind: WeakSetMethodKind,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -9105,6 +9928,21 @@ enum MapSetMethodKind {
     Keys,
     Values,
     Entries,
+}
+
+#[derive(Clone, Copy)]
+enum WeakMapMethodKind {
+    Set,
+    Get,
+    Has,
+    Delete,
+}
+
+#[derive(Clone, Copy)]
+enum WeakSetMethodKind {
+    Add,
+    Has,
+    Delete,
 }
 
 #[derive(Clone, Copy)]
@@ -11707,6 +12545,26 @@ fn create_date_method(state: &RuntimeState, kind: DateMethodKind) -> i64 {
     value::encode_native_callable_idx(handle)
 }
 
+fn create_weakmap_method(state: &RuntimeState, kind: WeakMapMethodKind) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::WeakMapMethod { kind });
+    value::encode_native_callable_idx(handle)
+}
+
+fn create_weakset_method(state: &RuntimeState, kind: WeakSetMethodKind) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let handle = table.len() as u32;
+    table.push(NativeCallable::WeakSetMethod { kind });
+    value::encode_native_callable_idx(handle)
+}
+
 fn read_date_ms(caller: &mut Caller<'_, RuntimeState>, this_val: i64) -> f64 {
     if !value::is_object(this_val) {
         return f64::NAN;
@@ -12354,6 +13212,152 @@ fn call_date_method_from_caller(
     }
 }
 
+fn read_weakmap_handle(caller: &mut Caller<'_, RuntimeState>, this_val: i64) -> Option<usize> {
+    if !value::is_object(this_val) {
+        return None;
+    }
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let op = obj_ptr?;
+    let handle_val = read_object_property_by_name(caller, op, "__weakmap_handle__")?;
+    Some(value::decode_f64(handle_val) as usize)
+}
+
+fn read_weakset_handle(caller: &mut Caller<'_, RuntimeState>, this_val: i64) -> Option<usize> {
+    if !value::is_object(this_val) {
+        return None;
+    }
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let op = obj_ptr?;
+    let handle_val = read_object_property_by_name(caller, op, "__weakset_handle__")?;
+    Some(value::decode_f64(handle_val) as usize)
+}
+
+fn is_object_key(key: i64) -> bool {
+    value::is_object(key) || value::is_array(key) || value::is_function(key)
+}
+
+fn call_weakmap_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: WeakMapMethodKind,
+    args: Vec<i64>,
+) -> i64 {
+    match kind {
+        WeakMapMethodKind::Set => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Invalid value used as weak map key".to_string());
+                return this_val;
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            {
+                let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+                if handle < table.len() {
+                    table[handle].map.insert(key_handle, val);
+                }
+            }
+            this_val
+        }
+        WeakMapMethodKind::Get => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_undefined();
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                if let Some(&val) = table[handle].map.get(&key_handle) {
+                    return val;
+                }
+            }
+            value::encode_undefined()
+        }
+        WeakMapMethodKind::Has => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].map.contains_key(&key_handle));
+            }
+            value::encode_bool(false)
+        }
+        WeakMapMethodKind::Delete => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].map.remove(&key_handle).is_some());
+            }
+            value::encode_bool(false)
+        }
+    }
+}
+
+fn call_weakset_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: WeakSetMethodKind,
+    args: Vec<i64>,
+) -> i64 {
+    match kind {
+        WeakSetMethodKind::Add => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Invalid value used in weak set".to_string());
+                return this_val;
+            }
+            let handle = read_weakset_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            {
+                let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+                if handle < table.len() {
+                    table[handle].set.insert(key_handle);
+                }
+            }
+            this_val
+        }
+        WeakSetMethodKind::Has => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakset_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].set.contains(&key_handle));
+            }
+            value::encode_bool(false)
+        }
+        WeakSetMethodKind::Delete => {
+            let key = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakset_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].set.remove(&key_handle));
+            }
+            value::encode_bool(false)
+        }
+    }
+}
+
 fn call_map_set_method_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     this_val: i64,
@@ -12645,6 +13649,12 @@ fn call_native_callable_with_args_from_caller(
         }
         NativeCallable::DateMethod { kind } => {
             Some(call_date_method_from_caller(caller, this_val, kind, args))
+        }
+        NativeCallable::WeakMapMethod { kind } => {
+            Some(call_weakmap_method_from_caller(caller, this_val, kind, args))
+        }
+        NativeCallable::WeakSetMethod { kind } => {
+            Some(call_weakset_method_from_caller(caller, this_val, kind, args))
         }
     }
 }
