@@ -1250,7 +1250,6 @@ impl Compiler {
         imports.import("env", "map_set_delete", EntityType::Function(2));
         // Import index 258: map_set_clear: (i64) -> i64
         imports.import("env", "map_set_clear", EntityType::Function(3));
-        // Import index 259: map_set_get_size: (i64) -> i64
         imports.import("env", "map_set_get_size", EntityType::Function(3));
         // Import index 260: map_set_for_each: (i64) -> i64
         imports.import("env", "map_set_for_each", EntityType::Function(3));
@@ -6350,7 +6349,6 @@ impl Compiler {
             // ── Map single-arg builtins ──
             | Builtin::MapConstructor
             | Builtin::MapSetClear
-            | Builtin::MapSetGetSize
             | Builtin::MapSetForEach
             | Builtin::MapSetKeys
             | Builtin::MapSetValues
@@ -6441,6 +6439,22 @@ impl Compiler {
             Builtin::FuncCall | Builtin::FuncBind => {
                 // These use shadow stack: compile like array proto methods
                 self.compile_proto_method_call(dest, builtin, args)
+            }
+            Builtin::MapSetGetSize => {
+                let val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects at least 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or_else(|| panic!("no func idx for {builtin}"));
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
             }
             Builtin::GetPrototypeFromConstructor => {
                 let func_idx = self.get_proto_from_ctor_func_idx;
@@ -7835,7 +7849,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::MathExpm1 => ("Math.expm1", 1),
         Builtin::MathFloor => ("Math.floor", 1),
         Builtin::MathFround => ("Math.fround", 1),
-        Builtin::MathHypot => ("Math.hypot", 1),
+        Builtin::MathHypot => ("Math.hypot", 0),
         Builtin::MathImul => ("Math.imul", 2),
         Builtin::MathLog => ("Math.log", 1),
         Builtin::MathLog1p => ("Math.log1p", 1),

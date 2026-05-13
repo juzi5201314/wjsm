@@ -7197,81 +7197,95 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     // ── Math builtins ────────────────────────────────────────────────────────
+    fn value_to_number(arg: i64) -> f64 {
+        if value::is_f64(arg) {
+            value::decode_f64(arg)
+        } else if value::is_bool(arg) {
+            if value::decode_bool(arg) { 1.0 } else { 0.0 }
+        } else if value::is_undefined(arg) {
+            f64::NAN
+        } else if value::is_null(arg) {
+            0.0
+        } else {
+            f64::NAN
+        }
+    }
+
     let math_abs_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.abs())
         },
     );
     let math_acos_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.acos())
         },
     );
     let math_acosh_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.acosh())
         },
     );
     let math_asin_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.asin())
         },
     );
     let math_asinh_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.asinh())
         },
     );
     let math_atan_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.atan())
         },
     );
     let math_atanh_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.atanh())
         },
     );
     let math_atan2_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
-            let y = f64::from_bits(a as u64);
-            let x = f64::from_bits(b as u64);
+            let y = value_to_number(a);
+            let x = value_to_number(b);
             value::encode_f64(y.atan2(x))
         },
     );
     let math_cbrt_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.cbrt())
         },
     );
     let math_ceil_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.ceil())
         },
     );
     let math_clz32_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             let n = x as i32 as u32;
             value::encode_f64(if n == 0 { 32.0 } else { n.leading_zeros() as f64 })
         },
@@ -7279,42 +7293,42 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let math_cos_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.cos())
         },
     );
     let math_cosh_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.cosh())
         },
     );
     let math_exp_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.exp())
         },
     );
     let math_expm1_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.exp_m1())
         },
     );
     let math_floor_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.floor())
         },
     );
     let math_fround_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64((x as f32) as f64)
         },
     );
@@ -7327,7 +7341,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let mut sum = 0.0_f64;
             for i in 0..args_count as u32 {
                 let val = read_shadow_arg(&mut caller, args_base, i);
-                let x = f64::from_bits(val as u64);
+                let x = value_to_number(val);
                 if x.is_infinite() {
                     return value::encode_f64(f64::INFINITY);
                 }
@@ -7339,8 +7353,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let math_imul_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
-            let ai = f64::from_bits(a as u64) as i32;
-            let bi = f64::from_bits(b as u64) as i32;
+            let ai = value_to_number(a) as i32;
+            let bi = value_to_number(b) as i32;
             let result = (ai as i64) * (bi as i64);
             value::encode_f64((result as i32) as f64)
         },
@@ -7348,28 +7362,28 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let math_log_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.ln())
         },
     );
     let math_log1p_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.ln_1p())
         },
     );
     let math_log10_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.log10())
         },
     );
     let math_log2_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.log2())
         },
     );
@@ -7410,8 +7424,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let math_pow_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
-            let base = f64::from_bits(a as u64);
-            let exp = f64::from_bits(b as u64);
+            let base = value_to_number(a);
+            let exp = value_to_number(b);
             value::encode_f64(base.powf(exp))
         },
     );
@@ -7425,14 +7439,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let math_round_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.round())
         },
     );
     let math_sign_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             if x.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
@@ -7445,42 +7459,42 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let math_sin_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.sin())
         },
     );
     let math_sinh_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.sinh())
         },
     );
     let math_sqrt_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.sqrt())
         },
     );
     let math_tan_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.tan())
         },
     );
     let math_tanh_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.tanh())
         },
     );
     let math_trunc_fn = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let x = f64::from_bits(arg as u64);
+            let x = value_to_number(arg);
             value::encode_f64(x.trunc())
         },
     );
@@ -7534,7 +7548,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if value::is_f64(arg) {
-                let x = f64::from_bits(arg as u64);
+                let x = value_to_number(arg);
                 value::encode_bool(x.is_finite() && x == x.trunc())
             } else {
                 value::encode_bool(false)
@@ -7545,7 +7559,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if value::is_f64(arg) {
-                let x = f64::from_bits(arg as u64);
+                let x = value_to_number(arg);
                 let is_int = x.is_finite() && x == x.trunc();
                 value::encode_bool(is_int && x.abs() <= 9007199254740991.0)
             } else {
@@ -7556,44 +7570,71 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let number_parse_int_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64, radix_val: i64| -> i64 {
-            if !value::is_string(arg) {
-                if value::is_f64(arg) {
-                    let x = f64::from_bits(arg as u64);
-                    if x.is_nan() || x.is_infinite() {
-                        return value::encode_f64(f64::NAN);
-                    }
-                    return value::encode_f64(x.trunc());
-                }
+            let input_str = if value::is_string(arg) {
+                let s = read_value_string_bytes(&mut caller, arg).unwrap_or_default();
+                String::from_utf8_lossy(&s).to_string()
+            } else if value::is_f64(arg) {
+                let x = value_to_number(arg);
+                if x.is_nan() { return value::encode_f64(f64::NAN); }
+                if x.is_infinite() { return value::encode_f64(f64::NAN); }
+                format_number_js(x)
+            } else if value::is_bool(arg) {
+                if value::decode_bool(arg) { "1" } else { "0" }.to_string()
+            } else {
                 return value::encode_f64(f64::NAN);
-            }
-            let s = read_value_string_bytes(&mut caller, arg).unwrap_or_default();
-            let s_str = String::from_utf8_lossy(&s).to_string();
-            let trimmed = s_str.trim();
+            };
+            let trimmed = input_str.trim();
             if trimmed.is_empty() {
                 return value::encode_f64(f64::NAN);
             }
             let radix = if value::is_undefined(radix_val) {
                 0
             } else if value::is_f64(radix_val) {
-                f64::from_bits(radix_val as u64) as i32
+                let r = f64::from_bits(radix_val as u64);
+                if r.is_nan() || r.is_infinite() {
+                    return value::encode_f64(f64::NAN);
+                }
+                r as i32
             } else {
                 0
             };
-            let actual_radix = if radix == 0 {
+            if radix != 0 && (radix < 2 || radix > 36) {
+                return value::encode_f64(f64::NAN);
+            }
+            let (actual_radix, parse_str): (i32, &str) = if radix == 0 {
                 if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-                    16
+                    (16, &trimmed[2..])
                 } else {
-                    10
+                    (10, &trimmed[..])
                 }
             } else {
-                radix
+                let s: &str = if (radix == 16) && (trimmed.starts_with("0x") || trimmed.starts_with("0X")) {
+                    &trimmed[2..]
+                } else {
+                    &trimmed[..]
+                };
+                (radix, s)
             };
-            let parse_str = if (actual_radix == 16) && (trimmed.starts_with("0x") || trimmed.starts_with("0X")) {
-                &trimmed[2..]
-            } else {
-                trimmed
-            };
-            match i64::from_str_radix(parse_str, actual_radix as u32) {
+            if parse_str.is_empty() {
+                return value::encode_f64(f64::NAN);
+            }
+            let valid_chars: String = parse_str
+                .chars()
+                .take_while(|c| {
+                    let digit = if c.is_ascii_digit() {
+                        *c as u32 - '0' as u32
+                    } else if c.is_ascii_alphabetic() {
+                        c.to_ascii_lowercase() as u32 - 'a' as u32 + 10
+                    } else {
+                        return false;
+                    };
+                    digit < actual_radix as u32
+                })
+                .collect();
+            if valid_chars.is_empty() {
+                return value::encode_f64(f64::NAN);
+            }
+            match i64::from_str_radix(&valid_chars, actual_radix as u32) {
                 Ok(v) => value::encode_f64(v as f64),
                 Err(_) => value::encode_f64(f64::NAN),
             }
@@ -7614,7 +7655,48 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             if trimmed.is_empty() {
                 return value::encode_f64(f64::NAN);
             }
-            match trimmed.parse::<f64>() {
+            let mut end = 0;
+            let bytes = trimmed.as_bytes();
+            if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') {
+                end += 1;
+            }
+            let _digit_start = end;
+            let mut has_digit = false;
+            while end < bytes.len() && bytes[end].is_ascii_digit() {
+                end += 1;
+                has_digit = true;
+            }
+            if end < bytes.len() && bytes[end] == b'.' {
+                end += 1;
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                    has_digit = true;
+                }
+            }
+            if !has_digit {
+                return value::encode_f64(f64::NAN);
+            }
+            if end < bytes.len() && (bytes[end] == b'e' || bytes[end] == b'E') {
+                end += 1;
+                if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') {
+                    end += 1;
+                }
+                let exp_start = end;
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                }
+                if end == exp_start {
+                    end -= if end > 0 && (bytes[end - 1] == b'+' || bytes[end - 1] == b'-') { 1 } else { 0 };
+                    if end > 0 && (bytes[end - 1] == b'e' || bytes[end - 1] == b'E') {
+                        end -= 1;
+                    }
+                }
+            }
+            if end == 0 {
+                return value::encode_f64(f64::NAN);
+            }
+            let float_str = &trimmed[..end];
+            match float_str.parse::<f64>() {
                 Ok(v) => value::encode_f64(v),
                 Err(_) => value::encode_f64(f64::NAN),
             }
@@ -7892,6 +7974,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "clear", clear_fn);
+            // TODO: size should be a getter accessor property per ES spec, but current
+            // architecture does not support call_indirect for host import functions.
+            // Tracked as a known compliance gap — currently exposed as a method: m.size()
             let _ = define_host_data_property_from_caller(&mut caller, obj, "size", size_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "forEach", for_each_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
@@ -7987,6 +8072,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "clear", clear_fn);
+            // TODO: ES spec requires `size` to be a getter accessor property, but the current
+            // WASM architecture doesn't support calling NativeCallable via call_indirect.
+            // Using a data property (method) as a workaround.
             let _ = define_host_data_property_from_caller(&mut caller, obj, "size", size_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "forEach", for_each_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
@@ -8404,9 +8492,21 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 Ok(dt) => value::encode_f64(dt.timestamp_millis() as f64),
                 Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S") {
                     Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
-                    Err(_) => match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                        Ok(nd) => value::encode_f64(nd.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis() as f64),
-                        Err(_) => value::encode_f64(f64::NAN),
+                    Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f") {
+                        Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
+                        Err(_) => match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                            Ok(nd) => value::encode_f64(nd.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis() as f64),
+                            Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%b %d, %Y") {
+                                Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
+                                Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%B %d, %Y") {
+                                    Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
+                                    Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%d %b %Y %H:%M:%S") {
+                                        Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
+                                        Err(_) => value::encode_f64(f64::NAN),
+                                    },
+                                },
+                            },
+                        },
                     },
                 },
             }
@@ -10556,6 +10656,9 @@ fn same_value_zero(a: i64, b: i64) -> bool {
         if fa.is_nan() && fb.is_nan() {
             return true;
         }
+        if fa == 0.0 && fb == 0.0 {
+            return true;
+        }
     }
     false
 }
@@ -11879,7 +11982,12 @@ fn call_date_method_from_caller(
                 Some(dt) => dt,
                 None => return value::encode_f64(f64::NAN),
             };
-            let new_dt = dt.with_month0(m as u32).unwrap_or(dt);
+            let mut new_dt = dt.with_month0(m as u32).unwrap_or(dt);
+            if let Some(d_arg) = args.get(1) {
+                let d = value::decode_f64(*d_arg);
+                if d.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
+            }
             let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
@@ -11892,7 +12000,17 @@ fn call_date_method_from_caller(
                 Some(dt) => dt,
                 None => return value::encode_f64(f64::NAN),
             };
-            let new_dt = dt.with_year(y as i32).unwrap_or(dt);
+            let mut new_dt = dt.with_year(y as i32).unwrap_or(dt);
+            if let Some(m_arg) = args.get(1) {
+                let m = value::decode_f64(*m_arg);
+                if m.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_month0(m as u32).unwrap_or(new_dt);
+            }
+            if let Some(d_arg) = args.get(2) {
+                let d = value::decode_f64(*d_arg);
+                if d.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
+            }
             let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
@@ -11905,8 +12023,24 @@ fn call_date_method_from_caller(
                 Some(dt) => dt,
                 None => return value::encode_f64(f64::NAN),
             };
-            let new_dt = dt.with_hour(h as u32).unwrap_or(dt);
-            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            let mut new_dt = dt.with_hour(h as u32).unwrap_or(dt);
+            if let Some(m_arg) = args.get(1) {
+                let m = value::decode_f64(*m_arg);
+                if m.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_minute(m as u32).unwrap_or(new_dt);
+            }
+            if let Some(s_arg) = args.get(2) {
+                let s = value::decode_f64(*s_arg);
+                if s.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
+            }
+            let new_ms = if let Some(ms_arg) = args.get(3) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -11918,8 +12052,19 @@ fn call_date_method_from_caller(
                 Some(dt) => dt,
                 None => return value::encode_f64(f64::NAN),
             };
-            let new_dt = dt.with_minute(m as u32).unwrap_or(dt);
-            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            let mut new_dt = dt.with_minute(m as u32).unwrap_or(dt);
+            if let Some(s_arg) = args.get(1) {
+                let s = value::decode_f64(*s_arg);
+                if s.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
+            }
+            let new_ms = if let Some(ms_arg) = args.get(2) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -11932,7 +12077,13 @@ fn call_date_method_from_caller(
                 None => return value::encode_f64(f64::NAN),
             };
             let new_dt = dt.with_second(s as u32).unwrap_or(dt);
-            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            let new_ms = if let Some(ms_arg) = args.get(1) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -11966,7 +12117,12 @@ fn call_date_method_from_caller(
                 Some(dt) => dt,
                 None => return value::encode_f64(f64::NAN),
             };
-            let new_dt = dt.with_month0(m as u32).unwrap_or(dt);
+            let mut new_dt = dt.with_month0(m as u32).unwrap_or(dt);
+            if let Some(d_arg) = args.get(1) {
+                let d = value::decode_f64(*d_arg);
+                if d.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
+            }
             let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
@@ -11979,7 +12135,17 @@ fn call_date_method_from_caller(
                 Some(dt) => dt,
                 None => return value::encode_f64(f64::NAN),
             };
-            let new_dt = dt.with_year(y as i32).unwrap_or(dt);
+            let mut new_dt = dt.with_year(y as i32).unwrap_or(dt);
+            if let Some(m_arg) = args.get(1) {
+                let m = value::decode_f64(*m_arg);
+                if m.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_month0(m as u32).unwrap_or(new_dt);
+            }
+            if let Some(d_arg) = args.get(2) {
+                let d = value::decode_f64(*d_arg);
+                if d.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
+            }
             let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
@@ -11992,8 +12158,24 @@ fn call_date_method_from_caller(
                 Some(dt) => dt,
                 None => return value::encode_f64(f64::NAN),
             };
-            let new_dt = dt.with_hour(h as u32).unwrap_or(dt);
-            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            let mut new_dt = dt.with_hour(h as u32).unwrap_or(dt);
+            if let Some(m_arg) = args.get(1) {
+                let m = value::decode_f64(*m_arg);
+                if m.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_minute(m as u32).unwrap_or(new_dt);
+            }
+            if let Some(s_arg) = args.get(2) {
+                let s = value::decode_f64(*s_arg);
+                if s.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
+            }
+            let new_ms = if let Some(ms_arg) = args.get(3) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -12005,8 +12187,19 @@ fn call_date_method_from_caller(
                 Some(dt) => dt,
                 None => return value::encode_f64(f64::NAN),
             };
-            let new_dt = dt.with_minute(m as u32).unwrap_or(dt);
-            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            let mut new_dt = dt.with_minute(m as u32).unwrap_or(dt);
+            if let Some(s_arg) = args.get(1) {
+                let s = value::decode_f64(*s_arg);
+                if s.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
+            }
+            let new_ms = if let Some(ms_arg) = args.get(2) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -12019,7 +12212,13 @@ fn call_date_method_from_caller(
                 None => return value::encode_f64(f64::NAN),
             };
             let new_dt = dt.with_second(s as u32).unwrap_or(dt);
-            let new_ms = new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc();
+            let new_ms = if let Some(ms_arg) = args.get(1) {
+                let ms_val = value::decode_f64(*ms_arg);
+                if ms_val.is_nan() { return value::encode_f64(f64::NAN); }
+                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+            } else {
+                new_dt.timestamp_millis() as f64 + (ms % 1000.0).trunc()
+            };
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -12034,38 +12233,38 @@ fn call_date_method_from_caller(
         }
         DateMethodKind::ToString => {
             if ms.is_nan() {
-                return value::encode_f64(f64::NAN);
+                return store_runtime_string(&caller, "Invalid Date".to_string());
             }
             match ms_to_datetime_local(ms) {
                 Some(dt) => {
                     let s = dt.format("%a %b %e %Y %H:%M:%S GMT%:z").to_string();
                     store_runtime_string(&caller, s)
                 }
-                None => value::encode_f64(f64::NAN),
+                None => store_runtime_string(&caller, "Invalid Date".to_string()),
             }
         }
         DateMethodKind::ToDateString => {
             if ms.is_nan() {
-                return value::encode_f64(f64::NAN);
+                return store_runtime_string(&caller, "Invalid Date".to_string());
             }
             match ms_to_datetime_local(ms) {
                 Some(dt) => {
                     let s = dt.format("%Y-%m-%d").to_string();
                     store_runtime_string(&caller, s)
                 }
-                None => value::encode_f64(f64::NAN),
+                None => store_runtime_string(&caller, "Invalid Date".to_string()),
             }
         }
         DateMethodKind::ToTimeString => {
             if ms.is_nan() {
-                return value::encode_f64(f64::NAN);
+                return store_runtime_string(&caller, "Invalid Date".to_string());
             }
             match ms_to_datetime_local(ms) {
                 Some(dt) => {
                     let s = dt.format("%H:%M:%S GMT%:z").to_string();
                     store_runtime_string(&caller, s)
                 }
-                None => value::encode_f64(f64::NAN),
+                None => store_runtime_string(&caller, "Invalid Date".to_string()),
             }
         }
         DateMethodKind::ToISOString => {
@@ -12075,16 +12274,30 @@ fn call_date_method_from_caller(
             match ms_to_datetime_utc(ms) {
                 Some(dt) => {
                     let frac_sec = (ms % 1000.0).trunc().abs() as u32;
-                    let s = format!(
-                        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-                        dt.year(),
-                        dt.month(),
-                        dt.day(),
-                        dt.hour(),
-                        dt.minute(),
-                        dt.second(),
-                        frac_sec
-                    );
+                    let year = dt.year();
+                    let s = if year >= 0 && year <= 9999 {
+                        format!(
+                            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                            year,
+                            dt.month(),
+                            dt.day(),
+                            dt.hour(),
+                            dt.minute(),
+                            dt.second(),
+                            frac_sec
+                        )
+                    } else {
+                        format!(
+                            "{:+06}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                            year,
+                            dt.month(),
+                            dt.day(),
+                            dt.hour(),
+                            dt.minute(),
+                            dt.second(),
+                            frac_sec
+                        )
+                    };
                     store_runtime_string(&caller, s)
                 }
                 None => value::encode_f64(f64::NAN),
@@ -12092,14 +12305,14 @@ fn call_date_method_from_caller(
         }
         DateMethodKind::ToUTCString => {
             if ms.is_nan() {
-                return value::encode_f64(f64::NAN);
+                return store_runtime_string(&caller, "Invalid Date".to_string());
             }
             match ms_to_datetime_utc(ms) {
                 Some(dt) => {
                     let s = dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
                     store_runtime_string(&caller, s)
                 }
-                None => value::encode_f64(f64::NAN),
+                None => store_runtime_string(&caller, "Invalid Date".to_string()),
             }
         }
         DateMethodKind::ToJSON => {
@@ -12109,16 +12322,30 @@ fn call_date_method_from_caller(
             match ms_to_datetime_utc(ms) {
                 Some(dt) => {
                     let frac_sec = (ms % 1000.0).trunc().abs() as u32;
-                    let s = format!(
-                        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-                        dt.year(),
-                        dt.month(),
-                        dt.day(),
-                        dt.hour(),
-                        dt.minute(),
-                        dt.second(),
-                        frac_sec
-                    );
+                    let year = dt.year();
+                    let s = if year >= 0 && year <= 9999 {
+                        format!(
+                            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                            year,
+                            dt.month(),
+                            dt.day(),
+                            dt.hour(),
+                            dt.minute(),
+                            dt.second(),
+                            frac_sec
+                        )
+                    } else {
+                        format!(
+                            "{:+06}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+                            year,
+                            dt.month(),
+                            dt.day(),
+                            dt.hour(),
+                            dt.minute(),
+                            dt.second(),
+                            frac_sec
+                        )
+                    };
                     store_runtime_string(&caller, s)
                 }
                 None => value::encode_f64(f64::NAN),
@@ -12302,6 +12529,7 @@ fn call_map_set_method_from_caller(
             }
             value::encode_f64(0.0)
         }
+        // TODO: implement forEach/keys/values/entries — currently stubbed
         MapSetMethodKind::ForEach
         | MapSetMethodKind::Keys
         | MapSetMethodKind::Values
