@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 251] = [
+const HOST_IMPORT_NAMES: [&str; 268] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -265,6 +265,27 @@ const HOST_IMPORT_NAMES: [&str; 251] = [
     "uri_error_constructor",
     "eval_error_constructor",
     "error_proto_to_string",
+    // ── Map imports ──
+    "map_constructor",
+    "map_proto_set",
+    "map_proto_get",
+    // ── Set imports ──
+    "set_constructor",
+    "set_proto_add",
+    // ── Map/Set shared imports ──
+    "map_set_has",
+    "map_set_delete",
+    "map_set_clear",
+    "map_set_get_size",
+    "map_set_for_each",
+    "map_set_keys",
+    "map_set_values",
+    "map_set_entries",
+    // ── Date imports ──
+    "date_constructor",
+    "date_now",
+    "date_parse",
+    "date_utc",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -273,7 +294,7 @@ const HOST_IMPORT_NAMES: [&str; 251] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        251,
+        268,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1210,6 +1231,44 @@ impl Compiler {
         imports.import("env", "eval_error_constructor", EntityType::Function(3));
         // Import index 250: error_proto_to_string: (i64) -> i64
         imports.import("env", "error_proto_to_string", EntityType::Function(3));
+        // ── Map imports ──
+        // Import index 251: map_constructor: (i64) -> i64
+        imports.import("env", "map_constructor", EntityType::Function(3));
+        // Import index 252: map_proto_set: (i64, i64, i64) -> i64
+        imports.import("env", "map_proto_set", EntityType::Function(16));
+        // Import index 253: map_proto_get: (i64, i64) -> i64
+        imports.import("env", "map_proto_get", EntityType::Function(2));
+        // ── Set imports ──
+        // Import index 254: set_constructor: (i64) -> i64
+        imports.import("env", "set_constructor", EntityType::Function(3));
+        // Import index 255: set_proto_add: (i64, i64) -> i64
+        imports.import("env", "set_proto_add", EntityType::Function(2));
+        // ── Map/Set shared imports ──
+        // Import index 256: map_set_has: (i64, i64) -> i64
+        imports.import("env", "map_set_has", EntityType::Function(2));
+        // Import index 257: map_set_delete: (i64, i64) -> i64
+        imports.import("env", "map_set_delete", EntityType::Function(2));
+        // Import index 258: map_set_clear: (i64) -> i64
+        imports.import("env", "map_set_clear", EntityType::Function(3));
+        // Import index 259: map_set_get_size: (i64) -> i64
+        imports.import("env", "map_set_get_size", EntityType::Function(3));
+        // Import index 260: map_set_for_each: (i64) -> i64
+        imports.import("env", "map_set_for_each", EntityType::Function(3));
+        // Import index 261: map_set_keys: (i64) -> i64
+        imports.import("env", "map_set_keys", EntityType::Function(3));
+        // Import index 262: map_set_values: (i64) -> i64
+        imports.import("env", "map_set_values", EntityType::Function(3));
+        // Import index 263: map_set_entries: (i64) -> i64
+        imports.import("env", "map_set_entries", EntityType::Function(3));
+        // ── Date imports ──
+        // Import index 264: date_constructor: Type 12 (shadow stack, variadic args)
+        imports.import("env", "date_constructor", EntityType::Function(12));
+        // Import index 265: date_now: () -> i64
+        imports.import("env", "date_now", EntityType::Function(4));
+        // Import index 266: date_parse: (i64) -> i64
+        imports.import("env", "date_parse", EntityType::Function(3));
+        // Import index 267: date_utc: (i64) -> i64
+        imports.import("env", "date_utc", EntityType::Function(3));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1481,6 +1540,27 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::URIErrorConstructor, 248);
         builtin_func_indices.insert(Builtin::EvalErrorConstructor, 249);
         builtin_func_indices.insert(Builtin::ErrorProtoToString, 250);
+        // ── Map builtins ──
+        builtin_func_indices.insert(Builtin::MapConstructor, 251);
+        builtin_func_indices.insert(Builtin::MapProtoSet, 252);
+        builtin_func_indices.insert(Builtin::MapProtoGet, 253);
+        // ── Set builtins ──
+        builtin_func_indices.insert(Builtin::SetConstructor, 254);
+        builtin_func_indices.insert(Builtin::SetProtoAdd, 255);
+        // ── Map/Set shared builtins ──
+        builtin_func_indices.insert(Builtin::MapSetHas, 256);
+        builtin_func_indices.insert(Builtin::MapSetDelete, 257);
+        builtin_func_indices.insert(Builtin::MapSetClear, 258);
+        builtin_func_indices.insert(Builtin::MapSetGetSize, 259);
+        builtin_func_indices.insert(Builtin::MapSetForEach, 260);
+        builtin_func_indices.insert(Builtin::MapSetKeys, 261);
+        builtin_func_indices.insert(Builtin::MapSetValues, 262);
+        builtin_func_indices.insert(Builtin::MapSetEntries, 263);
+        // ── Date builtins ──
+        builtin_func_indices.insert(Builtin::DateConstructor, 264);
+        builtin_func_indices.insert(Builtin::DateNow, 265);
+        builtin_func_indices.insert(Builtin::DateParse, 266);
+        builtin_func_indices.insert(Builtin::DateUTC, 267);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -5465,7 +5545,7 @@ impl Compiler {
         // 确定 this_val 和影子栈参数
         // ArrayIsArray: this_val=undefined, 所有 args 走影子栈
         // 其他方法: this_val=args[0], args[1..] 走影子栈
-        let (this_val_idx, shadow_args) = if matches!(builtin, Builtin::ArrayIsArray | Builtin::StringFromCharCode | Builtin::StringFromCodePoint | Builtin::MathMax | Builtin::MathMin | Builtin::MathHypot) {
+        let (this_val_idx, shadow_args) = if matches!(builtin, Builtin::ArrayIsArray | Builtin::StringFromCharCode | Builtin::StringFromCodePoint | Builtin::MathMax | Builtin::MathMin | Builtin::MathHypot | Builtin::DateConstructor) {
             (None, args)
         } else {
             let this = args
@@ -6186,7 +6266,8 @@ impl Compiler {
                 Ok(())
             }
             // ── Math.random: () -> i64 ──
-            Builtin::MathRandom => {
+            Builtin::MathRandom
+            | Builtin::DateNow => {
                 let func_idx = self
                     .builtin_func_indices
                     .get(builtin)
@@ -6265,7 +6346,20 @@ impl Compiler {
             | Builtin::ReferenceErrorConstructor
             | Builtin::URIErrorConstructor
             | Builtin::EvalErrorConstructor
-            | Builtin::ErrorProtoToString => {
+            | Builtin::ErrorProtoToString
+            // ── Map single-arg builtins ──
+            | Builtin::MapConstructor
+            | Builtin::MapSetClear
+            | Builtin::MapSetGetSize
+            | Builtin::MapSetForEach
+            | Builtin::MapSetKeys
+            | Builtin::MapSetValues
+            | Builtin::MapSetEntries
+            // ── Set single-arg builtins ──
+            | Builtin::SetConstructor
+            // ── Date single-arg builtins (not constructor) ──
+            | Builtin::DateParse
+            | Builtin::DateUTC => {
                 let val = args
                     .first()
                     .with_context(|| format!("{builtin} expects at least 1 argument"))?;
@@ -6296,6 +6390,30 @@ impl Compiler {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
                 Ok(())
+            }
+            // ── Map/Set multi-arg builtins ──
+            Builtin::MapProtoSet
+            | Builtin::MapProtoGet
+            | Builtin::MapSetHas
+            | Builtin::MapSetDelete
+            | Builtin::SetProtoAdd => {
+                for arg in args {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Date constructor (shadow stack, variadic args) ──
+            Builtin::DateConstructor => {
+                self.compile_proto_method_call(dest, builtin, args)
             }
             // ── Array prototype method calls (Type 12 imports) ─────────────
             Builtin::ArrayShift
@@ -7761,6 +7879,27 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::URIErrorConstructor => ("URIError", 1),
         Builtin::EvalErrorConstructor => ("EvalError", 1),
         Builtin::ErrorProtoToString => ("Error.prototype.toString", 1),
+        // ── Map builtins ──
+        Builtin::MapConstructor => ("Map", 1),
+        Builtin::MapProtoSet => ("Map.prototype.set", 3),
+        Builtin::MapProtoGet => ("Map.prototype.get", 2),
+        // ── Set builtins ──
+        Builtin::SetConstructor => ("Set", 1),
+        Builtin::SetProtoAdd => ("Set.prototype.add", 2),
+        // ── Map/Set shared builtins ──
+        Builtin::MapSetHas => ("MapSet.has", 2),
+        Builtin::MapSetDelete => ("MapSet.delete", 2),
+        Builtin::MapSetClear => ("MapSet.clear", 1),
+        Builtin::MapSetGetSize => ("MapSet.size", 1),
+        Builtin::MapSetForEach => ("MapSet.forEach", 1),
+        Builtin::MapSetKeys => ("MapSet.keys", 1),
+        Builtin::MapSetValues => ("MapSet.values", 1),
+        Builtin::MapSetEntries => ("MapSet.entries", 1),
+        // ── Date builtins ──
+        Builtin::DateConstructor => ("Date", 1),
+        Builtin::DateNow => ("Date.now", 0),
+        Builtin::DateParse => ("Date.parse", 1),
+        Builtin::DateUTC => ("Date.UTC", 1),
     }
 }
 

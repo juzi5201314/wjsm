@@ -875,6 +875,15 @@ pub enum Builtin {
     ErrorConstructor, TypeErrorConstructor, RangeErrorConstructor, SyntaxErrorConstructor,
     ReferenceErrorConstructor, URIErrorConstructor, EvalErrorConstructor,
     ErrorProtoToString,
+    // ── Map built-in ──────────────────────────────────────────────────
+    MapConstructor, MapProtoSet, MapProtoGet,
+    // ── Set built-in ──────────────────────────────────────────────────
+    SetConstructor, SetProtoAdd,
+    // ── Map/Set shared methods (dispatch at runtime) ──────────────────
+    MapSetHas, MapSetDelete, MapSetClear, MapSetGetSize, MapSetForEach,
+    MapSetKeys, MapSetValues, MapSetEntries,
+    // ── Date built-in ─────────────────────────────────────────────────
+    DateConstructor, DateNow, DateParse, DateUTC,
 }
 
 impl fmt::Display for Builtin {
@@ -1118,6 +1127,23 @@ impl fmt::Display for Builtin {
             Self::URIErrorConstructor => "URIError",
             Self::EvalErrorConstructor => "EvalError",
             Self::ErrorProtoToString => "Error.prototype.toString",
+            Self::MapConstructor => "Map",
+            Self::MapProtoSet => "Map.prototype.set",
+            Self::MapProtoGet => "Map.prototype.get",
+            Self::SetConstructor => "Set",
+            Self::SetProtoAdd => "Set.prototype.add",
+            Self::MapSetHas => "MapSet.has",
+            Self::MapSetDelete => "MapSet.delete",
+            Self::MapSetClear => "MapSet.clear",
+            Self::MapSetGetSize => "MapSet.size",
+            Self::MapSetForEach => "MapSet.forEach",
+            Self::MapSetKeys => "MapSet.keys",
+            Self::MapSetValues => "MapSet.values",
+            Self::MapSetEntries => "MapSet.entries",
+            Self::DateConstructor => "Date",
+            Self::DateNow => "Date.now",
+            Self::DateParse => "Date.parse",
+            Self::DateUTC => "Date.UTC",
         })
     }
 }
