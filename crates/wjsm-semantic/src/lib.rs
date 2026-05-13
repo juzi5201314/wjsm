@@ -14008,11 +14008,15 @@ fn builtin_from_number_proto_method(name: &str) -> Option<Builtin> {
 }
 
 fn builtin_from_boolean_proto_method(name: &str) -> Option<Builtin> {
+    // Boolean.prototype methods (toString, valueOf) are dispatched at runtime
+    // via property lookup on the Boolean prototype object, not via CallBuiltin.
     let _ = name;
     None
 }
 
 fn builtin_from_error_proto_method(name: &str) -> Option<Builtin> {
+    // Error.prototype methods (toString) are dispatched at runtime
+    // via property lookup on the Error prototype object, not via CallBuiltin.
     let _ = name;
     None
 }
