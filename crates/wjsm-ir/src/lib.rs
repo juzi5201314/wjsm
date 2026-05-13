@@ -871,6 +871,10 @@ pub enum Builtin {
     NumberProtoToExponential, NumberProtoToPrecision,
     // ── Boolean built-in ───────────────────────────────────────────────
     BooleanConstructor, BooleanProtoToString, BooleanProtoValueOf,
+    // ── Error built-in ─────────────────────────────────────────────────
+    ErrorConstructor, TypeErrorConstructor, RangeErrorConstructor, SyntaxErrorConstructor,
+    ReferenceErrorConstructor, URIErrorConstructor, EvalErrorConstructor,
+    ErrorProtoToString,
 }
 
 impl fmt::Display for Builtin {
@@ -1106,6 +1110,14 @@ impl fmt::Display for Builtin {
             Self::BooleanConstructor => "Boolean",
             Self::BooleanProtoToString => "Boolean.prototype.toString",
             Self::BooleanProtoValueOf => "Boolean.prototype.valueOf",
+            Self::ErrorConstructor => "Error",
+            Self::TypeErrorConstructor => "TypeError",
+            Self::RangeErrorConstructor => "RangeError",
+            Self::SyntaxErrorConstructor => "SyntaxError",
+            Self::ReferenceErrorConstructor => "ReferenceError",
+            Self::URIErrorConstructor => "URIError",
+            Self::EvalErrorConstructor => "EvalError",
+            Self::ErrorProtoToString => "Error.prototype.toString",
         })
     }
 }

@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 243] = [
+const HOST_IMPORT_NAMES: [&str; 251] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -257,6 +257,14 @@ const HOST_IMPORT_NAMES: [&str; 243] = [
     "boolean_constructor",
     "boolean_proto_to_string",
     "boolean_proto_value_of",
+    "error_constructor",
+    "type_error_constructor",
+    "range_error_constructor",
+    "syntax_error_constructor",
+    "reference_error_constructor",
+    "uri_error_constructor",
+    "eval_error_constructor",
+    "error_proto_to_string",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -265,7 +273,7 @@ const HOST_IMPORT_NAMES: [&str; 243] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        243,
+        251,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1185,6 +1193,23 @@ impl Compiler {
         imports.import("env", "boolean_proto_to_string", EntityType::Function(3));
         // Import index 242: boolean_proto_value_of: (i64) -> i64
         imports.import("env", "boolean_proto_value_of", EntityType::Function(3));
+        // ── Error imports ──
+        // Import index 243: error_constructor: (i64) -> i64
+        imports.import("env", "error_constructor", EntityType::Function(3));
+        // Import index 244: type_error_constructor: (i64) -> i64
+        imports.import("env", "type_error_constructor", EntityType::Function(3));
+        // Import index 245: range_error_constructor: (i64) -> i64
+        imports.import("env", "range_error_constructor", EntityType::Function(3));
+        // Import index 246: syntax_error_constructor: (i64) -> i64
+        imports.import("env", "syntax_error_constructor", EntityType::Function(3));
+        // Import index 247: reference_error_constructor: (i64) -> i64
+        imports.import("env", "reference_error_constructor", EntityType::Function(3));
+        // Import index 248: uri_error_constructor: (i64) -> i64
+        imports.import("env", "uri_error_constructor", EntityType::Function(3));
+        // Import index 249: eval_error_constructor: (i64) -> i64
+        imports.import("env", "eval_error_constructor", EntityType::Function(3));
+        // Import index 250: error_proto_to_string: (i64) -> i64
+        imports.import("env", "error_proto_to_string", EntityType::Function(3));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1447,6 +1472,15 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::BooleanConstructor, 240);
         builtin_func_indices.insert(Builtin::BooleanProtoToString, 241);
         builtin_func_indices.insert(Builtin::BooleanProtoValueOf, 242);
+        // ── Error builtins ──
+        builtin_func_indices.insert(Builtin::ErrorConstructor, 243);
+        builtin_func_indices.insert(Builtin::TypeErrorConstructor, 244);
+        builtin_func_indices.insert(Builtin::RangeErrorConstructor, 245);
+        builtin_func_indices.insert(Builtin::SyntaxErrorConstructor, 246);
+        builtin_func_indices.insert(Builtin::ReferenceErrorConstructor, 247);
+        builtin_func_indices.insert(Builtin::URIErrorConstructor, 248);
+        builtin_func_indices.insert(Builtin::EvalErrorConstructor, 249);
+        builtin_func_indices.insert(Builtin::ErrorProtoToString, 250);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -6222,7 +6256,16 @@ impl Compiler {
             // ── Boolean builtins ──
             Builtin::BooleanConstructor
             | Builtin::BooleanProtoToString
-            | Builtin::BooleanProtoValueOf => {
+            | Builtin::BooleanProtoValueOf
+            // ── Error builtins ──
+            | Builtin::ErrorConstructor
+            | Builtin::TypeErrorConstructor
+            | Builtin::RangeErrorConstructor
+            | Builtin::SyntaxErrorConstructor
+            | Builtin::ReferenceErrorConstructor
+            | Builtin::URIErrorConstructor
+            | Builtin::EvalErrorConstructor
+            | Builtin::ErrorProtoToString => {
                 let val = args
                     .first()
                     .with_context(|| format!("{builtin} expects at least 1 argument"))?;
@@ -7709,6 +7752,15 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::BooleanConstructor => ("Boolean", 1),
         Builtin::BooleanProtoToString => ("Boolean.prototype.toString", 1),
         Builtin::BooleanProtoValueOf => ("Boolean.prototype.valueOf", 1),
+        // ── Error builtins ──
+        Builtin::ErrorConstructor => ("Error", 1),
+        Builtin::TypeErrorConstructor => ("TypeError", 1),
+        Builtin::RangeErrorConstructor => ("RangeError", 1),
+        Builtin::SyntaxErrorConstructor => ("SyntaxError", 1),
+        Builtin::ReferenceErrorConstructor => ("ReferenceError", 1),
+        Builtin::URIErrorConstructor => ("URIError", 1),
+        Builtin::EvalErrorConstructor => ("EvalError", 1),
+        Builtin::ErrorProtoToString => ("Error.prototype.toString", 1),
     }
 }
 

@@ -95,6 +95,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>> = Arc::new(Mutex::new(Vec::new()));
     let module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let error_table: Arc<Mutex<Vec<ErrorEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
@@ -127,6 +128,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             async_generator_table: Arc::clone(&async_generator_table),
             combinator_contexts: Arc::clone(&combinator_contexts),
             module_namespace_cache: Arc::clone(&module_namespace_cache),
+            error_table: Arc::clone(&error_table),
         },
     );
 
@@ -4244,20 +4246,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── Import 93: obj_proto_to_string(i64) -> i64 ────────────────────────────
     let obj_proto_to_string_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            if value::is_undefined(obj) {
-                store_runtime_string(&_caller, "[object Undefined]".to_string())
-            } else if value::is_null(obj) {
-                store_runtime_string(&_caller, "[object Null]".to_string())
-            } else if value::is_array(obj) {
-                store_runtime_string(&_caller, "[object Array]".to_string())
-            } else if value::is_function(obj) || value::is_callable(obj) {
-                store_runtime_string(&_caller, "[object Function]".to_string())
-            } else if is_promise_value(_caller.data(), obj) {
-                store_runtime_string(&_caller, "[object Promise]".to_string())
-            } else {
-                store_runtime_string(&_caller, "[object Object]".to_string())
-            }
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            obj_proto_to_string_impl(&mut caller, obj)
         },
     );
     // ── Import 94: obj_proto_value_of(i64) -> i64 ─────────────────────────────
@@ -5727,8 +5717,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     });
     // Import 188: string_to_string(i64) -> i64
     let string_to_string_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
-        let s = get_string_value(&mut caller, receiver);
-        store_runtime_string(&caller, s)
+        if value::is_string(receiver) {
+            let s = get_string_value(&mut caller, receiver);
+            store_runtime_string(&caller, s)
+        } else {
+            obj_proto_to_string_impl(&mut caller, receiver)
+        }
     });
     // Import 189: string_value_of(i64) -> i64
     let string_value_of_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
@@ -7785,6 +7779,80 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
         },
     );
+    // ── Error builtins ────────────────────────────────────────────────────
+    let error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "Error", arg)
+        },
+    );
+    let type_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "TypeError", arg)
+        },
+    );
+    let range_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "RangeError", arg)
+        },
+    );
+    let syntax_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "SyntaxError", arg)
+        },
+    );
+    let reference_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "ReferenceError", arg)
+        },
+    );
+    let uri_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "URIError", arg)
+        },
+    );
+    let eval_error_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
+            create_error_object(&mut caller, "EvalError", arg)
+        },
+    );
+    let error_proto_to_string_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            if !value::is_object(this_val) {
+                return store_runtime_string(&caller, "Error".to_string());
+            }
+            let obj_ptr = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            let name = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "name"))
+                .and_then(|v| read_value_string_bytes(&mut caller, v))
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_else(|| "Error".to_string());
+            let obj_ptr2 = resolve_handle_idx(
+                &mut caller,
+                value::decode_object_handle(this_val) as usize,
+            );
+            let message = obj_ptr2
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "message"))
+                .and_then(|v| read_value_string_bytes(&mut caller, v))
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .unwrap_or_default();
+            if message.is_empty() {
+                store_runtime_string(&caller, name)
+            } else {
+                store_runtime_string(&caller, format!("{}: {}", name, message))
+            }
+        },
+    );
     let imports = [
         console_log.into(),                    // 0
         f64_mod.into(),                        // 1
@@ -8037,6 +8105,15 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         boolean_constructor_fn.into(),      // 240
         boolean_proto_to_string_fn.into(),  // 241
         boolean_proto_value_of_fn.into(),   // 242
+        // ── Error imports ──
+        error_constructor_fn.into(),           // 243
+        type_error_constructor_fn.into(),      // 244
+        range_error_constructor_fn.into(),     // 245
+        syntax_error_constructor_fn.into(),    // 246
+        reference_error_constructor_fn.into(), // 247
+        uri_error_constructor_fn.into(),       // 248
+        eval_error_constructor_fn.into(),      // 249
+        error_proto_to_string_fn.into(),       // 250
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -8248,6 +8325,8 @@ struct RuntimeState {
     combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>>,
     /// 模块命名空间对象缓存：module_id → namespace object (i64 NaN-boxed)
     module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>>,
+    /// Error 侧表：存储 error 对象的 name 和 message
+    error_table: Arc<Mutex<Vec<ErrorEntry>>>,
 }
 
 /// 绑定函数记录
@@ -8261,6 +8340,13 @@ struct BoundRecord {
 struct SymbolEntry {
     description: Option<String>,
     global_key: Option<String>,
+}
+
+/// Error 条目：存储 error 对象的 name 和 message
+#[allow(dead_code)]
+struct ErrorEntry {
+    name: String,
+    message: String,
 }
 
 /// RegExp 条目
@@ -9034,6 +9120,98 @@ fn alloc_host_object_from_caller(caller: &mut Caller<'_, RuntimeState>, capacity
         let _ = global.set(&mut *caller, Val::I32((obj_table_count + 1) as i32));
     }
     value::encode_object_handle(obj_table_count)
+}
+
+fn create_error_object(caller: &mut Caller<'_, RuntimeState>, error_name: &str, arg: i64) -> i64 {
+    let message = if value::is_undefined(arg) {
+        String::new()
+    } else if value::is_string(arg) {
+        read_value_string_bytes(caller, arg)
+            .map(|b| String::from_utf8_lossy(&b).into_owned())
+            .unwrap_or_default()
+    } else if value::is_null(arg) {
+        String::new()
+    } else if value::is_f64(arg) {
+        format_number_js(value::decode_f64(arg))
+    } else if value::is_bool(arg) {
+        if value::decode_bool(arg) { "true".to_string() } else { "false".to_string() }
+    } else {
+        String::new()
+    };
+    {
+        let mut table = caller.data().error_table.lock().expect("error table mutex");
+        table.push(ErrorEntry {
+            name: error_name.to_string(),
+            message: message.clone(),
+        });
+    }
+    let obj = alloc_host_object_from_caller(caller, 2);
+    let name_val = store_runtime_string(caller, error_name.to_string());
+    let _ = define_host_data_property_from_caller(caller, obj, "name", name_val);
+    let message_val = store_runtime_string(caller, message);
+    let _ = define_host_data_property_from_caller(caller, obj, "message", message_val);
+    obj
+}
+
+fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> i64 {
+    if value::is_undefined(obj) {
+        store_runtime_string(caller, "[object Undefined]".to_string())
+    } else if value::is_null(obj) {
+        store_runtime_string(caller, "[object Null]".to_string())
+    } else if value::is_array(obj) {
+        store_runtime_string(caller, "[object Array]".to_string())
+    } else if value::is_function(obj) || value::is_callable(obj) {
+        store_runtime_string(caller, "[object Function]".to_string())
+    } else if is_promise_value(caller.data(), obj) {
+        store_runtime_string(caller, "[object Promise]".to_string())
+    } else if value::is_object(obj) {
+        let obj_ptr = resolve_handle_idx(
+            caller,
+            value::decode_object_handle(obj) as usize,
+        );
+        let name_val = obj_ptr
+            .and_then(|p| read_object_property_by_name(caller, p, "name"));
+        let msg_val = obj_ptr
+            .and_then(|p| read_object_property_by_name(caller, p, "message"));
+        match (name_val, msg_val) {
+            (Some(nv), Some(_mv)) => {
+                let name_str = read_value_string_bytes(caller, nv)
+                    .map(|b| String::from_utf8_lossy(&b).into_owned())
+                    .unwrap_or_default();
+                if matches!(
+                    name_str.as_str(),
+                    "Error"
+                        | "TypeError"
+                        | "RangeError"
+                        | "SyntaxError"
+                        | "ReferenceError"
+                        | "URIError"
+                        | "EvalError"
+                        | "AggregateError"
+                ) {
+                    let obj_ptr2 = resolve_handle_idx(
+                        caller,
+                        value::decode_object_handle(obj) as usize,
+                    );
+                    let msg_str = obj_ptr2
+                        .and_then(|p| read_object_property_by_name(caller, p, "message"))
+                        .and_then(|v| read_value_string_bytes(caller, v))
+                        .map(|b| String::from_utf8_lossy(&b).into_owned())
+                        .unwrap_or_default();
+                    if msg_str.is_empty() {
+                        store_runtime_string(caller, name_str)
+                    } else {
+                        store_runtime_string(caller, format!("{}: {}", name_str, msg_str))
+                    }
+                } else {
+                    store_runtime_string(caller, "[object Object]".to_string())
+                }
+            }
+            _ => store_runtime_string(caller, "[object Object]".to_string()),
+        }
+    } else {
+        store_runtime_string(caller, "[object Object]".to_string())
+    }
 }
 
 fn define_host_data_property_from_caller(
