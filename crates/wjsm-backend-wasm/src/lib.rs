@@ -4366,30 +4366,32 @@ impl Compiler {
                     self.if_depth += 1;
                     self.emit(WasmInstruction::If(BlockType::Empty));
 
-                    // 判断哪些 block 是 merge（应在 if/else/end 之后编译）。
                     let true_is_merge = self.is_merge_block(blocks, false_idx, true_idx);
                     let false_is_merge = self.is_merge_block(blocks, true_idx, false_idx);
 
-                    // 编译 true 分支；若 true 直接通向 merge，也必须在该路径执行 Phi move。
-                    if true_is_merge {
+                    let true_terminates = if true_is_merge {
                         self.emit_phi_moves(blocks, idx, true_idx);
+                        false
                     } else {
                         self.compiled_blocks.insert(true_idx);
-                        self.compile_branch_body(module, blocks, true_idx)?;
-                    }
+                        self.compile_branch_body(module, blocks, true_idx)?
+                    };
 
-                    // 编译 false 分支；false 直达 merge 时用 else 分支承载 Phi move。
-                    if false_is_merge {
-                        self.emit(WasmInstruction::Else);
+                    self.emit(WasmInstruction::Else);
+                    let false_terminates = if false_is_merge {
                         self.emit_phi_moves(blocks, idx, false_idx);
+                        false
                     } else {
-                        self.emit(WasmInstruction::Else);
                         self.compiled_blocks.insert(false_idx);
-                        self.compile_branch_body(module, blocks, false_idx)?;
-                    }
+                        self.compile_branch_body(module, blocks, false_idx)?
+                    };
 
                     self.emit(WasmInstruction::End);
                     self.if_depth -= 1;
+
+                    if true_terminates && false_terminates {
+                        self.emit(WasmInstruction::Unreachable);
+                    }
 
                     // 继续到 merge block
                     let merge = if false_is_merge {
@@ -4683,25 +4685,31 @@ impl Compiler {
                     let true_is_merge = self.is_merge_block(blocks, false_idx, true_idx);
                     let false_is_merge = self.is_merge_block(blocks, true_idx, false_idx);
 
-                    if true_is_merge {
+                    let true_terminates = if true_is_merge {
                         self.emit_phi_moves(blocks, idx, true_idx);
                         self.emit(WasmInstruction::Nop);
+                        false
                     } else {
                         self.compiled_blocks.insert(true_idx);
-                        self.compile_branch_body(module, blocks, true_idx)?;
-                    }
+                        self.compile_branch_body(module, blocks, true_idx)?
+                    };
 
                     self.emit(WasmInstruction::Else);
-                    if false_is_merge {
+                    let false_terminates = if false_is_merge {
                         self.emit_phi_moves(blocks, idx, false_idx);
                         self.emit(WasmInstruction::Nop);
+                        false
                     } else {
                         self.compiled_blocks.insert(false_idx);
-                        self.compile_branch_body(module, blocks, false_idx)?;
-                    }
+                        self.compile_branch_body(module, blocks, false_idx)?
+                    };
 
                     self.emit(WasmInstruction::End);
                     self.if_depth -= 1;
+
+                    if true_terminates && false_terminates {
+                        self.emit(WasmInstruction::Unreachable);
+                    }
 
                     // 继续到 merge block
                     let merge = if false_is_merge {
@@ -4822,9 +4830,9 @@ impl Compiler {
         module: &IrModule,
         blocks: &[BasicBlock],
         idx: usize,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if idx >= blocks.len() {
-            return Ok(());
+            return Ok(false);
         }
         let block = &blocks[idx];
 
@@ -4837,40 +4845,38 @@ impl Compiler {
         }
 
         if suspended {
-            return Ok(());
+            return Ok(false);
         }
 
         match block.terminator() {
             Terminator::Return { value } => {
                 self.emit_return(value);
+                Ok(true)
             }
             Terminator::Jump { target } => {
                 let target_idx = target.0 as usize;
                 if let Some(depth) = self.loop_continue_depth(target_idx) {
-                    // back-edge：continue 循环
                     self.emit_phi_moves(blocks, idx, target_idx);
                     self.emit(WasmInstruction::Br(depth));
+                    Ok(true)
                 } else if let Some(depth) = self.loop_break_depth(target_idx) {
-                    // 跳到循环出口：break
                     self.emit_phi_moves(blocks, idx, target_idx);
                     self.emit(WasmInstruction::Br(depth));
+                    Ok(true)
                 } else if target_idx < idx && block_has_suspend(&blocks[target_idx]) {
-                    // async 状态机的循环头可能位于另一个 switch case 中，不能用当前 case 的 label 回跳；
-                    // 这里内联到下一个 suspend，让循环体能够调度下一轮 resume。
                     self.emit_phi_moves(blocks, idx, target_idx);
-                    self.compile_branch_body(module, blocks, target_idx)?;
+                    self.compile_branch_body(module, blocks, target_idx)
                 } else {
-                    // 普通 merge 跳转
                     self.emit_phi_moves(blocks, idx, target_idx);
+                    Ok(false)
                 }
             }
-            Terminator::Unreachable => {}
+            Terminator::Unreachable => Ok(true),
             Terminator::Branch {
                 condition,
                 true_block,
                 false_block,
             } => {
-                // 分支体内嵌套的 if/else
                 let true_idx = true_block.0 as usize;
                 let false_idx = false_block.0 as usize;
 
@@ -4881,32 +4887,39 @@ impl Compiler {
                 let true_is_merge = self.is_merge_block(blocks, false_idx, true_idx);
                 let false_is_merge = self.is_merge_block(blocks, true_idx, false_idx);
 
-                if true_is_merge {
+                let true_terminates = if true_is_merge {
                     self.emit_phi_moves(blocks, idx, true_idx);
                     self.emit(WasmInstruction::Nop);
+                    false
                 } else {
                     self.compiled_blocks.insert(true_idx);
-                    self.compile_branch_body(module, blocks, true_idx)?;
-                }
+                    self.compile_branch_body(module, blocks, true_idx)?
+                };
 
                 self.emit(WasmInstruction::Else);
-                if false_is_merge {
+                let false_terminates = if false_is_merge {
                     self.emit_phi_moves(blocks, idx, false_idx);
                     self.emit(WasmInstruction::Nop);
+                    false
                 } else {
                     self.compiled_blocks.insert(false_idx);
-                    self.compile_branch_body(module, blocks, false_idx)?;
-                }
+                    self.compile_branch_body(module, blocks, false_idx)?
+                };
 
                 self.emit(WasmInstruction::End);
                 self.if_depth -= 1;
+
+                if true_terminates && false_terminates {
+                    self.emit(WasmInstruction::Unreachable);
+                }
+
+                Ok(true_terminates && false_terminates)
             }
             _ => {
                 self.emit(WasmInstruction::Unreachable);
+                Ok(true)
             }
         }
-
-        Ok(())
     }
 
     /// Emit Phi moves: for each Phi instruction in the target block that references
