@@ -9515,6 +9515,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let private_get_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
+            eprintln!("DEBUG PrivateGet: obj=0x{:016x} key_name_id={}", obj, key_name_id);
             if !value::is_object(obj) && !value::is_function(obj) {
                 *caller.data().runtime_error.lock().expect("runtime error mutex") =
                     Some("TypeError: cannot read private member from non-object".to_string());
@@ -9524,8 +9525,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return value::encode_undefined();
             };
             match read_object_property_by_name_id(&mut caller, ptr, key_name_id as u32) {
-                Some(val) => val,
+                Some(val) => {
+                    eprintln!("DEBUG PrivateGet result: val=0x{:016x} is_function={} is_object={}", val, value::is_function(val), value::is_object(val));
+                    val
+                }
                 None => {
+                    eprintln!("DEBUG PrivateGet: property NOT FOUND");
                     *caller.data().runtime_error.lock().expect("runtime error mutex") =
                         Some("TypeError: cannot read private member from an object whose class did not declare it".to_string());
                     value::encode_undefined()
@@ -9537,6 +9542,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let private_set_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32, val: i64| -> i64 {
+            eprintln!("DEBUG PrivateSet: obj=0x{:016x} key_name_id={} val=0x{:016x} is_function(val)={} is_object(val)={}", obj, key_name_id, val, value::is_function(val), value::is_object(val));
             if !value::is_object(obj) && !value::is_function(obj) {
                 *caller.data().runtime_error.lock().expect("runtime error mutex") =
                     Some("TypeError: cannot write private member to non-object".to_string());
@@ -12374,7 +12380,7 @@ fn write_object_property_by_name_id(
         data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
         data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
         data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-        data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&new_count.to_le_bytes());
+        data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(new_count as u32).to_le_bytes());
     }
 }
 
