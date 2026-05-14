@@ -1193,6 +1193,11 @@ struct Lowerer {
     function_next_value_stack: Vec<u32>,
     function_next_temp_stack: Vec<u32>,
     async_context_stack: Vec<AsyncContextState>,
+    function_try_contexts_stack: Vec<Vec<TryContext>>,
+    function_finally_stack_stack: Vec<Vec<FinallyContext>>,
+    function_label_stack_stack: Vec<Vec<LabelContext>>,
+    function_active_finalizers_stack: Vec<Vec<swc_ast::BlockStmt>>,
+    function_pending_loop_label_stack: Vec<Option<String>>,
     // ── 闭包捕获相关 ──────────────────────────────────────────────────
     /// 每层函数的捕获绑定列表，push_function_context 时压入空 Vec。
     captured_names_stack: Vec<Vec<CapturedBinding>>,
@@ -1348,6 +1353,11 @@ impl Lowerer {
             function_next_value_stack: Vec::new(),
             function_next_temp_stack: Vec::new(),
             async_context_stack: Vec::new(),
+            function_try_contexts_stack: Vec::new(),
+            function_finally_stack_stack: Vec::new(),
+            function_label_stack_stack: Vec::new(),
+            function_active_finalizers_stack: Vec::new(),
+            function_pending_loop_label_stack: Vec::new(),
             captured_names_stack: Vec::new(),
             function_scope_id_stack: Vec::new(),
             is_arrow_fn_stack: Vec::new(),
@@ -1463,11 +1473,11 @@ impl Lowerer {
         self.function_next_temp_stack.push(self.next_temp);
         self.next_value = 0;
         self.next_temp = 0;
-        self.label_stack.clear();
-        self.finally_stack.clear();
-        self.try_contexts.clear();
-        self.active_finalizers.clear();
-        self.pending_loop_label = None;
+        self.function_try_contexts_stack.push(std::mem::take(&mut self.try_contexts));
+        self.function_finally_stack_stack.push(std::mem::take(&mut self.finally_stack));
+        self.function_label_stack_stack.push(std::mem::take(&mut self.label_stack));
+        self.function_active_finalizers_stack.push(std::mem::take(&mut self.active_finalizers));
+        self.function_pending_loop_label_stack.push(self.pending_loop_label.take());
         self.reset_async_context();
     }
 
@@ -1493,6 +1503,26 @@ impl Lowerer {
             .function_next_temp_stack
             .pop()
             .expect("next temp stack underflow");
+        self.try_contexts = self
+            .function_try_contexts_stack
+            .pop()
+            .expect("try contexts stack underflow");
+        self.finally_stack = self
+            .function_finally_stack_stack
+            .pop()
+            .expect("finally stack stack underflow");
+        self.label_stack = self
+            .function_label_stack_stack
+            .pop()
+            .expect("label stack stack underflow");
+        self.active_finalizers = self
+            .function_active_finalizers_stack
+            .pop()
+            .expect("active finalizers stack underflow");
+        self.pending_loop_label = self
+            .function_pending_loop_label_stack
+            .pop()
+            .expect("pending loop label stack underflow");
         let async_context = self
             .async_context_stack
             .pop()
@@ -9647,6 +9677,28 @@ impl Lowerer {
                 key_dest
             }
             swc_ast::MemberProp::Computed(computed) => self.lower_expr(&computed.expr, block)?,
+            swc_ast::MemberProp::PrivateName(name) => {
+                let field_name = format!("#{}", name.id.sym);
+                let key_const = self.module.add_constant(Constant::String(field_name));
+                let key_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: key_dest,
+                        constant: key_const,
+                    },
+                );
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::PrivateGet,
+                        args: vec![obj_val, key_dest],
+                    },
+                );
+                return Ok(dest);
+            }
             _ => return Err(self.error(member.span, "unsupported member property kind")),
         };
 
@@ -11829,6 +11881,54 @@ impl Lowerer {
                     }
                     swc_ast::MemberProp::Computed(computed) => {
                         self.lower_expr(&computed.expr, block)?
+                    }
+                    swc_ast::MemberProp::PrivateName(name) => {
+                        let field_name = format!("#{}", name.id.sym);
+                        let key_const = self.module.add_constant(Constant::String(field_name));
+                        let key_dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest: key_dest,
+                                constant: key_const,
+                            },
+                        );
+                        if assign.op == swc_ast::AssignOp::Assign {
+                            let value_val = self.lower_expr(assign.right.as_ref(), block)?;
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: Builtin::PrivateSet,
+                                    args: vec![obj_val, key_dest, value_val],
+                                },
+                            );
+                            return Ok(StmtFlow::Open(block));
+                        }
+                        let old_val = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(old_val),
+                                builtin: Builtin::PrivateGet,
+                                args: vec![obj_val, key_dest],
+                            },
+                        );
+                        let rhs_val = self.lower_expr(assign.right.as_ref(), block)?;
+                        let result = self.lower_compound_assign_op(
+                            block, assign.op, old_val, rhs_val,
+                        )?;
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::PrivateSet,
+                                args: vec![obj_val, key_dest, result],
+                            },
+                        );
+                        return Ok(StmtFlow::Open(block));
                     }
                     _ => {
                         return Err(self.error(

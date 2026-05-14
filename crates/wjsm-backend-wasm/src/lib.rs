@@ -7388,7 +7388,6 @@ impl Compiler {
             | Builtin::ReflectHas
             | Builtin::ReflectDeleteProperty
             | Builtin::ReflectApply
-            | Builtin::ReflectConstruct
             | Builtin::ReflectGetPrototypeOf
             | Builtin::ReflectSetPrototypeOf
             | Builtin::ReflectIsExtensible
@@ -7398,6 +7397,31 @@ impl Compiler {
             | Builtin::ReflectOwnKeys => {
                 for arg in args {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::ReflectConstruct => {
+                for arg in args {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                if args.len() < 3 {
+                    if let Some(target) = args.first() {
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(target.0)));
+                    } else {
+                        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    }
+                    if args.len() < 2 {
+                        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    }
                 }
                 let func_idx = self
                     .builtin_func_indices

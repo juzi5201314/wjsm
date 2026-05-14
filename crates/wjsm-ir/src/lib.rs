@@ -742,6 +742,9 @@ pub enum Builtin {
     GetPrototypeFromConstructor,
     // ── Object 原型方法 ──
     HasOwnProperty,
+    PrivateGet,
+    PrivateSet,
+    PrivateHas,
     ObjectProtoToString,
     ObjectProtoValueOf,
     // ── Object 静态方法 ──
@@ -988,6 +991,9 @@ impl fmt::Display for Builtin {
             Self::ObjectRest => "object_rest",
             Self::GetPrototypeFromConstructor => "get_prototype_from_constructor",
             Self::HasOwnProperty => "has_own_property",
+            Self::PrivateGet => "private_get",
+            Self::PrivateSet => "private_set",
+            Self::PrivateHas => "private_has",
             Self::ObjectProtoToString => "object_proto_to_string",
             Self::ObjectProtoValueOf => "object_proto_value_of",
             Self::ObjectKeys => "object.keys",

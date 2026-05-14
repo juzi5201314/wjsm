@@ -242,6 +242,20 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return value::encode_handle(value::TAG_ITERATOR, handle);
             }
 
+            if value::is_array(val) {
+                if let Some(ptr) = resolve_handle(&mut caller, val) {
+                    let length = read_array_length(&mut caller, ptr).unwrap_or(0);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let handle = iters.len() as u32;
+                    iters.push(IteratorState::ArrayIter {
+                        ptr,
+                        index: 0,
+                        length,
+                    });
+                    return value::encode_handle(value::TAG_ITERATOR, handle);
+                }
+            }
+
             if value::is_object(val) || value::is_function(val) {
                 if let Some(ptr) = resolve_handle(&mut caller, val) {
                     if let Some(next) = read_object_property_by_name(&mut caller, ptr, "next") {
@@ -289,6 +303,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 match iter {
                     IteratorState::StringIter { byte_pos, .. } => {
                         *byte_pos += 1;
+                        return value::encode_undefined();
+                    }
+                    IteratorState::ArrayIter { index, .. } => {
+                        *index += 1;
                         return value::encode_undefined();
                     }
                     IteratorState::ObjectIter { next, .. } => *next,
@@ -370,7 +388,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
     let iterator_value = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             if let Some(iter) = iters.get_mut(handle_idx) {
@@ -380,6 +398,17 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             let ch = data[*byte_pos] as char;
                             drop(iters);
                             store_runtime_string(&caller, ch.to_string())
+                        } else {
+                            value::encode_undefined()
+                        }
+                    }
+                    IteratorState::ArrayIter { ptr, index, length } => {
+                        if *index < *length {
+                            let idx = *index;
+                            let arr_ptr = *ptr;
+                            drop(iters);
+                            read_array_elem(&mut caller, arr_ptr, idx)
+                                .unwrap_or(value::encode_undefined())
                         } else {
                             value::encode_undefined()
                         }
@@ -414,6 +443,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 match iter {
                     IteratorState::StringIter { data, byte_pos } => {
                         return value::encode_bool(*byte_pos >= data.len());
+                    }
+                    IteratorState::ArrayIter { index, length, .. } => {
+                        return value::encode_bool(*index >= *length);
                     }
                     IteratorState::ObjectIter {
                         next,
@@ -10318,6 +10350,11 @@ enum IteratorState {
     StringIter {
         data: Vec<u8>,
         byte_pos: usize,
+    },
+    ArrayIter {
+        ptr: usize,
+        index: u32,
+        length: u32,
     },
     ObjectIter {
         next: i64,
