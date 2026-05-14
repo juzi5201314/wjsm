@@ -490,6 +490,8 @@ struct Compiler {
     continuation_local_idx: u32,
     current_function_has_eval: bool,
     mode: CompileMode,
+    function_param_counts: Vec<u32>,
+    function_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1843,6 +1845,8 @@ impl Compiler {
             continuation_local_idx: 0,
             current_function_has_eval: false,
             mode,
+            function_param_counts: Vec::new(),
+            function_names: Vec::new(),
         }
     }
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -1901,6 +1905,17 @@ impl Compiler {
             let wasm_idx = self._next_import_func;
             self.function_name_to_wasm_idx
                 .insert(function.name().to_string(), wasm_idx);
+
+            let declared_param_count = function
+                .params()
+                .iter()
+                .filter(|p| {
+                    let s = p.as_str();
+                    s != "$env" && s != "$this" && !s.ends_with(".$env") && !s.ends_with(".$this")
+                })
+                .count() as u32;
+            self.function_param_counts.push(declared_param_count);
+            self.function_names.push(function.name().to_string());
 
             if function.name() == "main" {
                 if self.mode == CompileMode::Eval {
