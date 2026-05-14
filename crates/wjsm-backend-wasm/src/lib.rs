@@ -5658,6 +5658,88 @@ impl Compiler {
                 self.emit(WasmInstruction::Return);
                 Ok(true)
             }
+            Instruction::CollectRestArgs { dest, skip } => {
+                let skip_val = *skip as i32;
+                let arr_push_func_idx = self.builtin_func_indices[&Builtin::ArrayPush];
+
+                self.emit(WasmInstruction::LocalGet(3));
+                self.emit(WasmInstruction::I32Const(skip_val));
+                self.emit(WasmInstruction::I32Sub);
+                self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(0));
+                self.emit(WasmInstruction::I32LtS);
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+                self.emit(WasmInstruction::I32Const(0));
+                self.emit(WasmInstruction::Else);
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::End);
+                self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(1));
+                self.emit(WasmInstruction::I32LtS);
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+                self.emit(WasmInstruction::I32Const(1));
+                self.emit(WasmInstruction::Else);
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::End);
+                self.emit(WasmInstruction::Call(self.arr_new_func_idx));
+                // Result is i32 ptr — encode as array handle
+                self.emit(WasmInstruction::I64ExtendI32U);
+                let box_base = value::BOX_BASE as i64;
+                let tag_array = (value::TAG_ARRAY << 32) as i64;
+                self.emit(WasmInstruction::I64Const(box_base | tag_array));
+                self.emit(WasmInstruction::I64Or);
+                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+
+                // Loop: for i in 0..rest_count, load arg from shadow stack and ArrayPush
+                let loop_counter = self.call_func_idx_scratch();
+                self.emit(WasmInstruction::I32Const(0));
+                self.emit(WasmInstruction::LocalSet(loop_counter));
+
+                self.emit(WasmInstruction::Block(BlockType::Empty));
+                self.emit(WasmInstruction::Loop(BlockType::Empty));
+                // Check: loop_counter < rest_count
+                self.emit(WasmInstruction::LocalGet(loop_counter));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32GeU);
+                self.emit(WasmInstruction::BrIf(1));
+
+                // Load arg from shadow stack: args_base + (skip + loop_counter) * 8
+                self.emit(WasmInstruction::LocalGet(2)); // args_base
+                self.emit(WasmInstruction::I32Const(skip_val));
+                self.emit(WasmInstruction::LocalGet(loop_counter));
+                self.emit(WasmInstruction::I32Add);
+                self.emit(WasmInstruction::I32Const(3)); // * 8
+                self.emit(WasmInstruction::I32Shl);
+                self.emit(WasmInstruction::I32Add);
+                self.emit(WasmInstruction::I64Load(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                // Stack: [arg_value]
+                // Save arg_value
+                self.emit(WasmInstruction::LocalSet(self.call_env_obj_scratch()));
+
+                // Call ArrayPush(arr_handle, arg_value)
+                self.emit(WasmInstruction::LocalGet(self.local_idx(dest.0)));
+                self.emit(WasmInstruction::LocalGet(self.call_env_obj_scratch()));
+                self.emit(WasmInstruction::Call(arr_push_func_idx));
+                self.emit(WasmInstruction::Drop);
+
+                // Increment loop counter
+                self.emit(WasmInstruction::LocalGet(loop_counter));
+                self.emit(WasmInstruction::I32Const(1));
+                self.emit(WasmInstruction::I32Add);
+                self.emit(WasmInstruction::LocalSet(loop_counter));
+
+                self.emit(WasmInstruction::Br(0));
+                self.emit(WasmInstruction::End); // end loop
+                self.emit(WasmInstruction::End); // end block
+
+                Ok(false)
+            }
         }
     }
 
@@ -8049,6 +8131,7 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
         Instruction::PromiseResolve { promise, value } => promise.0.max(value.0),
         Instruction::PromiseReject { promise, reason } => promise.0.max(reason.0),
         Instruction::Suspend { promise, .. } => promise.0,
+        Instruction::CollectRestArgs { dest, .. } => dest.0,
     }
 }
 

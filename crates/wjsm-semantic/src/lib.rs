@@ -3723,7 +3723,6 @@ impl Lowerer {
                             .declare(&temp, VarKind::Let, true)
                             .map_err(|msg| self.error(assign.span, msg))?;
                         ir_names.push(format!("${scope_id}.{temp}"));
-                        // 预声明解构内部的绑定
                         let mut nested = Vec::new();
                         Self::extract_pat_bindings(&[*assign.left.clone()], &mut nested);
                         for n in &nested {
@@ -3733,6 +3732,15 @@ impl Lowerer {
                         }
                     }
                 },
+                swc_ast::Pat::Rest(rest) => {
+                    let mut nested = Vec::new();
+                    Self::extract_pat_bindings(&[*rest.arg.clone()], &mut nested);
+                    for n in &nested {
+                        self.scopes
+                            .declare(n, VarKind::Let, true)
+                            .map_err(|msg| self.error(pat.span(), msg))?;
+                    }
+                }
                 _ => {
                     let temp = self.alloc_temp_name();
                     let scope_id = self
@@ -3740,7 +3748,6 @@ impl Lowerer {
                         .declare(&temp, VarKind::Let, true)
                         .map_err(|msg| self.error(pat.span(), msg))?;
                     ir_names.push(format!("${scope_id}.{temp}"));
-                    // 预声明解构内部的绑定
                     let mut nested = Vec::new();
                     Self::extract_pat_bindings(&[(*pat).clone()], &mut nested);
                     for n in &nested {
@@ -3788,15 +3795,38 @@ impl Lowerer {
         param_ir_names: &[String],
         mut block: BasicBlockId,
     ) -> Result<BasicBlockId, LoweringError> {
-        // param_ir_names[0] = $env, [1] = $this, [2..] = user params
-        for (i, pat) in pats.iter().enumerate() {
-            let ir_name = &param_ir_names[2 + i];
+        // param_ir_names[0] = $env, [1] = $this, [2..] = user params (excluding rest)
+        let mut ir_name_idx: usize = 2;
+        let mut regular_param_count: u32 = 0;
+        for pat in pats.iter() {
+            if let swc_ast::Pat::Rest(_) = pat {
+                break;
+            }
+            regular_param_count += 1;
+        }
+
+        for pat in pats.iter() {
+            if let swc_ast::Pat::Rest(rest) = pat {
+                let skip = regular_param_count;
+                let rest_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CollectRestArgs {
+                        dest: rest_val,
+                        skip,
+                    },
+                );
+                self.lower_destructure_pattern(&rest.arg, rest_val, block, VarKind::Let)?;
+                block = self.resolve_store_block(block);
+                break;
+            }
+
+            let ir_name = &param_ir_names[ir_name_idx];
             match pat {
                 swc_ast::Pat::Ident(_) => {
                     // 简单参数无默认值：值已在 local 中，无需操作
                 }
                 swc_ast::Pat::Assign(assign) => {
-                    // 带默认值
                     let raw = self.alloc_value();
                     self.current_function.append_instruction(
                         block,
@@ -3806,7 +3836,6 @@ impl Lowerer {
                         },
                     );
                     let resolved = self.lower_default_value_check(raw, &assign.right, block)?;
-                    // StoreVar 回原来的位置
                     let store_block = self.resolve_store_block(block);
                     self.current_function.append_instruction(
                         store_block,
@@ -3817,7 +3846,6 @@ impl Lowerer {
                     );
 
                     if !matches!(&*assign.left, swc_ast::Pat::Ident(_)) {
-                        // 解构默认值：还需要进一步 destructure
                         let loaded = self.alloc_value();
                         self.current_function.append_instruction(
                             store_block,
@@ -3835,7 +3863,6 @@ impl Lowerer {
                     }
                 }
                 _ => {
-                    // 解构参数
                     let raw = self.alloc_value();
                     self.current_function.append_instruction(
                         block,
@@ -3847,6 +3874,7 @@ impl Lowerer {
                     self.lower_destructure_pattern(pat, raw, block, VarKind::Let)?;
                 }
             }
+            ir_name_idx += 1;
             block = self.resolve_open_after_expr(block, self.resolve_store_block(block));
         }
         Ok(block)
@@ -3903,7 +3931,7 @@ impl Lowerer {
             swc_ast::Pat::Rest(_) => {
                 return Err(self.error(
                     pat.span(),
-                    "rest element must be inside an array or object destructuring pattern",
+                    "rest element must be used as a function parameter or inside array destructuring",
                 ));
             }
             swc_ast::Pat::Expr(_) | swc_ast::Pat::Invalid(_) => {}
@@ -11904,32 +11932,6 @@ impl Lowerer {
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin: obj_proto_builtin,
-                                    args: builtin_args,
-                                },
-                            );
-                            return Ok(dest);
-                        }
-
-                        // RegExp.prototype 方法调用优化：test/exec
-                        if let Some(regexp_builtin) =
-                            builtin_from_regexp_proto_method(&prop_ident.sym)
-                        {
-                            // JavaScript 允许这些方法无参数调用（缺失参数默认为 undefined）
-                            // 因此不在此处做参数数量限制，由运行时处理
-                            let _ = builtin_call_signature(regexp_builtin); // 验证 builtin 有效
-
-                            // regex.method() → regex 是 this
-                            this_val = self.lower_expr(&member_expr.obj, block)?;
-                            let mut builtin_args = vec![this_val];
-                            for arg in &call.args {
-                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                            }
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: regexp_builtin,
                                     args: builtin_args,
                                 },
                             );

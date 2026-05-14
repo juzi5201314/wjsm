@@ -420,6 +420,10 @@ pub enum Instruction {
         promise: ValueId,
         state: u32,
     },
+    CollectRestArgs {
+        dest: ValueId,
+        skip: u32,
+    },
 }
 
 impl fmt::Display for Instruction {
@@ -576,6 +580,9 @@ impl fmt::Display for Instruction {
             }
             Self::Suspend { promise, state } => {
                 write!(formatter, "suspend {promise}, state={state}")
+            }
+            Self::CollectRestArgs { dest, skip } => {
+                write!(formatter, "{dest} = collect_rest_args skip={skip}")
             }
         }
     }
