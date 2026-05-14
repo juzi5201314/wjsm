@@ -2803,7 +2803,6 @@ impl Lowerer {
     ) -> Result<(), LoweringError> {
         match left {
             swc_ast::ForHead::Pat(pat) => {
-                // for (x in obj) or for (x of obj) — x must be an existing variable
                 match &**pat {
                     swc_ast::Pat::Ident(binding) => {
                         let name = binding.id.sym.to_string();
@@ -2821,6 +2820,9 @@ impl Lowerer {
                         );
                         Ok(())
                     }
+                    swc_ast::Pat::Object(_) | swc_ast::Pat::Array(_) | swc_ast::Pat::Assign(_) => {
+                        self.lower_destructure_pattern(pat, value, block, VarKind::Let)
+                    }
                     _ => Err(self.error(
                         pat.span(),
                         "destructuring patterns in for...in/for...of are not yet supported",
@@ -2828,38 +2830,35 @@ impl Lowerer {
                 }
             }
             swc_ast::ForHead::VarDecl(var_decl) => {
-                // for (let x in obj) or for (const x in obj)
-                let _kind = match var_decl.kind {
+                let kind = match var_decl.kind {
                     swc_ast::VarDeclKind::Var => VarKind::Var,
                     swc_ast::VarDeclKind::Let => VarKind::Let,
                     swc_ast::VarDeclKind::Const => VarKind::Const,
                 };
                 for declarator in &var_decl.decls {
-                    let name = match &declarator.name {
-                        swc_ast::Pat::Ident(binding) => binding.id.sym.to_string(),
-                        _ => {
-                            return Err(self.error(
-                                declarator.name.span(),
-                                "destructuring patterns in for...in/for...of are not yet supported",
-                            ));
+                    match &declarator.name {
+                        swc_ast::Pat::Ident(binding) => {
+                            let name = binding.id.sym.to_string();
+                            let scope_id = self
+                                .scopes
+                                .resolve_scope_id(&name)
+                                .map_err(|msg| self.error(var_decl.span, msg))?;
+                            self.scopes
+                                .mark_initialised(&name)
+                                .map_err(|msg| self.error(var_decl.span, msg))?;
+                            let ir_name = format!("${scope_id}.{name}");
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::StoreVar {
+                                    name: ir_name,
+                                    value,
+                                },
+                            );
                         }
-                    };
-                    // Pre-declared during pre-scan; mark initialised
-                    let scope_id = self
-                        .scopes
-                        .resolve_scope_id(&name)
-                        .map_err(|msg| self.error(var_decl.span, msg))?;
-                    self.scopes
-                        .mark_initialised(&name)
-                        .map_err(|msg| self.error(var_decl.span, msg))?;
-                    let ir_name = format!("${scope_id}.{name}");
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::StoreVar {
-                            name: ir_name,
-                            value,
-                        },
-                    );
+                        _ => {
+                            self.lower_destructure_pattern(&declarator.name, value, block, kind)?;
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -3464,10 +3463,16 @@ impl Lowerer {
                             );
                         }
                         _ => {
-                            return Err(self.error(
-                                param.span(),
-                                "catch parameter must be a simple identifier",
-                            ));
+                            let exc_var = self.try_contexts.last().unwrap().exception_var.clone();
+                            let exc_val = self.alloc_value();
+                            self.current_function.append_instruction(
+                                catch_entry,
+                                Instruction::LoadVar {
+                                    dest: exc_val,
+                                    name: exc_var,
+                                },
+                            );
+                            self.lower_destructure_pattern(param, exc_val, catch_entry, VarKind::Let)?;
                         }
                     }
                 }
@@ -9906,6 +9911,19 @@ impl Lowerer {
                             },
                         );
                     }
+                    swc_ast::Prop::Method(method) => {
+                        let key_dest = self.lower_prop_name(&method.key, block)?;
+                        let fn_value =
+                            self.lower_method_prop_to_fn(&method.key, &method.function, block)?;
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::SetProp {
+                                object: obj_dest,
+                                key: key_dest,
+                                value: fn_value,
+                            },
+                        );
+                    }
                     _ => {
                         return Err(
                             self.error(prop.span(), "unsupported property kind in object literal")
@@ -10074,6 +10092,106 @@ impl Lowerer {
         );
 
         Ok(m_dest)
+    }
+
+    fn lower_method_prop_to_fn(
+        &mut self,
+        key: &swc_ast::PropName,
+        function: &swc_ast::Function,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let method_name = match key {
+            swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+            swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+            _ => "anonymous".to_string(),
+        };
+        let fn_name = format!("$0.{method_name}");
+
+        self.push_function_context(&fn_name, BasicBlockId(0));
+
+        let env_scope_id = self
+            .scopes
+            .declare("$env", VarKind::Let, true)
+            .map_err(|msg| self.error(key.span(), msg))?;
+        let this_scope_id = self
+            .scopes
+            .declare("$this", VarKind::Let, true)
+            .map_err(|msg| self.error(key.span(), msg))?;
+
+        let param_ir_names =
+            self.build_param_ir_names(&function.params, env_scope_id, this_scope_id)?;
+
+        if let Some(body) = &function.body {
+            self.predeclare_block_stmts(&body.stmts)?;
+        }
+
+        let entry = BasicBlockId(0);
+        self.emit_hoisted_var_initializers(entry);
+
+        let body_entry = self.emit_param_inits(&function.params, &param_ir_names, entry)?;
+
+        let body_entry = self.emit_arguments_init(body_entry)?;
+
+        let mut inner_flow = StmtFlow::Open(body_entry);
+        if let Some(body) = &function.body {
+            for stmt in &body.stmts {
+                if matches!(inner_flow, StmtFlow::Terminated) {
+                    continue;
+                }
+                inner_flow = self.lower_stmt(stmt, inner_flow)?;
+            }
+        }
+
+        if let StmtFlow::Open(b) = inner_flow {
+            self.current_function
+                .set_terminator(b, Terminator::Return { value: None });
+        }
+
+        let old_fn = std::mem::replace(
+            &mut self.current_function,
+            FunctionBuilder::new("", BasicBlockId(0)),
+        );
+        let has_eval = old_fn.has_eval();
+        let blocks = old_fn.into_blocks();
+        let mut ir_function = Function::new(&fn_name, BasicBlockId(0));
+        ir_function.set_has_eval(has_eval);
+        ir_function.set_params(param_ir_names);
+        let captured = self.captured_names_stack.last().unwrap().clone();
+        ir_function.set_captured_names(Self::captured_display_names(&captured));
+        for b in blocks {
+            ir_function.push_block(b);
+        }
+        let function_id = self.module.push_function(ir_function);
+
+        self.pop_function_context();
+
+        let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
+        let func_ref_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: func_ref_val,
+                constant: func_ref_const,
+            },
+        );
+
+        let callee_val = if captured.is_empty() {
+            func_ref_val
+        } else {
+            let env_val = self.ensure_shared_env(block, &captured, key.span())?;
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![func_ref_val, env_val],
+                },
+            );
+            closure_val
+        };
+
+        Ok(callee_val)
     }
 
     /// 构建 getter/setter descriptor 对象 { get/set: fn, enumerable, configurable }
@@ -12697,11 +12815,17 @@ impl Lowerer {
                     ));
                 }
             },
-            _ => {
-                return Err(self.error(
-                    assign.left.span(),
-                    "only simple identifier assignment targets are supported",
-                ));
+            swc_ast::AssignTarget::Pat(pat) => {
+                if assign.op != swc_ast::AssignOp::Assign {
+                    return Err(self.error(
+                        assign.span,
+                        "compound assignment with destructuring is not supported",
+                    ));
+                }
+                let value = self.lower_expr(assign.right.as_ref(), block)?;
+                let ir_pat = swc_ast::Pat::from(pat.clone());
+                self.lower_destructure_pattern(&ir_pat, value, block, VarKind::Let)?;
+                return Ok(value);
             }
         };
 
