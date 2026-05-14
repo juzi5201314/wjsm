@@ -9511,6 +9511,69 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_f64(ms)
         },
     );
+
+    let private_get_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
+            if !value::is_object(obj) && !value::is_function(obj) {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: cannot read private member from non-object".to_string());
+                return value::encode_undefined();
+            }
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_undefined();
+            };
+            match read_object_property_by_name_id(&mut caller, ptr, key_name_id as u32) {
+                Some(val) => val,
+                None => {
+                    *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                        Some("TypeError: cannot read private member from an object whose class did not declare it".to_string());
+                    value::encode_undefined()
+                }
+            }
+        },
+    );
+
+    let private_set_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32, val: i64| -> i64 {
+            if !value::is_object(obj) && !value::is_function(obj) {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: cannot write private member to non-object".to_string());
+                return value::encode_undefined();
+            }
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_undefined();
+            };
+            let found_slot = find_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32);
+            if let Some((slot_offset, _flags, _old_val)) = found_slot {
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                    return value::encode_undefined();
+                };
+                let data = memory.data_mut(&mut caller);
+                data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+                val
+            } else {
+                write_object_property_by_name_id(&mut caller, ptr, obj, key_name_id as u32, val, 0);
+                val
+            }
+        },
+    );
+
+    let private_has_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
+            if !value::is_object(obj) && !value::is_function(obj) {
+                return value::encode_bool(false);
+            }
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_bool(false);
+            };
+            let found = find_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32);
+            value::encode_bool(found.is_some())
+        },
+    );
+
     let imports = [
         console_log.into(),                    // 0
         f64_mod.into(),                        // 1
@@ -9840,6 +9903,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         typedarray_proto_slice_fn.into(),        // 310
         typedarray_proto_subarray_fn.into(),     // 311
         get_builtin_global_fn.into(),             // 312
+        private_get_fn.into(),                    // 313
+        private_set_fn.into(),                    // 314
+        private_has_fn.into(),                    // 315
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -12218,6 +12284,98 @@ fn find_property_slot_by_name_id(
         }
     }
     None
+}
+
+fn read_object_property_by_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    name_id: u32,
+) -> Option<i64> {
+    let (slot_offset, _flags, val) = find_property_slot_by_name_id(caller, obj_ptr, name_id)?;
+    let _ = slot_offset;
+    Some(val)
+}
+
+fn write_object_property_by_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    obj_handle: i64,
+    name_id: u32,
+    val: i64,
+    flags: i32,
+) {
+    let found = find_property_slot_by_name_id(caller, obj_ptr, name_id);
+    if let Some((slot_offset, _, _)) = found {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return;
+        };
+        let data = memory.data_mut(&mut *caller);
+        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+        let _ = flags;
+    } else {
+        let num_props = {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return;
+            };
+            let data = memory.data(&*caller);
+            if obj_ptr + 16 > data.len() {
+                return;
+            }
+            u32::from_le_bytes([
+                data[obj_ptr + 12],
+                data[obj_ptr + 13],
+                data[obj_ptr + 14],
+                data[obj_ptr + 15],
+            ]) as usize
+        };
+        let capacity = {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return;
+            };
+            let data = memory.data(&*caller);
+            if obj_ptr + 12 > data.len() {
+                return;
+            }
+            u32::from_le_bytes([
+                data[obj_ptr + 8],
+                data[obj_ptr + 9],
+                data[obj_ptr + 10],
+                data[obj_ptr + 11],
+            ]) as usize
+        };
+        if num_props >= capacity {
+            let new_cap = std::cmp::max(capacity * 2, 4) as u32;
+            let _ = grow_object(caller, obj_ptr, obj_handle, new_cap);
+        }
+        let num_props = {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return;
+            };
+            let data = memory.data(&*caller);
+            if obj_ptr + 16 > data.len() {
+                return;
+            }
+            u32::from_le_bytes([
+                data[obj_ptr + 12],
+                data[obj_ptr + 13],
+                data[obj_ptr + 14],
+                data[obj_ptr + 15],
+            ]) as usize
+        };
+        let new_count = num_props + 1;
+        let slot_offset = obj_ptr + 16 + num_props * 32;
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return;
+        };
+        let data = memory.data_mut(&mut *caller);
+        if slot_offset + 32 > data.len() {
+            return;
+        }
+        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+        data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&new_count.to_le_bytes());
+    }
 }
 
 /// 读取对象/函数的所有属性名，用于 for...in 枚举

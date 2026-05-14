@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 313] = [
+const HOST_IMPORT_NAMES: [&str; 316] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -337,6 +337,9 @@ const HOST_IMPORT_NAMES: [&str; 313] = [
     "typedarray_proto_slice",
     "typedarray_proto_subarray",
     "get_builtin_global",
+    "private_get",
+    "private_set",
+    "private_has",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -345,7 +348,7 @@ const HOST_IMPORT_NAMES: [&str; 313] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        313,
+        316,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -920,6 +923,11 @@ impl Compiler {
             vec![ValType::I64],
             vec![ValType::I64],
         );
+        // Type 32: (i64, i32, i64) -> (i64) — private_set(obj, key_name_id, value)
+        types.ty().function(
+            vec![ValType::I64, ValType::I32, ValType::I64],
+            vec![ValType::I64],
+        );
         // Import index 78: func_call — Type 12 (uses shadow stack for args)
         imports.import("env", "func_call", EntityType::Function(12));
         // Import index 79: func_apply — Type 16 (i64 func, i64 this, i64 argsArray) -> i64
@@ -1393,6 +1401,12 @@ impl Compiler {
         imports.import("env", "typedarray_proto_subarray", EntityType::Function(16));
         // Import index 312: get_builtin_global: (i64) -> i64
         imports.import("env", "get_builtin_global", EntityType::Function(3));
+        // Import index 313: private_get: (i64, i32) -> i64
+        imports.import("env", "private_get", EntityType::Function(8));
+        // Import index 314: private_set: (i64, i32, i64) -> i64
+        imports.import("env", "private_set", EntityType::Function(32));
+        // Import index 315: private_has: (i64, i32) -> i64
+        imports.import("env", "private_has", EntityType::Function(8));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1736,6 +1750,9 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::TypedArrayProtoSlice, 310);
         builtin_func_indices.insert(Builtin::TypedArrayProtoSubarray, 311);
         builtin_func_indices.insert(Builtin::GetBuiltinGlobal, 312);
+        builtin_func_indices.insert(Builtin::PrivateGet, 313);
+        builtin_func_indices.insert(Builtin::PrivateSet, 314);
+        builtin_func_indices.insert(Builtin::PrivateHas, 315);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -6749,6 +6766,73 @@ impl Compiler {
                 }
                 Ok(())
             }
+            Builtin::PrivateGet => {
+                let obj_arg = args
+                    .first()
+                    .context("PrivateGet expects 2 args (obj, key)")?;
+                let key_arg = args
+                    .get(1)
+                    .context("PrivateGet expects 2 args (obj, key)")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(313);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PrivateSet => {
+                let obj_arg = args
+                    .first()
+                    .context("PrivateSet expects 3 args (obj, key, value)")?;
+                let key_arg = args
+                    .get(1)
+                    .context("PrivateSet expects 3 args (obj, key, value)")?;
+                let val_arg = args
+                    .get(2)
+                    .context("PrivateSet expects 3 args (obj, key, value)")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val_arg.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(314);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PrivateHas => {
+                let obj_arg = args
+                    .first()
+                    .context("PrivateHas expects 2 args (obj, key)")?;
+                let key_arg = args
+                    .get(1)
+                    .context("PrivateHas expects 2 args (obj, key)")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(315);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
             Builtin::ObjectKeys
             | Builtin::ObjectValues
             | Builtin::ObjectEntries
@@ -8044,6 +8128,9 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ObjectRest => ("object_rest", 2),
         Builtin::GetPrototypeFromConstructor => ("get_prototype_from_constructor", 1),
         Builtin::HasOwnProperty => ("has_own_property", 2),
+        Builtin::PrivateGet => ("private_get", 2),
+        Builtin::PrivateSet => ("private_set", 3),
+        Builtin::PrivateHas => ("private_has", 2),
         Builtin::ObjectProtoToString => ("object_proto_to_string", 1),
         Builtin::ObjectProtoValueOf => ("object_proto_value_of", 1),
         Builtin::ObjectKeys => ("object.keys", 1),
