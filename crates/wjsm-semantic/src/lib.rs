@@ -3789,6 +3789,34 @@ impl Lowerer {
         )
     }
 
+    fn emit_arguments_init(
+        &mut self,
+        block: BasicBlockId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let scope_id = self
+            .scopes
+            .declare("arguments", VarKind::Let, true)
+            .expect("arguments declaration should not fail");
+        let ir_name = format!("${scope_id}.arguments");
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CollectRestArgs { dest, skip: 0 },
+        );
+        let store_block = self.resolve_store_block(block);
+        self.current_function.append_instruction(
+            store_block,
+            Instruction::StoreVar {
+                name: ir_name,
+                value: dest,
+            },
+        );
+        self.scopes
+            .mark_initialised("arguments")
+            .expect("arguments init should not fail");
+        Ok(self.resolve_store_block(block))
+    }
+
     fn emit_pat_inits_impl(
         &mut self,
         pats: &[&swc_ast::Pat],
@@ -4367,6 +4395,8 @@ impl Lowerer {
         // Emit parameter initialization (default values + destructuring)
         let body_entry = self.emit_param_inits(&fn_decl.function.params, &param_ir_names, entry)?;
 
+        let body_entry = self.emit_arguments_init(body_entry)?;
+
         // Lower the function body.
         let mut inner_flow = StmtFlow::Open(body_entry);
         if let Some(body) = &fn_decl.function.body {
@@ -4688,6 +4718,8 @@ impl Lowerer {
         let after_inits =
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
+        let after_inits = self.emit_arguments_init(after_inits)?;
+
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
@@ -4826,6 +4858,8 @@ impl Lowerer {
             &wrapper_user_param_ir_names,
             wrapper_entry,
         )?;
+
+        let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
 
         let func_ref_const = self
             .module
@@ -5265,6 +5299,8 @@ impl Lowerer {
         let after_inits =
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
+        let after_inits = self.emit_arguments_init(after_inits)?;
+
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
@@ -5418,6 +5454,8 @@ impl Lowerer {
             &wrapper_user_param_ir_names,
             wrapper_entry,
         )?;
+
+        let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
 
         let promise_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -5713,6 +5751,8 @@ impl Lowerer {
         self.emit_hoisted_var_initializers(entry);
 
         let body_entry = self.emit_param_inits(&fn_expr.function.params, &param_ir_names, entry)?;
+
+        let body_entry = self.emit_arguments_init(body_entry)?;
 
         // Lower body.
         let mut inner_flow = StmtFlow::Open(body_entry);
@@ -6021,6 +6061,8 @@ impl Lowerer {
         let after_inits =
             self.emit_param_inits(&fn_expr.function.params, &user_param_ir_names, entry)?;
 
+        let after_inits = self.emit_arguments_init(after_inits)?;
+
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
@@ -6168,6 +6210,8 @@ impl Lowerer {
             &wrapper_user_param_ir_names,
             wrapper_entry,
         )?;
+
+        let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
 
         let promise_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -7201,6 +7245,7 @@ impl Lowerer {
                 }
                 let m_entry = BasicBlockId(0);
                 self.emit_hoisted_var_initializers(m_entry);
+                let m_entry = self.emit_arguments_init(m_entry)?;
                 let mut m_flow = StmtFlow::Open(m_entry);
                 if let Some(body) = &pm.function.body {
                     for stmt in &body.stmts {
@@ -7389,6 +7434,11 @@ impl Lowerer {
         } else {
             StmtFlow::Open(field_block)
         };
+        if let Some(_ctor) = constructor {
+            inner_flow = StmtFlow::Open(self.emit_arguments_init(
+                match inner_flow { StmtFlow::Open(b) => b, _ => entry }
+            )?);
+        }
         if let Some(ctor) = constructor {
             if let Some(body) = &ctor.body {
                 for stmt in &body.stmts {
@@ -7506,6 +7556,7 @@ impl Lowerer {
 
                             let m_entry = BasicBlockId(0);
                             self.emit_hoisted_var_initializers(m_entry);
+                            let m_entry = self.emit_arguments_init(m_entry)?;
 
                             let mut m_flow = StmtFlow::Open(m_entry);
                             if let Some(body) = &method.function.body {
@@ -7624,6 +7675,7 @@ impl Lowerer {
 
                             let m_entry = BasicBlockId(0);
                             self.emit_hoisted_var_initializers(m_entry);
+                            let m_entry = self.emit_arguments_init(m_entry)?;
 
                             let mut m_flow = StmtFlow::Open(m_entry);
                             if let Some(body) = &method.function.body {
@@ -7721,6 +7773,7 @@ impl Lowerer {
 
                     let m_entry = BasicBlockId(0);
                     self.emit_hoisted_var_initializers(m_entry);
+                    let m_entry = self.emit_arguments_init(m_entry)?;
 
                     let mut m_flow = StmtFlow::Open(m_entry);
                     for stmt in &static_block.body.stmts {
@@ -7965,6 +8018,7 @@ impl Lowerer {
                 }
                 let m_entry = BasicBlockId(0);
                 self.emit_hoisted_var_initializers(m_entry);
+                let m_entry = self.emit_arguments_init(m_entry)?;
                 let mut m_flow = StmtFlow::Open(m_entry);
                 if let Some(body) = &pm.function.body {
                     for stmt in &body.stmts {
@@ -8149,6 +8203,11 @@ impl Lowerer {
         } else {
             StmtFlow::Open(field_block)
         };
+        if let Some(_ctor) = constructor {
+            inner_flow = StmtFlow::Open(self.emit_arguments_init(
+                match inner_flow { StmtFlow::Open(b) => b, _ => entry }
+            )?);
+        }
         if let Some(ctor) = constructor {
             if let Some(body) = &ctor.body {
                 for stmt in &body.stmts {
@@ -8260,6 +8319,7 @@ impl Lowerer {
 
                         let m_entry = BasicBlockId(0);
                         self.emit_hoisted_var_initializers(m_entry);
+                        let m_entry = self.emit_arguments_init(m_entry)?;
 
                         let mut m_flow = StmtFlow::Open(m_entry);
                         if let Some(body) = &method.function.body {
@@ -8372,6 +8432,7 @@ impl Lowerer {
 
                         let m_entry = BasicBlockId(0);
                         self.emit_hoisted_var_initializers(m_entry);
+                        let m_entry = self.emit_arguments_init(m_entry)?;
 
                         let mut m_flow = StmtFlow::Open(m_entry);
                         if let Some(body) = &method.function.body {
@@ -8461,6 +8522,7 @@ impl Lowerer {
 
                     let m_entry = BasicBlockId(0);
                     self.emit_hoisted_var_initializers(m_entry);
+                    let m_entry = self.emit_arguments_init(m_entry)?;
 
                     let mut m_flow = StmtFlow::Open(m_entry);
                     for stmt in &static_block.body.stmts {
@@ -9962,6 +10024,8 @@ impl Lowerer {
 
         let m_entry = BasicBlockId(0);
         self.emit_hoisted_var_initializers(m_entry);
+
+        let m_entry = self.emit_arguments_init(m_entry)?;
 
         // 降低方法体
         let mut m_flow = StmtFlow::Open(m_entry);
