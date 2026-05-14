@@ -9223,7 +9223,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     value::encode_native_callable_idx(idx)
                 }
                 "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
-                | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array" => {
+                | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array"
+                | "Float16Array" | "BigInt64Array" | "BigUint64Array" => {
                     let native_callables = caller.data().native_callables.lock().unwrap();
                     let idx = native_callables.len() as u32;
                     drop(native_callables);
@@ -9242,7 +9243,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 "Math" | "JSON" | "Reflect" | "globalThis" | "Atomics"
                 | "SharedArrayBuffer" | "FinalizationRegistry" | "WeakRef"
                 | "parseInt" | "parseFloat" | "isNaN" | "isFinite"
-                | "decodeURI" | "decodeURIComponent" | "encodeURI" | "encodeURIComponent" => {
+                | "decodeURI" | "decodeURIComponent" | "encodeURI" | "encodeURIComponent"
+                | "Temporal" | "Intl" | "Iterator" | "AsyncIterator"
+                | "$262" | "eval" | "AggregateError" | "SuppressedError" => {
                     let native_callables = caller.data().native_callables.lock().unwrap();
                     let idx = native_callables.len() as u32;
                     drop(native_callables);
@@ -10611,17 +10614,15 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
                 }
             }
         }
-        return Ok(format!("[object Object:{ptr}]"));
+        return Ok("[object Object]".to_string());
     }
 
     if value::is_function(val) {
-        let idx = value::decode_function_idx(val);
-        return Ok(format!("function [ref:{idx}]"));
+        return Ok("function() { [native code] }".to_string());
     }
 
     if value::is_closure(val) {
-        let idx = value::decode_closure_idx(val);
-        return Ok(format!("function [closure:{idx}]"));
+        return Ok("function() { [native code] }".to_string());
     }
 
     if value::is_bigint(val) {

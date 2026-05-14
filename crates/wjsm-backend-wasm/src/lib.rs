@@ -4254,27 +4254,26 @@ impl Compiler {
         let mut idx = start_idx;
 
         while idx < blocks.len() {
-            // 关闭已到达出口的循环
             while let Some(top) = self.loop_stack.last() {
                 if idx >= top.exit_idx {
-                    self.emit(WasmInstruction::End); // loop end
-                    self.emit(WasmInstruction::End); // block end
+                    self.emit(WasmInstruction::End);
+                    self.emit(WasmInstruction::End);
                     self.loop_stack.pop();
                 } else {
                     break;
                 }
             }
 
-            // 在循环头打开 block/loop
-            if let Some(loop_info) = loops.iter().find(|l| l.header_idx == idx) {
-                self.emit(WasmInstruction::Block(BlockType::Empty)); // break target
-                self.emit(WasmInstruction::Loop(BlockType::Empty)); // continue target
-                self.loop_stack.push(loop_info.clone());
-            }
-
             if self.compiled_blocks.contains(&idx) {
                 break;
             }
+
+            if let Some(loop_info) = loops.iter().find(|l| l.header_idx == idx) {
+                self.emit(WasmInstruction::Block(BlockType::Empty));
+                self.emit(WasmInstruction::Loop(BlockType::Empty));
+                self.loop_stack.push(loop_info.clone());
+            }
+
             self.compiled_blocks.insert(idx);
 
             let block = &blocks[idx];
@@ -4946,12 +4945,19 @@ impl Compiler {
     /// Check if `false_idx` is the natural merge block for a branch where
     /// true path is at `true_idx` and false path is at `false_idx`.
     fn is_merge_block(&self, blocks: &[BasicBlock], true_idx: usize, false_idx: usize) -> bool {
-        // false_idx is the merge if and only if the true block jumps to false_idx.
-        // This catches the if-without-else pattern: Branch → (true: Jump to merge, merge)
         if let Some(true_block) = blocks.get(true_idx) {
             match true_block.terminator() {
                 Terminator::Jump { target } if target.0 as usize == false_idx => return true,
                 _ => {}
+            }
+        }
+        if let Some(false_block) = blocks.get(false_idx) {
+            for instruction in false_block.instructions() {
+                if let Instruction::Phi { sources, .. } = instruction {
+                    if sources.len() > 1 {
+                        return true;
+                    }
+                }
             }
         }
         false
@@ -7775,7 +7781,7 @@ fn block_has_suspend(block: &BasicBlock) -> bool {
 /// 检测 CFG 中的循环（通过 back-edge 识别）。
 /// 返回按 header_idx 排序的 LoopInfo 列表。
 fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     let mut back_edges: HashMap<usize, Vec<usize>> = HashMap::new();
 
     for (i, block) in blocks.iter().enumerate() {
@@ -7787,7 +7793,6 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
                 }
             }
             Terminator::Branch { true_block, .. } => {
-                // do-while 模式：true → header（通过 Branch 实现的 back-edge）
                 let t = true_block.0 as usize;
                 if t <= i {
                     back_edges.entry(t).or_default().push(i);
@@ -7798,12 +7803,46 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
     }
 
     let mut loops: Vec<LoopInfo> = Vec::new();
-    for (header_idx, _latches) in &back_edges {
+    'next_edge: for (header_idx, latches) in &back_edges {
+        let mut reachable: HashSet<usize> = HashSet::new();
+        let mut stack = vec![*header_idx];
+        while let Some(idx) = stack.pop() {
+            if reachable.contains(&idx) {
+                continue;
+            }
+            reachable.insert(idx);
+            if idx >= blocks.len() {
+                continue;
+            }
+            match blocks[idx].terminator() {
+                Terminator::Jump { target } => {
+                    stack.push(target.0 as usize);
+                }
+                Terminator::Branch {
+                    true_block,
+                    false_block,
+                    ..
+                } => {
+                    stack.push(true_block.0 as usize);
+                    stack.push(false_block.0 as usize);
+                }
+                _ => {}
+            }
+        }
+        let mut any_latch_reachable = false;
+        for latch in latches {
+            if reachable.contains(latch) {
+                any_latch_reachable = true;
+                break;
+            }
+        }
+        if !any_latch_reachable {
+            continue 'next_edge;
+        }
+
         let exit_idx = match blocks[*header_idx].terminator() {
-            // while/for 模式：header 有 Branch，false 分支是出口
             Terminator::Branch { false_block, .. } => false_block.0 as usize,
             _ => {
-                // do-while 模式：header 没有 Branch，找到指向 header 的 Branch
                 let mut exit = *header_idx + 1;
                 for block in blocks.iter() {
                     if let Terminator::Branch {
