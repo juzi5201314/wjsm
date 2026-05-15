@@ -242,6 +242,20 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return value::encode_handle(value::TAG_ITERATOR, handle);
             }
 
+            if value::is_array(val) {
+                if let Some(ptr) = resolve_handle(&mut caller, val) {
+                    let length = read_array_length(&mut caller, ptr).unwrap_or(0);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let handle = iters.len() as u32;
+                    iters.push(IteratorState::ArrayIter {
+                        ptr,
+                        index: 0,
+                        length,
+                    });
+                    return value::encode_handle(value::TAG_ITERATOR, handle);
+                }
+            }
+
             if value::is_object(val) || value::is_function(val) {
                 if let Some(ptr) = resolve_handle(&mut caller, val) {
                     if let Some(next) = read_object_property_by_name(&mut caller, ptr, "next") {
@@ -289,6 +303,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 match iter {
                     IteratorState::StringIter { byte_pos, .. } => {
                         *byte_pos += 1;
+                        return value::encode_undefined();
+                    }
+                    IteratorState::ArrayIter { index, .. } => {
+                        *index += 1;
                         return value::encode_undefined();
                     }
                     IteratorState::ObjectIter { next, .. } => *next,
@@ -370,7 +388,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
     let iterator_value = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             if let Some(iter) = iters.get_mut(handle_idx) {
@@ -380,6 +398,17 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             let ch = data[*byte_pos] as char;
                             drop(iters);
                             store_runtime_string(&caller, ch.to_string())
+                        } else {
+                            value::encode_undefined()
+                        }
+                    }
+                    IteratorState::ArrayIter { ptr, index, length } => {
+                        if *index < *length {
+                            let idx = *index;
+                            let arr_ptr = *ptr;
+                            drop(iters);
+                            read_array_elem(&mut caller, arr_ptr, idx)
+                                .unwrap_or(value::encode_undefined())
                         } else {
                             value::encode_undefined()
                         }
@@ -414,6 +443,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 match iter {
                     IteratorState::StringIter { data, byte_pos } => {
                         return value::encode_bool(*byte_pos >= data.len());
+                    }
+                    IteratorState::ArrayIter { index, length, .. } => {
+                        return value::encode_bool(*index >= *length);
                     }
                     IteratorState::ObjectIter {
                         next,
@@ -1570,8 +1602,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 {
                     let timers = caller.data().timers.lock().expect("timers mutex");
                     for timer in timers.iter() {
-                        let val = timer.callback;
-                        if value::is_function(val) {
+                            let val = timer.callback;
+                          if value::is_function(val) {
                             let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
                             if func_idx < num_ir_functions as usize {
                                 add_root(func_idx, data, &mut roots);
@@ -7293,7 +7325,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64, _receiver: i64| -> i64 {
             let obj_ptr = resolve_handle(&mut caller, target);
-            if let Some(ptr) = obj_ptr {
+            if let Some(_ptr) = obj_ptr {
                 if let Some(prop_name) = render_value(&mut caller, prop).ok() {
                     let _ = define_host_data_property_from_caller(&mut caller, target, &prop_name, val);
                     return value::encode_bool(true);
@@ -9017,6 +9049,137 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
+    let get_builtin_global_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, name_val: i64| -> i64 {
+            let name = read_runtime_string(&mut caller, name_val);
+            let mut native_callables = caller.data().native_callables.lock().unwrap();
+            let idx = native_callables.len() as u32;
+            match name.as_str() {
+                "Array" => {
+                    native_callables.push(NativeCallable::ArrayConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Object" => {
+                    native_callables.push(NativeCallable::ObjectConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Function" => {
+                    native_callables.push(NativeCallable::FunctionConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "String" => {
+                    native_callables.push(NativeCallable::StringConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Boolean" => {
+                    native_callables.push(NativeCallable::BooleanConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Number" => {
+                    native_callables.push(NativeCallable::NumberConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Symbol" => {
+                    native_callables.push(NativeCallable::SymbolConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "BigInt" => {
+                    native_callables.push(NativeCallable::BigIntConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "RegExp" => {
+                    native_callables.push(NativeCallable::RegExpConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Error" => {
+                    native_callables.push(NativeCallable::ErrorConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "TypeError" => {
+                    native_callables.push(NativeCallable::TypeErrorConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "RangeError" => {
+                    native_callables.push(NativeCallable::RangeErrorConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "SyntaxError" => {
+                    native_callables.push(NativeCallable::SyntaxErrorConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "ReferenceError" => {
+                    native_callables.push(NativeCallable::ReferenceErrorConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "URIError" => {
+                    native_callables.push(NativeCallable::URIErrorConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "EvalError" => {
+                    native_callables.push(NativeCallable::EvalErrorConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "AggregateError" => {
+                    native_callables.push(NativeCallable::AggregateErrorConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Map" => {
+                    native_callables.push(NativeCallable::MapConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Set" => {
+                    native_callables.push(NativeCallable::SetConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "WeakMap" => {
+                    native_callables.push(NativeCallable::WeakMapConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "WeakSet" => {
+                    native_callables.push(NativeCallable::WeakSetConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Date" => {
+                    native_callables.push(NativeCallable::DateConstructorGlobal);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Promise" => {
+                    native_callables.push(NativeCallable::PromiseConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "ArrayBuffer" => {
+                    native_callables.push(NativeCallable::ArrayBufferConstructorGlobal);
+                    value::encode_native_callable_idx(idx)
+                }
+                "DataView" => {
+                    native_callables.push(NativeCallable::DataViewConstructorGlobal);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
+                | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array"
+                | "Float16Array" | "BigInt64Array" | "BigUint64Array" => {
+                    native_callables.push(NativeCallable::TypedArrayConstructor(name.clone()));
+                    value::encode_native_callable_idx(idx)
+                }
+                "Proxy" => {
+                    native_callables.push(NativeCallable::ProxyConstructor);
+                    value::encode_native_callable_idx(idx)
+                }
+                "Math" | "JSON" | "Reflect" | "globalThis" | "Atomics"
+                | "SharedArrayBuffer" | "FinalizationRegistry" | "WeakRef"
+                | "parseInt" | "parseFloat" | "isNaN" | "isFinite"
+                | "decodeURI" | "decodeURIComponent" | "encodeURI" | "encodeURIComponent"
+                | "Temporal" | "Intl" | "Iterator" | "AsyncIterator"
+                | "$262" | "eval" | "SuppressedError" => {
+                    native_callables.push(NativeCallable::StubGlobal(name.clone()));
+                    value::encode_native_callable_idx(idx)
+                }
+                _ => value::encode_undefined(),
+            }
+        },
+    );
+
     let date_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, _this_val: i64, args_base: i32, args_count: i32| -> i64 {
@@ -9238,6 +9401,72 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_f64(ms)
         },
     );
+
+    // TODO: 当前私有字段实现仅通过 "#fieldName" 字符串作为属性键存储在对象的普通属性槽中，
+    // 不符合 ECMAScript 规范的 [[PrivateElements]] 语义。任何代码都可以通过 obj["#x"] 访问，
+    // 且没有基于类身份的访问控制。未来需要重构为基于类身份的私有槽机制。
+    let private_get_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
+            if !value::is_object(obj) && !value::is_function(obj) {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: cannot read private member from non-object".to_string());
+                return value::encode_undefined();
+            }
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_undefined();
+            };
+            match read_object_property_by_name_id(&mut caller, ptr, key_name_id as u32) {
+                Some(val) => val,
+                None => {
+                    *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                        Some("TypeError: cannot read private member from an object whose class did not declare it".to_string());
+                    value::encode_undefined()
+                }
+            }
+        },
+    );
+
+    let private_set_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32, val: i64| -> i64 {
+            if !value::is_object(obj) && !value::is_function(obj) {
+                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                    Some("TypeError: cannot write private member to non-object".to_string());
+                return value::encode_undefined();
+            }
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_undefined();
+            };
+            let found_slot = find_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32);
+            if let Some((slot_offset, _flags, _old_val)) = found_slot {
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                    return value::encode_undefined();
+                };
+                let data = memory.data_mut(&mut caller);
+                data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+                val
+            } else {
+                write_object_property_by_name_id(&mut caller, ptr, obj, key_name_id as u32, val, 0);
+                val
+            }
+        },
+    );
+
+    let private_has_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
+            if !value::is_object(obj) && !value::is_function(obj) {
+                return value::encode_bool(false);
+            }
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_bool(false);
+            };
+            let found = find_property_slot_by_name_id(&mut caller, ptr, key_name_id as u32);
+            value::encode_bool(found.is_some())
+        },
+    );
+
     let imports = [
         console_log.into(),                    // 0
         f64_mod.into(),                        // 1
@@ -9566,6 +9795,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         typedarray_proto_set_fn.into(),          // 309
         typedarray_proto_slice_fn.into(),        // 310
         typedarray_proto_subarray_fn.into(),     // 311
+        get_builtin_global_fn.into(),             // 312
+        private_get_fn.into(),                    // 313
+        private_set_fn.into(),                    // 314
+        private_has_fn.into(),                    // 315
     ];
     let instance = Instance::new(&mut store, &module, &imports)?;
 
@@ -9913,6 +10146,34 @@ enum NativeCallable {
     WeakSetMethod {
         kind: WeakSetMethodKind,
     },
+    ArrayConstructor,
+    ObjectConstructor,
+    FunctionConstructor,
+    StringConstructor,
+    BooleanConstructor,
+    NumberConstructor,
+    SymbolConstructor,
+    BigIntConstructor,
+    RegExpConstructor,
+    ErrorConstructor,
+    TypeErrorConstructor,
+    RangeErrorConstructor,
+    SyntaxErrorConstructor,
+    ReferenceErrorConstructor,
+    URIErrorConstructor,
+    EvalErrorConstructor,
+    AggregateErrorConstructor,
+    MapConstructor,
+    SetConstructor,
+    WeakMapConstructor,
+    WeakSetConstructor,
+    DateConstructorGlobal,
+    PromiseConstructor,
+    ArrayBufferConstructorGlobal,
+    DataViewConstructorGlobal,
+    TypedArrayConstructor(String),
+    ProxyConstructor,
+    StubGlobal(String),
 }
 
 #[derive(Clone, Copy)]
@@ -10048,6 +10309,11 @@ enum IteratorState {
     StringIter {
         data: Vec<u8>,
         byte_pos: usize,
+    },
+    ArrayIter {
+        ptr: usize,
+        index: u32,
+        length: u32,
     },
     ObjectIter {
         next: i64,
@@ -10344,17 +10610,17 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
                 }
             }
         }
-        return Ok(format!("[object Object:{ptr}]"));
+        return Ok("[object Object]".to_string());
     }
 
+    // TODO: 函数的 toString() 应显示函数名（如 "function foo() { [native code] }"），
+    // 但当前 RuntimeState 未存储函数名信息，需要后续添加 function_names 侧表。
     if value::is_function(val) {
-        let idx = value::decode_function_idx(val);
-        return Ok(format!("function [ref:{idx}]"));
+        return Ok("function() { [native code] }".to_string());
     }
 
     if value::is_closure(val) {
-        let idx = value::decode_closure_idx(val);
-        return Ok(format!("function [closure:{idx}]"));
+        return Ok("function() { [native code] }".to_string());
     }
 
     if value::is_bigint(val) {
@@ -10504,6 +10770,37 @@ fn runtime_json_stringify(caller: &mut Caller<'_, RuntimeState>, val: i64) -> St
 fn read_string(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Result<String> {
     let data = read_string_bytes(caller, ptr);
     Ok(std::str::from_utf8(&data)?.to_owned())
+}
+
+fn read_runtime_string(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
+    if value::is_runtime_string_handle(val) {
+        let handle = value::decode_runtime_string_handle(val) as usize;
+        let strings = caller
+            .data()
+            .runtime_strings
+            .lock()
+            .expect("runtime strings mutex");
+        strings.get(handle).cloned().unwrap_or_default()
+    } else if value::is_string(val) {
+        let ptr = value::decode_string_ptr(val);
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return String::new();
+        };
+        let data = memory.data(caller);
+        let start = ptr as usize;
+        if start >= data.len() {
+            return String::new();
+        }
+        let end = data[start..]
+            .iter()
+            .position(|byte| *byte == 0)
+            .map_or(data.len(), |offset| start + offset);
+        std::str::from_utf8(&data[start..end])
+            .unwrap_or_default()
+            .to_owned()
+    } else {
+        String::new()
+    }
 }
 
 fn read_string_bytes(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Vec<u8> {
@@ -11882,6 +12179,90 @@ fn find_property_slot_by_name_id(
         }
     }
     None
+}
+
+fn read_object_property_by_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    name_id: u32,
+) -> Option<i64> {
+    let (slot_offset, _flags, val) = find_property_slot_by_name_id(caller, obj_ptr, name_id)?;
+    let _ = slot_offset;
+    Some(val)
+}
+
+fn write_object_property_by_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    obj_handle: i64,
+    name_id: u32,
+    val: i64,
+    flags: i32,
+) {
+    let found = find_property_slot_by_name_id(caller, obj_ptr, name_id);
+    if let Some((slot_offset, _, _)) = found {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return;
+        };
+        let data = memory.data_mut(&mut *caller);
+        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+        let _ = flags;
+    } else {
+        let (num_props, capacity) = {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return;
+            };
+            let data = memory.data(&*caller);
+            if obj_ptr + 16 > data.len() {
+                return;
+            }
+            let cap = u32::from_le_bytes([
+                data[obj_ptr + 8],
+                data[obj_ptr + 9],
+                data[obj_ptr + 10],
+                data[obj_ptr + 11],
+            ]) as usize;
+            let num = u32::from_le_bytes([
+                data[obj_ptr + 12],
+                data[obj_ptr + 13],
+                data[obj_ptr + 14],
+                data[obj_ptr + 15],
+            ]) as usize;
+            (num, cap)
+        };
+        if num_props >= capacity {
+            let new_cap = std::cmp::max(capacity * 2, 4) as u32;
+            let _ = grow_object(caller, obj_ptr, obj_handle, new_cap);
+        }
+        let num_props = {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return;
+            };
+            let data = memory.data(&*caller);
+            if obj_ptr + 16 > data.len() {
+                return;
+            }
+            u32::from_le_bytes([
+                data[obj_ptr + 12],
+                data[obj_ptr + 13],
+                data[obj_ptr + 14],
+                data[obj_ptr + 15],
+            ]) as usize
+        };
+        let new_count = num_props + 1;
+        let slot_offset = obj_ptr + 16 + num_props * 32;
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return;
+        };
+        let data = memory.data_mut(&mut *caller);
+        if slot_offset + 32 > data.len() {
+            return;
+        }
+        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+        data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(new_count as u32).to_le_bytes());
+    }
 }
 
 /// 读取对象/函数的所有属性名，用于 for...in 枚举
@@ -13655,6 +14036,84 @@ fn call_native_callable_with_args_from_caller(
         }
         NativeCallable::WeakSetMethod { kind } => {
             Some(call_weakset_method_from_caller(caller, this_val, kind, args))
+        }
+        NativeCallable::ArrayConstructor => {
+            if value::is_object(this_val) {
+                Some(this_val)
+            } else {
+                Some(alloc_host_object_from_caller(caller, 4))
+            }
+        }
+        NativeCallable::ObjectConstructor => {
+            if value::is_object(this_val) || value::is_function(this_val) {
+                Some(this_val)
+            } else {
+                Some(alloc_host_object_from_caller(caller, 4))
+            }
+        }
+        NativeCallable::FunctionConstructor
+        | NativeCallable::StringConstructor
+        | NativeCallable::BooleanConstructor
+        | NativeCallable::NumberConstructor
+        | NativeCallable::SymbolConstructor
+        | NativeCallable::BigIntConstructor
+        | NativeCallable::RegExpConstructor => {
+            Some(value::encode_undefined())
+        }
+        NativeCallable::ErrorConstructor
+        | NativeCallable::TypeErrorConstructor
+        | NativeCallable::RangeErrorConstructor
+        | NativeCallable::SyntaxErrorConstructor
+        | NativeCallable::ReferenceErrorConstructor
+        | NativeCallable::URIErrorConstructor
+        | NativeCallable::EvalErrorConstructor
+        | NativeCallable::AggregateErrorConstructor => {
+            let error_name = match &record {
+                NativeCallable::ErrorConstructor => "Error",
+                NativeCallable::TypeErrorConstructor => "TypeError",
+                NativeCallable::RangeErrorConstructor => "RangeError",
+                NativeCallable::SyntaxErrorConstructor => "SyntaxError",
+                NativeCallable::ReferenceErrorConstructor => "ReferenceError",
+                NativeCallable::URIErrorConstructor => "URIError",
+                NativeCallable::EvalErrorConstructor => "EvalError",
+                NativeCallable::AggregateErrorConstructor => "AggregateError",
+                _ => "Error",
+            };
+            let msg = args.first().copied().unwrap_or_else(value::encode_undefined);
+            Some(create_error_object(caller, error_name, msg))
+        }
+        NativeCallable::MapConstructor => {
+            Some(alloc_host_object_from_caller(caller, 0))
+        }
+        NativeCallable::SetConstructor => {
+            Some(alloc_host_object_from_caller(caller, 0))
+        }
+        NativeCallable::WeakMapConstructor => {
+            Some(alloc_host_object_from_caller(caller, 0))
+        }
+        NativeCallable::WeakSetConstructor => {
+            Some(alloc_host_object_from_caller(caller, 0))
+        }
+        NativeCallable::DateConstructorGlobal => {
+            Some(alloc_host_object_from_caller(caller, 4))
+        }
+        NativeCallable::PromiseConstructor => {
+            Some(alloc_host_object_from_caller(caller, 0))
+        }
+        NativeCallable::ArrayBufferConstructorGlobal => {
+            Some(alloc_host_object_from_caller(caller, 4))
+        }
+        NativeCallable::DataViewConstructorGlobal => {
+            Some(alloc_host_object_from_caller(caller, 4))
+        }
+        NativeCallable::TypedArrayConstructor(_) => {
+            Some(alloc_host_object_from_caller(caller, 4))
+        }
+        NativeCallable::ProxyConstructor => {
+            Some(alloc_host_object_from_caller(caller, 4))
+        }
+        NativeCallable::StubGlobal(_) => {
+            Some(value::encode_undefined())
         }
     }
 }

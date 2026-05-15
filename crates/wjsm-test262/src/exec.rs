@@ -72,7 +72,7 @@ pub fn run_test(test: &Test, harness: &Harness) -> TestResult {
 
     let mut cmd = if wjsm_binary.file_name() == Some(std::ffi::OsStr::new("cargo")) {
         let mut c = Command::new("cargo");
-        c.args(["run", "--bin", "wjsm", "--", "run", "-", "--script"]);
+        c.args(["run", "--bin", "wjsm-cli", "--", "run", "-", "--script"]);
         c
     } else {
         let mut c = Command::new(&wjsm_binary);
@@ -150,7 +150,7 @@ fn find_wjsm_binary() -> std::path::PathBuf {
     }
 
     // 尝试常见的构建输出路径
-    let candidates = ["target/debug/wjsm", "target/release/wjsm"];
+    let candidates = ["target/release/wjsm-cli", "target/debug/wjsm-cli", "target/release/wjsm", "target/debug/wjsm"];
 
     for candidate in &candidates {
         let path = std::path::Path::new(candidate);

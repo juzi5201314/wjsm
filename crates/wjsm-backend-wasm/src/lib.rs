@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 312] = [
+const HOST_IMPORT_NAMES: [&str; 316] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -336,6 +336,10 @@ const HOST_IMPORT_NAMES: [&str; 312] = [
     "typedarray_proto_set",
     "typedarray_proto_slice",
     "typedarray_proto_subarray",
+    "get_builtin_global",
+    "private_get",
+    "private_set",
+    "private_has",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -344,7 +348,7 @@ const HOST_IMPORT_NAMES: [&str; 312] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        312,
+        316,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -486,6 +490,8 @@ struct Compiler {
     continuation_local_idx: u32,
     current_function_has_eval: bool,
     mode: CompileMode,
+    function_param_counts: Vec<u32>,
+    function_names: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -917,6 +923,11 @@ impl Compiler {
         // Type 31: (i64) -> (i64)  — reflect_is_extensible, reflect_own_keys, etc.
         types.ty().function(
             vec![ValType::I64],
+            vec![ValType::I64],
+        );
+        // Type 32: (i64, i32, i64) -> (i64) — private_set(obj, key_name_id, value)
+        types.ty().function(
+            vec![ValType::I64, ValType::I32, ValType::I64],
             vec![ValType::I64],
         );
         // Import index 78: func_call — Type 12 (uses shadow stack for args)
@@ -1390,6 +1401,14 @@ impl Compiler {
         imports.import("env", "typedarray_proto_slice", EntityType::Function(16));
         // Import index 311: typedarray_proto_subarray: (i64, i64, i64) -> i64
         imports.import("env", "typedarray_proto_subarray", EntityType::Function(16));
+        // Import index 312: get_builtin_global: (i64) -> i64
+        imports.import("env", "get_builtin_global", EntityType::Function(3));
+        // Import index 313: private_get: (i64, i32) -> i64
+        imports.import("env", "private_get", EntityType::Function(8));
+        // Import index 314: private_set: (i64, i32, i64) -> i64
+        imports.import("env", "private_set", EntityType::Function(32));
+        // Import index 315: private_has: (i64, i32) -> i64
+        imports.import("env", "private_has", EntityType::Function(8));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1732,6 +1751,10 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::TypedArrayProtoSet, 309);
         builtin_func_indices.insert(Builtin::TypedArrayProtoSlice, 310);
         builtin_func_indices.insert(Builtin::TypedArrayProtoSubarray, 311);
+        builtin_func_indices.insert(Builtin::GetBuiltinGlobal, 312);
+        builtin_func_indices.insert(Builtin::PrivateGet, 313);
+        builtin_func_indices.insert(Builtin::PrivateSet, 314);
+        builtin_func_indices.insert(Builtin::PrivateHas, 315);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -1822,6 +1845,8 @@ impl Compiler {
             continuation_local_idx: 0,
             current_function_has_eval: false,
             mode,
+            function_param_counts: Vec::new(),
+            function_names: Vec::new(),
         }
     }
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -1880,6 +1905,17 @@ impl Compiler {
             let wasm_idx = self._next_import_func;
             self.function_name_to_wasm_idx
                 .insert(function.name().to_string(), wasm_idx);
+
+            let declared_param_count = function
+                .params()
+                .iter()
+                .filter(|p| {
+                    let s = p.as_str();
+                    s != "$env" && s != "$this" && !s.ends_with(".$env") && !s.ends_with(".$this")
+                })
+                .count() as u32;
+            self.function_param_counts.push(declared_param_count);
+            self.function_names.push(function.name().to_string());
 
             if function.name() == "main" {
                 if self.mode == CompileMode::Eval {
@@ -2338,10 +2374,30 @@ impl Compiler {
         // 对应 obj_table[0..num_functions-1]，存储函数属性对象的 ptr。
         // 这样后续 GetProp/SetProp 可以通过 obj_table 统一查找。
         if function.name() == "main" {
-            for _ in 0..self.num_ir_functions {
-                self.emit(WasmInstruction::I32Const(8)); // capacity
+            let length_name_id = self.intern_data_string(&"length".to_string());
+            let name_name_id = self.intern_data_string(&"name".to_string());
+            let box_base = value::BOX_BASE as i64;
+            let tag_object = (value::TAG_OBJECT << 32) as i64;
+            for i in 0..self.num_ir_functions as usize {
+                self.emit(WasmInstruction::I32Const(8));
                 self.emit(WasmInstruction::Call(self.obj_new_func_idx));
-                self.emit(WasmInstruction::Drop); // 丢弃返回的 handle_idx
+                self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I64ExtendI32U);
+                self.emit(WasmInstruction::I64Const(box_base | tag_object));
+                self.emit(WasmInstruction::I64Or);
+                self.emit(WasmInstruction::I32Const(length_name_id as i32));
+                let param_count = self.function_param_counts[i];
+                self.emit(WasmInstruction::I64Const(value::encode_f64(param_count as f64)));
+                self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I64ExtendI32U);
+                self.emit(WasmInstruction::I64Const(box_base | tag_object));
+                self.emit(WasmInstruction::I64Or);
+                self.emit(WasmInstruction::I32Const(name_name_id as i32));
+                let func_name = self.function_names[i].clone();
+                let name_ptr = self.intern_data_string(&func_name);
+                self.emit(WasmInstruction::I64Const(value::encode_string_ptr(name_ptr)));
+                self.emit(WasmInstruction::Call(self.obj_set_func_idx));
             }
             // ── 初始化 Array.prototype ──
             // 复用 shadow_sp_scratch_idx 作为 proto handle 的临时存储（proto_init_scratch）。
@@ -2631,6 +2687,7 @@ impl Compiler {
         let heap_global = self.heap_ptr_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
+        let num_ir_functions_global = self.num_ir_functions_global_idx;
 
         // ── $obj_new (param $capacity i32) (result i32) — Type 7 ──
         // 分配对象到堆上，将 ptr 存入 handle 表，返回 handle_idx。
@@ -2800,7 +2857,23 @@ impl Compiler {
                 (1, ValType::I32),
             ]);
 
-            // ── 通过 handle 表解析 ptr ──
+            // ── 检查 tag 以确定 handle_idx ──
+            func.instruction(&WasmInstruction::Block(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::I32Const(0x1F));
+            func.instruction(&WasmInstruction::I32And);
+            func.instruction(&WasmInstruction::LocalTee(3));
+            func.instruction(&WasmInstruction::I32Const(value::TAG_FUNCTION as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::GlobalGet(num_ir_functions_global));
+            func.instruction(&WasmInstruction::I32LtU);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
             func.instruction(&WasmInstruction::I32Const(4));
@@ -2813,6 +2886,38 @@ impl Compiler {
                 memory_index: 0,
             }));
             func.instruction(&WasmInstruction::LocalSet(5));
+            func.instruction(&WasmInstruction::Br(2));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(value::TAG_CLOSURE as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(value::TAG_BOUND as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(5));
+            func.instruction(&WasmInstruction::End);
 
             // ptr == 0 → return undefined
             func.instruction(&WasmInstruction::LocalGet(5));
@@ -3017,10 +3122,26 @@ impl Compiler {
                 (1, ValType::I64),
             ]);
 
-            // ── 通过 handle 表解析 ptr ──
+            // ── 通过 handle 表解析 ptr（支持 TAG_OBJECT 和 TAG_FUNCTION）──
+            func.instruction(&WasmInstruction::Block(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::I32Const(0x1F));
+            func.instruction(&WasmInstruction::I32And);
+            func.instruction(&WasmInstruction::LocalTee(5));
+            func.instruction(&WasmInstruction::I32Const(value::TAG_FUNCTION as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
-            func.instruction(&WasmInstruction::LocalTee(9)); // save handle_idx
+            func.instruction(&WasmInstruction::GlobalGet(num_ir_functions_global));
+            func.instruction(&WasmInstruction::I32LtU);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::LocalTee(9));
             func.instruction(&WasmInstruction::I32Const(4));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
@@ -3031,6 +3152,24 @@ impl Compiler {
                 memory_index: 0,
             }));
             func.instruction(&WasmInstruction::LocalSet(8));
+            func.instruction(&WasmInstruction::Br(2));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::LocalTee(9));
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(8));
+            func.instruction(&WasmInstruction::End);
 
             // ── 搜索已有属性 ──
             func.instruction(&WasmInstruction::LocalGet(8));
@@ -3335,7 +3474,23 @@ impl Compiler {
             // local 5 = resolved ptr (i32), local 6 = last_slot_addr (i32)
             let mut func = Function::new(vec![(5, ValType::I32)]);
 
-            // ── 通过 handle 表解析 ptr ──
+            // ── 通过 handle 表解析 ptr（支持 TAG_OBJECT 和 TAG_FUNCTION）──
+            func.instruction(&WasmInstruction::Block(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::I32Const(0x1F));
+            func.instruction(&WasmInstruction::I32And);
+            func.instruction(&WasmInstruction::LocalTee(3));
+            func.instruction(&WasmInstruction::I32Const(value::TAG_FUNCTION as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::GlobalGet(num_ir_functions_global));
+            func.instruction(&WasmInstruction::I32LtU);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
             func.instruction(&WasmInstruction::I32Const(4));
@@ -3348,6 +3503,24 @@ impl Compiler {
                 memory_index: 0,
             }));
             func.instruction(&WasmInstruction::LocalSet(5));
+            func.instruction(&WasmInstruction::Br(2));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::I64Const(value::encode_bool(false)));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(5));
+            func.instruction(&WasmInstruction::End);
 
             // ptr == 0 → return false
             func.instruction(&WasmInstruction::LocalGet(5));
@@ -4250,27 +4423,26 @@ impl Compiler {
         let mut idx = start_idx;
 
         while idx < blocks.len() {
-            // 关闭已到达出口的循环
             while let Some(top) = self.loop_stack.last() {
                 if idx >= top.exit_idx {
-                    self.emit(WasmInstruction::End); // loop end
-                    self.emit(WasmInstruction::End); // block end
+                    self.emit(WasmInstruction::End);
+                    self.emit(WasmInstruction::End);
                     self.loop_stack.pop();
                 } else {
                     break;
                 }
             }
 
-            // 在循环头打开 block/loop
-            if let Some(loop_info) = loops.iter().find(|l| l.header_idx == idx) {
-                self.emit(WasmInstruction::Block(BlockType::Empty)); // break target
-                self.emit(WasmInstruction::Loop(BlockType::Empty)); // continue target
-                self.loop_stack.push(loop_info.clone());
-            }
-
             if self.compiled_blocks.contains(&idx) {
                 break;
             }
+
+            if let Some(loop_info) = loops.iter().find(|l| l.header_idx == idx) {
+                self.emit(WasmInstruction::Block(BlockType::Empty));
+                self.emit(WasmInstruction::Loop(BlockType::Empty));
+                self.loop_stack.push(loop_info.clone());
+            }
+
             self.compiled_blocks.insert(idx);
 
             let block = &blocks[idx];
@@ -4362,30 +4534,32 @@ impl Compiler {
                     self.if_depth += 1;
                     self.emit(WasmInstruction::If(BlockType::Empty));
 
-                    // 判断哪些 block 是 merge（应在 if/else/end 之后编译）。
                     let true_is_merge = self.is_merge_block(blocks, false_idx, true_idx);
                     let false_is_merge = self.is_merge_block(blocks, true_idx, false_idx);
 
-                    // 编译 true 分支；若 true 直接通向 merge，也必须在该路径执行 Phi move。
-                    if true_is_merge {
+                    let true_terminates = if true_is_merge {
                         self.emit_phi_moves(blocks, idx, true_idx);
+                        false
                     } else {
                         self.compiled_blocks.insert(true_idx);
-                        self.compile_branch_body(module, blocks, true_idx)?;
-                    }
+                        self.compile_branch_body(module, blocks, true_idx)?
+                    };
 
-                    // 编译 false 分支；false 直达 merge 时用 else 分支承载 Phi move。
-                    if false_is_merge {
-                        self.emit(WasmInstruction::Else);
+                    self.emit(WasmInstruction::Else);
+                    let false_terminates = if false_is_merge {
                         self.emit_phi_moves(blocks, idx, false_idx);
+                        false
                     } else {
-                        self.emit(WasmInstruction::Else);
                         self.compiled_blocks.insert(false_idx);
-                        self.compile_branch_body(module, blocks, false_idx)?;
-                    }
+                        self.compile_branch_body(module, blocks, false_idx)?
+                    };
 
                     self.emit(WasmInstruction::End);
                     self.if_depth -= 1;
+
+                    if true_terminates && false_terminates {
+                        self.emit(WasmInstruction::Unreachable);
+                    }
 
                     // 继续到 merge block
                     let merge = if false_is_merge {
@@ -4679,25 +4853,31 @@ impl Compiler {
                     let true_is_merge = self.is_merge_block(blocks, false_idx, true_idx);
                     let false_is_merge = self.is_merge_block(blocks, true_idx, false_idx);
 
-                    if true_is_merge {
+                    let true_terminates = if true_is_merge {
                         self.emit_phi_moves(blocks, idx, true_idx);
                         self.emit(WasmInstruction::Nop);
+                        false
                     } else {
                         self.compiled_blocks.insert(true_idx);
-                        self.compile_branch_body(module, blocks, true_idx)?;
-                    }
+                        self.compile_branch_body(module, blocks, true_idx)?
+                    };
 
                     self.emit(WasmInstruction::Else);
-                    if false_is_merge {
+                    let false_terminates = if false_is_merge {
                         self.emit_phi_moves(blocks, idx, false_idx);
                         self.emit(WasmInstruction::Nop);
+                        false
                     } else {
                         self.compiled_blocks.insert(false_idx);
-                        self.compile_branch_body(module, blocks, false_idx)?;
-                    }
+                        self.compile_branch_body(module, blocks, false_idx)?
+                    };
 
                     self.emit(WasmInstruction::End);
                     self.if_depth -= 1;
+
+                    if true_terminates && false_terminates {
+                        self.emit(WasmInstruction::Unreachable);
+                    }
 
                     // 继续到 merge block
                     let merge = if false_is_merge {
@@ -4813,14 +4993,17 @@ impl Compiler {
 
     /// 编译分支体（if/else 的 true 或 false block）。
     /// 处理 Jump 到 merge block（no-op）、Return（发射）、循环 continue/break（发射 br）。
+    /// 返回 `Ok(true)` 表示该分支以终止指令（Return/Unreachable/br）结束，
+    /// 调用者可据此判断是否需要发射 `Unreachable` 以避免 WASM 验证错误；
+    /// 返回 `Ok(false)` 表示分支正常落入（fall through）后续代码。
     fn compile_branch_body(
         &mut self,
         module: &IrModule,
         blocks: &[BasicBlock],
         idx: usize,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if idx >= blocks.len() {
-            return Ok(());
+            return Ok(false);
         }
         let block = &blocks[idx];
 
@@ -4833,12 +5016,13 @@ impl Compiler {
         }
 
         if suspended {
-            return Ok(());
+            return Ok(false);
         }
 
         match block.terminator() {
             Terminator::Return { value } => {
                 self.emit_return(value);
+                Ok(true)
             }
             Terminator::Jump { target } => {
                 let target_idx = target.0 as usize;
@@ -4846,21 +5030,24 @@ impl Compiler {
                     // back-edge：continue 循环
                     self.emit_phi_moves(blocks, idx, target_idx);
                     self.emit(WasmInstruction::Br(depth));
+                    Ok(true)
                 } else if let Some(depth) = self.loop_break_depth(target_idx) {
                     // 跳到循环出口：break
                     self.emit_phi_moves(blocks, idx, target_idx);
                     self.emit(WasmInstruction::Br(depth));
+                    Ok(true)
                 } else if target_idx < idx && block_has_suspend(&blocks[target_idx]) {
                     // async 状态机的循环头可能位于另一个 switch case 中，不能用当前 case 的 label 回跳；
                     // 这里内联到下一个 suspend，让循环体能够调度下一轮 resume。
                     self.emit_phi_moves(blocks, idx, target_idx);
-                    self.compile_branch_body(module, blocks, target_idx)?;
+                    self.compile_branch_body(module, blocks, target_idx)
                 } else {
                     // 普通 merge 跳转
                     self.emit_phi_moves(blocks, idx, target_idx);
+                    Ok(false)
                 }
             }
-            Terminator::Unreachable => {}
+            Terminator::Unreachable => Ok(true),
             Terminator::Branch {
                 condition,
                 true_block,
@@ -4877,32 +5064,39 @@ impl Compiler {
                 let true_is_merge = self.is_merge_block(blocks, false_idx, true_idx);
                 let false_is_merge = self.is_merge_block(blocks, true_idx, false_idx);
 
-                if true_is_merge {
+                let true_terminates = if true_is_merge {
                     self.emit_phi_moves(blocks, idx, true_idx);
                     self.emit(WasmInstruction::Nop);
+                    false
                 } else {
                     self.compiled_blocks.insert(true_idx);
-                    self.compile_branch_body(module, blocks, true_idx)?;
-                }
+                    self.compile_branch_body(module, blocks, true_idx)?
+                };
 
                 self.emit(WasmInstruction::Else);
-                if false_is_merge {
+                let false_terminates = if false_is_merge {
                     self.emit_phi_moves(blocks, idx, false_idx);
                     self.emit(WasmInstruction::Nop);
+                    false
                 } else {
                     self.compiled_blocks.insert(false_idx);
-                    self.compile_branch_body(module, blocks, false_idx)?;
-                }
+                    self.compile_branch_body(module, blocks, false_idx)?
+                };
 
                 self.emit(WasmInstruction::End);
                 self.if_depth -= 1;
+
+                if true_terminates && false_terminates {
+                    self.emit(WasmInstruction::Unreachable);
+                }
+
+                Ok(true_terminates && false_terminates)
             }
             _ => {
                 self.emit(WasmInstruction::Unreachable);
+                Ok(true)
             }
         }
-
-        Ok(())
     }
 
     /// Emit Phi moves: for each Phi instruction in the target block that references
@@ -4929,12 +5123,21 @@ impl Compiler {
     /// Check if `false_idx` is the natural merge block for a branch where
     /// true path is at `true_idx` and false path is at `false_idx`.
     fn is_merge_block(&self, blocks: &[BasicBlock], true_idx: usize, false_idx: usize) -> bool {
-        // false_idx is the merge if and only if the true block jumps to false_idx.
-        // This catches the if-without-else pattern: Branch → (true: Jump to merge, merge)
         if let Some(true_block) = blocks.get(true_idx) {
             match true_block.terminator() {
                 Terminator::Jump { target } if target.0 as usize == false_idx => return true,
                 _ => {}
+            }
+        }
+        if let Some(false_block) = blocks.get(false_idx) {
+            for instruction in false_block.instructions() {
+                if let Instruction::Phi { sources, .. } = instruction {
+                    if sources.len() > 1
+                        && sources.iter().any(|s| s.predecessor.0 as usize == true_idx)
+                    {
+                        return true;
+                    }
+                }
             }
         }
         false
@@ -5618,6 +5821,88 @@ impl Compiler {
                 self.emit(WasmInstruction::Return);
                 Ok(true)
             }
+            Instruction::CollectRestArgs { dest, skip } => {
+                let skip_val = *skip as i32;
+                let arr_push_func_idx = self.builtin_func_indices[&Builtin::ArrayPush];
+
+                self.emit(WasmInstruction::LocalGet(3));
+                self.emit(WasmInstruction::I32Const(skip_val));
+                self.emit(WasmInstruction::I32Sub);
+                self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(0));
+                self.emit(WasmInstruction::I32LtS);
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+                self.emit(WasmInstruction::I32Const(0));
+                self.emit(WasmInstruction::Else);
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::End);
+                self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(1));
+                self.emit(WasmInstruction::I32LtS);
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+                self.emit(WasmInstruction::I32Const(1));
+                self.emit(WasmInstruction::Else);
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::End);
+                self.emit(WasmInstruction::Call(self.arr_new_func_idx));
+                // Result is i32 ptr — encode as array handle
+                self.emit(WasmInstruction::I64ExtendI32U);
+                let box_base = value::BOX_BASE as i64;
+                let tag_array = (value::TAG_ARRAY << 32) as i64;
+                self.emit(WasmInstruction::I64Const(box_base | tag_array));
+                self.emit(WasmInstruction::I64Or);
+                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+
+                // Loop: for i in 0..rest_count, load arg from shadow stack and ArrayPush
+                let loop_counter = self.call_func_idx_scratch();
+                self.emit(WasmInstruction::I32Const(0));
+                self.emit(WasmInstruction::LocalSet(loop_counter));
+
+                self.emit(WasmInstruction::Block(BlockType::Empty));
+                self.emit(WasmInstruction::Loop(BlockType::Empty));
+                // Check: loop_counter < rest_count
+                self.emit(WasmInstruction::LocalGet(loop_counter));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32GeU);
+                self.emit(WasmInstruction::BrIf(1));
+
+                // Load arg from shadow stack: args_base + (skip + loop_counter) * 8
+                self.emit(WasmInstruction::LocalGet(2)); // args_base
+                self.emit(WasmInstruction::I32Const(skip_val));
+                self.emit(WasmInstruction::LocalGet(loop_counter));
+                self.emit(WasmInstruction::I32Add);
+                self.emit(WasmInstruction::I32Const(3)); // * 8
+                self.emit(WasmInstruction::I32Shl);
+                self.emit(WasmInstruction::I32Add);
+                self.emit(WasmInstruction::I64Load(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                // Stack: [arg_value]
+                // Save arg_value
+                self.emit(WasmInstruction::LocalSet(self.call_env_obj_scratch()));
+
+                // Call ArrayPush(arr_handle, arg_value)
+                self.emit(WasmInstruction::LocalGet(self.local_idx(dest.0)));
+                self.emit(WasmInstruction::LocalGet(self.call_env_obj_scratch()));
+                self.emit(WasmInstruction::Call(arr_push_func_idx));
+                self.emit(WasmInstruction::Drop);
+
+                // Increment loop counter
+                self.emit(WasmInstruction::LocalGet(loop_counter));
+                self.emit(WasmInstruction::I32Const(1));
+                self.emit(WasmInstruction::I32Add);
+                self.emit(WasmInstruction::LocalSet(loop_counter));
+
+                self.emit(WasmInstruction::Br(0));
+                self.emit(WasmInstruction::End); // end loop
+                self.emit(WasmInstruction::End); // end block
+
+                Ok(false)
+            }
         }
     }
 
@@ -5765,6 +6050,8 @@ impl Compiler {
         // 处理返回值
         if let Some(d) = dest {
             self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+        } else {
+            self.emit(WasmInstruction::Drop);
         }
         Ok(())
     }
@@ -6726,6 +7013,73 @@ impl Compiler {
                 }
                 Ok(())
             }
+            Builtin::PrivateGet => {
+                let obj_arg = args
+                    .first()
+                    .context("PrivateGet expects 2 args (obj, key)")?;
+                let key_arg = args
+                    .get(1)
+                    .context("PrivateGet expects 2 args (obj, key)")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(313);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PrivateSet => {
+                let obj_arg = args
+                    .first()
+                    .context("PrivateSet expects 3 args (obj, key, value)")?;
+                let key_arg = args
+                    .get(1)
+                    .context("PrivateSet expects 3 args (obj, key, value)")?;
+                let val_arg = args
+                    .get(2)
+                    .context("PrivateSet expects 3 args (obj, key, value)")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val_arg.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(314);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::PrivateHas => {
+                let obj_arg = args
+                    .first()
+                    .context("PrivateHas expects 2 args (obj, key)")?;
+                let key_arg = args
+                    .get(1)
+                    .context("PrivateHas expects 2 args (obj, key)")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
+                self.emit(WasmInstruction::I32WrapI64);
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(315);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
             Builtin::ObjectKeys
             | Builtin::ObjectValues
             | Builtin::ObjectEntries
@@ -7365,7 +7719,6 @@ impl Compiler {
             | Builtin::ReflectHas
             | Builtin::ReflectDeleteProperty
             | Builtin::ReflectApply
-            | Builtin::ReflectConstruct
             | Builtin::ReflectGetPrototypeOf
             | Builtin::ReflectSetPrototypeOf
             | Builtin::ReflectIsExtensible
@@ -7387,10 +7740,47 @@ impl Compiler {
                 }
                 Ok(())
             }
+            Builtin::ReflectConstruct => {
+                for arg in args {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                if args.len() < 3 {
+                    if let Some(target) = args.first() {
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(target.0)));
+                    } else {
+                        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    }
+                    if args.len() < 2 {
+                        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                    }
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::GetBuiltinGlobal => {
+                let name_val = args.first().context("GetBuiltinGlobal expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(name_val.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
         }
     }
-
-    // ── Constant encoding ────────────────────────────────────────────────────
 
     fn encode_constant(&mut self, constant: &Constant, _module: &IrModule) -> Result<i64> {
         match constant {
@@ -7746,7 +8136,7 @@ fn block_has_suspend(block: &BasicBlock) -> bool {
 /// 检测 CFG 中的循环（通过 back-edge 识别）。
 /// 返回按 header_idx 排序的 LoopInfo 列表。
 fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
     let mut back_edges: HashMap<usize, Vec<usize>> = HashMap::new();
 
     for (i, block) in blocks.iter().enumerate() {
@@ -7769,7 +8159,45 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
     }
 
     let mut loops: Vec<LoopInfo> = Vec::new();
-    for (header_idx, _latches) in &back_edges {
+    // NOTE: 此处对每个 back-edge 做前向可达性分析以过滤无效循环。
+    // 在大型 CFG 上可能有性能影响，未来可考虑使用 dominator tree 分析替代。
+    'next_edge: for (header_idx, latches) in &back_edges {
+        let mut reachable: HashSet<usize> = HashSet::new();
+        let mut stack = vec![*header_idx];
+        while let Some(idx) = stack.pop() {
+            if reachable.contains(&idx) {
+                continue;
+            }
+            reachable.insert(idx);
+            if idx >= blocks.len() {
+                continue;
+            }
+            match blocks[idx].terminator() {
+                Terminator::Jump { target } => {
+                    stack.push(target.0 as usize);
+                }
+                Terminator::Branch {
+                    true_block,
+                    false_block,
+                    ..
+                } => {
+                    stack.push(true_block.0 as usize);
+                    stack.push(false_block.0 as usize);
+                }
+                _ => {}
+            }
+        }
+        let mut any_latch_reachable = false;
+        for latch in latches {
+            if reachable.contains(latch) {
+                any_latch_reachable = true;
+                break;
+            }
+        }
+        if !any_latch_reachable {
+            continue 'next_edge;
+        }
+
         let exit_idx = match blocks[*header_idx].terminator() {
             // while/for 模式：header 有 Branch，false 分支是出口
             Terminator::Branch { false_block, .. } => false_block.0 as usize,
@@ -7873,6 +8301,7 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
         Instruction::PromiseResolve { promise, value } => promise.0.max(value.0),
         Instruction::PromiseReject { promise, reason } => promise.0.max(reason.0),
         Instruction::Suspend { promise, .. } => promise.0,
+        Instruction::CollectRestArgs { dest, .. } => dest.0,
     }
 }
 
@@ -7952,6 +8381,9 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ObjectRest => ("object_rest", 2),
         Builtin::GetPrototypeFromConstructor => ("get_prototype_from_constructor", 1),
         Builtin::HasOwnProperty => ("has_own_property", 2),
+        Builtin::PrivateGet => ("private_get", 2),
+        Builtin::PrivateSet => ("private_set", 3),
+        Builtin::PrivateHas => ("private_has", 2),
         Builtin::ObjectProtoToString => ("object_proto_to_string", 1),
         Builtin::ObjectProtoValueOf => ("object_proto_value_of", 1),
         Builtin::ObjectKeys => ("object.keys", 1),
@@ -8192,6 +8624,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::TypedArrayProtoSet => ("TypedArray.prototype.set", 3),
         Builtin::TypedArrayProtoSlice => ("TypedArray.prototype.slice", 3),
         Builtin::TypedArrayProtoSubarray => ("TypedArray.prototype.subarray", 3),
+        Builtin::GetBuiltinGlobal => ("get_builtin_global", 1),
     }
 }
 
