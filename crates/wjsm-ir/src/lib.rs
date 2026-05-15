@@ -420,6 +420,10 @@ pub enum Instruction {
         promise: ValueId,
         state: u32,
     },
+    CollectRestArgs {
+        dest: ValueId,
+        skip: u32,
+    },
 }
 
 impl fmt::Display for Instruction {
@@ -576,6 +580,9 @@ impl fmt::Display for Instruction {
             }
             Self::Suspend { promise, state } => {
                 write!(formatter, "suspend {promise}, state={state}")
+            }
+            Self::CollectRestArgs { dest, skip } => {
+                write!(formatter, "{dest} = collect_rest_args skip={skip}")
             }
         }
     }
@@ -742,6 +749,9 @@ pub enum Builtin {
     GetPrototypeFromConstructor,
     // ── Object 原型方法 ──
     HasOwnProperty,
+    PrivateGet,
+    PrivateSet,
+    PrivateHas,
     ObjectProtoToString,
     ObjectProtoValueOf,
     // ── Object 静态方法 ──
@@ -908,6 +918,7 @@ pub enum Builtin {
     // ── TypedArray prototype methods ───────────────────────────────────
     TypedArrayProtoLength, TypedArrayProtoByteLength, TypedArrayProtoByteOffset,
     TypedArrayProtoSet, TypedArrayProtoSlice, TypedArrayProtoSubarray,
+    GetBuiltinGlobal,
 }
 
 impl fmt::Display for Builtin {
@@ -987,6 +998,9 @@ impl fmt::Display for Builtin {
             Self::ObjectRest => "object_rest",
             Self::GetPrototypeFromConstructor => "get_prototype_from_constructor",
             Self::HasOwnProperty => "has_own_property",
+            Self::PrivateGet => "private_get",
+            Self::PrivateSet => "private_set",
+            Self::PrivateHas => "private_has",
             Self::ObjectProtoToString => "object_proto_to_string",
             Self::ObjectProtoValueOf => "object_proto_value_of",
             Self::ObjectKeys => "object.keys",
@@ -1212,6 +1226,7 @@ impl fmt::Display for Builtin {
             Self::TypedArrayProtoSet => "TypedArray.prototype.set",
             Self::TypedArrayProtoSlice => "TypedArray.prototype.slice",
             Self::TypedArrayProtoSubarray => "TypedArray.prototype.subarray",
+            Self::GetBuiltinGlobal => "get_builtin_global",
         })
     }
 }
