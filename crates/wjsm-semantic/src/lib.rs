@@ -3433,14 +3433,12 @@ impl Lowerer {
 
             // Lower catch body if present
             if let Some(catch) = &try_stmt.handler {
-                eprintln!("DEBUG: catch param = {:?}", catch.param.as_ref().map(|p| std::mem::discriminant(p)));
                 // Lower catch clause: bind parameter if present
                 self.scopes.push_scope(ScopeKind::Block);
                 if let Some(param) = &catch.param {
                     match param {
                         swc_ast::Pat::Ident(binding) => {
                             let name = binding.id.sym.to_string();
-                            // 从 try context 获取异常变量名，用 LoadVar 加载
                             let exc_var = self.try_contexts.last().unwrap().exception_var.clone();
                             let exc_val = self.alloc_value();
                             self.current_function.append_instruction(
@@ -3475,9 +3473,7 @@ impl Lowerer {
                             );
                             let mut names = Vec::new();
                             Self::extract_pat_bindings(&[param.clone()], &mut names);
-                            eprintln!("DEBUG: catch destructure names: {:?}", names);
                             for name in &names {
-                                eprintln!("DEBUG: declaring {} in scope", name);
                                 self.scopes
                                     .declare(name, VarKind::Let, true)
                                     .map_err(|msg| self.error(param.span(), msg))?;
@@ -3516,7 +3512,6 @@ impl Lowerer {
                 match param {
                     swc_ast::Pat::Ident(binding) => {
                         let name = binding.id.sym.to_string();
-                        // 从 try context 获取异常变量名，用 LoadVar 加载
                         let exc_var = self.try_contexts.last().unwrap().exception_var.clone();
                         let exc_val = self.alloc_value();
                         self.current_function.append_instruction(
@@ -3539,7 +3534,25 @@ impl Lowerer {
                             },
                         );
                     }
-                    _ => {}
+                    _ => {
+                        let exc_var = self.try_contexts.last().unwrap().exception_var.clone();
+                        let exc_val = self.alloc_value();
+                        self.current_function.append_instruction(
+                            catch_entry,
+                            Instruction::LoadVar {
+                                dest: exc_val,
+                                name: exc_var,
+                            },
+                        );
+                        let mut names = Vec::new();
+                        Self::extract_pat_bindings(&[param.clone()], &mut names);
+                        for name in &names {
+                            self.scopes
+                                .declare(name, VarKind::Let, true)
+                                .map_err(|msg| self.error(param.span(), msg))?;
+                        }
+                        self.lower_destructure_pattern(param, exc_val, catch_entry, VarKind::Let)?;
+                    }
                 }
             }
 
@@ -3620,7 +3633,7 @@ impl Lowerer {
         var_decl: &swc_ast::VarDecl,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
-        let block = self.ensure_open(flow)?;
+        let mut block = self.ensure_open(flow)?;
         let kind = match var_decl.kind {
             swc_ast::VarDeclKind::Var => VarKind::Var,
             swc_ast::VarDeclKind::Let => VarKind::Let,
@@ -3631,10 +3644,7 @@ impl Lowerer {
             if let Some(init) = &declarator.init {
                 let value = self.lower_expr(init, block)?;
                 self.lower_destructure_pattern(&declarator.name, value, block, kind)?;
-                // lower_expr may have terminated the block; use resolve_store_block
-                let store_block = self.resolve_store_block(block);
-                let flow_block = self.resolve_open_after_expr(block, store_block);
-                return Ok(StmtFlow::Open(flow_block));
+                block = self.resolve_store_block(block);
             } else {
                 if matches!(kind, VarKind::Const) {
                     return Err(self.error(var_decl.span, "const declarations must be initialised"));
@@ -9027,6 +9037,7 @@ impl Lowerer {
                     }
                 }
             }
+
             _ => {}
         }
         Ok(())
@@ -10447,7 +10458,6 @@ impl Lowerer {
                 );
                 return Ok(dest);
             }
-            _ => return Err(self.error(member.span, "unsupported member property kind")),
         };
 
         let dest = self.alloc_value();
@@ -12686,12 +12696,6 @@ impl Lowerer {
                         );
                         return Ok(result);
                     }
-                    _ => {
-                        return Err(self.error(
-                            assign.span,
-                            "unsupported member property in assignment target",
-                        ));
-                    }
                 };
 
                 let is_computed = matches!(&member_expr.prop, swc_ast::MemberProp::Computed(_));
@@ -14418,6 +14422,43 @@ impl Lowerer {
                             .declare(&name, VarKind::Var, true)
                             .map_err(|msg| self.error(expr_stmt.span, msg))?;
                         self.record_hoisted_var(scope_id, name);
+                    }
+                }
+            }
+            swc_ast::Stmt::Try(try_stmt) => {
+                for stmt in &try_stmt.block.stmts {
+                    self.predeclare_stmt_with_mode_and_eval_strings(
+                        stmt,
+                        LexicalMode::Exclude,
+                        eval_string_bindings,
+                    )?;
+                }
+                if let Some(catch) = &try_stmt.handler {
+                    if let Some(param) = &catch.param {
+                        let mut names = Vec::new();
+                        Self::extract_pat_bindings(&[param.clone()], &mut names);
+                        for name in names {
+                            let _scope_id = self
+                                .scopes
+                                .declare(&name, VarKind::Let, false)
+                                .map_err(|msg| self.error(param.span(), msg))?;
+                        }
+                    }
+                    for stmt in &catch.body.stmts {
+                        self.predeclare_stmt_with_mode_and_eval_strings(
+                            stmt,
+                            LexicalMode::Exclude,
+                            eval_string_bindings,
+                        )?;
+                    }
+                }
+                if let Some(finally) = &try_stmt.finalizer {
+                    for stmt in &finally.stmts {
+                        self.predeclare_stmt_with_mode_and_eval_strings(
+                            stmt,
+                            LexicalMode::Exclude,
+                            eval_string_bindings,
+                        )?;
                     }
                 }
             }

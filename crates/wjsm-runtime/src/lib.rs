@@ -7325,7 +7325,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64, _receiver: i64| -> i64 {
             let obj_ptr = resolve_handle(&mut caller, target);
-            if let Some(ptr) = obj_ptr {
+            if let Some(_ptr) = obj_ptr {
                 if let Some(prop_name) = render_value(&mut caller, prop).ok() {
                     let _ = define_host_data_property_from_caller(&mut caller, target, &prop_name, val);
                     return value::encode_bool(true);
@@ -9277,7 +9277,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 | "parseInt" | "parseFloat" | "isNaN" | "isFinite"
                 | "decodeURI" | "decodeURIComponent" | "encodeURI" | "encodeURIComponent"
                 | "Temporal" | "Intl" | "Iterator" | "AsyncIterator"
-                | "$262" | "eval" | "AggregateError" | "SuppressedError" => {
+                | "$262" | "eval" | "SuppressedError" => {
                     let native_callables = caller.data().native_callables.lock().unwrap();
                     let idx = native_callables.len() as u32;
                     drop(native_callables);
