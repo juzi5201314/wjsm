@@ -1602,8 +1602,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 {
                     let timers = caller.data().timers.lock().expect("timers mutex");
                     for timer in timers.iter() {
-                        let val = timer.callback;
-                        if value::is_function(val) {
+                            let val = timer.callback;
+                          if value::is_function(val) {
                             let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
                             if func_idx < num_ir_functions as usize {
                                 add_root(func_idx, data, &mut roots);
@@ -9053,222 +9053,116 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, name_val: i64| -> i64 {
             let name = read_runtime_string(&mut caller, name_val);
+            let mut native_callables = caller.data().native_callables.lock().unwrap();
+            let idx = native_callables.len() as u32;
             match name.as_str() {
                 "Array" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::ArrayConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "Object" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::ObjectConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "Function" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::FunctionConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "String" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::StringConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "Boolean" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::BooleanConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "Number" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::NumberConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "Symbol" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::SymbolConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "BigInt" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::BigIntConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "RegExp" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::RegExpConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "Error" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::ErrorConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "TypeError" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::TypeErrorConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "RangeError" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::RangeErrorConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "SyntaxError" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::SyntaxErrorConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "ReferenceError" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::ReferenceErrorConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "URIError" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::URIErrorConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "EvalError" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::EvalErrorConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "AggregateError" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::AggregateErrorConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "Map" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::MapConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "Set" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::SetConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "WeakMap" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::WeakMapConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "WeakSet" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::WeakSetConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "Date" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::DateConstructorGlobal);
                     value::encode_native_callable_idx(idx)
                 }
                 "Promise" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::PromiseConstructor);
                     value::encode_native_callable_idx(idx)
                 }
                 "ArrayBuffer" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::ArrayBufferConstructorGlobal);
                     value::encode_native_callable_idx(idx)
                 }
                 "DataView" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::DataViewConstructorGlobal);
                     value::encode_native_callable_idx(idx)
                 }
                 "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
                 | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array"
                 | "Float16Array" | "BigInt64Array" | "BigUint64Array" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::TypedArrayConstructor(name.clone()));
                     value::encode_native_callable_idx(idx)
                 }
                 "Proxy" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::ProxyConstructor);
                     value::encode_native_callable_idx(idx)
                 }
@@ -9278,10 +9172,6 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 | "decodeURI" | "decodeURIComponent" | "encodeURI" | "encodeURIComponent"
                 | "Temporal" | "Intl" | "Iterator" | "AsyncIterator"
                 | "$262" | "eval" | "SuppressedError" => {
-                    let native_callables = caller.data().native_callables.lock().unwrap();
-                    let idx = native_callables.len() as u32;
-                    drop(native_callables);
-                    let mut native_callables = caller.data().native_callables.lock().unwrap();
                     native_callables.push(NativeCallable::StubGlobal(name.clone()));
                     value::encode_native_callable_idx(idx)
                 }
@@ -9512,6 +9402,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
+    // TODO: 当前私有字段实现仅通过 "#fieldName" 字符串作为属性键存储在对象的普通属性槽中，
+    // 不符合 ECMAScript 规范的 [[PrivateElements]] 语义。任何代码都可以通过 obj["#x"] 访问，
+    // 且没有基于类身份的访问控制。未来需要重构为基于类身份的私有槽机制。
     let private_get_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
@@ -10720,6 +10613,8 @@ fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Result<Strin
         return Ok("[object Object]".to_string());
     }
 
+    // TODO: 函数的 toString() 应显示函数名（如 "function foo() { [native code] }"），
+    // 但当前 RuntimeState 未存储函数名信息，需要后续添加 function_names 侧表。
     if value::is_function(val) {
         return Ok("function() { [native code] }".to_string());
     }
@@ -12313,7 +12208,7 @@ fn write_object_property_by_name_id(
         data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
         let _ = flags;
     } else {
-        let num_props = {
+        let (num_props, capacity) = {
             let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
                 return;
             };
@@ -12321,27 +12216,19 @@ fn write_object_property_by_name_id(
             if obj_ptr + 16 > data.len() {
                 return;
             }
-            u32::from_le_bytes([
-                data[obj_ptr + 12],
-                data[obj_ptr + 13],
-                data[obj_ptr + 14],
-                data[obj_ptr + 15],
-            ]) as usize
-        };
-        let capacity = {
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return;
-            };
-            let data = memory.data(&*caller);
-            if obj_ptr + 12 > data.len() {
-                return;
-            }
-            u32::from_le_bytes([
+            let cap = u32::from_le_bytes([
                 data[obj_ptr + 8],
                 data[obj_ptr + 9],
                 data[obj_ptr + 10],
                 data[obj_ptr + 11],
-            ]) as usize
+            ]) as usize;
+            let num = u32::from_le_bytes([
+                data[obj_ptr + 12],
+                data[obj_ptr + 13],
+                data[obj_ptr + 14],
+                data[obj_ptr + 15],
+            ]) as usize;
+            (num, cap)
         };
         if num_props >= capacity {
             let new_cap = std::cmp::max(capacity * 2, 4) as u32;
@@ -14150,34 +14037,82 @@ fn call_native_callable_with_args_from_caller(
         NativeCallable::WeakSetMethod { kind } => {
             Some(call_weakset_method_from_caller(caller, this_val, kind, args))
         }
-        NativeCallable::ArrayConstructor
-        | NativeCallable::ObjectConstructor
-        | NativeCallable::FunctionConstructor
+        NativeCallable::ArrayConstructor => {
+            if value::is_object(this_val) {
+                Some(this_val)
+            } else {
+                Some(alloc_host_object_from_caller(caller, 4))
+            }
+        }
+        NativeCallable::ObjectConstructor => {
+            if value::is_object(this_val) || value::is_function(this_val) {
+                Some(this_val)
+            } else {
+                Some(alloc_host_object_from_caller(caller, 4))
+            }
+        }
+        NativeCallable::FunctionConstructor
         | NativeCallable::StringConstructor
         | NativeCallable::BooleanConstructor
         | NativeCallable::NumberConstructor
         | NativeCallable::SymbolConstructor
         | NativeCallable::BigIntConstructor
-        | NativeCallable::RegExpConstructor
-        | NativeCallable::ErrorConstructor
+        | NativeCallable::RegExpConstructor => {
+            Some(value::encode_undefined())
+        }
+        NativeCallable::ErrorConstructor
         | NativeCallable::TypeErrorConstructor
         | NativeCallable::RangeErrorConstructor
         | NativeCallable::SyntaxErrorConstructor
         | NativeCallable::ReferenceErrorConstructor
         | NativeCallable::URIErrorConstructor
         | NativeCallable::EvalErrorConstructor
-        | NativeCallable::AggregateErrorConstructor
-        | NativeCallable::MapConstructor
-        | NativeCallable::SetConstructor
-        | NativeCallable::WeakMapConstructor
-        | NativeCallable::WeakSetConstructor
-        | NativeCallable::DateConstructorGlobal
-        | NativeCallable::PromiseConstructor
-        | NativeCallable::ArrayBufferConstructorGlobal
-        | NativeCallable::DataViewConstructorGlobal
-        | NativeCallable::TypedArrayConstructor(_)
-        | NativeCallable::ProxyConstructor
-        | NativeCallable::StubGlobal(_) => {
+        | NativeCallable::AggregateErrorConstructor => {
+            let error_name = match &record {
+                NativeCallable::ErrorConstructor => "Error",
+                NativeCallable::TypeErrorConstructor => "TypeError",
+                NativeCallable::RangeErrorConstructor => "RangeError",
+                NativeCallable::SyntaxErrorConstructor => "SyntaxError",
+                NativeCallable::ReferenceErrorConstructor => "ReferenceError",
+                NativeCallable::URIErrorConstructor => "URIError",
+                NativeCallable::EvalErrorConstructor => "EvalError",
+                NativeCallable::AggregateErrorConstructor => "AggregateError",
+                _ => "Error",
+            };
+            let msg = args.first().copied().unwrap_or_else(value::encode_undefined);
+            Some(create_error_object(caller, error_name, msg))
+        }
+        NativeCallable::MapConstructor => {
+            Some(alloc_host_object_from_caller(caller, 0))
+        }
+        NativeCallable::SetConstructor => {
+            Some(alloc_host_object_from_caller(caller, 0))
+        }
+        NativeCallable::WeakMapConstructor => {
+            Some(alloc_host_object_from_caller(caller, 0))
+        }
+        NativeCallable::WeakSetConstructor => {
+            Some(alloc_host_object_from_caller(caller, 0))
+        }
+        NativeCallable::DateConstructorGlobal => {
+            Some(alloc_host_object_from_caller(caller, 4))
+        }
+        NativeCallable::PromiseConstructor => {
+            Some(alloc_host_object_from_caller(caller, 0))
+        }
+        NativeCallable::ArrayBufferConstructorGlobal => {
+            Some(alloc_host_object_from_caller(caller, 4))
+        }
+        NativeCallable::DataViewConstructorGlobal => {
+            Some(alloc_host_object_from_caller(caller, 4))
+        }
+        NativeCallable::TypedArrayConstructor(_) => {
+            Some(alloc_host_object_from_caller(caller, 4))
+        }
+        NativeCallable::ProxyConstructor => {
+            Some(alloc_host_object_from_caller(caller, 4))
+        }
+        NativeCallable::StubGlobal(_) => {
             Some(value::encode_undefined())
         }
     }

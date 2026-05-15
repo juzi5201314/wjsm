@@ -3814,6 +3814,126 @@ impl Lowerer {
         )
     }
 
+    fn emit_field_init(
+        &mut self,
+        block: BasicBlockId,
+        this_scope_id: usize,
+        field_name: &str,
+        init_value: Option<&swc_ast::Expr>,
+        is_private: bool,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let key_const = self.module.add_constant(Constant::String(field_name.to_string()));
+        let key_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const { dest: key_dest, constant: key_const },
+        );
+        let this_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::LoadVar { dest: this_val, name: format!("${this_scope_id}.$this") },
+        );
+        let init_val = if let Some(value) = init_value {
+            self.lower_expr(value, block)?
+        } else {
+            let ud_const = self.module.add_constant(Constant::Undefined);
+            let ud_dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const { dest: ud_dest, constant: ud_const },
+            );
+            ud_dest
+        };
+        if is_private {
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::PrivateSet,
+                    args: vec![this_val, key_dest, init_val],
+                },
+            );
+        } else {
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp { object: this_val, key: key_dest, value: init_val },
+            );
+        }
+        Ok(self.resolve_store_block(block))
+    }
+
+    fn emit_static_field_init(
+        &mut self,
+        block: BasicBlockId,
+        ctor_dest: ValueId,
+        field_name: &str,
+        init_value: Option<&swc_ast::Expr>,
+        is_private: bool,
+    ) -> Result<(), LoweringError> {
+        let key_const = self.module.add_constant(Constant::String(field_name.to_string()));
+        let key_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const { dest: key_dest, constant: key_const },
+        );
+        let init_val = if let Some(value) = init_value {
+            self.lower_expr(value, block)?
+        } else {
+            let ud_const = self.module.add_constant(Constant::Undefined);
+            let ud_dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const { dest: ud_dest, constant: ud_const },
+            );
+            ud_dest
+        };
+        if is_private {
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::PrivateSet,
+                    args: vec![ctor_dest, key_dest, init_val],
+                },
+            );
+        } else {
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp { object: ctor_dest, key: key_dest, value: init_val },
+            );
+        }
+        Ok(())
+    }
+
+    fn emit_private_method_bind(
+        &mut self,
+        block: BasicBlockId,
+        target_val: ValueId,
+        field_name: &str,
+        func_id: FunctionId,
+    ) {
+        let key_const = self.module.add_constant(Constant::String(field_name.to_string()));
+        let key_dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const { dest: key_dest, constant: key_const },
+        );
+        let fn_dest = self.alloc_value();
+        let fn_ref_const = self.module.add_constant(Constant::FunctionRef(func_id));
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const { dest: fn_dest, constant: fn_ref_const },
+        );
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::PrivateSet,
+                args: vec![target_val, key_dest, fn_dest],
+            },
+        );
+    }
+
     fn emit_arguments_init(
         &mut self,
         block: BasicBlockId,
@@ -3916,6 +4036,7 @@ impl Lowerer {
                     }
                 }
                 _ => {
+                    // 解构参数
                     let raw = self.alloc_value();
                     self.current_function.append_instruction(
                         block,
@@ -7351,37 +7472,9 @@ impl Lowerer {
             match member {
                 swc_ast::ClassMember::PrivateProp(prop) if !prop.is_static => {
                     let field_name = format!("#{}", prop.key.name);
-                    let key_const = self.module.add_constant(Constant::String(field_name));
-                    let key_dest = self.alloc_value();
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::Const { dest: key_dest, constant: key_const },
-                    );
-                    let this_val = self.alloc_value();
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::LoadVar { dest: this_val, name: format!("${this_scope_id}.$this") },
-                    );
-                    let init_val = if let Some(value) = &prop.value {
-                        self.lower_expr(value, field_block)?
-                    } else {
-                        let ud_const = self.module.add_constant(Constant::Undefined);
-                        let ud_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            field_block,
-                            Instruction::Const { dest: ud_dest, constant: ud_const },
-                        );
-                        ud_dest
-                    };
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::CallBuiltin {
-                            dest: None,
-                            builtin: Builtin::PrivateSet,
-                            args: vec![this_val, key_dest, init_val],
-                        },
-                    );
-                    field_block = self.resolve_store_block(field_block);
+                    field_block = self.emit_field_init(
+                        field_block, this_scope_id, &field_name, prop.value.as_deref(), true,
+                    )?;
                 }
                 swc_ast::ClassMember::ClassProp(prop) if !prop.is_static => {
                     let prop_name = match &prop.key {
@@ -7390,33 +7483,9 @@ impl Lowerer {
                         swc_ast::PropName::Num(n) => n.value.to_string(),
                         _ => continue,
                     };
-                    let key_const = self.module.add_constant(Constant::String(prop_name));
-                    let key_dest = self.alloc_value();
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::Const { dest: key_dest, constant: key_const },
-                    );
-                    let this_val = self.alloc_value();
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::LoadVar { dest: this_val, name: format!("${this_scope_id}.$this") },
-                    );
-                    let init_val = if let Some(value) = &prop.value {
-                        self.lower_expr(value, field_block)?
-                    } else {
-                        let ud_const = self.module.add_constant(Constant::Undefined);
-                        let ud_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            field_block,
-                            Instruction::Const { dest: ud_dest, constant: ud_const },
-                        );
-                        ud_dest
-                    };
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::SetProp { object: this_val, key: key_dest, value: init_val },
-                    );
-                    field_block = self.resolve_store_block(field_block);
+                    field_block = self.emit_field_init(
+                        field_block, this_scope_id, &prop_name, prop.value.as_deref(), false,
+                    )?;
                 }
                 _ => {}
             }
@@ -7424,31 +7493,12 @@ impl Lowerer {
 
         for (field_name, is_static, func_id) in &private_method_ids {
             if !is_static {
-                let key_const = self.module.add_constant(Constant::String(field_name.clone()));
-                let key_dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    field_block,
-                    Instruction::Const { dest: key_dest, constant: key_const },
-                );
                 let this_val = self.alloc_value();
                 self.current_function.append_instruction(
                     field_block,
                     Instruction::LoadVar { dest: this_val, name: format!("${this_scope_id}.$this") },
                 );
-                let fn_dest = self.alloc_value();
-                let fn_ref_const = self.module.add_constant(Constant::FunctionRef(*func_id));
-                self.current_function.append_instruction(
-                    field_block,
-                    Instruction::Const { dest: fn_dest, constant: fn_ref_const },
-                );
-                self.current_function.append_instruction(
-                    field_block,
-                    Instruction::CallBuiltin {
-                        dest: None,
-                        builtin: Builtin::PrivateSet,
-                        args: vec![this_val, key_dest, fn_dest],
-                    },
-                );
+                self.emit_private_method_bind(field_block, this_val, field_name, *func_id);
                 field_block = self.resolve_store_block(field_block);
             }
         }
@@ -7857,31 +7907,9 @@ impl Lowerer {
                 }
                 swc_ast::ClassMember::PrivateProp(prop) if prop.is_static => {
                     let field_name = format!("#{}", prop.key.name);
-                    let key_const = self.module.add_constant(Constant::String(field_name));
-                    let key_dest = self.alloc_value();
-                    self.current_function.append_instruction(
-                        outer_block,
-                        Instruction::Const { dest: key_dest, constant: key_const },
-                    );
-                    let init_val = if let Some(value) = &prop.value {
-                        self.lower_expr(value, outer_block)?
-                    } else {
-                        let ud_const = self.module.add_constant(Constant::Undefined);
-                        let ud_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            outer_block,
-                            Instruction::Const { dest: ud_dest, constant: ud_const },
-                        );
-                        ud_dest
-                    };
-                    self.current_function.append_instruction(
-                        outer_block,
-                        Instruction::CallBuiltin {
-                            dest: None,
-                            builtin: Builtin::PrivateSet,
-                            args: vec![ctor_dest, key_dest, init_val],
-                        },
-                    );
+                    self.emit_static_field_init(
+                        outer_block, ctor_dest, &field_name, prop.value.as_deref(), true,
+                    )?;
                 }
                 swc_ast::ClassMember::ClassProp(prop) if prop.is_static => {
                     let prop_name = match &prop.key {
@@ -7890,27 +7918,9 @@ impl Lowerer {
                         swc_ast::PropName::Num(n) => n.value.to_string(),
                         _ => continue,
                     };
-                    let key_const = self.module.add_constant(Constant::String(prop_name));
-                    let key_dest = self.alloc_value();
-                    self.current_function.append_instruction(
-                        outer_block,
-                        Instruction::Const { dest: key_dest, constant: key_const },
-                    );
-                    let init_val = if let Some(value) = &prop.value {
-                        self.lower_expr(value, outer_block)?
-                    } else {
-                        let ud_const = self.module.add_constant(Constant::Undefined);
-                        let ud_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            outer_block,
-                            Instruction::Const { dest: ud_dest, constant: ud_const },
-                        );
-                        ud_dest
-                    };
-                    self.current_function.append_instruction(
-                        outer_block,
-                        Instruction::SetProp { object: ctor_dest, key: key_dest, value: init_val },
-                    );
+                    self.emit_static_field_init(
+                        outer_block, ctor_dest, &prop_name, prop.value.as_deref(), false,
+                    )?;
                 }
                 _ => {}
             }
@@ -7918,26 +7928,7 @@ impl Lowerer {
 
         for (field_name, is_static, func_id) in &private_method_ids {
             if *is_static {
-                let key_const = self.module.add_constant(Constant::String(field_name.clone()));
-                let key_dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    outer_block,
-                    Instruction::Const { dest: key_dest, constant: key_const },
-                );
-                let fn_dest = self.alloc_value();
-                let fn_ref_const = self.module.add_constant(Constant::FunctionRef(*func_id));
-                self.current_function.append_instruction(
-                    outer_block,
-                    Instruction::Const { dest: fn_dest, constant: fn_ref_const },
-                );
-                self.current_function.append_instruction(
-                    outer_block,
-                    Instruction::CallBuiltin {
-                        dest: None,
-                        builtin: Builtin::PrivateSet,
-                        args: vec![ctor_dest, key_dest, fn_dest],
-                    },
-                );
+                self.emit_private_method_bind(outer_block, ctor_dest, field_name, *func_id);
             }
         }
 
@@ -10115,6 +10106,9 @@ impl Lowerer {
         Ok(m_dest)
     }
 
+    // TODO: lower_method_prop_to_fn 与 lower_fn_expr 的逻辑高度相似
+    // （创建函数上下文、声明 $env/$this、构建参数、降低函数体、创建闭包等），
+    // 未来应提取共享逻辑以减少代码重复。
     fn lower_method_prop_to_fn(
         &mut self,
         key: &swc_ast::PropName,
@@ -12544,6 +12538,10 @@ impl Lowerer {
                 return Ok(self.lower_eval_env_read(&name, block));
             }
             Err(msg) if msg.starts_with("undeclared identifier") && is_builtin_global(&name) => {
+                // 变量查找失败且名称属于内建全局对象时，通过 GetBuiltinGlobal
+                // 在运行时获取全局对象引用。变量遮蔽是安全的，因为如果用户
+                // 声明了同名变量（如 var Array = 1），scopes.lookup 会成功，
+                // 不会走到此分支。
                 let name_const = self.module.add_constant(Constant::String(name));
                 let name_val = self.alloc_value();
                 self.current_function.append_instruction(
@@ -14727,7 +14725,6 @@ const BUILTIN_GLOBALS: &[&str] = &[
     "decodeURIComponent",
     "encodeURI",
     "encodeURIComponent",
-    "eval",
     "Atomics",
     "FinalizationRegistry",
     "WeakRef",
@@ -14999,16 +14996,6 @@ fn builtin_from_string_proto_method(name: &str) -> Option<Builtin> {
     }
 }
 
-/// 将 RegExp.prototype 方法名映射到 Builtin 变体，用于语义层优化。
-/// 当 `regex.test(str)` 被识别时，跳过运行时属性解析，直接发出 CallBuiltin。
-fn builtin_from_regexp_proto_method(name: &str) -> Option<Builtin> {
-    use Builtin::*;
-    match name {
-        "test" => Some(RegExpTest),
-        "exec" => Some(RegExpExec),
-        _ => None,
-    }
-}
 fn builtin_from_promise_proto_method(name: &str) -> Option<Builtin> {
     use Builtin::*;
     match name {

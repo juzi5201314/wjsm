@@ -4993,6 +4993,9 @@ impl Compiler {
 
     /// 编译分支体（if/else 的 true 或 false block）。
     /// 处理 Jump 到 merge block（no-op）、Return（发射）、循环 continue/break（发射 br）。
+    /// 返回 `Ok(true)` 表示该分支以终止指令（Return/Unreachable/br）结束，
+    /// 调用者可据此判断是否需要发射 `Unreachable` 以避免 WASM 验证错误；
+    /// 返回 `Ok(false)` 表示分支正常落入（fall through）后续代码。
     fn compile_branch_body(
         &mut self,
         module: &IrModule,
@@ -5024,17 +5027,22 @@ impl Compiler {
             Terminator::Jump { target } => {
                 let target_idx = target.0 as usize;
                 if let Some(depth) = self.loop_continue_depth(target_idx) {
+                    // back-edge：continue 循环
                     self.emit_phi_moves(blocks, idx, target_idx);
                     self.emit(WasmInstruction::Br(depth));
                     Ok(true)
                 } else if let Some(depth) = self.loop_break_depth(target_idx) {
+                    // 跳到循环出口：break
                     self.emit_phi_moves(blocks, idx, target_idx);
                     self.emit(WasmInstruction::Br(depth));
                     Ok(true)
                 } else if target_idx < idx && block_has_suspend(&blocks[target_idx]) {
+                    // async 状态机的循环头可能位于另一个 switch case 中，不能用当前 case 的 label 回跳；
+                    // 这里内联到下一个 suspend，让循环体能够调度下一轮 resume。
                     self.emit_phi_moves(blocks, idx, target_idx);
                     self.compile_branch_body(module, blocks, target_idx)
                 } else {
+                    // 普通 merge 跳转
                     self.emit_phi_moves(blocks, idx, target_idx);
                     Ok(false)
                 }
@@ -5045,6 +5053,7 @@ impl Compiler {
                 true_block,
                 false_block,
             } => {
+                // 分支体内嵌套的 if/else
                 let true_idx = true_block.0 as usize;
                 let false_idx = false_block.0 as usize;
 
@@ -5123,7 +5132,9 @@ impl Compiler {
         if let Some(false_block) = blocks.get(false_idx) {
             for instruction in false_block.instructions() {
                 if let Instruction::Phi { sources, .. } = instruction {
-                    if sources.len() > 1 {
+                    if sources.len() > 1
+                        && sources.iter().any(|s| s.predecessor.0 as usize == true_idx)
+                    {
                         return true;
                     }
                 }
@@ -8137,6 +8148,7 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
                 }
             }
             Terminator::Branch { true_block, .. } => {
+                // do-while 模式：true → header（通过 Branch 实现的 back-edge）
                 let t = true_block.0 as usize;
                 if t <= i {
                     back_edges.entry(t).or_default().push(i);
@@ -8147,6 +8159,8 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
     }
 
     let mut loops: Vec<LoopInfo> = Vec::new();
+    // NOTE: 此处对每个 back-edge 做前向可达性分析以过滤无效循环。
+    // 在大型 CFG 上可能有性能影响，未来可考虑使用 dominator tree 分析替代。
     'next_edge: for (header_idx, latches) in &back_edges {
         let mut reachable: HashSet<usize> = HashSet::new();
         let mut stack = vec![*header_idx];
@@ -8185,8 +8199,10 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
         }
 
         let exit_idx = match blocks[*header_idx].terminator() {
+            // while/for 模式：header 有 Branch，false 分支是出口
             Terminator::Branch { false_block, .. } => false_block.0 as usize,
             _ => {
+                // do-while 模式：header 没有 Branch，找到指向 header 的 Branch
                 let mut exit = *header_idx + 1;
                 for block in blocks.iter() {
                     if let Terminator::Branch {
