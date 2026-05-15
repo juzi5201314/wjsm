@@ -3433,6 +3433,7 @@ impl Lowerer {
 
             // Lower catch body if present
             if let Some(catch) = &try_stmt.handler {
+                eprintln!("DEBUG: catch param = {:?}", catch.param.as_ref().map(|p| std::mem::discriminant(p)));
                 // Lower catch clause: bind parameter if present
                 self.scopes.push_scope(ScopeKind::Block);
                 if let Some(param) = &catch.param {
@@ -3472,6 +3473,15 @@ impl Lowerer {
                                     name: exc_var,
                                 },
                             );
+                            let mut names = Vec::new();
+                            Self::extract_pat_bindings(&[param.clone()], &mut names);
+                            eprintln!("DEBUG: catch destructure names: {:?}", names);
+                            for name in &names {
+                                eprintln!("DEBUG: declaring {} in scope", name);
+                                self.scopes
+                                    .declare(name, VarKind::Let, true)
+                                    .map_err(|msg| self.error(param.span(), msg))?;
+                            }
                             self.lower_destructure_pattern(param, exc_val, catch_entry, VarKind::Let)?;
                         }
                     }
