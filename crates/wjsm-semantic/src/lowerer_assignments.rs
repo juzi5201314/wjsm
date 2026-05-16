@@ -48,26 +48,32 @@ impl Lowerer {
                 return Ok(self.lower_eval_env_read(&name, block));
             }
             Err(msg) if msg.starts_with("undeclared identifier") && is_builtin_global(&name) => {
-                // 变量查找失败且名称属于内建全局对象时，通过 GetBuiltinGlobal
-                // 在运行时获取全局对象引用。变量遮蔽是安全的，因为如果用户
-                // 声明了同名变量（如 var Array = 1），scopes.lookup 会成功，
-                // 不会走到此分支。
-                let name_const = self.module.add_constant(Constant::String(name));
-                let name_val = self.alloc_value();
+                // 变量查找失败 → 从全局对象按名读取属性
+                // 全局对象已在模块初始化阶段通过 CreateGlobalObject 创建并存入 $0.$global
+                let global_obj = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::LoadVar {
+                        dest: global_obj,
+                        name: "$0.$global".to_string(),
+                    },
+                );
+                let key_const = self.module.add_constant(Constant::String(name));
+                let key_val = self.alloc_value();
                 self.current_function.append_instruction(
                     block,
                     Instruction::Const {
-                        dest: name_val,
-                        constant: name_const,
+                        dest: key_val,
+                        constant: key_const,
                     },
                 );
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     block,
-                    Instruction::CallBuiltin {
-                        dest: Some(dest),
-                        builtin: Builtin::GetBuiltinGlobal,
-                        args: vec![name_val],
+                    Instruction::GetProp {
+                        dest,
+                        object: global_obj,
+                        key: key_val,
                     },
                 );
                 return Ok(dest);

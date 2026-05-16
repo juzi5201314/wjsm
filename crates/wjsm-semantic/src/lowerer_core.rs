@@ -63,6 +63,7 @@ impl Lowerer {
             async_generator_scope_id: 0,
             async_closure_env_ir_name: None,
             strict_mode: false,
+            script_mode: false,
             eval_mode: false,
             eval_has_scope_bridge: false,
             eval_var_writes_to_scope: false,
@@ -424,6 +425,44 @@ impl Lowerer {
                 },
             );
         }
+
+        // 创建全局对象，用于两种模式下的 builtin 解析和 globalThis
+        let global_obj = self.alloc_value();
+        self.current_function.append_instruction(
+            entry,
+            Instruction::CallBuiltin {
+                dest: Some(global_obj),
+                builtin: Builtin::CreateGlobalObject,
+                args: vec![],
+            },
+        );
+        self.current_function.append_instruction(
+            entry,
+            Instruction::StoreVar {
+                name: "$0.$global".to_string(),
+                value: global_obj,
+            },
+        );
+        
+        // 设置 $this：script 模式 = 全局对象，module 模式 = undefined
+        let this_val = if self.script_mode {
+            global_obj
+        } else {
+            let undef_const = self.module.add_constant(Constant::Undefined);
+            let v = self.alloc_value();
+            self.current_function.append_instruction(
+                entry,
+                Instruction::Const { dest: v, constant: undef_const },
+            );
+            v
+        };
+        self.current_function.append_instruction(
+            entry,
+            Instruction::StoreVar {
+                name: "$0.$this".to_string(),
+                value: this_val,
+            },
+        );
 
         let mut flow = StmtFlow::Open(entry);
 
