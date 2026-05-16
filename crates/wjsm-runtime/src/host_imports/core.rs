@@ -482,7 +482,7 @@
     // ── Import 13: typeof(i64) → i64 ───────────────────────────────────────
     let typeof_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+        |caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             if value::is_undefined(val) {
                 value::encode_typeof_undefined()
             } else if value::is_null(val) {

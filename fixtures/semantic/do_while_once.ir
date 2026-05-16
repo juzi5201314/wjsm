@@ -3,9 +3,25 @@ module {
     c0 = undefined
     c1 = number(NaN)
     c2 = number(inf)
-    c3 = number(10)
-    c4 = number(1)
-    c5 = number(5)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = number(10)
+    c20 = number(1)
+    c21 = number(5)
 
   fn @main [entry=bb0]:
     bb0:
@@ -16,21 +32,53 @@ module {
       %2 = const c2
       store var $0.Infinity, %2
       %3 = const c3
-      store var $0.x, %3
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = const c19
+      store var $0.x, %19
       jump bb1
     bb1:
-      %4 = load var $0.x
-      %5 = call builtin.console.log(%4)
-      %6 = load var $0.x
-      %7 = const c4
-      %8 = add %6, %7
-      store var $0.x, %8
+      %20 = load var $0.x
+      %21 = call builtin.console.log(%20)
+      %22 = load var $0.x
+      %23 = const c20
+      %24 = add %22, %23
+      store var $0.x, %24
       jump bb2
     bb2:
-      %9 = load var $0.x
-      %10 = const c5
-      %11 = call builtin.abstract_compare(%9, %10)
-      branch %11, bb1, bb3
+      %25 = load var $0.x
+      %26 = const c21
+      %27 = call builtin.abstract_compare(%25, %26)
+      branch %27, bb1, bb3
     bb3:
       return
 }

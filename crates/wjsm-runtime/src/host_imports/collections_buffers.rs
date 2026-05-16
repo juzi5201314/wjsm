@@ -992,7 +992,7 @@
                 "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
                 | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array"
                 | "Float16Array" | "BigInt64Array" | "BigUint64Array" => {
-                    native_callables.push(NativeCallable::TypedArrayConstructor(name.clone()));
+                    native_callables.push(NativeCallable::TypedArrayConstructor(()));
                     value::encode_native_callable_idx(idx)
                 }
                 "Proxy" => {
@@ -1005,7 +1005,7 @@
                 | "decodeURI" | "decodeURIComponent" | "encodeURI" | "encodeURIComponent"
                 | "Temporal" | "Intl" | "Iterator" | "AsyncIterator"
                 | "$262" | "eval" | "SuppressedError" => {
-                    native_callables.push(NativeCallable::StubGlobal(name.clone()));
+                    native_callables.push(NativeCallable::StubGlobal(()));
                     value::encode_native_callable_idx(idx)
                 }
                 _ => value::encode_undefined(),

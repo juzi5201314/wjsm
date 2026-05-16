@@ -3,83 +3,103 @@ module {
     c0 = undefined
     c1 = number(NaN)
     c2 = number(inf)
-    c3 = number(0)
-    c4 = number(1)
-    c5 = number(2)
-    c6 = number(3)
-    c7 = number(4)
-    c8 = number(2)
-    c9 = functionref(@0)
-    c10 = number(5)
-    c11 = number(2)
-    c12 = number(3)
-    c13 = undefined
-    c14 = number(4)
-    c15 = number(0)
-    c16 = undefined
-    c17 = bool(false)
-    c18 = functionref(@1)
-    c19 = undefined
-    c20 = number(5)
-    c21 = undefined
-    c22 = functionref(@2)
-    c23 = undefined
-    c24 = undefined
-    c25 = number(10)
-    c26 = undefined
-    c27 = functionref(@3)
-    c28 = undefined
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = number(0)
+    c20 = number(1)
+    c21 = number(2)
+    c22 = number(3)
+    c23 = number(4)
+    c24 = number(2)
+    c25 = functionref(@0)
+    c26 = number(5)
+    c27 = number(2)
+    c28 = number(3)
+    c29 = undefined
+    c30 = number(4)
+    c31 = number(0)
+    c32 = undefined
+    c33 = bool(false)
+    c34 = functionref(@1)
+    c35 = undefined
+    c36 = number(5)
+    c37 = undefined
+    c38 = functionref(@2)
+    c39 = undefined
+    c40 = undefined
+    c41 = number(10)
+    c42 = undefined
+    c43 = functionref(@3)
+    c44 = undefined
 
   fn @double$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = load var $1.$env
-      %1 = const c3
+      %1 = const c19
       %2 = call builtin.continuation.load_var(%0, %1)
       store var $1.$state, %2
-      %3 = const c4
+      %3 = const c20
       %4 = call builtin.continuation.load_var(%0, %3)
       store var $1.$is_rejected, %4
       %5 = load var $1.$this
       store var $1.$resume_val, %5
-      %6 = const c5
+      %6 = const c21
       %7 = call builtin.continuation.load_var(%0, %6)
       store var $1.$promise, %7
-      %8 = const c6
+      %8 = const c22
       %9 = call builtin.continuation.load_var(%0, %8)
       store var $1.$closure_env, %9
-      %10 = const c7
+      %10 = const c23
       %11 = call builtin.continuation.load_var(%0, %10)
       store var $1.x, %11
+      %12 = collect_rest_args skip=0
+      store var $1.arguments, %12
       jump bb1
     bb1:
       jump bb2
     bb2:
-      %12 = load var $1.x
-      %13 = const c8
-      %14 = mul %12, %13
-      %15 = load var $1.$promise
-      promise_resolve %15, %14
+      %13 = load var $1.x
+      %14 = const c24
+      %15 = mul %13, %14
+      %16 = load var $1.$promise
+      promise_resolve %16, %15
       return
 
   fn @double [params: $2.$env, $2.$this, $2.x] [entry=bb0]:
     bb0:
-      %0 = new_promise
-      %1 = const c9
-      %2 = const c10
-      %3 = call builtin.continuation.create(%1, %0, %2)
-      %4 = const c11
-      call builtin.continuation.save_var(%3, %4, %0)
-      %5 = const c12
-      %6 = const c13
-      call builtin.continuation.save_var(%3, %5, %6)
-      %7 = load var $2.x
-      %8 = const c14
-      call builtin.continuation.save_var(%3, %8, %7)
-      %9 = const c15
-      %10 = const c16
-      %11 = const c17
-      call builtin.async_function.resume(%1, %3, %9, %10, %11)
-      return %0
+      %0 = collect_rest_args skip=0
+      store var $2.arguments, %0
+      %1 = new_promise
+      %2 = const c25
+      %3 = const c26
+      %4 = call builtin.continuation.create(%2, %1, %3)
+      %5 = const c27
+      call builtin.continuation.save_var(%4, %5, %1)
+      %6 = const c28
+      %7 = const c29
+      call builtin.continuation.save_var(%4, %6, %7)
+      %8 = load var $2.x
+      %9 = const c30
+      call builtin.continuation.save_var(%4, %9, %8)
+      %10 = const c31
+      %11 = const c32
+      %12 = const c33
+      call builtin.async_function.resume(%2, %4, %10, %11, %12)
+      return %1
 
   fn @arrow_2 [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
     bb0:
@@ -101,25 +121,57 @@ module {
       store var $0.NaN, %1
       %2 = const c2
       store var $0.Infinity, %2
-      %3 = const c18
-      store var $0.double, %3
-      %4 = const c19
-      %5 = const c20
-      %6 = call builtin.promise.resolve_static(%4, %5)
-      %7 = load var $0.double
-      %8 = const c21
-      %9 = call builtin.promise.then(%6, %7, %8)
-      %10 = const c22
-      %11 = const c23
-      %12 = call builtin.promise.then(%9, %10, %11)
-      %13 = const c24
-      %14 = const c25
-      %15 = call builtin.promise.resolve_static(%13, %14)
-      %16 = load var $0.double
-      %17 = const c26
-      %18 = call builtin.promise.then(%15, %16, %17)
-      %19 = const c27
-      %20 = const c28
-      %21 = call builtin.promise.then(%18, %19, %20)
+      %3 = const c3
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = const c34
+      store var $0.double, %19
+      %20 = const c35
+      %21 = const c36
+      %22 = call builtin.promise.resolve_static(%20, %21)
+      %23 = load var $0.double
+      %24 = const c37
+      %25 = call builtin.promise.then(%22, %23, %24)
+      %26 = const c38
+      %27 = const c39
+      %28 = call builtin.promise.then(%25, %26, %27)
+      %29 = const c40
+      %30 = const c41
+      %31 = call builtin.promise.resolve_static(%29, %30)
+      %32 = load var $0.double
+      %33 = const c42
+      %34 = call builtin.promise.then(%31, %32, %33)
+      %35 = const c43
+      %36 = const c44
+      %37 = call builtin.promise.then(%34, %35, %36)
       return
 }

@@ -546,10 +546,10 @@ enum NativeCallable {
     PromiseConstructor,
     ArrayBufferConstructorGlobal,
     DataViewConstructorGlobal,
-    TypedArrayConstructor(String),
+    TypedArrayConstructor(()),
     ProxyConstructor,
     ProxyRevoker { proxy_handle: u32 },
-    StubGlobal(String),
+    StubGlobal(()),
 }
 
 #[derive(Clone, Copy)]

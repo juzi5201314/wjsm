@@ -3,10 +3,26 @@ module {
     c0 = undefined
     c1 = number(NaN)
     c2 = number(inf)
-    c3 = number(1)
-    c4 = number(1)
-    c5 = string("matched")
-    c6 = string("nope")
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = number(1)
+    c20 = number(1)
+    c21 = string("matched")
+    c22 = string("nope")
 
   fn @main [entry=bb0]:
     bb0:
@@ -17,19 +33,51 @@ module {
       %2 = const c2
       store var $0.Infinity, %2
       %3 = const c3
-      store var $0.x, %3
-      %4 = load var $0.x
-      switch %4 [case c4 -> bb2], default bb3, exit bb1
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = const c19
+      store var $0.x, %19
+      %20 = load var $0.x
+      switch %20 [case c20 -> bb2], default bb3, exit bb1
     bb1:
       return
     bb2:
-      %5 = const c5
-      store var $1.msg, %5
-      %6 = load var $1.msg
-      %7 = call builtin.console.log(%6)
+      %21 = const c21
+      store var $1.msg, %21
+      %22 = load var $1.msg
+      %23 = call builtin.console.log(%22)
       jump bb1
     bb3:
-      %8 = const c6
-      %9 = call builtin.console.log(%8)
+      %24 = const c22
+      %25 = call builtin.console.log(%24)
       jump bb1
 }

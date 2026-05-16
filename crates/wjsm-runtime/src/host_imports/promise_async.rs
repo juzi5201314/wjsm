@@ -1401,7 +1401,7 @@
     // ── Proxy / Reflect ────────────────────────────────────────────────────────
     let proxy_create_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
+        |caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
             if !value::is_object(target) && !value::is_function(target) && !value::is_array(target) && !value::is_proxy(target) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
                     Some("TypeError: Proxy target must be an object".to_string());

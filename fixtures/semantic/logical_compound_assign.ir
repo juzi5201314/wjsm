@@ -3,21 +3,37 @@ module {
     c0 = undefined
     c1 = number(NaN)
     c2 = number(inf)
-    c3 = bool(true)
-    c4 = bool(false)
-    c5 = bool(false)
-    c6 = bool(true)
-    c7 = null
-    c8 = number(42)
-    c9 = number(1)
-    c10 = number(2)
-    c11 = bool(false)
-    c12 = bool(true)
-    c13 = bool(true)
-    c14 = bool(true)
-    c15 = bool(false)
-    c16 = bool(true)
-    c17 = bool(false)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = bool(true)
+    c20 = bool(false)
+    c21 = bool(false)
+    c22 = bool(true)
+    c23 = null
+    c24 = number(42)
+    c25 = number(1)
+    c26 = number(2)
+    c27 = bool(false)
+    c28 = bool(true)
+    c29 = bool(true)
+    c30 = bool(true)
+    c31 = bool(false)
+    c32 = bool(true)
+    c33 = bool(false)
 
   fn @main [entry=bb0]:
     bb0:
@@ -28,88 +44,120 @@ module {
       %2 = const c2
       store var $0.Infinity, %2
       %3 = const c3
-      store var $0.a, %3
-      %4 = load var $0.a
-      branch %4, bb1, bb2
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = const c19
+      store var $0.a, %19
+      %20 = load var $0.a
+      branch %20, bb1, bb2
     bb1:
-      %5 = const c4
-      store var $0.a, %5
+      %21 = const c20
+      store var $0.a, %21
       jump bb2
     bb2:
-      %6 = phi [(bb0, %4), (bb1, %5)]
-      %7 = load var $0.a
-      %8 = call builtin.console.log(%7)
-      %9 = const c5
-      store var $0.b, %9
-      %10 = load var $0.b
-      branch %10, bb4, bb3
+      %22 = phi [(bb0, %20), (bb1, %21)]
+      %23 = load var $0.a
+      %24 = call builtin.console.log(%23)
+      %25 = const c21
+      store var $0.b, %25
+      %26 = load var $0.b
+      branch %26, bb4, bb3
     bb3:
-      %11 = const c6
-      store var $0.b, %11
+      %27 = const c22
+      store var $0.b, %27
       jump bb4
     bb4:
-      %12 = phi [(bb2, %10), (bb3, %11)]
-      %13 = load var $0.b
-      %14 = call builtin.console.log(%13)
-      %15 = const c7
-      store var $0.c, %15
-      %16 = load var $0.c
-      %17 = is_nullish %16
-      branch %17, bb5, bb6
+      %28 = phi [(bb2, %26), (bb3, %27)]
+      %29 = load var $0.b
+      %30 = call builtin.console.log(%29)
+      %31 = const c23
+      store var $0.c, %31
+      %32 = load var $0.c
+      %33 = is_nullish %32
+      branch %33, bb5, bb6
     bb5:
-      %18 = const c8
-      store var $0.c, %18
+      %34 = const c24
+      store var $0.c, %34
       jump bb6
     bb6:
-      %19 = phi [(bb4, %16), (bb5, %18)]
-      %20 = load var $0.c
-      %21 = call builtin.console.log(%20)
-      %22 = const c9
-      store var $0.d, %22
-      %23 = load var $0.d
-      %24 = is_nullish %23
-      branch %24, bb7, bb8
+      %35 = phi [(bb4, %32), (bb5, %34)]
+      %36 = load var $0.c
+      %37 = call builtin.console.log(%36)
+      %38 = const c25
+      store var $0.d, %38
+      %39 = load var $0.d
+      %40 = is_nullish %39
+      branch %40, bb7, bb8
     bb7:
-      %25 = const c10
-      store var $0.d, %25
+      %41 = const c26
+      store var $0.d, %41
       jump bb8
     bb8:
-      %26 = phi [(bb6, %23), (bb7, %25)]
-      %27 = load var $0.d
-      %28 = call builtin.console.log(%27)
-      %29 = const c11
-      store var $0.sideEffect, %29
-      %30 = const c12
-      store var $0.e, %30
-      %31 = load var $0.e
-      branch %31, bb10, bb9
+      %42 = phi [(bb6, %39), (bb7, %41)]
+      %43 = load var $0.d
+      %44 = call builtin.console.log(%43)
+      %45 = const c27
+      store var $0.sideEffect, %45
+      %46 = const c28
+      store var $0.e, %46
+      %47 = load var $0.e
+      branch %47, bb10, bb9
     bb9:
-      %33 = const c13
-      store var $0.sideEffect, %33
-      %34 = const c14
-      store var $0.e, %34
+      %49 = const c29
+      store var $0.sideEffect, %49
+      %50 = const c30
+      store var $0.e, %50
       jump bb10
     bb10:
-      %35 = phi [(bb8, %31), (bb9, %34)]
-      %36 = load var $0.sideEffect
-      %37 = call builtin.console.log(%36)
-      %38 = load var $0.e
-      %39 = call builtin.console.log(%38)
-      %40 = const c15
-      store var $0.f, %40
-      %41 = load var $0.f
-      branch %41, bb11, bb12
+      %51 = phi [(bb8, %47), (bb9, %50)]
+      %52 = load var $0.sideEffect
+      %53 = call builtin.console.log(%52)
+      %54 = load var $0.e
+      %55 = call builtin.console.log(%54)
+      %56 = const c31
+      store var $0.f, %56
+      %57 = load var $0.f
+      branch %57, bb11, bb12
     bb11:
-      %43 = const c16
-      store var $0.sideEffect, %43
-      %44 = const c17
-      store var $0.f, %44
+      %59 = const c32
+      store var $0.sideEffect, %59
+      %60 = const c33
+      store var $0.f, %60
       jump bb12
     bb12:
-      %45 = phi [(bb10, %41), (bb11, %44)]
-      %46 = load var $0.sideEffect
-      %47 = call builtin.console.log(%46)
-      %48 = load var $0.f
-      %49 = call builtin.console.log(%48)
+      %61 = phi [(bb10, %57), (bb11, %60)]
+      %62 = load var $0.sideEffect
+      %63 = call builtin.console.log(%62)
+      %64 = load var $0.f
+      %65 = call builtin.console.log(%64)
       return
 }

@@ -3,15 +3,31 @@ module {
     c0 = undefined
     c1 = number(NaN)
     c2 = number(inf)
-    c3 = number(0)
-    c4 = number(0)
-    c5 = number(1)
-    c6 = number(1)
-    c7 = number(2)
-    c8 = number(1)
-    c9 = number(2)
-    c10 = number(0)
-    c11 = number(3)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = number(0)
+    c20 = number(0)
+    c21 = number(1)
+    c22 = number(1)
+    c23 = number(2)
+    c24 = number(1)
+    c25 = number(2)
+    c26 = number(0)
+    c27 = number(3)
 
   fn @main [entry=bb0]:
     bb0:
@@ -22,42 +38,74 @@ module {
       %2 = const c2
       store var $0.Infinity, %2
       %3 = const c3
-      store var $0.hit, %3
+      store var $0.Math.E, %3
       %4 = const c4
-      branch %4, bb1, bb2
-    bb1:
+      store var $0.Math.LN10, %4
       %5 = const c5
-      store var $0.hit, %5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = const c19
+      store var $0.hit, %19
+      %20 = const c20
+      branch %20, bb1, bb2
+    bb1:
+      %21 = const c21
+      store var $0.hit, %21
       jump bb2
     bb2:
-      %6 = phi [(bb0, %4), (bb1, %5)]
-      %7 = call builtin.console.log(%6)
-      %8 = const c6
-      branch %8, bb4, bb3
+      %22 = phi [(bb0, %20), (bb1, %21)]
+      %23 = call builtin.console.log(%22)
+      %24 = const c22
+      branch %24, bb4, bb3
     bb3:
-      %9 = const c7
-      store var $0.hit, %9
+      %25 = const c23
+      store var $0.hit, %25
       jump bb4
     bb4:
-      %10 = phi [(bb2, %8), (bb3, %9)]
-      %11 = call builtin.console.log(%10)
-      %12 = load var $0.hit
-      %13 = call builtin.console.log(%12)
-      %14 = const c8
-      branch %14, bb5, bb6
+      %26 = phi [(bb2, %24), (bb3, %25)]
+      %27 = call builtin.console.log(%26)
+      %28 = load var $0.hit
+      %29 = call builtin.console.log(%28)
+      %30 = const c24
+      branch %30, bb5, bb6
     bb5:
-      %15 = const c9
+      %31 = const c25
       jump bb6
     bb6:
-      %16 = phi [(bb4, %14), (bb5, %15)]
-      %17 = call builtin.console.log(%16)
-      %18 = const c10
-      branch %18, bb8, bb7
+      %32 = phi [(bb4, %30), (bb5, %31)]
+      %33 = call builtin.console.log(%32)
+      %34 = const c26
+      branch %34, bb8, bb7
     bb7:
-      %19 = const c11
+      %35 = const c27
       jump bb8
     bb8:
-      %20 = phi [(bb6, %18), (bb7, %19)]
-      %21 = call builtin.console.log(%20)
+      %36 = phi [(bb6, %34), (bb7, %35)]
+      %37 = call builtin.console.log(%36)
       return
 }

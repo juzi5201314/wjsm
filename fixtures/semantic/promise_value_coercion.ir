@@ -3,25 +3,41 @@ module {
     c0 = undefined
     c1 = number(NaN)
     c2 = number(inf)
-    c3 = undefined
-    c4 = number(42)
-    c5 = functionref(@0)
-    c6 = undefined
-    c7 = undefined
-    c8 = string("hello")
-    c9 = functionref(@1)
-    c10 = undefined
-    c11 = undefined
-    c12 = bool(true)
-    c13 = functionref(@2)
-    c14 = undefined
-    c15 = undefined
-    c16 = null
-    c17 = functionref(@3)
-    c18 = undefined
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
     c19 = undefined
-    c20 = functionref(@4)
-    c21 = undefined
+    c20 = number(42)
+    c21 = functionref(@0)
+    c22 = undefined
+    c23 = undefined
+    c24 = string("hello")
+    c25 = functionref(@1)
+    c26 = undefined
+    c27 = undefined
+    c28 = bool(true)
+    c29 = functionref(@2)
+    c30 = undefined
+    c31 = undefined
+    c32 = null
+    c33 = functionref(@3)
+    c34 = undefined
+    c35 = undefined
+    c36 = functionref(@4)
+    c37 = undefined
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
     bb0:
@@ -62,34 +78,66 @@ module {
       %2 = const c2
       store var $0.Infinity, %2
       %3 = const c3
+      store var $0.Math.E, %3
       %4 = const c4
-      %5 = call builtin.promise.resolve_static(%3, %4)
-      %6 = const c5
-      %7 = const c6
-      %8 = call builtin.promise.then(%5, %6, %7)
-      %9 = const c7
-      %10 = const c8
-      %11 = call builtin.promise.resolve_static(%9, %10)
-      %12 = const c9
-      %13 = const c10
-      %14 = call builtin.promise.then(%11, %12, %13)
-      %15 = const c11
-      %16 = const c12
-      %17 = call builtin.promise.resolve_static(%15, %16)
-      %18 = const c13
-      %19 = const c14
-      %20 = call builtin.promise.then(%17, %18, %19)
-      %21 = const c15
-      %22 = const c16
-      %23 = call builtin.promise.resolve_static(%21, %22)
-      %24 = const c17
-      %25 = const c18
-      %26 = call builtin.promise.then(%23, %24, %25)
-      %27 = const c19
-      %28 = load var $0.undefined
-      %29 = call builtin.promise.resolve_static(%27, %28)
-      %30 = const c20
-      %31 = const c21
-      %32 = call builtin.promise.then(%29, %30, %31)
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = const c19
+      %20 = const c20
+      %21 = call builtin.promise.resolve_static(%19, %20)
+      %22 = const c21
+      %23 = const c22
+      %24 = call builtin.promise.then(%21, %22, %23)
+      %25 = const c23
+      %26 = const c24
+      %27 = call builtin.promise.resolve_static(%25, %26)
+      %28 = const c25
+      %29 = const c26
+      %30 = call builtin.promise.then(%27, %28, %29)
+      %31 = const c27
+      %32 = const c28
+      %33 = call builtin.promise.resolve_static(%31, %32)
+      %34 = const c29
+      %35 = const c30
+      %36 = call builtin.promise.then(%33, %34, %35)
+      %37 = const c31
+      %38 = const c32
+      %39 = call builtin.promise.resolve_static(%37, %38)
+      %40 = const c33
+      %41 = const c34
+      %42 = call builtin.promise.then(%39, %40, %41)
+      %43 = const c35
+      %44 = load var $0.undefined
+      %45 = call builtin.promise.resolve_static(%43, %44)
+      %46 = const c36
+      %47 = const c37
+      %48 = call builtin.promise.then(%45, %46, %47)
       return
 }
