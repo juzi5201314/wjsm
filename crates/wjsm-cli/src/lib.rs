@@ -371,7 +371,7 @@ fn cmd_build(
     match stage {
         Stage::Parse | Stage::Lower => {
             let source = read_input(input)?;
-            let result = run_pipeline(&source, stage, cli.verbose, cli.time, cli.target)?;
+            let result = run_pipeline(&source, stage, cli.verbose, cli.time, cli.target, false)?;
 
             if matches!(stage, Stage::Parse) {
                 if let Some(ast) = &result.ast {
@@ -495,7 +495,7 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
 fn cmd_check(cli: &Cli, input: &str) -> Result<ExitCode> {
     let source = read_input(input)?;
 
-    let result = run_pipeline(&source, Stage::Lower, cli.verbose, cli.time, cli.target)?;
+    let result = run_pipeline(&source, Stage::Lower, cli.verbose, cli.time, cli.target, false)?;
 
     if cli.verbose >= 1 {
         eprintln!("✓ No errors found");
@@ -512,7 +512,7 @@ fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
     // Wrap the expression in a module that logs it
     let source = format!("console.log({});", code);
 
-    let result = run_pipeline(&source, Stage::Execute, cli.verbose, cli.time, cli.target)?;
+    let result = run_pipeline(&source, Stage::Execute, cli.verbose, cli.time, cli.target, false)?;
 
     if let Some(wasm) = &result.wasm {
         if let Err(e) = runtime::execute(wasm) {
@@ -527,7 +527,7 @@ fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
 fn cmd_dump_ir(cli: &Cli, input: &str, format: DumpFormat) -> Result<ExitCode> {
     let source = read_input(input)?;
 
-    let result = run_pipeline(&source, Stage::Lower, cli.verbose, cli.time, cli.target)?;
+    let result = run_pipeline(&source, Stage::Lower, cli.verbose, cli.time, cli.target, false)?;
 
     if let Some(program) = &result.program {
         match format {
@@ -542,7 +542,7 @@ fn cmd_dump_ir(cli: &Cli, input: &str, format: DumpFormat) -> Result<ExitCode> {
 fn cmd_dump_ast(cli: &Cli, input: &str) -> Result<ExitCode> {
     let source = read_input(input)?;
 
-    let result = run_pipeline(&source, Stage::Parse, cli.verbose, cli.time, cli.target)?;
+    let result = run_pipeline(&source, Stage::Parse, cli.verbose, cli.time, cli.target, false)?;
 
     if let Some(ast) = &result.ast {
         let json = serde_json::to_string_pretty(ast)?;
@@ -555,7 +555,7 @@ fn cmd_dump_ast(cli: &Cli, input: &str) -> Result<ExitCode> {
 fn cmd_dump_wat(cli: &Cli, input: &str, _root: Option<&str>) -> Result<ExitCode> {
     let source = read_input(input)?;
 
-    let result = run_pipeline(&source, Stage::Compile, cli.verbose, cli.time, cli.target)?;
+    let result = run_pipeline(&source, Stage::Compile, cli.verbose, cli.time, cli.target, false)?;
 
     if let Some(wasm) = &result.wasm {
         let wat = wasmprinter::print_bytes(wasm)?;
@@ -738,6 +738,7 @@ fn run_pipeline(
     verbose: u8,
     time: bool,
     target: Target,
+    script: bool,
 ) -> Result<PipelineResult> {
     let mut result = PipelineResult {
         source: Some(source.to_string()),
@@ -765,7 +766,7 @@ fn run_pipeline(
         eprintln!("Lowering to IR...");
     }
     let start = Instant::now();
-    let program = semantic::lower_module(result.ast.take().unwrap())?;
+    let program = semantic::lower_module(result.ast.take().unwrap(), script)?;
     result.timings.lower_us = start.elapsed().as_micros() as u64;
     result.program = Some(program);
 
@@ -1091,7 +1092,7 @@ fn compile_source(source: &str, target: Target, script: bool) -> Result<Vec<u8>>
     } else {
         parser::parse_module(source)?
     };
-    let program = semantic::lower_module(module)?;
+    let program = semantic::lower_module(module, script)?;
     match target {
         Target::Wasm => backend_wasm::compile(&program),
         Target::Jit => bail!("JIT backend is not implemented yet"),

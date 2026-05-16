@@ -39,6 +39,9 @@ impl Module {
         &self.functions
     }
 
+    pub fn script_mode(&self) -> bool {
+        self.script_mode
+    }
     pub fn dump_text(&self) -> String {
         let mut out = String::from("module {\n");
 

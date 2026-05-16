@@ -597,8 +597,10 @@ fn has_top_level_await(module: &swc_ast::Module) -> bool {
     false
 }
 
-pub fn lower_module(module: swc_ast::Module) -> Result<Program, LoweringError> {
-    Lowerer::new().lower_module(&module)
+pub fn lower_module(module: swc_ast::Module, script: bool) -> Result<Program, LoweringError> {
+    let mut lowerer = Lowerer::new();
+    lowerer.script_mode = script;
+    lowerer.lower_module(&module)
 }
 
 pub fn lower_eval_module(module: swc_ast::Module) -> Result<Program, LoweringError> {
@@ -638,7 +640,7 @@ pub fn lower_modules(
     // 如果只有一个模块且没有 import，使用单模块编译路径
     if modules.len() == 1 && import_map.is_empty() {
         let (_, module) = modules.into_iter().next().unwrap();
-        return lower_module(module);
+        return lower_module(module, false);
     }
 
     // 多模块编译路径
@@ -1279,6 +1281,7 @@ struct Lowerer {
     async_generator_scope_id: usize,
     async_closure_env_ir_name: Option<String>,
     strict_mode: bool,
+    script_mode: bool,
     eval_mode: bool,
     eval_has_scope_bridge: bool,
     eval_var_writes_to_scope: bool,
