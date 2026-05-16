@@ -1,0 +1,709 @@
+use super::*;
+
+impl Lowerer {
+    pub(crate) fn lower_binary(
+        &mut self,
+        bin: &swc_ast::BinExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        use swc_ast::BinaryOp::*;
+
+        match bin.op {
+            // Logical operators — short circuit, may create new blocks
+            LogicalAnd | LogicalOr | NullishCoalescing => self.lower_logical(bin, block),
+            // Comparison operators
+            EqEq | NotEq | EqEqEq | NotEqEq | Lt | LtEq | Gt | GtEq => {
+                self.lower_comparison(bin, block)
+            }
+            // Standard arithmetic
+            Add | Sub | Mul | Div => {
+                let lhs = self.lower_expr(bin.left.as_ref(), block)?;
+                let rhs = self.lower_expr(bin.right.as_ref(), block)?;
+                let dest = self.alloc_value();
+                let op = match bin.op {
+                    Add => BinaryOp::Add,
+                    Sub => BinaryOp::Sub,
+                    Mul => BinaryOp::Mul,
+                    Div => BinaryOp::Div,
+                    _ => unreachable!(),
+                };
+                self.current_function
+                    .append_instruction(block, Instruction::Binary { dest, op, lhs, rhs });
+                Ok(dest)
+            }
+            // Mod / Exp → CallBuiltin
+            Mod => {
+                let lhs = self.lower_expr(bin.left.as_ref(), block)?;
+                let rhs = self.lower_expr(bin.right.as_ref(), block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::F64Mod,
+                        args: vec![lhs, rhs],
+                    },
+                );
+                Ok(dest)
+            }
+            Exp => {
+                let lhs = self.lower_expr(bin.left.as_ref(), block)?;
+                let rhs = self.lower_expr(bin.right.as_ref(), block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::F64Exp,
+                        args: vec![lhs, rhs],
+                    },
+                );
+                Ok(dest)
+            }
+            // Bitwise operators — convert to i32, operate, NaN-box back
+            BitOr | BitXor | BitAnd | LShift | RShift | ZeroFillRShift => {
+                let lhs = self.lower_expr(bin.left.as_ref(), block)?;
+                let rhs = self.lower_expr(bin.right.as_ref(), block)?;
+                let dest = self.alloc_value();
+                let op = match bin.op {
+                    BitOr => BinaryOp::BitOr,
+                    BitXor => BinaryOp::BitXor,
+                    BitAnd => BinaryOp::BitAnd,
+                    LShift => BinaryOp::Shl,
+                    RShift => BinaryOp::Shr,
+                    ZeroFillRShift => BinaryOp::UShr,
+                    _ => unreachable!(),
+                };
+                self.current_function
+                    .append_instruction(block, Instruction::Binary { dest, op, lhs, rhs });
+                Ok(dest)
+            }
+            // in 操作符：检查对象是否有属性
+            In => {
+                let prop = self.lower_expr(bin.left.as_ref(), block)?;
+                let object = self.lower_expr(bin.right.as_ref(), block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::In,
+                        args: vec![object, prop],
+                    },
+                );
+                Ok(dest)
+            }
+            // instanceof 操作符：检查原型链
+            InstanceOf => {
+                let value = self.lower_expr(bin.left.as_ref(), block)?;
+                let constructor = self.lower_expr(bin.right.as_ref(), block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::InstanceOf,
+                        args: vec![value, constructor],
+                    },
+                );
+                Ok(dest)
+            }
+        }
+    }
+
+    /// Lower comparison operators → Compare instruction.
+    /// 注意: == 和 != 使用 abstract_eq builtin 而不是 Compare 指令
+    pub(crate) fn lower_comparison(
+        &mut self,
+        bin: &swc_ast::BinExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let lhs = self.lower_expr(bin.left.as_ref(), block)?;
+        let rhs = self.lower_expr(bin.right.as_ref(), block)?;
+        let dest = self.alloc_value();
+
+        match bin.op {
+            // == 使用 abstract_eq builtin
+            swc_ast::BinaryOp::EqEq => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::AbstractEq,
+                        args: vec![lhs, rhs],
+                    },
+                );
+            }
+            // != 使用 abstract_eq builtin 然后 Not
+            swc_ast::BinaryOp::NotEq => {
+                let eq_result = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(eq_result),
+                        builtin: Builtin::AbstractEq,
+                        args: vec![lhs, rhs],
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::Not,
+                        value: eq_result,
+                    },
+                );
+            }
+            // < 使用 abstract_compare builtin
+            swc_ast::BinaryOp::Lt => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::AbstractCompare,
+                        args: vec![lhs, rhs],
+                    },
+                );
+            }
+            // > 相当于 (rhs < lhs)
+            swc_ast::BinaryOp::Gt => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::AbstractCompare,
+                        args: vec![rhs, lhs],
+                    },
+                );
+            }
+            // <= 相当于 NOT (rhs < lhs)
+            swc_ast::BinaryOp::LtEq => {
+                let cmp_result = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(cmp_result),
+                        builtin: Builtin::AbstractCompare,
+                        args: vec![rhs, lhs],
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::Not,
+                        value: cmp_result,
+                    },
+                );
+            }
+            // >= 相当于 NOT (lhs < rhs)
+            swc_ast::BinaryOp::GtEq => {
+                let cmp_result = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(cmp_result),
+                        builtin: Builtin::AbstractCompare,
+                        args: vec![lhs, rhs],
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::Not,
+                        value: cmp_result,
+                    },
+                );
+            }
+            // === 和 !== 仍使用 Compare 指令
+            _ => {
+                let op = match bin.op {
+                    swc_ast::BinaryOp::EqEqEq => CompareOp::StrictEq,
+                    swc_ast::BinaryOp::NotEqEq => CompareOp::StrictNotEq,
+                    _ => unreachable!(),
+                };
+                self.current_function
+                    .append_instruction(block, Instruction::Compare { dest, op, lhs, rhs });
+            }
+        }
+
+        Ok(dest)
+    }
+
+    /// Lower logical operators `&&`, `||`, `??` with short-circuit CFG.
+    /// The merge block receives a real Phi so expression-level control flow is explicit in IR.
+    pub(crate) fn lower_logical(
+        &mut self,
+        bin: &swc_ast::BinExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let lhs = self.lower_expr(bin.left.as_ref(), block)?;
+        let rhs_block = self.current_function.new_block();
+        let merge = self.current_function.new_block();
+
+        let condition = if matches!(bin.op, swc_ast::BinaryOp::NullishCoalescing) {
+            let is_nullish = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Unary {
+                    dest: is_nullish,
+                    op: UnaryOp::IsNullish,
+                    value: lhs,
+                },
+            );
+            is_nullish
+        } else {
+            lhs
+        };
+
+        let (true_block, false_block) = match bin.op {
+            swc_ast::BinaryOp::LogicalAnd => (rhs_block, merge),
+            swc_ast::BinaryOp::LogicalOr => (merge, rhs_block),
+            swc_ast::BinaryOp::NullishCoalescing => (rhs_block, merge),
+            _ => unreachable!(),
+        };
+
+        self.current_function.set_terminator(
+            block,
+            Terminator::Branch {
+                condition,
+                true_block,
+                false_block,
+            },
+        );
+
+        let rhs = self.lower_expr(bin.right.as_ref(), rhs_block)?;
+        let rhs_end = self.resolve_store_block(rhs_block);
+        self.current_function
+            .set_terminator(rhs_end, Terminator::Jump { target: merge });
+
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: block,
+                        value: lhs,
+                    },
+                    PhiSource {
+                        predecessor: rhs_end,
+                        value: rhs,
+                    },
+                ],
+            },
+        );
+
+        Ok(result)
+    }
+
+    // ── Unary operators ─────────────────────────────────────────────────────
+
+    pub(crate) fn lower_unary(
+        &mut self,
+        unary: &swc_ast::UnaryExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        use swc_ast::UnaryOp::*;
+
+        match unary.op {
+            Bang => {
+                let value = self.lower_expr(&unary.arg, block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::Not,
+                        value,
+                    },
+                );
+                Ok(dest)
+            }
+            Minus => {
+                let value = self.lower_expr(&unary.arg, block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::Neg,
+                        value,
+                    },
+                );
+                Ok(dest)
+            }
+            Plus => {
+                let value = self.lower_expr(&unary.arg, block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::Pos,
+                        value,
+                    },
+                );
+                Ok(dest)
+            }
+            Tilde => {
+                let value = self.lower_expr(&unary.arg, block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::BitNot,
+                        value,
+                    },
+                );
+                Ok(dest)
+            }
+            Void => {
+                let _ = self.lower_expr(&unary.arg, block)?;
+                // void returns undefined
+                let undef = self.module.add_constant(Constant::Undefined);
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest,
+                        constant: undef,
+                    },
+                );
+                Ok(dest)
+            }
+            TypeOf => {
+                let arg = self.lower_expr(&unary.arg, block)?;
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::TypeOf,
+                        args: vec![arg],
+                    },
+                );
+                Ok(dest)
+            }
+            Delete => {
+                // delete 操作符
+                match unary.arg.as_ref() {
+                    // delete obj.prop → DeleteProp 指令
+                    swc_ast::Expr::Member(member) => {
+                        let object = self.lower_expr(&member.obj, block)?;
+                        let key = match &member.prop {
+                            swc_ast::MemberProp::Ident(ident) => {
+                                let key_str = ident.sym.to_string();
+                                let key_const = self.module.add_constant(Constant::String(key_str));
+                                let key_val = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::Const {
+                                        dest: key_val,
+                                        constant: key_const,
+                                    },
+                                );
+                                key_val
+                            }
+                            swc_ast::MemberProp::Computed(computed) => {
+                                self.lower_expr(&computed.expr, block)?
+                            }
+                            _ => {
+                                return Err(self.error(
+                                    member.span(),
+                                    "delete only supports identifier or computed property keys",
+                                ));
+                            }
+                        };
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::DeleteProp { dest, object, key },
+                        );
+                        Ok(dest)
+                    }
+                    // delete x 对变量总是返回 true（不能删除变量）
+                    swc_ast::Expr::Ident(_) => {
+                        let true_const = self.module.add_constant(Constant::Bool(true));
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest,
+                                constant: true_const,
+                            },
+                        );
+                        Ok(dest)
+                    }
+                    _ => Err(self.error(
+                        unary.span(),
+                        "delete only supports member expressions or identifiers",
+                    )),
+                }
+            }
+        }
+    }
+
+    // ── Update expression (++x, x++, --x, x--) ─────────────────────────────
+
+    pub(crate) fn lower_update(
+        &mut self,
+        update: &swc_ast::UpdateExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        use swc_ast::UpdateOp;
+
+        // ── Step 1: 确定存储目标类型并加载当前值 ──
+        enum Target {
+            Var(String),
+            Member { obj: ValueId, key: ValueId },
+        }
+
+        let target = match update.arg.as_ref() {
+            swc_ast::Expr::Ident(ident) => {
+                let name = ident.sym.to_string();
+                // 性能优化：使用 lookup_for_assign 一次遍历完成 const 检查 + TDZ 检查 + scope 解析
+                let (scope_id, _kind) = self
+                    .scopes
+                    .lookup_for_assign(&name)
+                    .map_err(|msg| self.error(update.span(), msg))?;
+                Target::Var(format!("${scope_id}.{name}"))
+            }
+            swc_ast::Expr::Member(member) => {
+                let obj = self.lower_expr(&member.obj, block)?;
+                let key = match &member.prop {
+                    swc_ast::MemberProp::Ident(ident) => {
+                        let key_const = self
+                            .module
+                            .add_constant(Constant::String(ident.sym.to_string()));
+                        let key_dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest: key_dest,
+                                constant: key_const,
+                            },
+                        );
+                        key_dest
+                    }
+                    swc_ast::MemberProp::Computed(computed) => {
+                        self.lower_expr(&computed.expr, block)?
+                    }
+                    _ => {
+                        return Err(self.error(
+                            update.span(),
+                            "unsupported member property in update expression target",
+                        ));
+                    }
+                };
+                Target::Member { obj, key }
+            }
+            _ => {
+                return Err(self.error(
+                    update.span(),
+                    "update expression only supports identifier or member expression operands",
+                ));
+            }
+        };
+
+        // 1. 读取当前值
+        let old_val = self.alloc_value();
+        match &target {
+            Target::Var(ir_name) => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::LoadVar {
+                        dest: old_val,
+                        name: ir_name.clone(),
+                    },
+                );
+            }
+            Target::Member { obj, key } => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest: old_val,
+                        object: *obj,
+                        key: *key,
+                    },
+                );
+            }
+        }
+
+        // 2. 转换为 Number (ToNumber)
+        let num_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Unary {
+                dest: num_val,
+                op: UnaryOp::Pos,
+                value: old_val,
+            },
+        );
+
+        // 3. 常量 1.0
+        let one = self.module.add_constant(Constant::Number(1.0));
+        let one_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: one_val,
+                constant: one,
+            },
+        );
+
+        // 4. 执行加法或减法
+        let new_val = self.alloc_value();
+        let op = match update.op {
+            UpdateOp::PlusPlus => BinaryOp::Add,
+            UpdateOp::MinusMinus => BinaryOp::Sub,
+        };
+        self.current_function.append_instruction(
+            block,
+            Instruction::Binary {
+                dest: new_val,
+                op,
+                lhs: num_val,
+                rhs: one_val,
+            },
+        );
+
+        // 5. 写回 (StoreVar or SetProp)
+        match target {
+            Target::Var(ir_name) => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::StoreVar {
+                        name: ir_name,
+                        value: new_val,
+                    },
+                );
+            }
+            Target::Member { obj, key } => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::SetProp {
+                        object: obj,
+                        key,
+                        value: new_val,
+                    },
+                );
+            }
+        }
+
+        Ok(if update.prefix { new_val } else { num_val })
+    }
+
+    pub(crate) fn lower_cond(
+        &mut self,
+        cond: &swc_ast::CondExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        // 评估条件表达式
+        let test = self.lower_expr(&cond.test, block)?;
+
+        let cons_block = self.current_function.new_block();
+        let alt_block = self.current_function.new_block();
+        let merge = self.current_function.new_block();
+        self.current_function.set_terminator(
+            block,
+            Terminator::Branch {
+                condition: test,
+                true_block: cons_block,
+                false_block: alt_block,
+            },
+        );
+
+        let cons_val = self.lower_expr(&cond.cons, cons_block)?;
+        let cons_end = self.resolve_store_block(cons_block);
+        self.current_function
+            .set_terminator(cons_end, Terminator::Jump { target: merge });
+
+        let alt_val = self.lower_expr(&cond.alt, alt_block)?;
+        let alt_end = self.resolve_store_block(alt_block);
+        self.current_function
+            .set_terminator(alt_end, Terminator::Jump { target: merge });
+
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: cons_end,
+                        value: cons_val,
+                    },
+                    PhiSource {
+                        predecessor: alt_end,
+                        value: alt_val,
+                    },
+                ],
+            },
+        );
+
+        Ok(result)
+    }
+    // ── Comma expression ────────────────────────────────────────────────────
+
+    pub(crate) fn lower_seq(
+        &mut self,
+        seq: &swc_ast::SeqExpr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let mut last = self.alloc_value();
+        for expr in &seq.exprs {
+            last = self.lower_expr(expr, block)?;
+        }
+        Ok(last)
+    }
+
+    // ── Literals ────────────────────────────────────────────────────────────
+
+    pub(crate) fn lower_literal(
+        &mut self,
+        lit: &swc_ast::Lit,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let constant = match lit {
+            swc_ast::Lit::Num(num) => Constant::Number(num.value),
+            swc_ast::Lit::Str(string) => {
+                Constant::String(string.value.to_string_lossy().into_owned())
+            }
+            swc_ast::Lit::Bool(b) => Constant::Bool(b.value),
+            swc_ast::Lit::BigInt(b) => Constant::BigInt(b.value.to_str_radix(10)),
+            swc_ast::Lit::Regex(regex) => Constant::RegExp {
+                pattern: regex.exp.to_string(),
+                flags: regex.flags.to_string(),
+            },
+            swc_ast::Lit::Null(_) => Constant::Null,
+            _ => {
+                return Err(self.error(
+                    lit.span(),
+                    format!("unsupported literal kind `{}`", literal_kind(lit)),
+                ));
+            }
+        };
+
+        let constant = self.module.add_constant(constant);
+        let dest = self.alloc_value();
+        self.current_function
+            .append_instruction(block, Instruction::Const { dest, constant });
+        Ok(dest)
+    }
+
+    // ── Helper: load bool constant ──────────────────────────────────────────
+
+    pub(crate) fn load_bool_constant(&mut self, val: bool, block: BasicBlockId) -> ValueId {
+        let constant = self.module.add_constant(Constant::Bool(val));
+        let dest = self.alloc_value();
+        self.current_function
+            .append_instruction(block, Instruction::Const { dest, constant });
+        dest
+    }
+
+    // ── Flow helper ─────────────────────────────────────────────────────────
+}
