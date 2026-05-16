@@ -109,6 +109,41 @@ impl Lowerer {
                         }
                     }
 
+                    // RegExp.prototype 方法调用优化：RegExp 宿主函数使用固定二参调用约定，
+                    // 不能通过运行时属性查找后再走通用 call_indirect。
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {
+                        if let Some(regexp_builtin) =
+                            builtin_from_regexp_proto_method(&prop_ident.sym)
+                        {
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            if let Some(arg) = call.args.first() {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            } else {
+                                let undef_const = self.module.add_constant(Constant::Undefined);
+                                let undef_val = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::Const {
+                                        dest: undef_val,
+                                        constant: undef_const,
+                                    },
+                                );
+                                builtin_args.push(undef_val);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: regexp_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+                    }
+
                     // Array.prototype 方法调用优化：发出 CallBuiltin 代替 Call，
                     // 跳过运行时属性解析（原型链查找）。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop {

@@ -641,7 +641,7 @@ fn block_has_suspend(block: &BasicBlock) -> bool {
 /// 检测 CFG 中的循环（通过 back-edge 识别）。
 /// 返回按 header_idx 排序的 LoopInfo 列表。
 fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashMap;
     let mut back_edges: HashMap<usize, Vec<usize>> = HashMap::new();
 
     for (i, block) in blocks.iter().enumerate() {
@@ -664,45 +664,7 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
     }
 
     let mut loops: Vec<LoopInfo> = Vec::new();
-    // NOTE: 此处对每个 back-edge 做前向可达性分析以过滤无效循环。
-    // 在大型 CFG 上可能有性能影响，未来可考虑使用 dominator tree 分析替代。
-    'next_edge: for (header_idx, latches) in &back_edges {
-        let mut reachable: HashSet<usize> = HashSet::new();
-        let mut stack = vec![*header_idx];
-        while let Some(idx) = stack.pop() {
-            if reachable.contains(&idx) {
-                continue;
-            }
-            reachable.insert(idx);
-            if idx >= blocks.len() {
-                continue;
-            }
-            match blocks[idx].terminator() {
-                Terminator::Jump { target } => {
-                    stack.push(target.0 as usize);
-                }
-                Terminator::Branch {
-                    true_block,
-                    false_block,
-                    ..
-                } => {
-                    stack.push(true_block.0 as usize);
-                    stack.push(false_block.0 as usize);
-                }
-                _ => {}
-            }
-        }
-        let mut any_latch_reachable = false;
-        for latch in latches {
-            if reachable.contains(latch) {
-                any_latch_reachable = true;
-                break;
-            }
-        }
-        if !any_latch_reachable {
-            continue 'next_edge;
-        }
-
+    for header_idx in back_edges.keys() {
         let exit_idx = match blocks[*header_idx].terminator() {
             // while/for 模式：header 有 Branch，false 分支是出口
             Terminator::Branch { false_block, .. } => false_block.0 as usize,

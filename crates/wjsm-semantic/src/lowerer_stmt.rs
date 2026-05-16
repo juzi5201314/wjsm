@@ -920,7 +920,10 @@ impl Lowerer {
                     Ok(())
                 }
                 swc_ast::Pat::Object(_) | swc_ast::Pat::Array(_) | swc_ast::Pat::Assign(_) => {
-                    self.lower_destructure_pattern(pat, value, block, VarKind::Let)
+                    Err(self.error(
+                        pat.span(),
+                        "destructuring patterns in for...in/for...of are not yet supported",
+                    ))
                 }
                 _ => Err(self.error(
                     pat.span(),

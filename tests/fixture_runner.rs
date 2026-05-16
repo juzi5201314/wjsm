@@ -114,6 +114,7 @@ impl FixtureRunner {
 
     fn run_fixture(&self, fixture: &FixtureCase) -> Result<()> {
         let output = Command::new(&self.binary_path)
+            .env("TZ", "UTC")
             .arg("run")
             .arg(&fixture.input_path)
             .output()

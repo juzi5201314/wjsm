@@ -324,6 +324,18 @@ pub(crate) fn builtin_from_string_proto_method(name: &str) -> Option<Builtin> {
     }
 }
 
+/// 将 RegExp.prototype 方法名映射到 Builtin 变体。
+/// RegExp 值不是对象属性表中的普通方法，必须直接分派到宿主实现，
+/// 否则会走通用 call_indirect 路径并因调用约定不匹配而 trap。
+pub(crate) fn builtin_from_regexp_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "test" => Some(RegExpTest),
+        "exec" => Some(RegExpExec),
+        _ => None,
+    }
+}
+
 pub(crate) fn builtin_from_promise_proto_method(name: &str) -> Option<Builtin> {
     use Builtin::*;
     match name {
