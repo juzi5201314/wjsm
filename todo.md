@@ -7,13 +7,14 @@
 ```
  套件                       总测试   通过     失败     通过率
  ──────────────────────────────────────────────────────────
- language/eval-code/direct   286      32      254     11.19%
- language/eval-code/indirect  61      17       44     27.87%
- built-ins/eval               10       3        7     30.00%
- annexB/eval-code/direct     309       5      304      1.62%
- annexB/eval-code/indirect   160       0      160      0.00%
+ language/eval-code/direct      286      32      254     11.19%
+ language/eval-code/indirect     61      17       44     27.87%
+ built-ins/eval                  10       3        7     30.00%
+ annexB/eval-code/direct        309       5      304      1.62%
+ annexB/eval-code/indirect      160       0      160      0.00%
+ staging/sm/eval                 20       1       19      5.00%
  ──────────────────────────────────────────────────────────
- 合计                       826      57      769      6.90%
+ 合计                          846      58      788      6.86%
 ```
 
 ## 基础
