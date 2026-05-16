@@ -777,6 +777,9 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
         Instruction::PromiseResolve { promise, value } => promise.0.max(value.0),
         Instruction::PromiseReject { promise, reason } => promise.0.max(reason.0),
         Instruction::Suspend { promise, .. } => promise.0,
+        Instruction::IsException { dest, value } => dest.0.max(value.0),
+        Instruction::EncodeException { dest, value } => dest.0.max(value.0),
+        Instruction::ExceptionToObject { dest, value } => dest.0.max(value.0),
         Instruction::CollectRestArgs { dest, .. } => dest.0,
     }
 }

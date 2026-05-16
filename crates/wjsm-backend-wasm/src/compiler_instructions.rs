@@ -709,6 +709,63 @@ impl Compiler {
 
                 Ok(false)
             }
+            Instruction::IsException { dest, value } => {
+                let box_base = value::BOX_BASE as i64;
+                let tag_exception = value::TAG_EXCEPTION as i64;
+                let tag_mask = value::TAG_MASK as i64;
+                let bool_true = value::encode_bool(true);
+                let bool_false = value::encode_bool(false);
+
+                // Check BOX_BASE
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(box_base));
+                self.emit(WasmInstruction::I64Ne);
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                self.emit(WasmInstruction::I64Const(bool_false));
+                self.emit(WasmInstruction::Else);
+                // Check tag
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I64Const(tag_mask));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(tag_exception));
+                self.emit(WasmInstruction::I64Eq);
+                self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                self.emit(WasmInstruction::I64Const(bool_true));
+                self.emit(WasmInstruction::Else);
+                self.emit(WasmInstruction::I64Const(bool_false));
+                self.emit(WasmInstruction::End);
+                self.emit(WasmInstruction::End);
+                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                Ok(false)
+            }
+            Instruction::EncodeException { dest, value } => {
+                let box_base = value::BOX_BASE as i64;
+                let tag_exception = value::TAG_EXCEPTION as i64;
+                let encoded_base = box_base | ((tag_exception & 0x1F) << 32);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                self.emit(WasmInstruction::I64Const(0xFFFFFFFFi64));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(encoded_base));
+                self.emit(WasmInstruction::I64Or);
+                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                Ok(false)
+            }
+            Instruction::ExceptionToObject { dest, value } => {
+                let box_base = value::BOX_BASE as i64;
+                let tag_object = value::TAG_OBJECT as i64;
+                let decoded_base = box_base | ((tag_object & 0x1F) << 32);
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                self.emit(WasmInstruction::I64Const(0xFFFFFFFFi64));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(decoded_base));
+                self.emit(WasmInstruction::I64Or);
+                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                Ok(false)
+            }
         }
     }
 

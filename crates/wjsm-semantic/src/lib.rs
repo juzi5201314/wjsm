@@ -51,6 +51,9 @@ struct VarInfo {
     /// `false` = in TDZ (declared lexically but not yet initialised).
     /// `true`  = initialised and ready for use.
     initialised: bool,
+    /// `true` only for the implicit `arguments` binding created by emit_arguments_init.
+    /// Used to distinguish implicit `arguments` from explicit `var`/`let`/`const arguments`.
+    implicit_arguments: bool,
 }
 
 struct Scope {
@@ -145,7 +148,7 @@ impl ScopeTree {
 
         scope
             .variables
-            .insert(name.to_string(), VarInfo { kind, initialised });
+            .insert(name.to_string(), VarInfo { kind, initialised, implicit_arguments: false });
         Ok(scope.id)
     }
 
@@ -283,6 +286,34 @@ impl ScopeTree {
                 .parent
                 .ok_or_else(|| "root must be function scope".to_string())?;
         }
+    }
+    /// Mark an existing variable as implicit `arguments`.
+    pub(crate) fn set_implicit_arguments(&mut self, name: &str) -> Result<(), String> {
+        let mut cursor = Some(self.current);
+        while let Some(scope_id) = cursor {
+            let scope = &mut self.arenas[scope_id];
+            if let Some(info) = scope.variables.get_mut(name) {
+                info.implicit_arguments = true;
+                return Ok(());
+            }
+            cursor = scope.parent;
+        }
+        Err(format!("undeclared identifier `{name}`"))
+    }
+    
+    /// 检查当前作用域链中是否有显式（非 implicit）的 `arguments` 声明
+    pub(crate) fn has_explicit_arguments_in_scope(&self) -> bool {
+        let mut cursor = Some(self.current);
+        while let Some(scope_id) = cursor {
+            let scope = &self.arenas[scope_id];
+            if let Some(info) = scope.variables.get("arguments") {
+                if !info.implicit_arguments {
+                    return true;
+                }
+            }
+            cursor = scope.parent;
+        }
+        false
     }
 }
 

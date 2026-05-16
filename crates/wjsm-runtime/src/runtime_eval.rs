@@ -230,7 +230,25 @@ pub(crate) fn perform_eval_from_caller(
             entry.offset % 8 == 0 && !entry.function_name.is_empty() && !entry.var_name.is_empty()
         })
         .count();
-
+    // ── SyntaxError 检测：eval 代码中声明 var/function arguments ──
+    // 检查规则（EvalDeclarationInstantiation）：
+    // 如果 eval 代码声明 var arguments 且调用上下文没有 arguments 绑定 → SyntaxError
+    if let Some(env) = scope_env {
+        if code.contains("var arguments") || code.contains("function arguments") {
+            let has_arguments = resolve_handle(caller, env)
+                .and_then(|ptr| read_object_property_by_name(caller, ptr, "arguments"))
+                .is_some();
+            
+            if !has_arguments {
+                let msg = "SyntaxError: declaring 'arguments' in eval code is invalid";
+                let msg_str = store_runtime_string(&caller, msg.to_string());
+                let _error_val = create_error_object(caller, "SyntaxError", msg_str);
+                set_runtime_error(caller.data(), msg.to_string());
+                return value::encode_handle(value::TAG_EXCEPTION, 0);
+            }
+        }
+    }
+    
     let module = match wjsm_parser::parse_script_as_module(&code) {
         Ok(module) => module,
         Err(error) => {
@@ -239,11 +257,11 @@ pub(crate) fn perform_eval_from_caller(
         }
     };
     let strict_eval_source = runtime_module_has_use_strict_directive(&module);
-
+    
     let var_writes_to_scope = scope_env
         .map(|env| !strict_eval_source && !eval_scope_has_strict_marker(caller, env))
         .unwrap_or(false);
-
+    
     match try_compiled_eval_from_caller(caller, &code, &module, scope_env, var_writes_to_scope) {
         Ok(value) => value,
         Err(error) => {
@@ -278,6 +296,10 @@ pub(crate) fn format_eval_error(error: anyhow::Error) -> String {
         format!("SyntaxError: {normalized}")
     } else if message.starts_with("const declarations must be initialised") {
         format!("SyntaxError: {message}")
+    } else if message.starts_with("cannot access") {
+        format!("ReferenceError: {message}")
+    } else if message.starts_with("undeclared identifier") {
+        format!("ReferenceError: {message}")
     } else {
         format!("RuntimeError: {raw}")
     }

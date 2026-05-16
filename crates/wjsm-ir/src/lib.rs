@@ -427,6 +427,21 @@ pub enum Instruction {
         dest: ValueId,
         skip: u32,
     },
+    /// 检查值是否为 TAG_EXCEPTION，将 dest 设为布尔值（true=是异常）
+    IsException {
+        dest: ValueId,
+        value: ValueId,
+    },
+    /// 将错误对象编码为 TAG_EXCEPTION（用于函数返回异常）
+    EncodeException {
+        dest: ValueId,
+        value: ValueId,
+    },
+    /// 将 TAG_EXCEPTION 解码为原始对象（用于重新抛出）
+    ExceptionToObject {
+        dest: ValueId,
+        value: ValueId,
+    },
 }
 
 impl fmt::Display for Instruction {
@@ -586,6 +601,15 @@ impl fmt::Display for Instruction {
             }
             Self::CollectRestArgs { dest, skip } => {
                 write!(formatter, "{dest} = collect_rest_args skip={skip}")
+            }
+            Self::IsException { dest, value } => {
+                write!(formatter, "{dest} = is_exception {value}")
+            }
+            Self::EncodeException { dest, value } => {
+                write!(formatter, "{dest} = encode_exception {value}")
+            }
+            Self::ExceptionToObject { dest, value } => {
+                write!(formatter, "{dest} = exception_to_object {value}")
             }
         }
     }
