@@ -1,6 +1,8 @@
 const target = { x: 10 };
-const handler = {};
+const handler = {
+  get: function(t, p, r) {
+    return 42;
+  }
+};
 const proxy = new Proxy(target, handler);
-console.log(proxy !== null);
-console.log(target.x);
 console.log(proxy.x);

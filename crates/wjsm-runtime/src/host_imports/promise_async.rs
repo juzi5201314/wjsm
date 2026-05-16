@@ -1250,6 +1250,49 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
+            // Proxy apply trap: if the callable is a proxy, handle via handler.apply
+            if value::is_proxy(callable) {
+                let handle = value::decode_proxy_handle(callable) as usize;
+                let entry = {
+                    let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    table.get(handle).cloned()
+                };
+                if let Some(entry) = entry {
+                    if entry.revoked {
+                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'apply' on a proxy that has been revoked".to_string());
+                        return value::encode_undefined();
+                    }
+                    // Look up apply trap on handler
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "apply")
+                            .unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            // Create args array from shadow stack
+                            let arr = alloc_array(&mut caller, args_count as u32);
+                            for i in 0..args_count {
+                                let arg = read_shadow_arg(&mut caller, args_base, i as u32);
+                                set_array_elem(&mut caller, arr, i, arg);
+                            }
+                            // Call trap via resolve_and_call
+                            let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+                            let shadow_sp_global = caller.get_export("__shadow_sp").and_then(|e| e.into_global()).unwrap();
+                            let saved_sp = shadow_sp_global.get(&mut caller).i32().unwrap();
+                            let trap_args = [entry.target, this_val, arr];
+                            let total_size = (trap_args.len() * 8) as i32;
+                            for (i, &arg) in trap_args.iter().enumerate() {
+                                memory.write(&mut caller, (saved_sp + i as i32 * 8) as usize, &arg.to_le_bytes()).unwrap();
+                            }
+                            shadow_sp_global.set(&mut caller, Val::I32(saved_sp + total_size)).unwrap();
+                            let result = resolve_and_call(&mut caller, trap, entry.handler, saved_sp, trap_args.len() as i32);
+                            shadow_sp_global.set(&mut caller, Val::I32(saved_sp)).unwrap();
+                            return result;
+                        }
+                    }
+                    // No apply trap, forward to target
+                    return resolve_and_call(&mut caller, entry.target, this_val, args_base, args_count);
+                }
+                return value::encode_undefined();
+            }
             let args = (0..args_count.max(0))
                 .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
                 .collect();
@@ -1359,12 +1402,12 @@
     let proxy_create_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
-            if !value::is_object(target) && !value::is_function(target) && !value::is_array(target) {
+            if !value::is_object(target) && !value::is_function(target) && !value::is_array(target) && !value::is_proxy(target) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
                     Some("TypeError: Proxy target must be an object".to_string());
                 return value::encode_undefined();
             }
-            if !value::is_object(handler) && !value::is_function(handler) && !value::is_array(handler) {
+            if !value::is_object(handler) && !value::is_function(handler) && !value::is_array(handler) && !value::is_proxy(handler) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
                     Some("TypeError: Proxy handler must be an object".to_string());
                 return value::encode_undefined();
@@ -1375,51 +1418,83 @@
                 handle = table.len() as u32;
                 table.push(ProxyEntry { target, handler, revoked: false });
             }
-            let obj = alloc_host_object_from_caller(&mut caller, 4);
-            let handle_val = value::encode_f64(handle as f64);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "__proxy_handle__", handle_val);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_target", target);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_handler", handler);
-            obj
+            value::encode_proxy_handle(handle)
         },
     );
 
     let reflect_get_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, receiver: i64| -> i64 {
-            let obj_ptr = resolve_handle(&mut caller, target);
-            if let Some(ptr) = obj_ptr {
-                if let Some(prop_name) = render_value(&mut caller, prop).ok() {
-                    if let Some(val) = read_object_property_by_name(&mut caller, ptr, &prop_name) {
-                        return val;
-                    }
-                }
-            }
             let _ = receiver;
-            value::encode_undefined()
+            // Proxy target: 触发 get trap
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = {
+                    let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    table.get(handle).cloned()
+                };
+                if let Some(entry) = entry {
+                    if entry.revoked {
+                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'get' on a proxy that has been revoked".to_string());
+                        return value::encode_undefined();
+                    }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "get")
+                            .unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            return call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop, target])
+                                .unwrap_or_else(|_| value::encode_undefined());
+                        }
+                    }
+                    // 无 trap，转发到 target
+                    return reflect_get_impl(&mut caller, entry.target, prop);
+                }
+                return value::encode_undefined();
+            }
+            reflect_get_impl(&mut caller, target, prop)
         },
     );
+
+    fn reflect_get_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64) -> i64 {
+        let obj_ptr = resolve_handle(caller, target);
+        if let Some(ptr) = obj_ptr {
+            if let Some(prop_name) = render_value(caller, prop).ok() {
+                if let Some(val) = read_object_property_by_name(caller, ptr, &prop_name) {
+                    return val;
+                }
+            }
+        }
+        value::encode_undefined()
+    }
 
     let proxy_revocable_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
-            let proxy_val = {
-                let handle;
-                {
-                    let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
-                    handle = table.len() as u32;
-                    table.push(ProxyEntry { target, handler, revoked: false });
-                }
-                let obj = alloc_host_object_from_caller(&mut caller, 4);
-                let handle_val = value::encode_f64(handle as f64);
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "__proxy_handle__", handle_val);
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_target", target);
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy_handler", handler);
-                obj
+            if !value::is_object(target) && !value::is_function(target) && !value::is_array(target) && !value::is_proxy(target) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Proxy target must be an object".to_string());
+                return value::encode_undefined();
+            }
+            if !value::is_object(handler) && !value::is_function(handler) && !value::is_array(handler) && !value::is_proxy(handler) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Proxy handler must be an object".to_string());
+                return value::encode_undefined();
+            }
+            let handle = {
+                let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                let handle = table.len() as u32;
+                table.push(ProxyEntry { target, handler, revoked: false });
+                handle
+            };
+            let proxy_val = value::encode_proxy_handle(handle);
+            let revoke_fn = {
+                let mut native_callables = caller.data().native_callables.lock().unwrap();
+                let idx = native_callables.len() as u32;
+                native_callables.push(NativeCallable::ProxyRevoker { proxy_handle: handle });
+                value::encode_native_callable_idx(idx)
             };
             let obj = alloc_host_object_from_caller(&mut caller, 2);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy", proxy_val);
-            let revoke_fn = alloc_host_object_from_caller(&mut caller, 0);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "revoke", revoke_fn);
             obj
         },
@@ -1428,39 +1503,136 @@
     let reflect_set_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64, _receiver: i64| -> i64 {
-            let obj_ptr = resolve_handle(&mut caller, target);
-            if let Some(_ptr) = obj_ptr {
-                if let Some(prop_name) = render_value(&mut caller, prop).ok() {
-                    let _ = define_host_data_property_from_caller(&mut caller, target, &prop_name, val);
-                    return value::encode_bool(true);
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
+                if let Some(entry) = entry {
+                    if entry.revoked { set_runtime_error(caller.data(), "TypeError: Cannot perform 'set' on a proxy that has been revoked".to_string()); return value::encode_bool(false); }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "set").unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop, val, target]).unwrap_or_else(|_| value::encode_bool(false));
+                            return value::encode_bool(nanbox_to_bool(result));
+                        }
+                    }
+                    return reflect_set_impl(&mut caller, entry.target, prop, val);
                 }
+                return value::encode_bool(false);
             }
-            value::encode_bool(false)
+            reflect_set_impl(&mut caller, target, prop, val)
         },
     );
+
+    fn reflect_set_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64) -> i64 {
+        if let Some(prop_name) = render_value(caller, prop).ok() {
+            let _ = define_host_data_property_from_caller(caller, target, &prop_name, val);
+            return value::encode_bool(true);
+        }
+        value::encode_bool(false)
+    }
 
     let reflect_has_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64| -> i64 {
-            let obj_ptr = resolve_handle(&mut caller, target);
-            if let Some(ptr) = obj_ptr {
-                if let Some(prop_name) = render_value(&mut caller, prop).ok() {
-                    if let Some(name_id) = find_memory_c_string(&mut caller, &prop_name) {
-                        let found = find_property_slot_by_name_id(&mut caller, ptr, name_id).is_some();
-                        return value::encode_bool(found);
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
+                if let Some(entry) = entry {
+                    if entry.revoked { set_runtime_error(caller.data(), "TypeError: Cannot perform 'has' on a proxy that has been revoked".to_string()); return value::encode_bool(false); }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "has").unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop]).unwrap_or_else(|_| value::encode_bool(false));
+                            return value::encode_bool(nanbox_to_bool(result));
+                        }
                     }
+                    return reflect_has_impl(&mut caller, entry.target, prop);
                 }
+                return value::encode_bool(false);
             }
-            value::encode_bool(false)
+            reflect_has_impl(&mut caller, target, prop)
         },
     );
 
+    fn reflect_has_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64) -> i64 {
+        let obj_ptr = resolve_handle(caller, target);
+        if let Some(ptr) = obj_ptr {
+            if let Some(prop_name) = render_value(caller, prop).ok() {
+                if let Some(name_id) = find_memory_c_string(caller, &prop_name) {
+                    let found = find_property_slot_by_name_id(caller, ptr, name_id).is_some();
+                    return value::encode_bool(found);
+                }
+            }
+        }
+        value::encode_bool(false)
+    }
+
     let reflect_delete_property_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64| -> i64 {
-            value::encode_bool(true)
+        |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64| -> i64 {
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
+                if let Some(entry) = entry {
+                    if entry.revoked { set_runtime_error(caller.data(), "TypeError: Cannot perform 'deleteProperty' on a proxy that has been revoked".to_string()); return value::encode_bool(false); }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "deleteProperty").unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop]).unwrap_or_else(|_| value::encode_bool(false));
+                            return value::encode_bool(nanbox_to_bool(result));
+                        }
+                    }
+                    return reflect_delete_property_impl(&mut caller, entry.target, prop);
+                }
+                return value::encode_bool(false);
+            }
+            reflect_delete_property_impl(&mut caller, target, prop)
         },
     );
+    fn reflect_delete_property_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64) -> i64 {
+        let prop_name = match render_value(caller, prop) {
+            Ok(name) => name,
+            Err(_) => return value::encode_bool(true),
+        };
+        let Some(ptr) = resolve_handle(caller, target) else {
+            return value::encode_bool(true);
+        };
+        let Some(name_id) = find_memory_c_string(caller, &prop_name) else {
+            return value::encode_bool(true);
+        };
+        let Some((
+            slot_offset, flags, _val,
+        )) = find_property_slot_by_name_id(caller, ptr, name_id)
+        else {
+            return value::encode_bool(true);
+        };
+        // Not configurable → can't delete
+        if (flags & constants::FLAG_CONFIGURABLE) == 0 {
+            return value::encode_bool(false);
+        }
+        // Perform swap-remove
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return value::encode_bool(false);
+        };
+        let data = memory.data_mut(&mut *caller);
+        if ptr + 16 > data.len() || slot_offset + 32 > data.len() {
+            return value::encode_bool(false);
+        }
+        let num_props = u32::from_le_bytes([data[ptr + 12], data[ptr + 13], data[ptr + 14], data[ptr + 15]]) as usize;
+        if num_props == 0 {
+            return value::encode_bool(true);
+        }
+        let last_slot_offset = ptr + 16 + (num_props - 1) * 32;
+        // Decrement num_props
+        data[ptr + 12..ptr + 16].copy_from_slice(&(num_props as u32 - 1).to_le_bytes());
+        // If not deleting the last slot, copy last slot over deleted slot
+        if slot_offset != last_slot_offset {
+            for j in 0..32 {
+                data[slot_offset + j] = data[last_slot_offset + j];
+            }
+        }
+        value::encode_bool(true)
+    }
 
     let reflect_apply_fn = Func::wrap(
         &mut store,
@@ -1468,20 +1640,75 @@
             resolve_and_call(&mut caller, target, this_arg, 0, 0)
         },
     );
-
     let reflect_construct_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _target: i64, _args: i64, _new_target: i64| -> i64 {
-            alloc_host_object_from_caller(&mut caller, 4)
+        |mut caller: Caller<'_, RuntimeState>, target: i64, args_array: i64, _new_target: i64| -> i64 {
+            let is_callable = value::is_function(target) || value::is_closure(target) || value::is_proxy(target);
+            if !is_callable {
+                return alloc_host_object_from_caller(&mut caller, 4);
+            }
+            let this_obj = alloc_host_object_from_caller(&mut caller, 4);
+            // Read args from array and push to shadow stack
+            let arg_count = if value::is_array(args_array) {
+                let handle = value::decode_array_handle(args_array) as usize;
+                let Some(ptr) = resolve_handle_idx(&mut caller, handle) else { return this_obj; };
+                // Read shadow stack position first (mutable borrow)
+                let shadow_sp_global = caller.get_export("__shadow_sp").and_then(|e| e.into_global()).unwrap();
+                let saved_sp = shadow_sp_global.get(&mut caller).i32().unwrap();
+                // Read array length (immutable borrow on memory)
+                let len = {
+                    let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return this_obj; };
+                    let data = memory.data(&caller);
+                    if ptr + 12 > data.len() { return this_obj; };
+                    u32::from_le_bytes([data[ptr + 8], data[ptr + 9], data[ptr + 10], data[ptr + 11]]) as usize
+                };
+                let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+                for i in 0..len {
+                    let mut buf = [0u8; 8];
+                    let _ = memory.read(&mut caller, (ptr + 16 + i * 8) as usize, &mut buf);
+                    let arg_val = i64::from_le_bytes(buf);
+                    memory.write(&mut caller, (saved_sp + i as i32 * 8) as usize, &arg_val.to_le_bytes()).unwrap();
+                }
+                shadow_sp_global.set(&mut caller, Val::I32(saved_sp + len as i32 * 8)).unwrap();
+                let result = resolve_and_call(&mut caller, target, this_obj, saved_sp, len as i32);
+                shadow_sp_global.set(&mut caller, Val::I32(saved_sp)).unwrap();
+                return result;
+            } else {
+                0
+            };
+            resolve_and_call(&mut caller, target, this_obj, 0, arg_count as i32)
         },
     );
 
     let reflect_get_prototype_of_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
-            value::encode_null()
+        |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
+                if let Some(entry) = entry {
+                    if entry.revoked { set_runtime_error(caller.data(), "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked".to_string()); return value::encode_undefined(); }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "getPrototypeOf").unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            return call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target]).unwrap_or_else(|_| value::encode_null());
+                        }
+                    }
+                    return reflect_get_prototype_of_impl(&mut caller, entry.target);
+                }
+            }
+            reflect_get_prototype_of_impl(&mut caller, target)
         },
     );
+
+    fn reflect_get_prototype_of_impl(caller: &mut Caller<'_, RuntimeState>, target: i64) -> i64 {
+        let Some(ptr) = resolve_handle(caller, target) else { return value::encode_undefined(); };
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return value::encode_null(); };
+        let data = memory.data(&*caller);
+        if ptr + 4 > data.len() { return value::encode_null(); }
+        let proto_handle = u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
+        if proto_handle == 0xFFFF_FFFF { value::encode_null() } else { value::encode_object_handle(proto_handle) }
+    }
 
     let reflect_set_prototype_of_fn = Func::wrap(
         &mut store,
@@ -1506,22 +1733,96 @@
 
     let reflect_get_own_property_descriptor_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64| -> i64 {
-            value::encode_undefined()
+        |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64| -> i64 {
+            // Proxy target: trigger getOwnPropertyDescriptor trap
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
+                if let Some(entry) = entry {
+                    if entry.revoked { set_runtime_error(caller.data(), "TypeError: Cannot perform 'getOwnPropertyDescriptor' on a proxy that has been revoked".to_string()); return value::encode_undefined(); }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "getOwnPropertyDescriptor").unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            return call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop])
+                                .unwrap_or_else(|_| value::encode_undefined());
+                        }
+                    }
+                    return reflect_get_own_property_descriptor_impl(&mut caller, entry.target, prop);
+                }
+                return value::encode_undefined();
+            }
+            reflect_get_own_property_descriptor_impl(&mut caller, target, prop)
         },
     );
+    fn reflect_get_own_property_descriptor_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64) -> i64 {
+        let prop_name = match render_value(caller, prop) {
+            Ok(name) => name,
+            Err(_) => return value::encode_undefined(),
+        };
+        let Some(ptr) = resolve_handle(caller, target) else {
+            return value::encode_undefined();
+        };
+        let Some(name_id) = find_memory_c_string(caller, &prop_name) else {
+            return value::encode_undefined();
+        };
+        let Some((slot_offset, flags, val)) = find_property_slot_by_name_id(caller, ptr, name_id) else {
+            return value::encode_undefined();
+        };
+        let is_accessor = (flags & constants::FLAG_IS_ACCESSOR) != 0;
+        let enumerable = (flags & constants::FLAG_ENUMERABLE) != 0;
+        let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
+        let (getter_val, setter_val) = if is_accessor {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return value::encode_undefined();
+            };
+            let data = memory.data(&*caller);
+            if slot_offset + 32 > data.len() { return value::encode_undefined(); }
+            let g = i64::from_le_bytes([
+                data[slot_offset + 16], data[slot_offset + 17], data[slot_offset + 18], data[slot_offset + 19],
+                data[slot_offset + 20], data[slot_offset + 21], data[slot_offset + 22], data[slot_offset + 23],
+            ]);
+            let s = i64::from_le_bytes([
+                data[slot_offset + 24], data[slot_offset + 25], data[slot_offset + 26], data[slot_offset + 27],
+                data[slot_offset + 28], data[slot_offset + 29], data[slot_offset + 30], data[slot_offset + 31],
+            ]);
+            (g, s)
+        } else {
+            (value::encode_undefined(), value::encode_undefined())
+        };
+        let desc = alloc_host_object_from_caller(caller, 4);
+        if is_accessor {
+            let _ = define_host_data_property_from_caller(caller, desc, "get", getter_val);
+            let _ = define_host_data_property_from_caller(caller, desc, "set", setter_val);
+        } else {
+            let _ = define_host_data_property_from_caller(caller, desc, "value", val);
+            let _ = define_host_data_property_from_caller(caller, desc, "writable", value::encode_bool((flags & constants::FLAG_WRITABLE) != 0));
+        }
+        let _ = define_host_data_property_from_caller(caller, desc, "enumerable", value::encode_bool(enumerable));
+        let _ = define_host_data_property_from_caller(caller, desc, "configurable", value::encode_bool(configurable));
+        desc
+    }
 
     let reflect_define_property_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _target: i64, _prop: i64, _descriptor: i64| -> i64 {
-            value::encode_bool(true)
+        |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, descriptor: i64| -> i64 {
+            let value_val = resolve_handle(&mut caller, descriptor)
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "value"))
+                .unwrap_or_else(value::encode_undefined);
+            reflect_set_impl(&mut caller, target, prop, value_val)
         },
     );
 
     let reflect_own_keys_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
-            value::encode_undefined()
+        |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
+            let Some(ptr) = resolve_handle(&mut caller, target) else { return value::encode_undefined(); };
+            let names = collect_own_property_names(&mut caller, ptr, false);
+            let arr = alloc_array(&mut caller, names.len() as u32);
+            for (i, name) in names.into_iter().enumerate() {
+                let name_val = store_runtime_string(&caller, name);
+                let _ = define_host_data_property_from_caller(&mut caller, arr, &i.to_string(), name_val);
+            }
+            arr
         },
     );
     // ── Math builtins ────────────────────────────────────────────────────────

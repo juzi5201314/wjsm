@@ -824,6 +824,12 @@ impl Compiler {
         imports.import("env", "private_set", EntityType::Function(32));
         // Import index 315: private_has: (i64, i32) -> i64
         imports.import("env", "private_has", EntityType::Function(8));
+        // Import index 316: proxy_trap_get: (i64 proxy, i32 name_id) -> i64
+        imports.import("env", "proxy_trap_get", EntityType::Function(8));
+        // Import index 317: proxy_trap_set: (i64 proxy, i32 name_id, i64 value) -> ()
+        imports.import("env", "proxy_trap_set", EntityType::Function(9));
+        // Import index 318: proxy_trap_delete: (i64 proxy, i32 name_id) -> i64
+        imports.import("env", "proxy_trap_delete", EntityType::Function(8));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1249,6 +1255,9 @@ impl Compiler {
             array_proto_handle_global_idx: 0,
             arr_proto_table_base: 0,
             obj_spread_func_idx: 0,
+            proxy_trap_get_func_idx: 316,
+            proxy_trap_set_func_idx: 317,
+            proxy_trap_delete_func_idx: 318,
             get_proto_from_ctor_func_idx: 0,
             string_eq_func_idx: 0,
             object_proto_handle_global_idx: 0,

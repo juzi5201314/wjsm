@@ -66,6 +66,10 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
         return Ok("[array]".to_string());
     }
 
+    if value::is_proxy(val) {
+        return Ok("Proxy {}".to_string());
+    }
+
     if value::is_object(val) {
         let ptr = value::decode_object_handle(val);
         let obj_ptr = resolve_handle_idx(caller, ptr as usize);
