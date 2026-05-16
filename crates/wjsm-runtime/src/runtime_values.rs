@@ -1016,6 +1016,42 @@ pub(crate) fn resolve_callable_and_call(
         )
     } else if value::is_bound(callee) {
         return resolve_and_call(caller, callee, this_val, args_base, args_count);
+    } else if value::is_proxy(callee) {
+        // Proxy apply trap: 查找 handler.apply，如果存在则调用
+        let handle = value::decode_proxy_handle(callee) as usize;
+        let entry = {
+            let table = caller.data().proxy_table.lock().unwrap();
+            table.get(handle).cloned()
+        };
+        if let Some(entry) = entry {
+            if entry.revoked {
+                set_runtime_error(caller.data(), "TypeError: Cannot perform 'apply' on a proxy that has been revoked".to_string());
+                return value::encode_undefined();
+            }
+            // 查找 apply trap
+            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
+                let trap = read_object_property_by_name(caller, handler_ptr, "apply")
+                    .unwrap_or_else(value::encode_undefined);
+                if !value::is_undefined(trap) && !value::is_null(trap) {
+                    // 收集 shadow stack 参数到数组
+                    let args_arr = crate::runtime_host_helpers::alloc_array(caller, args_count as u32);
+                    let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+                    for i in 0..args_count {
+                        let mut buf = [0u8; 8];
+                        let _ = memory.read(&mut *caller, (args_base + i * 8) as usize, &mut buf);
+                        let arg_val = i64::from_le_bytes(buf);
+                        crate::runtime_host_helpers::define_host_data_property(
+                            caller, args_arr, &i.to_string(), arg_val,
+                        );
+                    }
+                    return call_wasm_callback(caller, trap, entry.handler, &[entry.target, this_val, args_arr])
+                        .unwrap_or_else(|_| value::encode_undefined());
+                }
+            }
+            // 无 apply trap，转发到 target
+            return resolve_callable_and_call(caller, entry.target, this_val, args_base, args_count);
+        }
+        return value::encode_undefined();
     } else {
         return value::encode_undefined();
     };

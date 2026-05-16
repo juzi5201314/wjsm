@@ -49,18 +49,51 @@ pub(crate) fn call_wasm_callback(
     }
     // 更新 __shadow_sp
     shadow_sp_global.set(&mut *caller, Val::I32(new_shadow_sp))?;
-    // 解析函数（闭包或函数引用）
-    let (func_idx, env_obj) = if value::is_closure(func_val) {
-        let idx = value::decode_closure_idx(func_val) as usize;
+    // 解析函数：支持闭包、函数引用、代理链
+    let mut resolved = func_val;
+    loop {
+        if value::is_closure(resolved) || value::is_function(resolved) {
+            break;
+        }
+        if !value::is_proxy(resolved) {
+            return Err(anyhow::anyhow!("not callable"));
+        }
+        let handle = value::decode_proxy_handle(resolved) as usize;
+        let entry = {
+            let table = caller.data().proxy_table.lock().unwrap();
+            table.get(handle).cloned()
+        };
+        let entry = match entry {
+            Some(e) => e,
+            None => return Err(anyhow::anyhow!("proxy handle not found")),
+        };
+        if entry.revoked {
+            return Err(anyhow::anyhow!("proxy has been revoked"));
+        }
+        // Check handler.apply trap
+        if let Some(handler_ptr) = resolve_handle(&mut *caller, entry.handler) {
+            let trap = read_object_property_by_name(&mut *caller, handler_ptr, "apply")
+                .unwrap_or_else(value::encode_undefined);
+            if !value::is_undefined(trap) && !value::is_null(trap) {
+                resolved = trap;
+                continue;
+            }
+        }
+        // No apply trap, forward to target
+        resolved = entry.target;
+        continue;
+    }
+    let (func_idx, env_obj) = if value::is_closure(resolved) {
+        let idx = value::decode_closure_idx(resolved) as usize;
         let closures = caller.data().closures.lock().unwrap();
         if let Some(entry) = closures.get(idx) {
             (entry.func_idx, entry.env_obj)
         } else {
             return Err(anyhow::anyhow!("closure index out of range"));
         }
-    } else if value::is_function(func_val) {
+    } else if value::is_function(resolved) {
         (
-            (func_val as u64 & 0xFFFF_FFFF) as u32,
+            (resolved as u64 & 0xFFFF_FFFF) as u32,
             value::encode_undefined(),
         )
     } else {
@@ -144,6 +177,38 @@ pub(crate) fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) 
     value::encode_handle(value::TAG_ARRAY, obj_table_count)
 }
 // ── arr_proto_push (#49) ──────────────────────────────────────────
+/// 从 host 元素设置数组元素（直接写入堆内存）
+pub(crate) fn set_array_elem(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr_val: i64,
+    index: i32,
+    val: i64,
+) {
+    if !value::is_array(arr_val) {
+        return;
+    }
+    let handle = value::decode_handle(arr_val) as usize;
+    let Some(ptr) = resolve_handle_idx(caller, handle) else {
+        return;
+    };
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return;
+    };
+    let data = memory.data_mut(&mut *caller);
+    let slot_offset = ptr + 16 + index as usize * 8;
+    if slot_offset + 8 > data.len() {
+        return;
+    }
+    data[slot_offset..slot_offset + 8].copy_from_slice(&val.to_le_bytes());
+    // Update length to max(length, index+1)
+    let old_len = u32::from_le_bytes([
+        data[ptr + 8], data[ptr + 9], data[ptr + 10], data[ptr + 11],
+    ]);
+    if (index as u32) >= old_len {
+        let new_len = (index as u32) + 1;
+        data[ptr + 8..ptr + 12].copy_from_slice(&new_len.to_le_bytes());
+    }
+}
 // ── 辅助函数：分配新对象 ────────────────────────────────────────────
 pub(crate) fn alloc_object(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
     let heap_ptr = {

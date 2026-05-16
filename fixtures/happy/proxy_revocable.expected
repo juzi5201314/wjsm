@@ -1,0 +1,6 @@
+exit_code: 2
+--- stdout ---
+10
+undefined
+--- stderr ---
+Runtime error: TypeError: Cannot perform 'get' on a proxy that has been revoked

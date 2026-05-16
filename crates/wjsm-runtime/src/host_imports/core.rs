@@ -482,7 +482,7 @@
     // ── Import 13: typeof(i64) → i64 ───────────────────────────────────────
     let typeof_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             if value::is_undefined(val) {
                 value::encode_typeof_undefined()
             } else if value::is_null(val) {
@@ -493,6 +493,30 @@
                 value::encode_typeof_string()
             } else if value::is_callable(val) {
                 value::encode_typeof_function()
+            } else if value::is_proxy(val) {
+                // Proxy: walk the chain to find ultimate non-proxy target
+                let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                let mut current_handle = value::decode_proxy_handle(val) as usize;
+                let target_callable = loop {
+                    match table.get(current_handle) {
+                        Some(entry) => {
+                            if value::is_callable(entry.target) {
+                                break true;
+                            }
+                            if value::is_proxy(entry.target) {
+                                current_handle = value::decode_proxy_handle(entry.target) as usize;
+                                continue;
+                            }
+                            break false;
+                        }
+                        None => break false,
+                    }
+                };
+                if target_callable {
+                    value::encode_typeof_function()
+                } else {
+                    value::encode_typeof_object()
+                }
             } else if value::is_object(val) {
                 value::encode_typeof_object()
             } else if value::is_iterator(val) || value::is_enumerator(val) {
@@ -513,6 +537,43 @@
     let op_in = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, object: i64, prop: i64| -> i64 {
+            // Proxy: 触发 has trap
+            if value::is_proxy(object) {
+                let handle = value::decode_proxy_handle(object) as usize;
+                let entry = {
+                    let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    table.get(handle).cloned()
+                };
+                if let Some(entry) = entry {
+                    if entry.revoked {
+                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'has' on a proxy that has been revoked".to_string());
+                        return value::encode_bool(false);
+                    }
+                    // 查找 handler 的 has trap
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "has")
+                            .unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop])
+                                .unwrap_or_else(|_| value::encode_bool(false));
+                            return value::encode_bool(nanbox_to_bool(result));
+                        }
+                    }
+                    // 无 trap，转发到 target
+                    if value::is_proxy(entry.target) {
+                        // 递归
+                        return op_in_impl(&mut caller, entry.target, prop);
+                    }
+                    // 普通对象 target，继续下面的逻辑
+                    return op_in_impl(&mut caller, entry.target, prop);
+                }
+                return value::encode_bool(false);
+            }
+            op_in_impl(&mut caller, object, prop)
+        },
+    );
+
+    fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, prop: i64) -> i64 {
             // 检查 object 是否有 prop 属性
             if !value::is_object(object) && !value::is_function(object) {
                 *caller
@@ -536,7 +597,7 @@
                     strings.get(handle).cloned().unwrap_or_default()
                 } else {
                     let ptr = value::decode_string_ptr(prop);
-                    read_string(&mut caller, ptr).unwrap_or_default()
+                    read_string(caller, ptr).unwrap_or_default()
                 }
             } else if value::is_f64(prop) {
                 let f = f64::from_bits(prop as u64);
@@ -560,7 +621,7 @@
             };
 
             // 解析对象指针：通过 handle 表统一解析（支持 object 和 function）
-            let mut ptr = match resolve_handle(&mut caller, object) {
+            let mut ptr = match resolve_handle(caller, object) {
                 Some(p) => p,
                 None => return value::encode_bool(false),
             };
@@ -602,7 +663,7 @@
                 let _ = data;
 
                 for name_id in name_ids {
-                    let name_str = read_string_bytes(&mut caller, name_id);
+                    let name_str = read_string_bytes(caller, name_id);
                     if name_str == prop_str.as_bytes() {
                         return value::encode_bool(true);
                     }
@@ -622,14 +683,13 @@
                 if proto_handle == 0xFFFF_FFFF {
                     return value::encode_bool(false);
                 }
-                if let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) {
+                if let Some(proto_ptr) = resolve_handle_idx(caller, proto_handle as usize) {
                     ptr = proto_ptr;
                 } else {
                     return value::encode_bool(false);
                 }
             }
-        },
-    );
+    }
 
     // ── Import 15: op_instanceof(i64, i64) ────────────────────────────
     let op_instanceof = Func::wrap(

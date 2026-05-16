@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 316] = [
+const HOST_IMPORT_NAMES: [&str; 319] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -340,6 +340,9 @@ const HOST_IMPORT_NAMES: [&str; 316] = [
     "private_get",
     "private_set",
     "private_has",
+    "proxy_trap_get",
+    "proxy_trap_set",
+    "proxy_trap_delete",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -348,7 +351,7 @@ const HOST_IMPORT_NAMES: [&str; 316] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        316,
+        319,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -472,6 +475,12 @@ struct Compiler {
     arr_proto_table_base: u32,
     /// WASM function index for $obj_spread helper.
     obj_spread_func_idx: u32,
+    /// WASM function index for proxy get trap host import.
+    proxy_trap_get_func_idx: u32,
+    /// WASM function index for proxy set trap host import.
+    proxy_trap_set_func_idx: u32,
+    /// WASM function index for proxy delete trap host import.
+    proxy_trap_delete_func_idx: u32,
     /// WASM function index for $get_prototype_from_constructor helper.
     get_proto_from_ctor_func_idx: u32,
     /// WASM function index for nul-terminated string equality helper.

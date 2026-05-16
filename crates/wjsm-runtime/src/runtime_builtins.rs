@@ -1446,6 +1446,13 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::DataViewConstructorGlobal => Some(alloc_host_object_from_caller(caller, 4)),
         NativeCallable::TypedArrayConstructor(_) => Some(alloc_host_object_from_caller(caller, 4)),
         NativeCallable::ProxyConstructor => Some(alloc_host_object_from_caller(caller, 4)),
+        NativeCallable::ProxyRevoker { proxy_handle } => {
+            let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            if let Some(entry) = table.get_mut(proxy_handle as usize) {
+                entry.revoked = true;
+            }
+            Some(value::encode_undefined())
+        }
         NativeCallable::StubGlobal(_) => Some(value::encode_undefined()),
     }
 }

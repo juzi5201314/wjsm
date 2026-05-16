@@ -165,7 +165,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     );
 
     // ── Import 0: console_log(i64) → () ─────────────────────────────────
-    let mut imports: Vec<Extern> = Vec::with_capacity(316);
+    let mut imports: Vec<Extern> = Vec::with_capacity(319);
     imports.extend(include!("host_imports/core.rs"));
     imports.extend(include!("host_imports/timers_arrays.rs"));
     imports.extend(include!("host_imports/array_object.rs"));
@@ -174,6 +174,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     imports.extend(include!("host_imports/string_methods.rs"));
     imports.extend(include!("host_imports/math_number_error.rs"));
     imports.extend(include!("host_imports/collections_buffers.rs"));
+    imports.extend(include!("host_imports/proxy_traps.rs"));
     let instance = Instance::new(&mut store, &module, &imports)?;
 
     // ── Run main ─────────────────────────────────────────────────────────
@@ -547,6 +548,7 @@ enum NativeCallable {
     DataViewConstructorGlobal,
     TypedArrayConstructor(String),
     ProxyConstructor,
+    ProxyRevoker { proxy_handle: u32 },
     StubGlobal(String),
 }
 
