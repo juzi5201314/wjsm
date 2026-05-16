@@ -165,7 +165,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     );
 
     // ── Import 0: console_log(i64) → () ─────────────────────────────────
-    let mut imports: Vec<Extern> = Vec::with_capacity(319);
+    let mut imports: Vec<Extern> = Vec::with_capacity(322);
     imports.extend(include!("host_imports/core.rs"));
     imports.extend(include!("host_imports/timers_arrays.rs"));
     imports.extend(include!("host_imports/array_object.rs"));
@@ -175,14 +175,28 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     imports.extend(include!("host_imports/math_number_error.rs"));
     imports.extend(include!("host_imports/collections_buffers.rs"));
     imports.extend(include!("host_imports/proxy_traps.rs"));
+    imports.push(include!("host_imports/get_builtin_global_entry.rs"));
     let instance = Instance::new(&mut store, &module, &imports)?;
 
-    // ── Run main ─────────────────────────────────────────────────────────
-    let main = instance.get_typed_func::<(), ()>(&mut store, "main")?;
+    // ── Run main ──
+    let main = instance.get_typed_func::<(), i64>(&mut store, "main")?;
     let main_result = main.call(&mut store, ());
-
+    let main_ok = match main_result {
+        Ok(return_val) => {
+            if value::is_exception(return_val) {
+                // 未捕获异常被抛出顶层，跳过后续 microtasks/timers
+                false
+            } else {
+                true
+            }
+        }
+        Err(trap) => {
+            return Err(anyhow::anyhow!("WASM trap: {:?}", trap));
+        }
+    };
+    
     // ── Drain microtasks after main() ────────────────────────────────────
-    if main_result.is_ok() {
+    if main_ok {
         if let Some(Extern::Table(func_table)) = instance.get_export(&mut store, "__table") {
             if let (
                 Some(Extern::Memory(memory)),
@@ -209,10 +223,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
         }
     }
-
+    
     // ── Timer event loop (only if main succeeded) ─────────────────────────
-    // Poll timers; fire expired callbacks via the WASM function table.
-    if main_result.is_ok() {
+    // Poll timers; fire expired callbacks via the WASM function table.  
+    if main_ok {
         loop {
             let now = Instant::now();
             let mut _entry_to_fire: Option<TimerEntry> = None;
@@ -423,6 +437,7 @@ struct SymbolEntry {
 struct ErrorEntry {
     name: String,
     message: String,
+    value: i64,
 }
 
 struct MapEntry {
