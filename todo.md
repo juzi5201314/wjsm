@@ -2,6 +2,20 @@
 
 基于 test262 eval 专项验证（2026-05-16）分析得出的特性实现顺序。
 
+## test262 当前通过率
+
+```
+ 套件                       总测试   通过     失败     通过率
+ ──────────────────────────────────────────────────────────
+ language/eval-code/direct   286      32      254     11.19%
+ language/eval-code/indirect  61      17       44     27.87%
+ built-ins/eval               10       3        7     30.00%
+ annexB/eval-code/direct     309       5      304      1.62%
+ annexB/eval-code/indirect   160       0      160      0.00%
+ ──────────────────────────────────────────────────────────
+ 合计                       826      57      769      6.90%
+```
+
 ## 基础
 
 - [x] NaN-boxed value encoding
