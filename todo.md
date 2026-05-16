@@ -99,16 +99,16 @@
 - [x] **模块系统 — ES `import` / `export`** — 解析器识别 `ImportDecl`/`ExportDecl`，语义层构建模块依赖图，运行时实现模块加载和绑定。影响层：解析器 + 语义 + 运行时
 - [x] **模块系统 — CommonJS `require` / `module.exports`** — 运行时 `require` 函数 + `module` 对象。影响层：运行时
 - [x] **模块系统 — 动态 `import()`** — 异步模块加载，返回 Promise。影响层：语义 + 运行时
-- [ ] **JSX** — 解析器识别 JSX 语法（需 swc `jsx` feature），语义层 lowering 为 `createElement` 调用。影响层：解析器 + 语义
-- [ ] **TypeScript `interface` / `type` / `enum` / `namespace`** — TypeScript 特有声明，语义层解析类型并擦除（或保留在 IR 中以支持运行时反射）。影响层：解析器 + 语义
-- [ ] **Proxy / Reflect** — 运行时实现 `Proxy` 构造函数和全部 handler trap（`get`/`set`/`has`/`deleteProperty`/`apply`/`construct` 等），`Reflect` 静态方法。影响层：运行时
-- [ ] **`using` 声明（Explicit Resource Management）** — ES2024 Stage 3，`using x = expr` 在作用域退出时自动调用 `Symbol.dispose`。影响层：语义 + WASM 后端
+- [x] **JSX** — 解析器识别 JSX 语法（swc `jsx`），语义层 lowering 为 `jsx.create_element` / `Builtin::JsxCreateElement`；已有 `jsx_basic`、`jsx_expr`、`jsx_fragment`、`jsx_attrs` fixtures。影响层：解析器 + 语义 + WASM 后端 + 运行时
+- [x] **TypeScript `interface` / `type` / `enum` / `namespace`** — `interface` / `type` 擦除，`enum` / `namespace` lowering；已有 `ts_interface`、`ts_type_alias`、`ts_enum*`、`ts_namespace` fixtures。影响层：解析器 + 语义
+- [ ] **Proxy / Reflect 完整语义** — 已有 `Proxy` 基础构造与 `proxy_basic` fixture，Reflect 部分静态方法有宿主入口；仍缺完整 Proxy handler trap（`get`/`set`/`has`/`deleteProperty`/`apply`/`construct` 等）和 Reflect 规范语义（当前多项仍为简化返回值）。影响层：运行时
+- [x] **`using` 声明（Explicit Resource Management）** — 语义层 lowering 作用域退出 dispose；已有 `using_basic`、`using_block_scope` fixtures。影响层：语义 + WASM 后端
 
 ### 块 J：动态执行
 
 无外部依赖。
 
-- [ ] **`eval` 函数** — 运行时动态编译执行 JavaScript 代码字符串，需要将整个编译管线（parse → lower → compile → execute）嵌入运行时。**test262 大量使用，优先级高。** 影响层：运行时
+- [x] **`eval` 函数** — 运行时动态编译执行 JavaScript 代码字符串，已具备 parse → lower_eval_module_with_scope → compile_eval_at_data_base → instantiate → `__eval_entry` 执行链路；已有 direct/indirect eval、strict、scope bridge、completion/error fixtures。**仍需 test262 eval 专项验证。** 影响层：运行时 + 语义 + WASM 后端
 
 ### 块 K：JIT 后端
 
