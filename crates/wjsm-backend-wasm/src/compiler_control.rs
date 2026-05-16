@@ -323,6 +323,26 @@ impl Compiler {
                     } else {
                         idx = merge;
                     }
+                
+                    // 当 merge 已被编译（作为某分支主体的一部分），而另一个分支未终结时，
+                    // 需要为 fall-through 路径重新发射 merge 块的终止器。
+                    if self.compiled_blocks.contains(&merge) && !(true_terminates && false_terminates) {
+                        if let Some(merge_block) = blocks.get(merge) {
+                            // 重新发射 phi 指令：将 phi_local 复制到 SSA local
+                            for instruction in merge_block.instructions() {
+                                if let Instruction::Phi { dest, .. } = instruction {
+                                    if let Some(&phi_local) = self.phi_locals.get(&dest.0) {
+                                        self.emit(WasmInstruction::LocalGet(phi_local));
+                                        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                                    }
+                                }
+                            }
+                            // 重新发射 merge 块的 return
+                            if let Terminator::Return { value } = merge_block.terminator() {
+                                self.emit_return(value);
+                            }
+                        }
+                    }
                 }
                 Terminator::Switch {
                     value,

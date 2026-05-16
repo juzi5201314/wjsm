@@ -116,6 +116,7 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     "ArrayBuffer",
     "DataView",
     "JSON",
+    "eval",
 ];
 
 /// 需要忽略的 flags（当前 wjsm 不支持）。
