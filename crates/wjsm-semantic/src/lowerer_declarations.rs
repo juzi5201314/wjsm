@@ -373,10 +373,18 @@ impl Lowerer {
         &mut self,
         block: BasicBlockId,
     ) -> Result<BasicBlockId, LoweringError> {
-        let scope_id = self
-            .scopes
-            .declare("arguments", VarKind::Let, true)
-            .expect("arguments declaration should not fail");
+        // arguments may already be declared (var arguments in body or eval predeclare)
+        let scope_id = match self.scopes.declare("arguments", VarKind::Let, true) {
+            Ok(id) => {
+                self.scopes.set_implicit_arguments("arguments").expect("arguments should have been declared");
+                id
+            }
+            Err(_) => {
+                // Already declared (var/let arguments in body or eval predeclare)
+                // Find the existing scope id
+                self.scopes.resolve_scope_id("arguments").unwrap_or(0)
+            }
+        };
         let ir_name = format!("${scope_id}.arguments");
         let dest = self.alloc_value();
         self.current_function
@@ -389,12 +397,12 @@ impl Lowerer {
                 value: dest,
             },
         );
-        self.scopes
-            .mark_initialised("arguments")
-            .expect("arguments init should not fail");
+        // Only mark initialised if we declared it (skip if pre-declared)
+        if self.scopes.mark_initialised("arguments").is_err() {
+            // Already initialised, that's fine
+        }
         Ok(self.resolve_store_block(block))
     }
-
     pub(crate) fn emit_pat_inits_impl(
         &mut self,
         pats: &[&swc_ast::Pat],

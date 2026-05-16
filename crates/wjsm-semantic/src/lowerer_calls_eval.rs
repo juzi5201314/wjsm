@@ -506,7 +506,6 @@ impl Lowerer {
                 },
             );
         }
-
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -516,7 +515,6 @@ impl Lowerer {
                 args: vec![code_val, env_val],
             },
         );
-
         for (scope_id, name, _) in &bindings {
             let binding = CapturedBinding::new(name.clone(), *scope_id);
             if !self.binding_belongs_to_current_function(&binding)
@@ -524,7 +522,7 @@ impl Lowerer {
             {
                 continue;
             }
-
+            
             let key_const = self.module.add_constant(Constant::String(name.clone()));
             let key_val = self.alloc_value();
             self.current_function.append_instruction(
@@ -534,7 +532,7 @@ impl Lowerer {
                     constant: key_const,
                 },
             );
-
+            
             let value = self.alloc_value();
             self.current_function.append_instruction(
                 block,
@@ -552,9 +550,10 @@ impl Lowerer {
                 },
             );
         }
-
+        
         Ok(dest)
     }
+
 
     pub(crate) fn eval_scope_bridge_active(&self) -> bool {
         self.eval_mode && self.eval_has_scope_bridge
