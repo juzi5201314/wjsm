@@ -3,73 +3,97 @@ module {
     c0 = undefined
     c1 = number(NaN)
     c2 = number(inf)
-    c3 = undefined
-    c4 = undefined
-    c5 = number(1)
-    c6 = undefined
-    c7 = number(2)
-    c8 = undefined
-    c9 = number(3)
-    c10 = functionref(@0)
-    c11 = undefined
-    c12 = undefined
-    c13 = undefined
-    c14 = string("first")
-    c15 = undefined
-    c16 = string("second")
-    c17 = functionref(@1)
-    c18 = undefined
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
     c19 = undefined
     c20 = undefined
-    c21 = string("ok")
+    c21 = number(1)
     c22 = undefined
-    c23 = string("fail")
-    c24 = number(0)
-    c25 = string("status")
-    c26 = number(1)
-    c27 = string("status")
-    c28 = functionref(@2)
+    c23 = number(2)
+    c24 = undefined
+    c25 = number(3)
+    c26 = functionref(@0)
+    c27 = undefined
+    c28 = undefined
     c29 = undefined
-    c30 = undefined
+    c30 = string("first")
     c31 = undefined
-    c32 = string("err")
-    c33 = undefined
-    c34 = string("win")
-    c35 = functionref(@3)
+    c32 = string("second")
+    c33 = functionref(@1)
+    c34 = undefined
+    c35 = undefined
     c36 = undefined
+    c37 = string("ok")
+    c38 = undefined
+    c39 = string("fail")
+    c40 = number(0)
+    c41 = string("status")
+    c42 = number(1)
+    c43 = string("status")
+    c44 = functionref(@2)
+    c45 = undefined
+    c46 = undefined
+    c47 = undefined
+    c48 = string("err")
+    c49 = undefined
+    c50 = string("win")
+    c51 = functionref(@3)
+    c52 = undefined
 
   fn @anon_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
     bb0:
-      %0 = load var $1.v
-      %1 = call builtin.console.log(%0)
+      %0 = collect_rest_args skip=0
+      store var $1.arguments, %0
+      %1 = load var $1.v
+      %2 = call builtin.console.log(%1)
       return
 
   fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
-      %0 = load var $2.v
-      %1 = call builtin.console.log(%0)
+      %0 = collect_rest_args skip=0
+      store var $2.arguments, %0
+      %1 = load var $2.v
+      %2 = call builtin.console.log(%1)
       return
 
   fn @anon_2 [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
     bb0:
-      %0 = load var $3.v
-      %1 = const c24
-      %2 = get_elem %0, %1
-      %3 = const c25
-      %4 = get_prop %2, %3
-      %5 = call builtin.console.log(%4)
-      %6 = load var $3.v
-      %7 = const c26
-      %8 = get_elem %6, %7
-      %9 = const c27
-      %10 = get_prop %8, %9
-      %11 = call builtin.console.log(%10)
+      %0 = collect_rest_args skip=0
+      store var $3.arguments, %0
+      %1 = load var $3.v
+      %2 = const c40
+      %3 = get_elem %1, %2
+      %4 = const c41
+      %5 = get_prop %3, %4
+      %6 = call builtin.console.log(%5)
+      %7 = load var $3.v
+      %8 = const c42
+      %9 = get_elem %7, %8
+      %10 = const c43
+      %11 = get_prop %9, %10
+      %12 = call builtin.console.log(%11)
       return
 
   fn @anon_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
     bb0:
-      %0 = load var $4.v
-      %1 = call builtin.console.log(%0)
+      %0 = collect_rest_args skip=0
+      store var $4.arguments, %0
+      %1 = load var $4.v
+      %2 = call builtin.console.log(%1)
       return
 
   fn @main [entry=bb0]:
@@ -81,64 +105,96 @@ module {
       %2 = const c2
       store var $0.Infinity, %2
       %3 = const c3
-      %4 = new_array(capacity=4)
-      %5 = const c4
-      %6 = const c5
-      %7 = call builtin.promise.resolve_static(%5, %6)
-      call builtin.array.push(%4, %7)
-      %8 = const c6
-      %9 = const c7
-      %10 = call builtin.promise.resolve_static(%8, %9)
-      call builtin.array.push(%4, %10)
-      %11 = const c8
-      %12 = const c9
-      %13 = call builtin.promise.resolve_static(%11, %12)
-      call builtin.array.push(%4, %13)
-      %14 = call builtin.promise.all(%3, %4)
-      %15 = const c10
-      %16 = const c11
-      %17 = call builtin.promise.then(%14, %15, %16)
-      %18 = const c12
-      %19 = new_array(capacity=4)
-      %20 = const c13
-      %21 = const c14
-      %22 = call builtin.promise.resolve_static(%20, %21)
-      call builtin.array.push(%19, %22)
-      %23 = const c15
-      %24 = const c16
-      %25 = call builtin.promise.resolve_static(%23, %24)
-      call builtin.array.push(%19, %25)
-      %26 = call builtin.promise.race(%18, %19)
-      %27 = const c17
-      %28 = const c18
-      %29 = call builtin.promise.then(%26, %27, %28)
-      %30 = const c19
-      %31 = new_array(capacity=4)
-      %32 = const c20
-      %33 = const c21
-      %34 = call builtin.promise.resolve_static(%32, %33)
-      call builtin.array.push(%31, %34)
-      %35 = const c22
-      %36 = const c23
-      %37 = call builtin.promise.reject_static(%35, %36)
-      call builtin.array.push(%31, %37)
-      %38 = call builtin.promise.all_settled(%30, %31)
-      %39 = const c28
-      %40 = const c29
-      %41 = call builtin.promise.then(%38, %39, %40)
-      %42 = const c30
-      %43 = new_array(capacity=4)
-      %44 = const c31
-      %45 = const c32
-      %46 = call builtin.promise.reject_static(%44, %45)
-      call builtin.array.push(%43, %46)
-      %47 = const c33
-      %48 = const c34
-      %49 = call builtin.promise.resolve_static(%47, %48)
-      call builtin.array.push(%43, %49)
-      %50 = call builtin.promise.any(%42, %43)
-      %51 = const c35
-      %52 = const c36
-      %53 = call builtin.promise.then(%50, %51, %52)
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = const c19
+      %20 = new_array(capacity=4)
+      %21 = const c20
+      %22 = const c21
+      %23 = call builtin.promise.resolve_static(%21, %22)
+      call builtin.array.push(%20, %23)
+      %24 = const c22
+      %25 = const c23
+      %26 = call builtin.promise.resolve_static(%24, %25)
+      call builtin.array.push(%20, %26)
+      %27 = const c24
+      %28 = const c25
+      %29 = call builtin.promise.resolve_static(%27, %28)
+      call builtin.array.push(%20, %29)
+      %30 = call builtin.promise.all(%19, %20)
+      %31 = const c26
+      %32 = const c27
+      %33 = call builtin.promise.then(%30, %31, %32)
+      %34 = const c28
+      %35 = new_array(capacity=4)
+      %36 = const c29
+      %37 = const c30
+      %38 = call builtin.promise.resolve_static(%36, %37)
+      call builtin.array.push(%35, %38)
+      %39 = const c31
+      %40 = const c32
+      %41 = call builtin.promise.resolve_static(%39, %40)
+      call builtin.array.push(%35, %41)
+      %42 = call builtin.promise.race(%34, %35)
+      %43 = const c33
+      %44 = const c34
+      %45 = call builtin.promise.then(%42, %43, %44)
+      %46 = const c35
+      %47 = new_array(capacity=4)
+      %48 = const c36
+      %49 = const c37
+      %50 = call builtin.promise.resolve_static(%48, %49)
+      call builtin.array.push(%47, %50)
+      %51 = const c38
+      %52 = const c39
+      %53 = call builtin.promise.reject_static(%51, %52)
+      call builtin.array.push(%47, %53)
+      %54 = call builtin.promise.all_settled(%46, %47)
+      %55 = const c44
+      %56 = const c45
+      %57 = call builtin.promise.then(%54, %55, %56)
+      %58 = const c46
+      %59 = new_array(capacity=4)
+      %60 = const c47
+      %61 = const c48
+      %62 = call builtin.promise.reject_static(%60, %61)
+      call builtin.array.push(%59, %62)
+      %63 = const c49
+      %64 = const c50
+      %65 = call builtin.promise.resolve_static(%63, %64)
+      call builtin.array.push(%59, %65)
+      %66 = call builtin.promise.any(%58, %59)
+      %67 = const c51
+      %68 = const c52
+      %69 = call builtin.promise.then(%66, %67, %68)
       return
 }

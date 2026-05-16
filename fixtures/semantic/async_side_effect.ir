@@ -3,87 +3,115 @@ module {
     c0 = undefined
     c1 = number(NaN)
     c2 = number(inf)
-    c3 = number(0)
-    c4 = number(0)
-    c5 = number(1)
-    c6 = number(2)
-    c7 = number(3)
-    c8 = undefined
-    c9 = string("$0.undefined")
-    c10 = undefined
-    c11 = string("$0.x")
-    c12 = string("$0.x")
-    c13 = number(1)
-    c14 = undefined
-    c15 = number(0)
-    c16 = number(1)
-    c17 = functionref(@0)
-    c18 = number(4)
-    c19 = number(2)
-    c20 = number(3)
-    c21 = number(0)
-    c22 = undefined
-    c23 = bool(false)
-    c24 = functionref(@1)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = number(0)
+    c20 = number(0)
+    c21 = number(1)
+    c22 = number(2)
+    c23 = number(3)
+    c24 = undefined
     c25 = string("$0.undefined")
-    c26 = string("$0.x")
-    c27 = undefined
-    c28 = string("$0.x")
-    c29 = functionref(@2)
-    c30 = undefined
+    c26 = undefined
+    c27 = number(4)
+    c28 = number(4)
+    c29 = string("$0.x")
+    c30 = string("$0.x")
+    c31 = number(1)
+    c32 = undefined
+    c33 = number(0)
+    c34 = number(1)
+    c35 = functionref(@0)
+    c36 = number(5)
+    c37 = number(2)
+    c38 = number(3)
+    c39 = number(0)
+    c40 = undefined
+    c41 = bool(false)
+    c42 = functionref(@1)
+    c43 = string("$0.undefined")
+    c44 = string("$0.x")
+    c45 = undefined
+    c46 = string("$0.x")
+    c47 = functionref(@2)
+    c48 = undefined
 
   fn @inc$async [captures: $0.undefined, $0.x] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = load var $1.$env
-      %1 = const c4
+      %1 = const c20
       %2 = call builtin.continuation.load_var(%0, %1)
       store var $1.$state, %2
-      %3 = const c5
+      %3 = const c21
       %4 = call builtin.continuation.load_var(%0, %3)
       store var $1.$is_rejected, %4
       %5 = load var $1.$this
       store var $1.$resume_val, %5
-      %6 = const c6
+      %6 = const c22
       %7 = call builtin.continuation.load_var(%0, %6)
       store var $1.$promise, %7
-      %8 = const c7
+      %8 = const c23
       %9 = call builtin.continuation.load_var(%0, %8)
       store var $1.$closure_env, %9
+      %10 = collect_rest_args skip=0
+      store var $1.arguments, %10
       jump bb1
     bb1:
-      %30 = load var $1.$state
-      switch %30 [case c15 -> bb2, case c16 -> bb3], default bb6, exit bb7
+      %37 = load var $1.$state
+      switch %37 [case c33 -> bb2, case c34 -> bb3], default bb6, exit bb7
     bb2:
-      %10 = const c8
-      %11 = load var $1.$closure_env
-      %12 = const c9
-      %13 = get_prop %11, %12
-      %14 = call builtin.promise.resolve_static(%10, %13)
-      %16 = const c10
-      %15 = call builtin.promise.resolve_static(%16, %14)
-      suspend %15, state=1
+      %11 = const c24
+      %12 = load var $1.$closure_env
+      %13 = const c25
+      %14 = get_prop %12, %13
+      %15 = call builtin.promise.resolve_static(%11, %14)
+      %17 = const c26
+      %16 = call builtin.promise.resolve_static(%17, %15)
+      %18 = load var $1.$env
+      %19 = const c27
+      %20 = load var $1.arguments
+      call builtin.continuation.save_var(%18, %19, %20)
+      suspend %16, state=1
       jump bb5
     bb3:
-      %17 = load var $1.$resume_val
-      %18 = load var $1.$is_rejected
-      branch %18, bb4, bb5
+      %21 = load var $1.$env
+      %22 = const c28
+      %23 = call builtin.continuation.load_var(%21, %22)
+      store var $1.arguments, %23
+      %24 = load var $1.$resume_val
+      %25 = load var $1.$is_rejected
+      branch %25, bb4, bb5
     bb4:
-      %19 = load var $1.$promise
-      promise_reject %19, %17
+      %26 = load var $1.$promise
+      promise_reject %26, %24
       return
     bb5:
-      %20 = load var $1.$resume_val
-      %21 = load var $1.$closure_env
-      %22 = const c11
-      %23 = load var $1.$closure_env
-      %24 = const c12
-      %25 = get_prop %23, %24
-      %26 = const c13
-      %27 = add %25, %26
-      set_prop %21, %22, %27
-      %28 = const c14
-      %29 = load var $1.$promise
-      promise_resolve %29, %28
+      %27 = load var $1.$resume_val
+      %28 = load var $1.$closure_env
+      %29 = const c29
+      %30 = load var $1.$closure_env
+      %31 = const c30
+      %32 = get_prop %30, %31
+      %33 = const c31
+      %34 = add %32, %33
+      set_prop %28, %29, %34
+      %35 = const c32
+      %36 = load var $1.$promise
+      promise_resolve %36, %35
       return
     bb6:
       return
@@ -92,26 +120,28 @@ module {
 
   fn @inc [captures: $0.undefined, $0.x] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
-      %0 = new_promise
-      %1 = const c17
-      %2 = load var $2.$env
-      %3 = call builtin.create_closure(%1, %2)
-      %4 = const c18
-      %5 = call builtin.continuation.create(%3, %0, %4)
-      %6 = const c19
-      call builtin.continuation.save_var(%5, %6, %0)
-      %7 = const c20
-      call builtin.continuation.save_var(%5, %7, %2)
-      %8 = const c21
-      %9 = const c22
-      %10 = const c23
-      call builtin.async_function.resume(%3, %5, %8, %9, %10)
-      return %0
+      %0 = collect_rest_args skip=0
+      store var $2.arguments, %0
+      %1 = new_promise
+      %2 = const c35
+      %3 = load var $2.$env
+      %4 = call builtin.create_closure(%2, %3)
+      %5 = const c36
+      %6 = call builtin.continuation.create(%4, %1, %5)
+      %7 = const c37
+      call builtin.continuation.save_var(%6, %7, %1)
+      %8 = const c38
+      call builtin.continuation.save_var(%6, %8, %3)
+      %9 = const c39
+      %10 = const c40
+      %11 = const c41
+      call builtin.async_function.resume(%4, %6, %9, %10, %11)
+      return %1
 
   fn @arrow_2 [captures: $0.x] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c28
+      %1 = const c46
       %2 = get_prop %0, %1
       %3 = call builtin.console.log(%2)
       return %3
@@ -125,23 +155,55 @@ module {
       %2 = const c2
       store var $0.Infinity, %2
       %3 = const c3
-      store var $0.x, %3
-      %4 = const c24
-      %5 = new_object(capacity=2)
-      %6 = load var $0.undefined
-      %7 = const c25
-      set_prop %5, %7, %6
-      %8 = load var $0.x
-      %9 = const c26
-      set_prop %5, %9, %8
-      %10 = call builtin.create_closure(%4, %5)
-      store var $0.inc, %10
-      %11 = const c27
-      %12 = load var $0.inc
-      %13 = call %12, this=%11
-      %14 = const c29
-      %15 = call builtin.create_closure(%14, %5)
-      %16 = const c30
-      %17 = call builtin.promise.then(%13, %15, %16)
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = const c19
+      store var $0.x, %19
+      %20 = const c42
+      %21 = new_object(capacity=2)
+      %22 = load var $0.undefined
+      %23 = const c43
+      set_prop %21, %23, %22
+      %24 = load var $0.x
+      %25 = const c44
+      set_prop %21, %25, %24
+      %26 = call builtin.create_closure(%20, %21)
+      store var $0.inc, %26
+      %27 = const c45
+      %28 = load var $0.inc
+      %29 = call %28, this=%27
+      %30 = const c47
+      %31 = call builtin.create_closure(%30, %21)
+      %32 = const c48
+      %33 = call builtin.promise.then(%29, %31, %32)
       return
 }

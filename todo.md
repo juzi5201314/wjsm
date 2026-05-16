@@ -136,9 +136,8 @@
     - 注意：在 `--script` 模式下不适用
 
 ## 已知问题
-
-- 95 个 semantic snapshot 测试失败（预先存在，需更新 `.ir` 文件）
-- 4 个 wjsm-runtime 编译警告（预先存在）
+- **[已修复]** 95 个 semantic snapshot 测试失败 — 已更新 `.ir` 文件
+- **[已修复]** 4 个 wjsm-runtime 编译警告 — 移除多余 `mut`，未使用的 `String` 字段改为 `()`
 
 ## 运行 test262 eval 测试
 

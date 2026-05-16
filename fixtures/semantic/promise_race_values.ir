@@ -3,18 +3,34 @@ module {
     c0 = undefined
     c1 = number(NaN)
     c2 = number(inf)
-    c3 = undefined
-    c4 = number(7)
-    c5 = undefined
-    c6 = number(9)
-    c7 = functionref(@0)
-    c8 = undefined
-    c9 = undefined
-    c10 = undefined
-    c11 = number(4)
-    c12 = undefined
-    c13 = number(9)
-    c14 = functionref(@1)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = undefined
+    c20 = number(7)
+    c21 = undefined
+    c22 = number(9)
+    c23 = functionref(@0)
+    c24 = undefined
+    c25 = undefined
+    c26 = undefined
+    c27 = number(4)
+    c28 = undefined
+    c29 = number(9)
+    c30 = functionref(@1)
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
     bb0:
@@ -37,29 +53,61 @@ module {
       %2 = const c2
       store var $0.Infinity, %2
       %3 = const c3
-      %4 = new_array(capacity=4)
-      %5 = const c4
-      call builtin.array.push(%4, %5)
-      %6 = const c5
-      %7 = const c6
-      %8 = call builtin.promise.resolve_static(%6, %7)
-      call builtin.array.push(%4, %8)
-      %9 = call builtin.promise.race(%3, %4)
-      %10 = const c7
-      %11 = const c8
-      %12 = call builtin.promise.then(%9, %10, %11)
-      %13 = const c9
-      %14 = new_array(capacity=4)
-      %15 = const c10
-      %16 = const c11
-      %17 = call builtin.promise.reject_static(%15, %16)
-      call builtin.array.push(%14, %17)
-      %18 = const c12
-      %19 = const c13
-      %20 = call builtin.promise.resolve_static(%18, %19)
-      call builtin.array.push(%14, %20)
-      %21 = call builtin.promise.race(%13, %14)
-      %22 = const c14
-      %23 = call builtin.promise.catch(%21, %22)
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = const c19
+      %20 = new_array(capacity=4)
+      %21 = const c20
+      call builtin.array.push(%20, %21)
+      %22 = const c21
+      %23 = const c22
+      %24 = call builtin.promise.resolve_static(%22, %23)
+      call builtin.array.push(%20, %24)
+      %25 = call builtin.promise.race(%19, %20)
+      %26 = const c23
+      %27 = const c24
+      %28 = call builtin.promise.then(%25, %26, %27)
+      %29 = const c25
+      %30 = new_array(capacity=4)
+      %31 = const c26
+      %32 = const c27
+      %33 = call builtin.promise.reject_static(%31, %32)
+      call builtin.array.push(%30, %33)
+      %34 = const c28
+      %35 = const c29
+      %36 = call builtin.promise.resolve_static(%34, %35)
+      call builtin.array.push(%30, %36)
+      %37 = call builtin.promise.race(%29, %30)
+      %38 = const c30
+      %39 = call builtin.promise.catch(%37, %38)
       return
 }

@@ -4,32 +4,54 @@ module {
     c1 = undefined
     c2 = number(NaN)
     c3 = number(inf)
-    c4 = undefined
-    c5 = number(42)
-    c6 = undefined
-    c7 = functionref(@0)
-    c8 = undefined
-    c9 = undefined
-    c10 = string("err")
-    c11 = functionref(@1)
-    c12 = functionref(@2)
+    c4 = number(2.718281828459045)
+    c5 = number(2.302585092994046)
+    c6 = number(0.6931471805599453)
+    c7 = number(0.4342944819032518)
+    c8 = number(1.4426950408889634)
+    c9 = number(3.141592653589793)
+    c10 = number(0.7071067811865476)
+    c11 = number(1.4142135623730951)
+    c12 = number(0.0000000000000002220446049250313)
+    c13 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c14 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c15 = number(9007199254740991)
+    c16 = number(-9007199254740991)
+    c17 = number(NaN)
+    c18 = number(-inf)
+    c19 = number(inf)
+    c20 = undefined
+    c21 = number(42)
+    c22 = undefined
+    c23 = functionref(@0)
+    c24 = undefined
+    c25 = undefined
+    c26 = string("err")
+    c27 = functionref(@1)
+    c28 = functionref(@2)
 
   fn @anon_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
     bb0:
-      %0 = load var $1.v
-      %1 = call builtin.console.log(%0)
+      %0 = collect_rest_args skip=0
+      store var $1.arguments, %0
+      %1 = load var $1.v
+      %2 = call builtin.console.log(%1)
       return
 
   fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
-      %0 = load var $2.v
-      %1 = call builtin.console.log(%0)
+      %0 = collect_rest_args skip=0
+      store var $2.arguments, %0
+      %1 = load var $2.v
+      %2 = call builtin.console.log(%1)
       return
 
   fn @anon_2 [params: $3.$env, $3.$this, $3.e] [entry=bb0]:
     bb0:
-      %0 = load var $3.e
-      %1 = call builtin.console.log(%0)
+      %0 = collect_rest_args skip=0
+      store var $3.arguments, %0
+      %1 = load var $3.e
+      %2 = call builtin.console.log(%1)
       return
 
   fn @main [entry=bb0]:
@@ -45,28 +67,60 @@ module {
       %3 = const c3
       store var $0.Infinity, %3
       %4 = const c4
+      store var $0.Math.E, %4
       %5 = const c5
-      %6 = call builtin.promise.resolve_static(%4, %5)
-      store var $0.p, %6
-      %7 = const c6
-      %8 = load var $0.p
-      %9 = call builtin.promise.resolve_static(%7, %8)
-      store var $0.p2, %9
-      %10 = load var $0.p
-      %11 = load var $0.p2
-      %12 = stricteq %10, %11
-      %13 = call builtin.console.log(%12)
-      %14 = load var $0.p2
-      %15 = const c7
-      %16 = const c8
-      %17 = call builtin.promise.then(%14, %15, %16)
-      %18 = const c9
-      %19 = const c10
-      %20 = call builtin.promise.reject_static(%18, %19)
-      store var $0.p3, %20
-      %21 = load var $0.p3
-      %22 = const c11
-      %23 = const c12
-      %24 = call builtin.promise.then(%21, %22, %23)
+      store var $0.Math.LN10, %5
+      %6 = const c6
+      store var $0.Math.LN2, %6
+      %7 = const c7
+      store var $0.Math.LOG10E, %7
+      %8 = const c8
+      store var $0.Math.LOG2E, %8
+      %9 = const c9
+      store var $0.Math.PI, %9
+      %10 = const c10
+      store var $0.Math.SQRT1_2, %10
+      %11 = const c11
+      store var $0.Math.SQRT2, %11
+      %12 = const c12
+      store var $0.Number.EPSILON, %12
+      %13 = const c13
+      store var $0.Number.MAX_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MIN_VALUE, %14
+      %15 = const c15
+      store var $0.Number.MAX_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.MIN_SAFE_INTEGER, %16
+      %17 = const c17
+      store var $0.Number.NaN, %17
+      %18 = const c18
+      store var $0.Number.NEGATIVE_INFINITY, %18
+      %19 = const c19
+      store var $0.Number.POSITIVE_INFINITY, %19
+      %20 = const c20
+      %21 = const c21
+      %22 = call builtin.promise.resolve_static(%20, %21)
+      store var $0.p, %22
+      %23 = const c22
+      %24 = load var $0.p
+      %25 = call builtin.promise.resolve_static(%23, %24)
+      store var $0.p2, %25
+      %26 = load var $0.p
+      %27 = load var $0.p2
+      %28 = stricteq %26, %27
+      %29 = call builtin.console.log(%28)
+      %30 = load var $0.p2
+      %31 = const c23
+      %32 = const c24
+      %33 = call builtin.promise.then(%30, %31, %32)
+      %34 = const c25
+      %35 = const c26
+      %36 = call builtin.promise.reject_static(%34, %35)
+      store var $0.p3, %36
+      %37 = load var $0.p3
+      %38 = const c27
+      %39 = const c28
+      %40 = call builtin.promise.then(%37, %38, %39)
       return
 }
