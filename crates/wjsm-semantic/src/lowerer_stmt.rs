@@ -72,10 +72,40 @@ impl Lowerer {
         call: &swc_ast::CallExpr,
         block: BasicBlockId,
     ) -> Result<BasicBlockId, LoweringError> {
-        let _ = self.lower_call_expr(call, block)?;
-        Ok(self.resolve_store_block(block))
+        let result = self.lower_call_expr(call, block)?;
+        
+        // 跨函数异常检查：call 返回值可能是 TAG_EXCEPTION
+        let is_exception = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::IsException { dest: is_exception, value: result },
+        );
+        let continue_block = self.current_function.new_block();
+        let exc_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            block,
+            Terminator::Branch {
+                condition: is_exception,
+                true_block: exc_block,
+                false_block: continue_block,
+            },
+        );
+        
+        // 异常路径：解封装并传播
+        let thrown_val = self.alloc_value();
+        self.current_function.append_instruction(
+            exc_block,
+            Instruction::CallBuiltin {
+                dest: Some(thrown_val),
+                builtin: Builtin::ExceptionValue,
+                args: vec![result],
+            },
+        );
+        self.emit_throw_value(exc_block, thrown_val)?;
+        
+        // 返回继续 block
+        Ok(self.resolve_store_block(continue_block))
     }
-
     // ── Blocks ──────────────────────────────────────────────────────────────
 
     pub(crate) fn lower_block_stmt(
