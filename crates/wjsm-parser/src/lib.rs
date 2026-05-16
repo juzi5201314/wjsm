@@ -50,7 +50,11 @@ pub fn parse_script_as_module(source: &str) -> Result<swc_ast::Module> {
 
     Ok(swc_ast::Module {
         span: script.span,
-        body: script.body.into_iter().map(swc_ast::ModuleItem::Stmt).collect(),
+        body: script
+            .body
+            .into_iter()
+            .map(swc_ast::ModuleItem::Stmt)
+            .collect(),
         shebang: script.shebang,
     })
 }

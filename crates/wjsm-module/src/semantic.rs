@@ -174,7 +174,9 @@ fn collect_dynamic_import_targets(graph: &ModuleGraph) -> HashMap<ModuleId, Vec<
 }
 
 /// 收集动态 import() specifier → ModuleId 映射
-fn collect_dynamic_import_specifiers(graph: &ModuleGraph) -> HashMap<ModuleId, Vec<(String, ModuleId)>> {
+fn collect_dynamic_import_specifiers(
+    graph: &ModuleGraph,
+) -> HashMap<ModuleId, Vec<(String, ModuleId)>> {
     let mut specifiers = HashMap::new();
     for module_id in graph.all_module_ids() {
         if let Some(node) = graph.get_module(module_id) {

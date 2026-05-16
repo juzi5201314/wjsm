@@ -1066,7 +1066,12 @@ fn bundle_plan_from_root(input: PathBuf, root: PathBuf) -> Result<CompilePlan> {
     })
 }
 
-fn compile_from_file_input(input: &str, root: Option<&str>, target: Target, script: bool) -> Result<Vec<u8>> {
+fn compile_from_file_input(
+    input: &str,
+    root: Option<&str>,
+    target: Target,
+    script: bool,
+) -> Result<Vec<u8>> {
     let plan = build_compile_plan(Path::new(input), root)?;
     match plan {
         CompilePlan::Bundle { entry, root } => {

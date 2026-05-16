@@ -55,7 +55,6 @@ pub fn is_commonjs_module(module: &ast::Module) -> bool {
     cjs_transform::is_commonjs_module(module)
 }
 
-
 /// 递归检测声明中是否包含动态 import() 调用
 fn decl_has_dynamic_import(decl: &ast::Decl) -> bool {
     match decl {
@@ -76,10 +75,11 @@ fn decl_has_dynamic_import(decl: &ast::Decl) -> bool {
                 .map_or(false, |body| body.stmts.iter().any(stmt_has_dynamic_import)),
             _ => false,
         }),
-        ast::Decl::Var(var_decl) => var_decl
-            .decls
-            .iter()
-            .any(|d| d.init.as_ref().map_or(false, |e| expr_has_dynamic_import(e))),
+        ast::Decl::Var(var_decl) => var_decl.decls.iter().any(|d| {
+            d.init
+                .as_ref()
+                .map_or(false, |e| expr_has_dynamic_import(e))
+        }),
         _ => false,
     }
 }
@@ -92,7 +92,10 @@ fn stmt_has_dynamic_import(stmt: &ast::Stmt) -> bool {
         ast::Stmt::If(if_stmt) => {
             expr_has_dynamic_import(&if_stmt.test)
                 || stmt_has_dynamic_import(&if_stmt.cons)
-                || if_stmt.alt.as_ref().map_or(false, |alt| stmt_has_dynamic_import(alt))
+                || if_stmt
+                    .alt
+                    .as_ref()
+                    .map_or(false, |alt| stmt_has_dynamic_import(alt))
         }
         ast::Stmt::While(while_stmt) => {
             expr_has_dynamic_import(&while_stmt.test) || stmt_has_dynamic_import(&while_stmt.body)
@@ -100,29 +103,44 @@ fn stmt_has_dynamic_import(stmt: &ast::Stmt) -> bool {
         ast::Stmt::For(for_stmt) => {
             for_stmt.init.as_ref().map_or(false, |init| match init {
                 ast::VarDeclOrExpr::VarDecl(decl) => decl.decls.iter().any(|d| {
-                    d.init.as_ref().map_or(false, |e| expr_has_dynamic_import(e))
+                    d.init
+                        .as_ref()
+                        .map_or(false, |e| expr_has_dynamic_import(e))
                 }),
                 ast::VarDeclOrExpr::Expr(e) => expr_has_dynamic_import(e),
-            }) || for_stmt.test.as_ref().map_or(false, |e| expr_has_dynamic_import(e))
-            || for_stmt.update.as_ref().map_or(false, |e| expr_has_dynamic_import(e))
-            || stmt_has_dynamic_import(&for_stmt.body)
+            }) || for_stmt
+                .test
+                .as_ref()
+                .map_or(false, |e| expr_has_dynamic_import(e))
+                || for_stmt
+                    .update
+                    .as_ref()
+                    .map_or(false, |e| expr_has_dynamic_import(e))
+                || stmt_has_dynamic_import(&for_stmt.body)
         }
-        ast::Stmt::Return(ret) => ret.arg.as_ref().map_or(false, |e| expr_has_dynamic_import(e)),
+        ast::Stmt::Return(ret) => ret
+            .arg
+            .as_ref()
+            .map_or(false, |e| expr_has_dynamic_import(e)),
         ast::Stmt::Decl(decl) => decl_has_dynamic_import(decl),
         ast::Stmt::Throw(throw) => expr_has_dynamic_import(&throw.arg),
         ast::Stmt::Try(try_stmt) => {
             try_stmt.block.stmts.iter().any(stmt_has_dynamic_import)
-                || try_stmt.handler.as_ref().map_or(false, |h| {
-                    h.body.stmts.iter().any(stmt_has_dynamic_import)
-                })
-                || try_stmt.finalizer.as_ref().map_or(false, |f| {
-                    f.stmts.iter().any(stmt_has_dynamic_import)
-                })
+                || try_stmt
+                    .handler
+                    .as_ref()
+                    .map_or(false, |h| h.body.stmts.iter().any(stmt_has_dynamic_import))
+                || try_stmt
+                    .finalizer
+                    .as_ref()
+                    .map_or(false, |f| f.stmts.iter().any(stmt_has_dynamic_import))
         }
         ast::Stmt::Switch(switch) => {
             expr_has_dynamic_import(&switch.discriminant)
                 || switch.cases.iter().any(|c| {
-                    c.test.as_ref().map_or(false, |e| expr_has_dynamic_import(e))
+                    c.test
+                        .as_ref()
+                        .map_or(false, |e| expr_has_dynamic_import(e))
                         || c.cons.iter().any(stmt_has_dynamic_import)
                 })
         }
@@ -146,9 +164,7 @@ fn expr_has_dynamic_import(expr: &ast::Expr) -> bool {
                     _ => false,
                 }
         }
-        ast::Expr::Assign(assign) => {
-            expr_has_dynamic_import(&assign.right)
-        }
+        ast::Expr::Assign(assign) => expr_has_dynamic_import(&assign.right),
         ast::Expr::Bin(bin) => {
             expr_has_dynamic_import(&bin.left) || expr_has_dynamic_import(&bin.right)
         }
@@ -167,11 +183,12 @@ fn expr_has_dynamic_import(expr: &ast::Expr) -> bool {
             }
             ast::BlockStmtOrExpr::Expr(e) => expr_has_dynamic_import(e),
         },
-        ast::Expr::Fn(fn_expr) => {
-            fn_expr.function.as_ref().body.as_ref().map_or(false, |body| {
-                body.stmts.iter().any(stmt_has_dynamic_import)
-            })
-        }
+        ast::Expr::Fn(fn_expr) => fn_expr
+            .function
+            .as_ref()
+            .body
+            .as_ref()
+            .map_or(false, |body| body.stmts.iter().any(stmt_has_dynamic_import)),
         _ => false,
     }
 }
