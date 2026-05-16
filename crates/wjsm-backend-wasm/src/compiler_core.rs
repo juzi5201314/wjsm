@@ -816,19 +816,23 @@ impl Compiler {
         imports.import("env", "typedarray_proto_slice", EntityType::Function(16));
         // Import index 311: typedarray_proto_subarray: (i64, i64, i64) -> i64
         imports.import("env", "typedarray_proto_subarray", EntityType::Function(16));
-        // Import index 312: get_builtin_global: (i64) -> i64
-        imports.import("env", "get_builtin_global", EntityType::Function(3));
-        // Import index 313: private_get: (i64, i32) -> i64
+        // Import index 312: create_global_object: () -> i64
+        imports.import("env", "create_global_object", EntityType::Function(0));
+        // Import index 313: create_exception: (i64) -> i64
+        imports.import("env", "create_exception", EntityType::Function(1));
+        // Import index 314: exception_value: (i64) -> i64
+        imports.import("env", "exception_value", EntityType::Function(1));
+        // Import index 315: private_get: (i64, i32) -> i64
         imports.import("env", "private_get", EntityType::Function(8));
-        // Import index 314: private_set: (i64, i32, i64) -> i64
+        // Import index 316: private_set: (i64, i32, i64) -> i64
         imports.import("env", "private_set", EntityType::Function(32));
-        // Import index 315: private_has: (i64, i32) -> i64
+        // Import index 317: private_has: (i64, i32) -> i64
         imports.import("env", "private_has", EntityType::Function(8));
-        // Import index 316: proxy_trap_get: (i64 proxy, i32 name_id) -> i64
+        // Import index 318: proxy_trap_get: (i64 proxy, i32 name_id) -> i64
         imports.import("env", "proxy_trap_get", EntityType::Function(8));
-        // Import index 317: proxy_trap_set: (i64 proxy, i32 name_id, i64 value) -> ()
+        // Import index 319: proxy_trap_set: (i64 proxy, i32 name_id, i64 value) -> ()
         imports.import("env", "proxy_trap_set", EntityType::Function(9));
-        // Import index 318: proxy_trap_delete: (i64 proxy, i32 name_id) -> i64
+        // Import index 320: proxy_trap_delete: (i64 proxy, i32 name_id) -> i64
         imports.import("env", "proxy_trap_delete", EntityType::Function(8));
         if mode == CompileMode::Eval {
             imports.import(
@@ -1172,10 +1176,13 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::TypedArrayProtoSet, 309);
         builtin_func_indices.insert(Builtin::TypedArrayProtoSlice, 310);
         builtin_func_indices.insert(Builtin::TypedArrayProtoSubarray, 311);
-        builtin_func_indices.insert(Builtin::GetBuiltinGlobal, 312);
-        builtin_func_indices.insert(Builtin::PrivateGet, 313);
-        builtin_func_indices.insert(Builtin::PrivateSet, 314);
-        builtin_func_indices.insert(Builtin::PrivateHas, 315);
+        builtin_func_indices.insert(Builtin::CreateGlobalObject, 312);
+        builtin_func_indices.insert(Builtin::CreateException, 313);
+        builtin_func_indices.insert(Builtin::ExceptionValue, 314);
+        builtin_func_indices.insert(Builtin::GetBuiltinGlobal, 315);
+        builtin_func_indices.insert(Builtin::PrivateGet, 316);
+        builtin_func_indices.insert(Builtin::PrivateSet, 317);
+        builtin_func_indices.insert(Builtin::PrivateHas, 318);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
@@ -1232,6 +1239,7 @@ impl Compiler {
             elem_set_func_idx: 0,
             to_int32_func_idx: 0,
             current_func_returns_value: false,
+            current_func_is_main: false,
             heap_ptr_global_idx: 0,
             func_props_global_idx: 0,
             obj_table_global_idx: 0,
@@ -1255,9 +1263,9 @@ impl Compiler {
             array_proto_handle_global_idx: 0,
             arr_proto_table_base: 0,
             obj_spread_func_idx: 0,
-            proxy_trap_get_func_idx: 316,
-            proxy_trap_set_func_idx: 317,
-            proxy_trap_delete_func_idx: 318,
+            proxy_trap_get_func_idx: 318,
+            proxy_trap_set_func_idx: 319,
+            proxy_trap_delete_func_idx: 320,
             get_proto_from_ctor_func_idx: 0,
             string_eq_func_idx: 0,
             object_proto_handle_global_idx: 0,

@@ -9,6 +9,7 @@ use std::fmt::{self, Write};
 pub struct Module {
     constants: Vec<Constant>,
     functions: Vec<Function>,
+    script_mode: bool,
 }
 
 pub type Program = Module;
