@@ -78,6 +78,7 @@ pub(crate) fn create_error_object(
         table.push(ErrorEntry {
             name: error_name.to_string(),
             message: message.clone(),
+            value: value::encode_undefined(),
         });
     }
     let obj = alloc_host_object_from_caller(caller, 2);

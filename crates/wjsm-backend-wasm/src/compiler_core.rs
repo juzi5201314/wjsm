@@ -817,11 +817,11 @@ impl Compiler {
         // Import index 311: typedarray_proto_subarray: (i64, i64, i64) -> i64
         imports.import("env", "typedarray_proto_subarray", EntityType::Function(16));
         // Import index 312: create_global_object: () -> i64
-        imports.import("env", "create_global_object", EntityType::Function(0));
+        imports.import("env", "create_global_object", EntityType::Function(4));
         // Import index 313: create_exception: (i64) -> i64
-        imports.import("env", "create_exception", EntityType::Function(1));
+        imports.import("env", "create_exception", EntityType::Function(3));
         // Import index 314: exception_value: (i64) -> i64
-        imports.import("env", "exception_value", EntityType::Function(1));
+        imports.import("env", "exception_value", EntityType::Function(3));
         // Import index 315: private_get: (i64, i32) -> i64
         imports.import("env", "private_get", EntityType::Function(8));
         // Import index 316: private_set: (i64, i32, i64) -> i64
@@ -834,6 +834,8 @@ impl Compiler {
         imports.import("env", "proxy_trap_set", EntityType::Function(9));
         // Import index 320: proxy_trap_delete: (i64 proxy, i32 name_id) -> i64
         imports.import("env", "proxy_trap_delete", EntityType::Function(8));
+        // Import index 321: get_builtin_global: (i64) -> i64
+        imports.import("env", "get_builtin_global", EntityType::Function(3));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1179,7 +1181,7 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::CreateGlobalObject, 312);
         builtin_func_indices.insert(Builtin::CreateException, 313);
         builtin_func_indices.insert(Builtin::ExceptionValue, 314);
-        builtin_func_indices.insert(Builtin::GetBuiltinGlobal, 315);
+        builtin_func_indices.insert(Builtin::GetBuiltinGlobal, 321);
         builtin_func_indices.insert(Builtin::PrivateGet, 316);
         builtin_func_indices.insert(Builtin::PrivateSet, 317);
         builtin_func_indices.insert(Builtin::PrivateHas, 318);

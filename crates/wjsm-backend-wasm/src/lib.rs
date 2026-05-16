@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 321] = [
+const HOST_IMPORT_NAMES: [&str; 322] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -345,6 +345,7 @@ const HOST_IMPORT_NAMES: [&str; 321] = [
     "proxy_trap_get",
     "proxy_trap_set",
     "proxy_trap_delete",
+    "get_builtin_global",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -353,7 +354,7 @@ const HOST_IMPORT_NAMES: [&str; 321] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        321,
+        322,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);

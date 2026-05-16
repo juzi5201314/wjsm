@@ -1013,6 +1013,77 @@
         },
     );
 
+    let create_global_object_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>| -> i64 {
+            let obj = alloc_host_object_from_caller(&mut caller, 60);
+            let builtin_pairs: &[(&str, NativeCallable)] = &[
+                ("Array", NativeCallable::ArrayConstructor),
+                ("Object", NativeCallable::ObjectConstructor),
+                ("Function", NativeCallable::FunctionConstructor),
+                ("String", NativeCallable::StringConstructor),
+                ("Boolean", NativeCallable::BooleanConstructor),
+                ("Number", NativeCallable::NumberConstructor),
+                ("Symbol", NativeCallable::SymbolConstructor),
+                ("BigInt", NativeCallable::BigIntConstructor),
+                ("RegExp", NativeCallable::RegExpConstructor),
+                ("Error", NativeCallable::ErrorConstructor),
+                ("TypeError", NativeCallable::TypeErrorConstructor),
+                ("RangeError", NativeCallable::RangeErrorConstructor),
+                ("SyntaxError", NativeCallable::SyntaxErrorConstructor),
+                ("ReferenceError", NativeCallable::ReferenceErrorConstructor),
+                ("URIError", NativeCallable::URIErrorConstructor),
+                ("EvalError", NativeCallable::EvalErrorConstructor),
+                ("AggregateError", NativeCallable::AggregateErrorConstructor),
+                ("Map", NativeCallable::MapConstructor),
+                ("Set", NativeCallable::SetConstructor),
+                ("WeakMap", NativeCallable::WeakMapConstructor),
+                ("WeakSet", NativeCallable::WeakSetConstructor),
+                ("Date", NativeCallable::DateConstructorGlobal),
+                ("Promise", NativeCallable::PromiseConstructor),
+                ("ArrayBuffer", NativeCallable::ArrayBufferConstructorGlobal),
+                ("DataView", NativeCallable::DataViewConstructorGlobal),
+                ("Proxy", NativeCallable::ProxyConstructor),
+            ];
+            
+            for (name, callable) in builtin_pairs {
+                let mut native_callables = caller.data().native_callables.lock().unwrap();
+                let idx = native_callables.len() as u32;
+                native_callables.push(callable.clone());
+                let val = value::encode_native_callable_idx(idx);
+                drop(native_callables);
+                let _ = define_host_data_property_from_caller(&mut caller, obj, name, val);
+            }
+            
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "globalThis", obj);
+            
+            obj
+        },
+    );
+
+    let create_exception_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, thrown_value: i64| -> i64 {
+            let mut errors = caller.data().error_table.lock().unwrap();
+            let idx = errors.len() as u32;
+            errors.push(ErrorEntry {
+                name: String::new(),
+                message: String::new(),
+                value: thrown_value,
+            });
+            value::encode_handle(value::TAG_EXCEPTION, idx)
+        },
+    );
+
+    let exception_value_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, exception_handle: i64| -> i64 {
+            let idx = value::decode_handle(exception_handle) as usize;
+            let errors = caller.data().error_table.lock().unwrap();
+            errors.get(idx).map(|e| e.value).unwrap_or(value::encode_undefined())
+        },
+    );
+
     let date_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, _this_val: i64, args_base: i32, args_count: i32| -> i64 {
@@ -1367,9 +1438,11 @@
         typedarray_proto_set_fn.into(),          // 309
         typedarray_proto_slice_fn.into(),        // 310
         typedarray_proto_subarray_fn.into(),     // 311
-        get_builtin_global_fn.into(),             // 312
-        private_get_fn.into(),                    // 313
-        private_set_fn.into(),                    // 314
-        private_has_fn.into(),                    // 315
+        create_global_object_fn.into(),           // 312
+        create_exception_fn.into(),               // 313
+        exception_value_fn.into(),                // 314
+        private_get_fn.into(),                    // 316
+        private_set_fn.into(),                    // 317
+        private_has_fn.into(),                    // 318
     ]
 }
