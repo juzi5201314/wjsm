@@ -882,7 +882,7 @@
         },
     );
 
-    let get_builtin_global_fn = Func::wrap(
+    let _get_builtin_global_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, name_val: i64| -> i64 {
             let name = read_runtime_string(&mut caller, name_val);
