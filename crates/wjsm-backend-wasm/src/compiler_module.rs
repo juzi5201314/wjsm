@@ -74,8 +74,8 @@ impl Compiler {
                     // eval entry: Type 3 = (scope_env: i64) -> i64 completion value
                     self.functions.function(3);
                 } else {
-                    // main: Type 1 = () -> ()
-                    self.functions.function(1);
+                    // main: Type 4 = () -> i64 (返回异常值或 undefined)
+                    self.functions.function(4);
                 }
                 main_wasm_idx = Some(wasm_idx);
             } else {
@@ -489,7 +489,8 @@ impl Compiler {
         module: &IrModule,
         function: &IrFunction,
     ) -> Result<()> {
-        self.current_func_returns_value = self.mode == CompileMode::Eval;
+        self.current_func_is_main = function.name() == "main";
+        self.current_func_returns_value = self.mode == CompileMode::Eval || self.current_func_is_main;
         self.ssa_local_base = if self.mode == CompileMode::Eval {
             function.params().len() as u32
         } else {

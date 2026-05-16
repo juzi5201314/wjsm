@@ -13,7 +13,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 319] = [
+const HOST_IMPORT_NAMES: [&str; 321] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -336,7 +336,9 @@ const HOST_IMPORT_NAMES: [&str; 319] = [
     "typedarray_proto_set",
     "typedarray_proto_slice",
     "typedarray_proto_subarray",
-    "get_builtin_global",
+    "create_global_object",
+    "create_exception",
+    "exception_value",
     "private_get",
     "private_set",
     "private_has",
@@ -351,7 +353,7 @@ const HOST_IMPORT_NAMES: [&str; 319] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        319,
+        321,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -439,6 +441,8 @@ struct Compiler {
     num_ir_functions: u32,
     /// Whether the current function returns a value (Type 6 JS functions = true).
     current_func_returns_value: bool,
+    /// Whether the current function is main (for throw handling).
+    current_func_is_main: bool,
     /// Base offset for SSA value WASM local indices (0 for main, 8 for Type 6 JS functions).
     ssa_local_base: u32,
     /// String ptr cache: maps string content → data segment offset.
@@ -1104,10 +1108,14 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::TypedArrayProtoSlice => ("TypedArray.prototype.slice", 3),
         Builtin::TypedArrayProtoSubarray => ("TypedArray.prototype.subarray", 3),
         Builtin::GetBuiltinGlobal => ("get_builtin_global", 1),
-    }
+        Builtin::CreateGlobalObject => ("create_global_object", 0),
+        Builtin::CreateException => ("create_exception", 1),
+        Builtin::ExceptionValue => ("exception_value", 1),
 }
 
-// ── Tests ───────────────────────────────────────────────────────────────
+}
+
+// ── Tests ──
 
 #[cfg(test)]
 mod tests {

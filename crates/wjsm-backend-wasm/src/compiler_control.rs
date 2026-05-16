@@ -452,6 +452,12 @@ impl Compiler {
             self.emit(WasmInstruction::End); // block end
         }
 
+        // 函数返回 i64 时，确保所有控制流路径末尾都有值在栈上。
+        // 到达此处意味着没有任何块以 Return 结束——应被视为 unreachable。
+        if self.current_func_returns_value {
+            self.emit(WasmInstruction::Unreachable);
+        }
+
         Ok(())
     }
 

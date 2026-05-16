@@ -338,6 +338,9 @@ pub enum Builtin {
     TypedArrayProtoSlice,
     TypedArrayProtoSubarray,
     GetBuiltinGlobal,
+    CreateGlobalObject,
+    CreateException,
+    ExceptionValue,
 }
 
 impl fmt::Display for Builtin {
@@ -646,6 +649,9 @@ impl fmt::Display for Builtin {
             Self::TypedArrayProtoSlice => "TypedArray.prototype.slice",
             Self::TypedArrayProtoSubarray => "TypedArray.prototype.subarray",
             Self::GetBuiltinGlobal => "get_builtin_global",
+            Self::CreateGlobalObject => "create_global_object",
+            Self::CreateException => "create_exception",
+            Self::ExceptionValue => "exception_value",
         })
     }
 }
