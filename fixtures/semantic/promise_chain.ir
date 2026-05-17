@@ -20,17 +20,18 @@ module {
     c17 = number(-inf)
     c18 = number(inf)
     c19 = undefined
-    c20 = number(1)
+    c20 = undefined
     c21 = number(1)
-    c22 = functionref(@0)
-    c23 = undefined
-    c24 = functionref(@1)
-    c25 = undefined
+    c22 = number(1)
+    c23 = functionref(@0)
+    c24 = undefined
+    c25 = functionref(@1)
+    c26 = undefined
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
     bb0:
       %0 = load var $1.v
-      %1 = const c21
+      %1 = const c22
       %2 = add %0, %1
       return %2
 
@@ -80,14 +81,24 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      %20 = const c20
-      %21 = call builtin.promise.resolve_static(%19, %20)
-      %22 = const c22
-      %23 = const c23
-      %24 = call builtin.promise.then(%21, %22, %23)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      %22 = const c21
+      %23 = call builtin.promise.resolve_static(%21, %22)
+      %24 = const c23
       %25 = const c24
-      %26 = const c25
-      %27 = call builtin.promise.then(%24, %25, %26)
+      %26 = call builtin.promise.then(%23, %24, %25)
+      %27 = const c25
+      %28 = const c26
+      %29 = call builtin.promise.then(%26, %27, %28)
+      %30 = is_exception %29
+      branch %30, bb2, bb1
+    bb1:
       return
+    bb2:
+      %31 = call builtin.exception_value(%29)
+      throw %31
 }

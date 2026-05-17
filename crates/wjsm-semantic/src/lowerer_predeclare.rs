@@ -119,7 +119,10 @@ impl Lowerer {
                     };
                     for declarator in &var_decl.decls {
                         let mut names = Vec::new();
-                        Self::extract_pat_bindings(&[declarator.name.clone()], &mut names);
+                        Self::extract_pat_bindings(
+                            std::slice::from_ref(&declarator.name),
+                            &mut names,
+                        );
                         for name in names {
                             if !matches!(kind, VarKind::Var) && matches!(mode, LexicalMode::Exclude)
                             {
@@ -175,7 +178,10 @@ impl Lowerer {
                 swc_ast::Decl::Using(using_decl) => {
                     for declarator in &using_decl.decls {
                         let mut names = Vec::new();
-                        Self::extract_pat_bindings(&[declarator.name.clone()], &mut names);
+                        Self::extract_pat_bindings(
+                            std::slice::from_ref(&declarator.name),
+                            &mut names,
+                        );
                         for name in names {
                             let _scope_id = self
                                 .scopes
@@ -197,13 +203,10 @@ impl Lowerer {
             }
             swc_ast::Stmt::For(for_stmt) => {
                 // For `for (let x ...)`, the init variable is in a separate scope
-                if let Some(init) = &for_stmt.init {
-                    match init {
-                        swc_ast::VarDeclOrExpr::VarDecl(var_decl) => {
-                            self.predeclare_var_decl(var_decl)?;
-                        }
-                        _ => {}
-                    }
+                if let Some(init) = &for_stmt.init
+                    && let swc_ast::VarDeclOrExpr::VarDecl(var_decl) = init
+                {
+                    self.predeclare_var_decl(var_decl)?;
                 }
                 // Recursively scan for nested declarations in the body
                 self.predeclare_stmt_with_mode_and_eval_strings(
@@ -214,11 +217,8 @@ impl Lowerer {
             }
             swc_ast::Stmt::ForIn(for_in) => {
                 // Pre-declare the loop variable if it's a var declaration
-                match &for_in.left {
-                    swc_ast::ForHead::VarDecl(var_decl) => {
-                        self.predeclare_var_decl(var_decl)?;
-                    }
-                    _ => {}
+                if let swc_ast::ForHead::VarDecl(var_decl) = &for_in.left {
+                    self.predeclare_var_decl(var_decl)?;
                 }
                 self.predeclare_stmt_with_mode_and_eval_strings(
                     &for_in.body,
@@ -227,11 +227,8 @@ impl Lowerer {
                 )?;
             }
             swc_ast::Stmt::ForOf(for_of) => {
-                match &for_of.left {
-                    swc_ast::ForHead::VarDecl(var_decl) => {
-                        self.predeclare_var_decl(var_decl)?;
-                    }
-                    _ => {}
+                if let swc_ast::ForHead::VarDecl(var_decl) = &for_of.left {
+                    self.predeclare_var_decl(var_decl)?;
                 }
                 self.predeclare_stmt_with_mode_and_eval_strings(
                     &for_of.body,
@@ -271,21 +268,33 @@ impl Lowerer {
                 }
                 if let Some(catch) = &try_stmt.handler {
                     if let Some(param) = &catch.param {
+                        self.scopes.push_scope(ScopeKind::Block);
                         let mut names = Vec::new();
-                        Self::extract_pat_bindings(&[param.clone()], &mut names);
+                        Self::extract_pat_bindings(std::slice::from_ref(param), &mut names);
                         for name in names {
                             let _scope_id = self
                                 .scopes
                                 .declare(&name, VarKind::Let, false)
                                 .map_err(|msg| self.error(param.span(), msg))?;
                         }
-                    }
-                    for stmt in &catch.body.stmts {
-                        self.predeclare_stmt_with_mode_and_eval_strings(
-                            stmt,
-                            LexicalMode::Exclude,
-                            eval_string_bindings,
-                        )?;
+                        for stmt in &catch.body.stmts {
+                            self.predeclare_stmt_with_mode_and_eval_strings(
+                                stmt,
+                                LexicalMode::Exclude,
+                                eval_string_bindings,
+                            )?;
+                        }
+                        self.scopes.pop_scope();
+                    } else {
+                        self.scopes.push_scope(ScopeKind::Block);
+                        for stmt in &catch.body.stmts {
+                            self.predeclare_stmt_with_mode_and_eval_strings(
+                                stmt,
+                                LexicalMode::Exclude,
+                                eval_string_bindings,
+                            )?;
+                        }
+                        self.scopes.pop_scope();
                     }
                 }
                 if let Some(finally) = &try_stmt.finalizer {
@@ -315,7 +324,7 @@ impl Lowerer {
         };
         for declarator in &var_decl.decls {
             let mut names = Vec::new();
-            Self::extract_pat_bindings(&[declarator.name.clone()], &mut names);
+            Self::extract_pat_bindings(std::slice::from_ref(&declarator.name), &mut names);
             for name in names {
                 let declared = matches!(kind, VarKind::Var);
                 let scope_id = self
@@ -374,10 +383,15 @@ impl Lowerer {
     }
 
     /// Check if a block has been terminated by lower_expr (e.g. ternary/short-circuit).
-    /// If so, find the merge block where subsequent instructions should go.
     /// Check if a block has been terminated by lower_expr (e.g. ternary/short-circuit).
     /// If so, find the merge block where subsequent instructions should go.
-    pub(crate) fn resolve_store_block(&self, block: BasicBlockId) -> BasicBlockId {
+    /// Also checks for eval_continue_block set by lower_direct_eval_call.
+    pub(crate) fn resolve_store_block(&mut self, block: BasicBlockId) -> BasicBlockId {
+        // eval 异常检查分叉后，后续代码应插入到 continue block
+        if let Some(cont) = self.eval_continue_block.take() {
+            return cont;
+        }
+
         let Some(b) = self.current_function.block(block) else {
             return block;
         };
@@ -412,7 +426,7 @@ impl Lowerer {
                 let true_has_phi =
                     self.current_function
                         .block(*true_block)
-                        .map_or(false, |candidate| {
+                        .is_some_and(|candidate| {
                             candidate
                                 .instructions()
                                 .iter()
@@ -425,7 +439,7 @@ impl Lowerer {
                 let false_has_phi =
                     self.current_function
                         .block(*false_block)
-                        .map_or(false, |candidate| {
+                        .is_some_and(|candidate| {
                             candidate
                                 .instructions()
                                 .iter()

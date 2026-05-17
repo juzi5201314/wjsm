@@ -32,7 +32,7 @@ impl Lowerer {
         if let Some(ref ident) = fn_expr.ident {
             let _ = self
                 .scopes
-                .declare(&ident.sym.to_string(), VarKind::Let, true)
+                .declare(ident.sym.as_ref(), VarKind::Let, true)
                 .map_err(|msg| self.error(fn_expr.span(), msg))?;
         }
 
@@ -149,7 +149,7 @@ impl Lowerer {
         if let Some(ref ident) = fn_expr.ident {
             let _ = self
                 .scopes
-                .declare(&ident.sym.to_string(), VarKind::Let, true)
+                .declare(ident.sym.as_ref(), VarKind::Let, true)
                 .map_err(|msg| self.error(fn_expr.span(), msg))?;
         }
 
@@ -494,7 +494,7 @@ impl Lowerer {
             wrapper_this_scope_id,
         )?;
 
-        let _wrapper_param_ir_names = vec![
+        let _wrapper_param_ir_names = [
             format!("${wrapper_env_scope_id}.$env"),
             format!("${wrapper_this_scope_id}.$this"),
         ];

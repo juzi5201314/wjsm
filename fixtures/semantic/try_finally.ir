@@ -19,9 +19,11 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = string("try")
-    c20 = string("finally")
-    c21 = string("after")
+    c19 = undefined
+    c20 = string("try")
+    c21 = string("finally")
+    c22 = string("finally")
+    c23 = string("after")
 
   fn @main [entry=bb0]:
     bb0:
@@ -63,19 +65,49 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
       jump bb1
     bb1:
-      %19 = const c19
-      %20 = call builtin.console.log(%19)
-      jump bb3
+      %21 = const c20
+      %22 = call builtin.console.log(%21)
+      %23 = is_exception %22
+      branch %23, bb6, bb5
     bb2:
       jump bb3
     bb3:
-      %21 = const c20
-      %22 = call builtin.console.log(%21)
-      jump bb4
+      %29 = const c22
+      %30 = call builtin.console.log(%29)
+      %31 = is_exception %30
+      branch %31, bb10, bb9
     bb4:
-      %23 = const c21
-      %24 = call builtin.console.log(%23)
+      %33 = const c23
+      %34 = call builtin.console.log(%33)
+      %35 = is_exception %34
+      branch %35, bb12, bb11
+    bb5:
+      jump bb3
+    bb6:
+      %24 = call builtin.exception_value(%22)
+      %25 = const c21
+      %26 = call builtin.console.log(%25)
+      %27 = is_exception %26
+      branch %27, bb8, bb7
+    bb7:
+      throw %24
+    bb8:
+      %28 = call builtin.exception_value(%26)
+      throw %28
+    bb9:
+      jump bb4
+    bb10:
+      %32 = call builtin.exception_value(%30)
+      throw %32
+    bb11:
       return
+    bb12:
+      %36 = call builtin.exception_value(%34)
+      throw %36
 }

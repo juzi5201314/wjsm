@@ -363,7 +363,7 @@
     let symbol_well_known_fn = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, id: i32| -> i64 {
-            if id < 0 || id > 7 {
+            if !(0..=7).contains(&id) {
                 return value::encode_undefined();
             }
             let table = caller
@@ -785,8 +785,8 @@
                                     continue;
                                 }
                                 // 检查是否为两位数 $nn
-                                if i + 2 < chars.len() {
-                                    if let Some('0'..='9') = chars.get(i + 2) {
+                                if i + 2 < chars.len()
+                                    && let Some('0'..='9') = chars.get(i + 2) {
                                         let next_digit = (chars[i + 2] as u8 - b'0') as usize;
                                         let two_digit = group_num * 10 + next_digit;
                                         // $00 不是特殊模式，只有 $01-$99 是
@@ -795,7 +795,6 @@
                                             consumed = 3;
                                         }
                                     }
-                                }
                                 // 获取捕获组
                                 if group_num < captures.len() {
                                     if let Some(ref range) = captures[group_num] {
@@ -998,8 +997,7 @@
                             &captures,
                         )
                     } else {
-                        let replace_str = get_string_value(&mut caller, replace);
-                        replace_str
+                        get_string_value(&mut caller, replace)
                     };
                     let mut result = String::new();
                     result.push_str(&s[..pos]);

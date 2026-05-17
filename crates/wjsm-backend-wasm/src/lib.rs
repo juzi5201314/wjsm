@@ -474,6 +474,8 @@ struct Compiler {
     closure_get_env_idx: u32,
     /// WASM function index for native_call import.
     native_call_func_idx: u32,
+    /// WASM function index for new.target context setter import.
+    new_target_set_func_idx: u32,
     /// WASM global index for array prototype handle.
     array_proto_handle_global_idx: u32,
     /// Base table index for array prototype methods (Table[N+8])
@@ -673,41 +675,195 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
                     back_edges.entry(t).or_default().push(i);
                 }
             }
+            Terminator::Switch {
+                cases,
+                default_block,
+                exit_block,
+                ..
+            } => {
+                for target in cases
+                    .iter()
+                    .map(|case| case.target)
+                    .chain([*default_block, *exit_block])
+                {
+                    let t = target.0 as usize;
+                    if t <= i {
+                        back_edges.entry(t).or_default().push(i);
+                    }
+                }
+            }
             _ => {}
         }
     }
 
-    let mut loops: Vec<LoopInfo> = Vec::new();
-    for header_idx in back_edges.keys() {
-        let exit_idx = match blocks[*header_idx].terminator() {
-            // while/for 模式：header 有 Branch，false 分支是出口
-            Terminator::Branch { false_block, .. } => false_block.0 as usize,
-            _ => {
-                // do-while 模式：header 没有 Branch，找到指向 header 的 Branch
-                let mut exit = *header_idx + 1;
-                for block in blocks.iter() {
-                    if let Terminator::Branch {
+    // 简单 CFG 可达性检查：从 start 出发，沿所有 CFG 边走，能否到达 target。
+    fn can_reach(blocks: &[BasicBlock], start: usize, target: usize) -> bool {
+        let mut visited = std::collections::HashSet::new();
+        let mut stack = vec![start];
+        while let Some(current) = stack.pop() {
+            if current == target {
+                return true;
+            }
+            if !visited.insert(current) {
+                continue;
+            }
+            if let Some(block) = blocks.get(current) {
+                match block.terminator() {
+                    Terminator::Jump { target: t } => stack.push(t.0 as usize),
+                    Terminator::Branch {
                         true_block,
                         false_block,
                         ..
-                    } = block.terminator()
-                    {
-                        if true_block.0 as usize == *header_idx {
-                            exit = false_block.0 as usize;
-                            break;
+                    } => {
+                        stack.push(false_block.0 as usize);
+                        stack.push(true_block.0 as usize);
+                    }
+                    Terminator::Switch {
+                        cases,
+                        default_block,
+                        exit_block,
+                        ..
+                    } => {
+                        stack.extend(cases.iter().map(|case| case.target.0 as usize));
+                        stack.push(default_block.0 as usize);
+                        stack.push(exit_block.0 as usize);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
+    }
+
+    fn can_reach_before(blocks: &[BasicBlock], start: usize, limit: usize) -> bool {
+        let mut visited = std::collections::HashSet::new();
+        let mut stack = vec![start];
+        while let Some(current) = stack.pop() {
+            if !visited.insert(current) {
+                continue;
+            }
+            if let Some(block) = blocks.get(current) {
+                match block.terminator() {
+                    Terminator::Jump { target } => {
+                        let target_idx = target.0 as usize;
+                        if target_idx < limit {
+                            return true;
+                        }
+                        stack.push(target_idx);
+                    }
+                    Terminator::Branch {
+                        true_block,
+                        false_block,
+                        ..
+                    } => {
+                        for target_idx in [true_block.0 as usize, false_block.0 as usize] {
+                            if target_idx < limit {
+                                return true;
+                            }
+                            stack.push(target_idx);
                         }
                     }
+                    Terminator::Switch {
+                        cases,
+                        default_block,
+                        exit_block,
+                        ..
+                    } => {
+                        for target_idx in cases
+                            .iter()
+                            .map(|case| case.target.0 as usize)
+                            .chain([default_block.0 as usize, exit_block.0 as usize])
+                        {
+                            if target_idx < limit {
+                                return true;
+                            }
+                            stack.push(target_idx);
+                        }
+                    }
+                    _ => {}
                 }
-                exit
             }
+        }
+        false
+    }
+
+    let mut loops: Vec<LoopInfo> = Vec::new();
+    for header_idx in back_edges.keys() {
+        let h = *header_idx;
+        if let Terminator::Branch {
+            true_block,
+            false_block,
+            ..
+        } = blocks[h].terminator()
+        {
+            let true_idx = true_block.0 as usize;
+            let false_idx = false_block.0 as usize;
+            let sources = &back_edges[&h];
+            let has_do_while_source = sources.iter().any(|&source_idx| {
+                matches!(
+                    blocks[source_idx].terminator(),
+                    Terminator::Branch { true_block, .. } if true_block.0 as usize == h
+                )
+            });
+            let reaches_backedge = sources
+                .iter()
+                .any(|&source_idx| can_reach(blocks, true_idx, source_idx));
+            let reaches_exit = can_reach(blocks, true_idx, false_idx);
+            let reaches_outer_target = can_reach_before(blocks, true_idx, h);
+            if !(has_do_while_source || reaches_backedge || reaches_exit || reaches_outer_target) {
+                continue;
+            }
+        }
+
+        let exit_idx = if let Some(exit) =
+            back_edges[&h]
+                .iter()
+                .find_map(|&source_idx| match blocks[source_idx].terminator() {
+                    Terminator::Branch {
+                        true_block,
+                        false_block,
+                        ..
+                    } if true_block.0 as usize == h => Some(false_block.0 as usize),
+                    _ => None,
+                }) {
+            exit
+        } else if let Terminator::Branch { false_block, .. } = blocks[h].terminator() {
+            false_block.0 as usize
+        } else {
+            let mut exit = h + 1;
+            for block in blocks.iter() {
+                if let Terminator::Branch {
+                    true_block,
+                    false_block,
+                    ..
+                } = block.terminator()
+                    && true_block.0 as usize == h
+                {
+                    exit = false_block.0 as usize;
+                    break;
+                }
+            }
+            exit
         };
         loops.push(LoopInfo {
-            header_idx: *header_idx,
+            header_idx: h,
             exit_idx,
         });
     }
 
     loops.sort_by_key(|l| l.header_idx);
+    let all_loops = loops.clone();
+    loops.retain(|loop_info| {
+        if let Terminator::Branch { true_block, .. } = blocks[loop_info.header_idx].terminator() {
+            let true_idx = true_block.0 as usize;
+            if true_idx < loop_info.header_idx {
+                return !all_loops.iter().any(|outer| {
+                    outer.header_idx == true_idx && outer.exit_idx == loop_info.exit_idx
+                });
+            }
+        }
+        true
+    });
     loops
 }
 
@@ -744,6 +900,14 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
             let args_max = args.iter().map(|v| v.0).max().unwrap_or(0);
             let max_val = callee.0.max(this_val.0).max(args_max);
             dest.map_or(max_val, |d| d.0.max(max_val))
+        }
+        Instruction::ConstructCall {
+            callee,
+            this_val,
+            args,
+        } => {
+            let args_max = args.iter().map(|v| v.0).max().unwrap_or(0);
+            callee.0.max(this_val.0).max(args_max)
         }
         Instruction::NewObject { dest, capacity: _ } => dest.0,
         Instruction::GetProp { dest, object, key } => dest.0.max(object.0).max(key.0),
@@ -1112,8 +1276,9 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::CreateGlobalObject => ("create_global_object", 0),
         Builtin::CreateException => ("create_exception", 1),
         Builtin::ExceptionValue => ("exception_value", 1),
-}
-
+        Builtin::IsException => ("is_exception", 1),
+        Builtin::NewTarget => ("new_target", 1),
+    }
 }
 
 // ── Tests ──
@@ -1126,7 +1291,7 @@ mod tests {
 
     fn compile_source(source: &str) -> Result<Vec<u8>> {
         let module = wjsm_parser::parse_module(source)?;
-        let program = wjsm_semantic::lower_module(module)?;
+        let program = wjsm_semantic::lower_module(module, false)?;
         compile(&program)
     }
 
@@ -1268,7 +1433,7 @@ mod tests {
     fn dump_if_else_ir() -> Result<()> {
         let source = "if (true) { console.log(\"yes\"); } else { console.log(\"no\"); }";
         let module = wjsm_parser::parse_module(source)?;
-        let program = wjsm_semantic::lower_module(module)?;
+        let program = wjsm_semantic::lower_module(module, false)?;
         assert!(program.dump_text().contains("fn @main"));
         Ok(())
     }

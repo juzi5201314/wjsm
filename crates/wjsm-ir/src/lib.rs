@@ -342,6 +342,11 @@ pub enum Instruction {
         this_val: ValueId,
         args: Vec<ValueId>,
     },
+    ConstructCall {
+        callee: ValueId,
+        this_val: ValueId,
+        args: Vec<ValueId>,
+    },
     NewObject {
         dest: ValueId,
         capacity: u32,
@@ -515,6 +520,24 @@ impl fmt::Display for Instruction {
                     write!(formatter, "{dest} = ")?;
                 }
                 write!(formatter, "call {callee}, this={this_val}")?;
+                if !args.is_empty() {
+                    formatter.write_str(", args=[")?;
+                    for (index, arg) in args.iter().enumerate() {
+                        if index > 0 {
+                            formatter.write_str(", ")?;
+                        }
+                        write!(formatter, "{arg}")?;
+                    }
+                    formatter.write_char(']')?;
+                }
+                Ok(())
+            }
+            Self::ConstructCall {
+                callee,
+                this_val,
+                args,
+            } => {
+                write!(formatter, "construct_call {callee}, this={this_val}")?;
                 if !args.is_empty() {
                     formatter.write_str(", args=[")?;
                     for (index, arg) in args.iter().enumerate() {

@@ -9,7 +9,7 @@ impl Lowerer {
         let block = self.ensure_open(flow)?;
 
         let target_index = if let Some(label) = &break_stmt.label {
-            self.find_label_context_index(&label.sym.to_string(), Some(label.span))?
+            self.find_label_context_index(label.sym.as_ref(), Some(label.span))?
         } else {
             self.find_nearest_break_context_index(break_stmt.span())?
         };
@@ -35,7 +35,7 @@ impl Lowerer {
         let block = self.ensure_open(flow)?;
 
         let target_index = if let Some(label) = &continue_stmt.label {
-            let index = self.find_label_context_index(&label.sym.to_string(), Some(label.span))?;
+            let index = self.find_label_context_index(label.sym.as_ref(), Some(label.span))?;
             if self.label_stack[index].continue_target.is_none() {
                 return Err(self.error(
                     continue_stmt.span(),
@@ -455,26 +455,26 @@ impl Lowerer {
         block: BasicBlockId,
         value: ValueId,
     ) -> Result<StmtFlow, LoweringError> {
-        if let Some(try_ctx) = self.try_contexts.last() {
-            if let Some(catch_entry) = try_ctx.catch_entry {
-                let exc_var = try_ctx.exception_var.clone();
-                let iterator_cleanups = self.iterator_cleanups_from_depth(try_ctx.label_depth);
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::StoreVar {
-                        name: exc_var,
-                        value,
-                    },
-                );
-                self.emit_iterator_closes(block, &iterator_cleanups);
-                self.current_function.set_terminator(
-                    block,
-                    Terminator::Jump {
-                        target: catch_entry,
-                    },
-                );
-                return Ok(StmtFlow::Terminated);
-            }
+        if let Some(try_ctx) = self.try_contexts.last()
+            && let Some(catch_entry) = try_ctx.catch_entry
+        {
+            let exc_var = try_ctx.exception_var.clone();
+            let iterator_cleanups = self.iterator_cleanups_from_depth(try_ctx.label_depth);
+            self.current_function.append_instruction(
+                block,
+                Instruction::StoreVar {
+                    name: exc_var,
+                    value,
+                },
+            );
+            self.emit_iterator_closes(block, &iterator_cleanups);
+            self.current_function.set_terminator(
+                block,
+                Terminator::Jump {
+                    target: catch_entry,
+                },
+            );
+            return Ok(StmtFlow::Terminated);
         }
 
         let throw_block = self.resolve_store_block(block);
@@ -546,6 +546,7 @@ impl Lowerer {
         // 推入 try context 以便 lower_throw 能重定向到 catch
         let exc_var = self.alloc_temp_name();
         let has_catch = try_stmt.handler.is_some();
+        let mut try_ctx_popped = false;
         self.try_contexts.push(TryContext {
             catch_entry: if has_catch { Some(catch_entry) } else { None },
             exception_var: exc_var,
@@ -611,7 +612,7 @@ impl Lowerer {
                                 },
                             );
                             let mut names = Vec::new();
-                            Self::extract_pat_bindings(&[param.clone()], &mut names);
+                            Self::extract_pat_bindings(std::slice::from_ref(param), &mut names);
                             for name in &names {
                                 self.scopes
                                     .declare(name, VarKind::Let, true)
@@ -626,6 +627,10 @@ impl Lowerer {
                         }
                     }
                 }
+                // 推入 try_context 是为了 catch try body 中的 throw；进入 catch body 前弹出，
+                // 避免 catch body 内部的 throw 被同一个 catch 重新捕获形成自循环。
+                self.try_contexts.pop();
+                try_ctx_popped = true;
 
                 // Lower catch body
                 let catch_body_flow =
@@ -689,7 +694,7 @@ impl Lowerer {
                             },
                         );
                         let mut names = Vec::new();
-                        Self::extract_pat_bindings(&[param.clone()], &mut names);
+                        Self::extract_pat_bindings(std::slice::from_ref(param), &mut names);
                         for name in &names {
                             self.scopes
                                 .declare(name, VarKind::Let, true)
@@ -699,6 +704,10 @@ impl Lowerer {
                     }
                 }
             }
+
+            // 进入 catch body 前弹出 try_context，避免自循环
+            self.try_contexts.pop();
+            try_ctx_popped = true;
 
             let catch_flow = self.lower_block_body(&catch.body, StmtFlow::Open(catch_entry))?;
             let _ = self
@@ -714,7 +723,9 @@ impl Lowerer {
                 .ensure_jump_or_terminated(try_flow, exit);
         }
 
-        self.try_contexts.pop();
+        if !try_ctx_popped {
+            self.try_contexts.pop();
+        }
         Ok(StmtFlow::Open(exit))
     }
 

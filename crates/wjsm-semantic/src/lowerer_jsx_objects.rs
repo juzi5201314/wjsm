@@ -207,7 +207,7 @@ impl Lowerer {
                     };
 
                     let attr_value = if let Some(ref value) = attr.value {
-                        match &*value {
+                        match value {
                             swc_ast::JSXAttrValue::Str(s) => {
                                 let str_val = s.value.to_string_lossy().into_owned();
                                 let const_id = self.module.add_constant(Constant::String(str_val));
@@ -241,10 +241,10 @@ impl Lowerer {
                                 }
                             }
                             swc_ast::JSXAttrValue::JSXElement(el) => {
-                                self.lower_jsx_element(&el, block)?
+                                self.lower_jsx_element(el, block)?
                             }
                             swc_ast::JSXAttrValue::JSXFragment(frag) => {
-                                self.lower_jsx_fragment(&frag, block)?
+                                self.lower_jsx_fragment(frag, block)?
                             }
                         }
                     } else {
@@ -428,6 +428,56 @@ impl Lowerer {
                 );
                 Ok(dest)
             }
+            swc_ast::Expr::MetaProp(meta) => match meta.kind {
+                swc_ast::MetaPropKind::NewTarget => {
+                    // new.target is only valid in function code (not top-level)
+                    if self.function_stack.is_empty() {
+                        if self.eval_mode {
+                            // eval at top-level: new.target is a SyntaxError
+                            return Err(self.error(
+                                meta.span,
+                                "SyntaxError: new.target expression is not valid in top-level eval",
+                            ));
+                        }
+                        return Err(self.error(
+                            meta.span,
+                            "SyntaxError: new.target expression is not valid outside functions",
+                        ));
+                    }
+                    // In eval mode: only valid if eval is inside a non-arrow function
+                    if self.eval_mode
+                        && !self.function_stack.is_empty()
+                        && self.is_arrow_fn_stack.last().copied() == Some(true)
+                    {
+                        return Err(self.error(
+                            meta.span,
+                            "SyntaxError: new.target is not valid in arrow function eval",
+                        ));
+                    }
+                    let dest = self.alloc_value();
+                    let dummy_const = self.module.add_constant(Constant::Undefined);
+                    let dummy_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: dummy_val,
+                            constant: dummy_const,
+                        },
+                    );
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::CallBuiltin {
+                            dest: Some(dest),
+                            builtin: Builtin::NewTarget,
+                            args: vec![dummy_val],
+                        },
+                    );
+                    Ok(dest)
+                }
+                swc_ast::MetaPropKind::ImportMeta => {
+                    Err(self.error(meta.span, "SyntaxError: import.meta is not supported"))
+                }
+            },
             _ => Err(self.error(
                 expr.span(),
                 format!("unsupported expression kind `{}`", expr_kind(expr)),
@@ -1151,54 +1201,54 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         // 拦截 Math 常量属性访问（Math.PI, Math.E 等）
-        if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop {
-            if let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-                if obj_ident.sym.to_string() == "Math" && self.scopes.lookup("Math").is_err() {
-                    let prop_name = prop_ident.sym.to_string();
-                    let is_math_const = matches!(
-                        prop_name.as_str(),
-                        "E" | "LN10" | "LN2" | "LOG10E" | "LOG2E" | "PI" | "SQRT1_2" | "SQRT2"
+        if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop
+            && let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref()
+        {
+            if obj_ident.sym == "Math" && self.scopes.lookup("Math").is_err() {
+                let prop_name = prop_ident.sym.to_string();
+                let is_math_const = matches!(
+                    prop_name.as_str(),
+                    "E" | "LN10" | "LN2" | "LOG10E" | "LOG2E" | "PI" | "SQRT1_2" | "SQRT2"
+                );
+                if is_math_const {
+                    let math_const_name = format!("$0.Math.{}", prop_name);
+                    let dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::LoadVar {
+                            dest,
+                            name: math_const_name,
+                        },
                     );
-                    if is_math_const {
-                        let math_const_name = format!("$0.Math.{}", prop_name);
-                        let dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::LoadVar {
-                                dest,
-                                name: math_const_name,
-                            },
-                        );
-                        return Ok(dest);
-                    }
+                    return Ok(dest);
                 }
+            }
 
-                // 拦截 Number 常量属性访问（Number.EPSILON, Number.MAX_VALUE 等）
-                if obj_ident.sym.to_string() == "Number" && self.scopes.lookup("Number").is_err() {
-                    let prop_name = prop_ident.sym.to_string();
-                    let is_number_const = matches!(
-                        prop_name.as_str(),
-                        "EPSILON"
-                            | "MAX_VALUE"
-                            | "MIN_VALUE"
-                            | "MAX_SAFE_INTEGER"
-                            | "MIN_SAFE_INTEGER"
-                            | "NaN"
-                            | "NEGATIVE_INFINITY"
-                            | "POSITIVE_INFINITY"
+            // 拦截 Number 常量属性访问（Number.EPSILON, Number.MAX_VALUE 等）
+            if obj_ident.sym == "Number" && self.scopes.lookup("Number").is_err() {
+                let prop_name = prop_ident.sym.to_string();
+                let is_number_const = matches!(
+                    prop_name.as_str(),
+                    "EPSILON"
+                        | "MAX_VALUE"
+                        | "MIN_VALUE"
+                        | "MAX_SAFE_INTEGER"
+                        | "MIN_SAFE_INTEGER"
+                        | "NaN"
+                        | "NEGATIVE_INFINITY"
+                        | "POSITIVE_INFINITY"
+                );
+                if is_number_const {
+                    let number_const_name = format!("$0.Number.{}", prop_name);
+                    let dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::LoadVar {
+                            dest,
+                            name: number_const_name,
+                        },
                     );
-                    if is_number_const {
-                        let number_const_name = format!("$0.Number.{}", prop_name);
-                        let dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::LoadVar {
-                                dest,
-                                name: number_const_name,
-                            },
-                        );
-                        return Ok(dest);
-                    }
+                    return Ok(dest);
                 }
             }
         }
@@ -1251,42 +1301,42 @@ impl Lowerer {
             // Ident（命名属性）→ 检查是否为 Symbol 的静态属性（如 Symbol.dispose）
             swc_ast::MemberProp::Ident(ident) => {
                 // 检查对象是否为 Symbol（编译时已知的 well-known symbol 访问）
-                if let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
-                    if obj_ident.sym.to_string() == "Symbol" {
-                        let prop_name = ident.sym.to_string();
-                        // 将 Symbol.dispose 等映射为 well-known symbol
-                        let wk_index = match prop_name.as_str() {
-                            "iterator" => Some(WK_SYMBOL_ITERATOR),
-                            "species" => Some(WK_SYMBOL_SPECIES),
-                            "toStringTag" => Some(WK_SYMBOL_TO_STRING_TAG),
-                            "asyncIterator" => Some(WK_SYMBOL_ASYNC_ITERATOR),
-                            "hasInstance" => Some(WK_SYMBOL_HAS_INSTANCE),
-                            "toPrimitive" => Some(WK_SYMBOL_TO_PRIMITIVE),
-                            "dispose" => Some(WK_SYMBOL_DISPOSE),
-                            "match" => Some(WK_SYMBOL_MATCH),
-                            "asyncDispose" => Some(WK_SYMBOL_ASYNC_DISPOSE),
-                            _ => None,
-                        };
-                        if let Some(idx) = wk_index {
-                            let idx_const = self.module.add_constant(Constant::Number(idx as f64));
-                            let idx_val = self.alloc_value();
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::Const {
-                                    dest: idx_val,
-                                    constant: idx_const,
-                                },
-                            );
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: Builtin::SymbolWellKnown,
-                                    args: vec![idx_val],
-                                },
-                            );
-                            return Ok(dest);
-                        }
+                if let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref()
+                    && obj_ident.sym == "Symbol"
+                {
+                    let prop_name = ident.sym.to_string();
+                    // 将 Symbol.dispose 等映射为 well-known symbol
+                    let wk_index = match prop_name.as_str() {
+                        "iterator" => Some(WK_SYMBOL_ITERATOR),
+                        "species" => Some(WK_SYMBOL_SPECIES),
+                        "toStringTag" => Some(WK_SYMBOL_TO_STRING_TAG),
+                        "asyncIterator" => Some(WK_SYMBOL_ASYNC_ITERATOR),
+                        "hasInstance" => Some(WK_SYMBOL_HAS_INSTANCE),
+                        "toPrimitive" => Some(WK_SYMBOL_TO_PRIMITIVE),
+                        "dispose" => Some(WK_SYMBOL_DISPOSE),
+                        "match" => Some(WK_SYMBOL_MATCH),
+                        "asyncDispose" => Some(WK_SYMBOL_ASYNC_DISPOSE),
+                        _ => None,
+                    };
+                    if let Some(idx) = wk_index {
+                        let idx_const = self.module.add_constant(Constant::Number(idx as f64));
+                        let idx_val = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest: idx_val,
+                                constant: idx_const,
+                            },
+                        );
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::SymbolWellKnown,
+                                args: vec![idx_val],
+                            },
+                        );
+                        return Ok(dest);
                     }
                 }
                 // 默认走 GetProp 路径

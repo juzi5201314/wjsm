@@ -20,17 +20,18 @@ module {
     c17 = number(-inf)
     c18 = number(inf)
     c19 = undefined
-    c20 = number(1)
-    c21 = functionref(@0)
-    c22 = undefined
-    c23 = functionref(@1)
-    c24 = undefined
+    c20 = undefined
+    c21 = number(1)
+    c22 = functionref(@0)
+    c23 = undefined
+    c24 = functionref(@1)
+    c25 = undefined
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
     bb0:
-      %0 = const c19
+      %0 = const c20
       %1 = load var $1.resolve
-      %2 = const c20
+      %2 = const c21
       %3 = call %1, this=%0, args=[%2]
       return %3
 
@@ -80,14 +81,24 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = new_promise
-      %20 = const c21
-      %21 = call builtin.promise.create_resolve_function(%19)
-      %22 = call builtin.promise.create_reject_function(%19)
-      %23 = const c22
-      call %20, this=%23, args=[%21, %22]
-      %24 = const c23
-      %25 = const c24
-      %26 = call builtin.promise.then(%19, %24, %25)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = new_promise
+      %22 = const c22
+      %23 = call builtin.promise.create_resolve_function(%21)
+      %24 = call builtin.promise.create_reject_function(%21)
+      %25 = const c23
+      call %22, this=%25, args=[%23, %24]
+      %26 = const c24
+      %27 = const c25
+      %28 = call builtin.promise.then(%21, %26, %27)
+      %29 = is_exception %28
+      branch %29, bb2, bb1
+    bb1:
       return
+    bb2:
+      %30 = call builtin.exception_value(%28)
+      throw %30
 }

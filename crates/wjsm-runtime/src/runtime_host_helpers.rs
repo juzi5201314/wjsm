@@ -111,6 +111,7 @@ pub(crate) fn call_wasm_callback(
         .as_func()
         .flatten()
         .ok_or_else(|| anyhow::anyhow!("table entry not a function"))?;
+    let previous_new_target = caller.data().new_target.replace(value::encode_undefined());
     let mut results = [Val::I64(0)];
     let call_result = func.call(
         &mut *caller,
@@ -122,7 +123,8 @@ pub(crate) fn call_wasm_callback(
         ],
         &mut results,
     );
-    // 恢复 __shadow_sp（无论 call 成功与否）
+    // 恢复调用上下文（无论 call 成功与否）
+    caller.data().new_target.set(previous_new_target);
     let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
     call_result?;
     Ok(results[0].unwrap_i64())
@@ -201,9 +203,8 @@ pub(crate) fn set_array_elem(
     }
     data[slot_offset..slot_offset + 8].copy_from_slice(&val.to_le_bytes());
     // Update length to max(length, index+1)
-    let old_len = u32::from_le_bytes([
-        data[ptr + 8], data[ptr + 9], data[ptr + 10], data[ptr + 11],
-    ]);
+    let old_len =
+        u32::from_le_bytes([data[ptr + 8], data[ptr + 9], data[ptr + 10], data[ptr + 11]]);
     if (index as u32) >= old_len {
         let new_len = (index as u32) + 1;
         data[ptr + 8..ptr + 12].copy_from_slice(&new_len.to_le_bytes());

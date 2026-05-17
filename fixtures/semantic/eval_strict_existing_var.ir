@@ -20,15 +20,16 @@ module {
     c17 = number(NaN)
     c18 = number(-inf)
     c19 = number(inf)
-    c20 = string("use strict")
-    c21 = number(0)
-    c22 = string("var x = 1;")
-    c23 = string("__wjsm_eval_strict")
-    c24 = bool(true)
-    c25 = string("Symbol")
-    c26 = string("x")
-    c27 = string("Symbol")
-    c28 = string("x")
+    c20 = undefined
+    c21 = string("use strict")
+    c22 = number(0)
+    c23 = string("var x = 1;")
+    c24 = string("__wjsm_eval_strict")
+    c25 = bool(true)
+    c26 = string("Symbol")
+    c27 = string("x")
+    c28 = string("Symbol")
+    c29 = string("x")
 
   fn @main [has_eval] [entry=bb0]:
     bb0:
@@ -72,28 +73,52 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %18
       %19 = const c19
       store var $0.Number.POSITIVE_INFINITY, %19
-      %20 = const c20
-      %21 = const c21
-      store var $0.x, %21
-      %22 = const c22
-      %23 = new_object(capacity=3)
+      %20 = call builtin.create_global_object()
+      store var $0.$global, %20
+      %21 = const c20
+      store var $0.$this, %21
+      %22 = const c21
+      %23 = const c22
+      store var $0.x, %23
       %24 = const c23
-      %25 = const c24
-      set_prop %23, %24, %25
-      %26 = const c25
-      %27 = load var $0.Symbol
-      set_prop %23, %26, %27
+      %25 = new_object(capacity=3)
+      %26 = const c24
+      %27 = const c25
+      set_prop %25, %26, %27
       %28 = const c26
-      %29 = load var $0.x
-      set_prop %23, %28, %29
-      %30 = call builtin.eval(%22, %23)
-      %31 = const c27
-      %32 = get_prop %23, %31
-      store var $0.Symbol, %32
-      %33 = const c28
-      %34 = get_prop %23, %33
-      store var $0.x, %34
-      %35 = load var $0.x
-      %36 = call builtin.console.log(%35)
+      %29 = load var $0.Symbol
+      set_prop %25, %28, %29
+      %30 = const c27
+      %31 = load var $0.x
+      set_prop %25, %30, %31
+      %32 = call builtin.eval(%24, %25)
+      %33 = is_exception %32
+      branch %33, bb2, bb1
+    bb1:
+      %35 = const c28
+      %36 = get_prop %25, %35
+      store var $0.Symbol, %36
+      %37 = const c29
+      %38 = get_prop %25, %37
+      store var $0.x, %38
+      jump bb3
+    bb2:
+      %34 = call builtin.exception_value(%32)
+      throw %34
+    bb3:
+      %39 = is_exception %32
+      branch %39, bb5, bb4
+    bb4:
+      %41 = load var $0.x
+      %42 = call builtin.console.log(%41)
+      %43 = is_exception %42
+      branch %43, bb7, bb6
+    bb5:
+      %40 = call builtin.exception_value(%32)
+      throw %40
+    bb6:
       return
+    bb7:
+      %44 = call builtin.exception_value(%42)
+      throw %44
 }

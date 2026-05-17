@@ -19,10 +19,11 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(1)
+    c19 = undefined
     c20 = number(1)
-    c21 = string("matched")
-    c22 = string("nope")
+    c21 = number(1)
+    c22 = string("matched")
+    c23 = string("nope")
 
   fn @main [entry=bb0]:
     bb0:
@@ -64,20 +65,36 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      store var $0.x, %19
-      %20 = load var $0.x
-      switch %20 [case c20 -> bb2], default bb3, exit bb1
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      store var $0.x, %21
+      %22 = load var $0.x
+      switch %22 [case c21 -> bb2], default bb3, exit bb1
     bb1:
       return
     bb2:
-      %21 = const c21
-      store var $1.msg, %21
-      %22 = load var $1.msg
-      %23 = call builtin.console.log(%22)
-      jump bb1
-    bb3:
-      %24 = const c22
+      %23 = const c22
+      store var $1.msg, %23
+      %24 = load var $1.msg
       %25 = call builtin.console.log(%24)
+      %26 = is_exception %25
+      branch %26, bb5, bb4
+    bb3:
+      %28 = const c23
+      %29 = call builtin.console.log(%28)
+      %30 = is_exception %29
+      branch %30, bb7, bb6
+    bb4:
       jump bb1
+    bb5:
+      %27 = call builtin.exception_value(%25)
+      throw %27
+    bb6:
+      jump bb1
+    bb7:
+      %31 = call builtin.exception_value(%29)
+      throw %31
 }

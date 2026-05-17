@@ -971,7 +971,6 @@
                             resume_val: val,
                             is_rejected: false,
                         });
-                        return;
                     }
                     PromiseState::Rejected(reason) => {
                         let reason = *reason;
@@ -988,7 +987,6 @@
                             resume_val: reason,
                             is_rejected: true,
                         });
-                        return;
                     }
                 }
             }
@@ -1043,11 +1041,10 @@
                 .continuation_table
                 .lock()
                 .expect("continuation table mutex");
-            if let Some(entry) = table.get_mut(handle) {
-                if actual_slot < entry.captured_vars.len() {
+            if let Some(entry) = table.get_mut(handle)
+                && actual_slot < entry.captured_vars.len() {
                     entry.captured_vars[actual_slot] = val;
                 }
-            }
         },
     );
 
@@ -1062,11 +1059,10 @@
                 .continuation_table
                 .lock()
                 .expect("continuation table mutex");
-            if let Some(entry) = table.get(handle) {
-                if actual_slot < entry.captured_vars.len() {
+            if let Some(entry) = table.get(handle)
+                && actual_slot < entry.captured_vars.len() {
                     return entry.captured_vars[actual_slot];
                 }
-            }
             value::encode_undefined()
         },
     );
@@ -1148,8 +1144,7 @@
                 };
                 entry.state = AsyncGeneratorState::SuspendedYield;
                 entry.waiting_resume_promise = Some(resume_promise);
-                let active = entry.active_request.take();
-                active
+                entry.active_request.take()
             };
             if let Some(request) = request_to_fulfill {
                 let result = alloc_iterator_result_from_caller(&mut caller, value, false);
@@ -1250,6 +1245,8 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
+            // Update new.target for this call context
+            caller.data().new_target.set(value::encode_undefined());
             // Proxy apply trap: if the callable is a proxy, handle via handler.apply
             if value::is_proxy(callable) {
                 let handle = value::decode_proxy_handle(callable) as usize;
@@ -1457,13 +1454,11 @@
 
     fn reflect_get_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64) -> i64 {
         let obj_ptr = resolve_handle(caller, target);
-        if let Some(ptr) = obj_ptr {
-            if let Some(prop_name) = render_value(caller, prop).ok() {
-                if let Some(val) = read_object_property_by_name(caller, ptr, &prop_name) {
+        if let Some(ptr) = obj_ptr
+            && let Ok(prop_name) = render_value(caller, prop)
+                && let Some(val) = read_object_property_by_name(caller, ptr, &prop_name) {
                     return val;
                 }
-            }
-        }
         value::encode_undefined()
     }
 
@@ -1524,7 +1519,7 @@
     );
 
     fn reflect_set_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64) -> i64 {
-        if let Some(prop_name) = render_value(caller, prop).ok() {
+        if let Ok(prop_name) = render_value(caller, prop) {
             let _ = define_host_data_property_from_caller(caller, target, &prop_name, val);
             return value::encode_bool(true);
         }
@@ -1556,14 +1551,12 @@
 
     fn reflect_has_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64) -> i64 {
         let obj_ptr = resolve_handle(caller, target);
-        if let Some(ptr) = obj_ptr {
-            if let Some(prop_name) = render_value(caller, prop).ok() {
-                if let Some(name_id) = find_memory_c_string(caller, &prop_name) {
+        if let Some(ptr) = obj_ptr
+            && let Ok(prop_name) = render_value(caller, prop)
+                && let Some(name_id) = find_memory_c_string(caller, &prop_name) {
                     let found = find_property_slot_by_name_id(caller, ptr, name_id).is_some();
                     return value::encode_bool(found);
                 }
-            }
-        }
         value::encode_bool(false)
     }
 
@@ -1665,7 +1658,7 @@
                 let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
                 for i in 0..len {
                     let mut buf = [0u8; 8];
-                    let _ = memory.read(&mut caller, (ptr + 16 + i * 8) as usize, &mut buf);
+                    let _ = memory.read(&mut caller, ptr + 16 + i * 8, &mut buf);
                     let arg_val = i64::from_le_bytes(buf);
                     memory.write(&mut caller, (saved_sp + i as i32 * 8) as usize, &arg_val.to_le_bytes()).unwrap();
                 }

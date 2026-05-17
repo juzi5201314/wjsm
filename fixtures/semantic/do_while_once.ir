@@ -19,9 +19,10 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(10)
-    c20 = number(1)
-    c21 = number(5)
+    c19 = undefined
+    c20 = number(10)
+    c21 = number(1)
+    c22 = number(5)
 
   fn @main [entry=bb0]:
     bb0:
@@ -63,22 +64,32 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      store var $0.x, %19
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      store var $0.x, %21
       jump bb1
     bb1:
-      %20 = load var $0.x
-      %21 = call builtin.console.log(%20)
       %22 = load var $0.x
-      %23 = const c20
-      %24 = add %22, %23
-      store var $0.x, %24
-      jump bb2
+      %23 = call builtin.console.log(%22)
+      %24 = is_exception %23
+      branch %24, bb5, bb4
     bb2:
-      %25 = load var $0.x
-      %26 = const c21
-      %27 = call builtin.abstract_compare(%25, %26)
-      branch %27, bb1, bb3
+      %29 = load var $0.x
+      %30 = const c22
+      %31 = call builtin.abstract_compare(%29, %30)
+      branch %31, bb1, bb3
     bb3:
       return
+    bb4:
+      %26 = load var $0.x
+      %27 = const c21
+      %28 = add %26, %27
+      store var $0.x, %28
+      jump bb2
+    bb5:
+      %25 = call builtin.exception_value(%23)
+      throw %25
 }

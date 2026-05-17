@@ -1,4 +1,38 @@
 use super::*;
+/// 沿 Jump 链追溯，检测从 start 块是否能到达 target 块（最多 10 跳）
+fn chain_jumps_to(blocks: &[BasicBlock], start: usize, target: usize) -> bool {
+    let mut current = start;
+    for _ in 0..10 {
+        if current == target {
+            return true;
+        }
+        let block = match blocks.get(current) {
+            Some(b) => b,
+            None => return false,
+        };
+        match block.terminator() {
+            Terminator::Jump { target: t } => current = t.0 as usize,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// 沿 Jump 链追溯，找到最终跳转目标（最多 10 跳）
+fn resolve_jump_chain(blocks: &[BasicBlock], start: usize) -> usize {
+    let mut current = start;
+    for _ in 0..10 {
+        let block = match blocks.get(current) {
+            Some(b) => b,
+            None => return current,
+        };
+        match block.terminator() {
+            Terminator::Jump { target } => current = target.0 as usize,
+            _ => return current,
+        }
+    }
+    current
+}
 
 impl Compiler {
     pub(crate) fn compile_region_tree(
@@ -249,11 +283,14 @@ impl Compiler {
                     // 循环头条件（while/for 模式）：
                     // true → body, false → exit
                     // 发射：condition → i32.eqz → br_if (break if falsy)
-                    if self
-                        .loop_stack
-                        .last()
-                        .map_or(false, |l| l.header_idx == idx)
-                    {
+                    if self.loop_stack.last().is_some_and(|l| {
+                        l.header_idx == idx
+                            && matches!(
+                                block.terminator(),
+                                Terminator::Branch { false_block, .. }
+                                    if false_block.0 as usize == l.exit_idx
+                            )
+                    }) {
                         self.emit_to_bool_i32(condition.0);
                         self.emit(WasmInstruction::I32Eqz);
                         let break_depth = self.loop_break_depth(false_idx).unwrap_or(1);
@@ -269,6 +306,43 @@ impl Compiler {
                         self.emit_to_bool_i32(condition.0);
                         self.emit(WasmInstruction::BrIf(depth));
                         idx = false_idx;
+                        continue;
+                    }
+                    // 自循环检测：某个分支通过 Jump 链最终跳回当前块
+                    // （如 catch 块内 IsException → throw 跳回 catch 入口）
+                    let true_self_loop = chain_jumps_to(blocks, true_idx, idx);
+                    let false_self_loop = chain_jumps_to(blocks, false_idx, idx);
+
+                    if true_self_loop || false_self_loop {
+                        // 生成: block { loop { if (cond) { true_body; br 1 } else { false_body; br 2 } } }
+                        self.emit(WasmInstruction::Block(BlockType::Empty));
+                        self.emit(WasmInstruction::Loop(BlockType::Empty));
+
+                        self.emit_to_bool_i32(condition.0);
+                        self.emit(WasmInstruction::If(BlockType::Empty));
+
+                        // true 分支
+                        self.compiled_blocks.insert(true_idx);
+                        self.compile_branch_body(module, blocks, true_idx)?;
+                        self.emit(WasmInstruction::Br(1)); // continue loop
+
+                        self.emit(WasmInstruction::Else);
+                        // false 分支
+                        self.compiled_blocks.insert(false_idx);
+                        self.compile_branch_body(module, blocks, false_idx)?;
+                        self.emit(WasmInstruction::Br(2)); // break block
+
+                        self.emit(WasmInstruction::End); // end if
+                        self.emit(WasmInstruction::End); // end loop
+                        self.emit(WasmInstruction::End); // end block
+
+                        // 找到出口 merge（不跳回自身的分支沿 Jump 链的最终目标）
+                        let exit_target = if true_self_loop {
+                            resolve_jump_chain(blocks, false_idx)
+                        } else {
+                            resolve_jump_chain(blocks, true_idx)
+                        };
+                        idx = exit_target;
                         continue;
                     }
 
@@ -313,34 +387,49 @@ impl Compiler {
                         self.find_merge(blocks, true_idx, false_idx)
                     };
 
-                    // 如果 merge 已编译（循环 back-edge 情况），跳到下一个未编译块
-                    if self.compiled_blocks.contains(&merge) {
-                        let mut next = true_idx.max(false_idx) + 1;
-                        while next < blocks.len() && self.compiled_blocks.contains(&next) {
-                            next += 1;
+                    // 如果 merge 是循环头，当前分支体已经以 continue 回到循环，
+                    // 后续应编译循环出口块，而不是跳过出口直接落到函数尾部。
+                    if self
+                        .loop_stack
+                        .last()
+                        .is_some_and(|loop_info| merge < loop_info.header_idx)
+                    {
+                        while self
+                            .loop_stack
+                            .last()
+                            .is_some_and(|loop_info| merge < loop_info.header_idx)
+                        {
+                            self.emit(WasmInstruction::End);
+                            self.emit(WasmInstruction::End);
+                            self.loop_stack.pop();
                         }
-                        idx = next;
+                        idx = merge;
+                    } else if let Some(exit_idx) = self.loop_exit_for_header(merge) {
+                        idx = exit_idx;
+                    } else if self.compiled_blocks.contains(&merge) {
+                        idx = self.next_after_compiled_merge(blocks, merge, true_idx, false_idx);
                     } else {
                         idx = merge;
                     }
-                
+
                     // 当 merge 已被编译（作为某分支主体的一部分），而另一个分支未终结时，
                     // 需要为 fall-through 路径重新发射 merge 块的终止器。
-                    if self.compiled_blocks.contains(&merge) && !(true_terminates && false_terminates) {
-                        if let Some(merge_block) = blocks.get(merge) {
-                            // 重新发射 phi 指令：将 phi_local 复制到 SSA local
-                            for instruction in merge_block.instructions() {
-                                if let Instruction::Phi { dest, .. } = instruction {
-                                    if let Some(&phi_local) = self.phi_locals.get(&dest.0) {
-                                        self.emit(WasmInstruction::LocalGet(phi_local));
-                                        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
-                                    }
-                                }
+                    if self.compiled_blocks.contains(&merge)
+                        && !(true_terminates && false_terminates)
+                        && let Some(merge_block) = blocks.get(merge)
+                    {
+                        // 重新发射 phi 指令：将 phi_local 复制到 SSA local
+                        for instruction in merge_block.instructions() {
+                            if let Instruction::Phi { dest, .. } = instruction
+                                && let Some(&phi_local) = self.phi_locals.get(&dest.0)
+                            {
+                                self.emit(WasmInstruction::LocalGet(phi_local));
+                                self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                             }
-                            // 重新发射 merge 块的 return
-                            if let Terminator::Return { value } = merge_block.terminator() {
-                                self.emit_return(value);
-                            }
+                        }
+                        // 重新发射 merge 块的 return
+                        if let Terminator::Return { value } = merge_block.terminator() {
+                            self.emit_return(value);
                         }
                     }
                 }
@@ -380,7 +469,6 @@ impl Compiler {
                     let default_pos = entries.iter().position(|e| e.is_default).unwrap();
 
                     self.compiled_blocks.insert(default_target_idx);
-                    self.compiled_blocks.insert(exit_idx);
 
                     self.emit(WasmInstruction::Block(BlockType::Empty));
 
@@ -403,12 +491,12 @@ impl Compiler {
                     }
                     self.emit(WasmInstruction::Br(default_pos as u32));
 
-                    for i in 0..num_entries {
+                    for (i, entry) in entries.iter().enumerate() {
                         if i == default_pos {
                             self.compiled_blocks.remove(&default_target_idx);
                         }
                         self.emit(WasmInstruction::End);
-                        let entry_target = entries[i].target_idx;
+                        let entry_target = entry.target_idx;
                         let switch_break_depth = (num_entries - i - 1) as u32;
                         let extra_depth = (num_entries - i) as u32;
                         self.compile_switch_case(
@@ -424,11 +512,19 @@ impl Compiler {
 
                     self.emit(WasmInstruction::End);
 
-                    if self.current_func_returns_value {
-                        self.emit(WasmInstruction::Unreachable);
+                    if self.compiled_blocks.contains(&exit_idx) {
+                        if let Some(continuation) =
+                            self.branch_continuation_target(blocks, exit_idx)
+                        {
+                            idx = self
+                                .loop_exit_for_header(continuation)
+                                .unwrap_or(continuation);
+                        } else {
+                            idx = exit_idx;
+                        }
+                    } else {
+                        idx = exit_idx;
                     }
-
-                    idx = exit_idx;
                 }
                 Terminator::Throw { value } => {
                     // 调用 runtime throw host function，然后 trap
@@ -463,6 +559,7 @@ impl Compiler {
 
     /// 编译 switch case body。支持嵌套控制流（if/else、循环、嵌套 switch）。
     /// 从 case_idx 开始，跟随控制流编译所有属于 case body 的 block。
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn compile_switch_case(
         &mut self,
         module: &IrModule,
@@ -583,11 +680,14 @@ impl Compiler {
                     let false_idx = false_block.0 as usize;
 
                     // 循环头条件（while/for 模式）：
-                    if self
-                        .loop_stack
-                        .last()
-                        .map_or(false, |l| l.header_idx == idx)
-                    {
+                    if self.loop_stack.last().is_some_and(|l| {
+                        l.header_idx == idx
+                            && matches!(
+                                block.terminator(),
+                                Terminator::Branch { false_block, .. }
+                                    if false_block.0 as usize == l.exit_idx
+                            )
+                    }) {
                         self.emit_to_bool_i32(condition.0);
                         self.emit(WasmInstruction::I32Eqz);
                         let break_depth = self.loop_break_depth(false_idx).unwrap_or(1);
@@ -613,6 +713,52 @@ impl Compiler {
                         idx = false_idx;
                         continue;
                     }
+                    // 自循环检测：某个分支通过 Jump 链最终跳回当前块
+                    let true_self_loop = chain_jumps_to(blocks, true_idx, idx);
+                    let false_self_loop = chain_jumps_to(blocks, false_idx, idx);
+
+                    if true_self_loop || false_self_loop {
+                        self.emit(WasmInstruction::Block(BlockType::Empty));
+                        self.emit(WasmInstruction::Loop(BlockType::Empty));
+
+                        self.emit_to_bool_i32(condition.0);
+                        self.emit(WasmInstruction::If(BlockType::Empty));
+
+                        // true 分支
+                        self.compiled_blocks.insert(true_idx);
+                        self.compile_branch_body_in_case(
+                            module,
+                            blocks,
+                            true_idx,
+                            case_start,
+                            extra_depth,
+                        )?;
+                        self.emit(WasmInstruction::Br(1));
+
+                        self.emit(WasmInstruction::Else);
+                        // false 分支
+                        self.compiled_blocks.insert(false_idx);
+                        self.compile_branch_body_in_case(
+                            module,
+                            blocks,
+                            false_idx,
+                            case_start,
+                            extra_depth,
+                        )?;
+                        self.emit(WasmInstruction::Br(2));
+
+                        self.emit(WasmInstruction::End);
+                        self.emit(WasmInstruction::End);
+                        self.emit(WasmInstruction::End);
+
+                        let exit_target = if true_self_loop {
+                            resolve_jump_chain(blocks, false_idx)
+                        } else {
+                            resolve_jump_chain(blocks, true_idx)
+                        };
+                        idx = exit_target;
+                        continue;
+                    }
 
                     // 普通 if/else
                     self.emit_to_bool_i32(condition.0);
@@ -621,6 +767,10 @@ impl Compiler {
 
                     let true_is_merge = self.is_merge_block(blocks, false_idx, true_idx);
                     let false_is_merge = self.is_merge_block(blocks, true_idx, false_idx);
+                    let true_exits_switch =
+                        self.branch_continuation_target(blocks, true_idx) == Some(exit_idx);
+                    let false_exits_switch =
+                        self.branch_continuation_target(blocks, false_idx) == Some(exit_idx);
 
                     let true_terminates = if true_is_merge {
                         self.emit_phi_moves(blocks, idx, true_idx);
@@ -628,7 +778,19 @@ impl Compiler {
                         false
                     } else {
                         self.compiled_blocks.insert(true_idx);
-                        self.compile_branch_body(module, blocks, true_idx)?
+                        let terminates = self.compile_branch_body_in_case(
+                            module,
+                            blocks,
+                            true_idx,
+                            case_start,
+                            extra_depth,
+                        )?;
+                        if !terminates && true_exits_switch {
+                            self.emit(WasmInstruction::Br(switch_break_depth + self.if_depth));
+                            true
+                        } else {
+                            terminates
+                        }
                     };
 
                     self.emit(WasmInstruction::Else);
@@ -638,7 +800,19 @@ impl Compiler {
                         false
                     } else {
                         self.compiled_blocks.insert(false_idx);
-                        self.compile_branch_body(module, blocks, false_idx)?
+                        let terminates = self.compile_branch_body_in_case(
+                            module,
+                            blocks,
+                            false_idx,
+                            case_start,
+                            extra_depth,
+                        )?;
+                        if !terminates && false_exits_switch {
+                            self.emit(WasmInstruction::Br(switch_break_depth + self.if_depth));
+                            true
+                        } else {
+                            terminates
+                        }
                     };
 
                     self.emit(WasmInstruction::End);
@@ -646,6 +820,7 @@ impl Compiler {
 
                     if true_terminates && false_terminates {
                         self.emit(WasmInstruction::Unreachable);
+                        break;
                     }
 
                     // 继续到 merge block
@@ -657,12 +832,25 @@ impl Compiler {
                         self.find_merge(blocks, true_idx, false_idx)
                     };
 
-                    if self.compiled_blocks.contains(&merge) {
-                        let mut next = true_idx.max(false_idx) + 1;
-                        while next < blocks.len() && self.compiled_blocks.contains(&next) {
-                            next += 1;
+                    if self
+                        .loop_stack
+                        .last()
+                        .is_some_and(|loop_info| merge < loop_info.header_idx)
+                    {
+                        while self
+                            .loop_stack
+                            .last()
+                            .is_some_and(|loop_info| merge < loop_info.header_idx)
+                        {
+                            self.emit(WasmInstruction::End);
+                            self.emit(WasmInstruction::End);
+                            self.loop_stack.pop();
                         }
-                        idx = next;
+                        idx = merge;
+                    } else if let Some(exit_idx) = self.loop_exit_for_header(merge) {
+                        idx = exit_idx;
+                    } else if self.compiled_blocks.contains(&merge) {
+                        idx = self.next_after_compiled_merge(blocks, merge, true_idx, false_idx);
                     } else {
                         idx = merge;
                     }
@@ -731,7 +919,6 @@ impl Compiler {
 
                     // 关闭 nested exit block
                     self.emit(WasmInstruction::End);
-                    self.compiled_blocks.insert(nested_exit_idx);
 
                     idx = nested_exit_idx;
                 }
@@ -771,6 +958,28 @@ impl Compiler {
         blocks: &[BasicBlock],
         idx: usize,
     ) -> Result<bool> {
+        self.compile_branch_body_with_context(module, blocks, idx, 0, 0)
+    }
+
+    fn compile_branch_body_in_case(
+        &mut self,
+        module: &IrModule,
+        blocks: &[BasicBlock],
+        idx: usize,
+        case_start: usize,
+        extra_depth: u32,
+    ) -> Result<bool> {
+        self.compile_branch_body_with_context(module, blocks, idx, case_start, extra_depth)
+    }
+
+    fn compile_branch_body_with_context(
+        &mut self,
+        module: &IrModule,
+        blocks: &[BasicBlock],
+        idx: usize,
+        case_start: usize,
+        extra_depth: u32,
+    ) -> Result<bool> {
         if idx >= blocks.len() {
             return Ok(false);
         }
@@ -798,23 +1007,51 @@ impl Compiler {
                 if let Some(depth) = self.loop_continue_depth(target_idx) {
                     // back-edge：continue 循环
                     self.emit_phi_moves(blocks, idx, target_idx);
-                    self.emit(WasmInstruction::Br(depth));
+                    let adj = if extra_depth > 0 && target_idx < case_start {
+                        depth + extra_depth
+                    } else {
+                        depth
+                    };
+                    self.emit(WasmInstruction::Br(adj));
                     Ok(true)
                 } else if let Some(depth) = self.loop_break_depth(target_idx) {
                     // 跳到循环出口：break
                     self.emit_phi_moves(blocks, idx, target_idx);
-                    self.emit(WasmInstruction::Br(depth));
+                    let adj = if extra_depth > 0 && target_idx < case_start {
+                        depth + extra_depth
+                    } else {
+                        depth
+                    };
+                    self.emit(WasmInstruction::Br(adj));
                     Ok(true)
                 } else if target_idx < idx && block_has_suspend(&blocks[target_idx]) {
                     // async 状态机的循环头可能位于另一个 switch case 中，不能用当前 case 的 label 回跳；
                     // 这里内联到下一个 suspend，让循环体能够调度下一轮 resume。
                     self.emit_phi_moves(blocks, idx, target_idx);
-                    self.compile_branch_body(module, blocks, target_idx)
+                    self.compile_branch_body_with_context(
+                        module,
+                        blocks,
+                        target_idx,
+                        case_start,
+                        extra_depth,
+                    )
                 } else {
                     // 普通 merge 跳转
                     self.emit_phi_moves(blocks, idx, target_idx);
                     Ok(false)
                 }
+            }
+            Terminator::Throw { value } => {
+                self.emit_eval_var_frame_exit();
+                self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(&Builtin::Throw)
+                    .copied()
+                    .unwrap_or(3);
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::Unreachable);
+                Ok(true)
             }
             Terminator::Unreachable => Ok(true),
             Terminator::Branch {
@@ -839,7 +1076,13 @@ impl Compiler {
                     false
                 } else {
                     self.compiled_blocks.insert(true_idx);
-                    self.compile_branch_body(module, blocks, true_idx)?
+                    self.compile_branch_body_with_context(
+                        module,
+                        blocks,
+                        true_idx,
+                        case_start,
+                        extra_depth,
+                    )?
                 };
 
                 self.emit(WasmInstruction::Else);
@@ -849,7 +1092,13 @@ impl Compiler {
                     false
                 } else {
                     self.compiled_blocks.insert(false_idx);
-                    self.compile_branch_body(module, blocks, false_idx)?
+                    self.compile_branch_body_with_context(
+                        module,
+                        blocks,
+                        false_idx,
+                        case_start,
+                        extra_depth,
+                    )?
                 };
 
                 self.emit(WasmInstruction::End);
@@ -883,11 +1132,11 @@ impl Compiler {
         for instruction in target_block.instructions() {
             if let Instruction::Phi { dest, sources } = instruction {
                 for source in sources {
-                    if source.predecessor.0 as usize == pred_idx {
-                        if let Some(&phi_local) = self.phi_locals.get(&dest.0) {
-                            self.emit(WasmInstruction::LocalGet(self.local_idx(source.value.0)));
-                            self.emit(WasmInstruction::LocalSet(phi_local));
-                        }
+                    if source.predecessor.0 as usize == pred_idx
+                        && let Some(&phi_local) = self.phi_locals.get(&dest.0)
+                    {
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(source.value.0)));
+                        self.emit(WasmInstruction::LocalSet(phi_local));
                     }
                 }
             }
@@ -910,12 +1159,11 @@ impl Compiler {
         }
         if let Some(false_block) = blocks.get(false_idx) {
             for instruction in false_block.instructions() {
-                if let Instruction::Phi { sources, .. } = instruction {
-                    if sources.len() > 1
-                        && sources.iter().any(|s| s.predecessor.0 as usize == true_idx)
-                    {
-                        return true;
-                    }
+                if let Instruction::Phi { sources, .. } = instruction
+                    && sources.len() > 1
+                    && sources.iter().any(|s| s.predecessor.0 as usize == true_idx)
+                {
+                    return true;
                 }
             }
         }
@@ -929,22 +1177,88 @@ impl Compiler {
         true_idx: usize,
         false_idx: usize,
     ) -> usize {
+        let true_continuation = self.branch_continuation_target(blocks, true_idx);
+        let false_continuation = self.branch_continuation_target(blocks, false_idx);
+
+        match (true_continuation, false_continuation) {
+            (Some(left), Some(right)) if left == right => return left,
+            (Some(target), None) | (None, Some(target)) => return target,
+            _ => {}
+        }
+
         // Check where the true block jumps to
-        if let Some(true_block) = blocks.get(true_idx) {
-            match true_block.terminator() {
-                Terminator::Jump { target } => return target.0 as usize,
-                _ => {}
-            }
+        if let Some(true_block) = blocks.get(true_idx)
+            && let Terminator::Jump { target } = true_block.terminator()
+        {
+            return target.0 as usize;
         }
         // Check where the false block jumps to
-        if let Some(false_block) = blocks.get(false_idx) {
-            match false_block.terminator() {
-                Terminator::Jump { target } => return target.0 as usize,
-                _ => {}
-            }
+        if let Some(false_block) = blocks.get(false_idx)
+            && let Terminator::Jump { target } = false_block.terminator()
+        {
+            return target.0 as usize;
         }
         // Default: the block after the false block
         false_idx + 1
+    }
+
+    fn branch_continuation_target(&self, blocks: &[BasicBlock], start_idx: usize) -> Option<usize> {
+        fn walk(
+            blocks: &[BasicBlock],
+            idx: usize,
+            visited: &mut std::collections::HashSet<usize>,
+        ) -> Option<usize> {
+            if !visited.insert(idx) {
+                return Some(idx);
+            }
+
+            let block = blocks.get(idx)?;
+            match block.terminator() {
+                Terminator::Jump { target } => Some(target.0 as usize),
+                Terminator::Branch {
+                    true_block,
+                    false_block,
+                    ..
+                } => {
+                    let true_target = walk(blocks, true_block.0 as usize, visited);
+                    let false_target = walk(blocks, false_block.0 as usize, visited);
+                    match (true_target, false_target) {
+                        (Some(left), Some(right)) if left == right => Some(left),
+                        (Some(target), None) | (None, Some(target)) => Some(target),
+                        _ => None,
+                    }
+                }
+                Terminator::Switch { exit_block, .. } => Some(exit_block.0 as usize),
+                Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => {
+                    None
+                }
+            }
+        }
+
+        walk(blocks, start_idx, &mut std::collections::HashSet::new())
+    }
+
+    fn next_after_compiled_merge(
+        &self,
+        blocks: &[BasicBlock],
+        merge: usize,
+        true_idx: usize,
+        false_idx: usize,
+    ) -> usize {
+        if let Some(continuation) = self.branch_continuation_target(blocks, merge) {
+            let target = self
+                .loop_exit_for_header(continuation)
+                .unwrap_or(continuation);
+            if target < blocks.len() && !self.compiled_blocks.contains(&target) {
+                return target;
+            }
+        }
+
+        let mut next = true_idx.max(false_idx) + 1;
+        while next < blocks.len() && self.compiled_blocks.contains(&next) {
+            next += 1;
+        }
+        next
     }
 
     pub(crate) fn emit_return(&mut self, value: &Option<ValueId>) {
@@ -975,6 +1289,14 @@ impl Compiler {
             }
         }
         None
+    }
+
+    fn loop_exit_for_header(&self, header_idx: usize) -> Option<usize> {
+        self.loop_stack
+            .iter()
+            .rev()
+            .find(|loop_info| loop_info.header_idx == header_idx)
+            .map(|loop_info| loop_info.exit_idx)
     }
 
     // ── Instruction compilation ─────────────────────────────────────────────

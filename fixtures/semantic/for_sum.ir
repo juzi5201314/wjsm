@@ -19,10 +19,11 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(0)
-    c20 = number(1)
-    c21 = number(3)
-    c22 = number(1)
+    c19 = undefined
+    c20 = number(0)
+    c21 = number(1)
+    c22 = number(3)
+    c23 = number(1)
 
   fn @main [entry=bb0]:
     bb0:
@@ -64,31 +65,41 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      store var $0.sum, %19
-      %20 = const c20
-      store var $0.i, %20
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      store var $0.sum, %21
+      %22 = const c21
+      store var $0.i, %22
       jump bb1
     bb1:
-      %21 = load var $0.i
-      %22 = const c21
-      %24 = call builtin.abstract_compare(%22, %21)
-      %23 = not %24
-      branch %23, bb2, bb4
+      %23 = load var $0.i
+      %24 = const c22
+      %26 = call builtin.abstract_compare(%24, %23)
+      %25 = not %26
+      branch %25, bb2, bb4
     bb2:
-      %25 = load var $0.sum
-      %26 = load var $0.i
-      %27 = add %25, %26
-      store var $0.sum, %27
+      %27 = load var $0.sum
+      %28 = load var $0.i
+      %29 = add %27, %28
+      store var $0.sum, %29
       jump bb3
     bb3:
-      %28 = load var $0.i
-      %29 = const c22
-      %30 = add %28, %29
-      store var $0.i, %30
+      %30 = load var $0.i
+      %31 = const c23
+      %32 = add %30, %31
+      store var $0.i, %32
       jump bb1
     bb4:
-      %31 = load var $0.sum
-      %32 = call builtin.console.log(%31)
+      %33 = load var $0.sum
+      %34 = call builtin.console.log(%33)
+      %35 = is_exception %34
+      branch %35, bb6, bb5
+    bb5:
       return
+    bb6:
+      %36 = call builtin.exception_value(%34)
+      throw %36
 }

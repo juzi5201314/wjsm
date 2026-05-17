@@ -146,9 +146,6 @@ fn print_single_result(test: &read::Test, result: &TestResult) {
             println!("  expected: {}", expected);
             println!("  actual:   {}", actual);
         }
-        TestResult::Ignored => {
-            println!("{} {}", "SKIP".yellow(), test.path.display());
-        }
         TestResult::Error(msg) => {
             println!("{} {}: {}", "ERROR".red().bold(), test.path.display(), msg);
         }

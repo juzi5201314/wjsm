@@ -14,7 +14,6 @@ use crate::read::{Harness, Negative, Phase, Test, TestSuite};
 pub enum TestResult {
     Passed,
     Failed { expected: String, actual: String },
-    Ignored,
     Error(String),
 }
 
@@ -34,7 +33,6 @@ impl Statistics {
         match result {
             TestResult::Passed => self.passed += 1,
             TestResult::Failed { .. } => self.failed += 1,
-            TestResult::Ignored => self.ignored += 1,
             TestResult::Error(_) => self.errors += 1,
         }
     }
@@ -90,10 +88,10 @@ pub fn run_test(test: &Test, harness: &Harness) -> TestResult {
         Err(e) => return TestResult::Error(format!("failed to spawn wjsm: {}", e)),
     };
 
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(source.as_bytes()) {
-            return TestResult::Error(format!("failed to write to stdin: {}", e));
-        }
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(e) = stdin.write_all(source.as_bytes())
+    {
+        return TestResult::Error(format!("failed to write to stdin: {}", e));
     }
 
     let output = match child.wait_with_output() {
@@ -240,11 +238,11 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
     source.push('\n');
 
     // 3. async 测试注入 asyncHelpers.js（提供 asyncTest 和 assert.throwsAsync）
-    if test.is_async() {
-        if let Some(file) = harness.includes.get("asyncHelpers.js") {
-            source.push_str(&file.content);
-            source.push('\n');
-        }
+    if test.is_async()
+        && let Some(file) = harness.includes.get("asyncHelpers.js")
+    {
+        source.push_str(&file.content);
+        source.push('\n');
     }
 
     // 4. 添加 includes 中指定的文件

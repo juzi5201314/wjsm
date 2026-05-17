@@ -19,18 +19,19 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = string("Hello, World!")
-    c20 = string("Hello, ")
-    c21 = number(1)
+    c19 = undefined
+    c20 = string("Hello, World!")
+    c21 = string("Hello, ")
     c22 = number(1)
-    c23 = string("!")
-    c24 = string("A: ")
-    c25 = number(1)
-    c26 = string(", B: ")
-    c27 = number(2)
-    c28 = string(", C: ")
-    c29 = number(3)
-    c30 = string("")
+    c23 = number(1)
+    c24 = string("!")
+    c25 = string("A: ")
+    c26 = number(1)
+    c27 = string(", B: ")
+    c28 = number(2)
+    c29 = string(", C: ")
+    c30 = number(3)
+    c31 = string("")
 
   fn @main [entry=bb0]:
     bb0:
@@ -72,24 +73,46 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      %20 = string_concat_va [%19]
-      %21 = call builtin.console.log(%20)
-      %22 = const c20
-      %23 = const c21
-      %24 = const c22
-      %25 = add %23, %24
-      %26 = const c23
-      %27 = string_concat_va [%22, %25, %26]
-      %28 = call builtin.console.log(%27)
-      %29 = const c24
-      %30 = const c25
-      %31 = const c26
-      %32 = const c27
-      %33 = const c28
-      %34 = const c29
-      %35 = const c30
-      %36 = string_concat_va [%29, %30, %31, %32, %33, %34, %35]
-      %37 = call builtin.console.log(%36)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      %22 = string_concat_va [%21]
+      %23 = call builtin.console.log(%22)
+      %24 = is_exception %23
+      branch %24, bb2, bb1
+    bb1:
+      %26 = const c21
+      %27 = const c22
+      %28 = const c23
+      %29 = add %27, %28
+      %30 = const c24
+      %31 = string_concat_va [%26, %29, %30]
+      %32 = call builtin.console.log(%31)
+      %33 = is_exception %32
+      branch %33, bb4, bb3
+    bb2:
+      %25 = call builtin.exception_value(%23)
+      throw %25
+    bb3:
+      %35 = const c25
+      %36 = const c26
+      %37 = const c27
+      %38 = const c28
+      %39 = const c29
+      %40 = const c30
+      %41 = const c31
+      %42 = string_concat_va [%35, %36, %37, %38, %39, %40, %41]
+      %43 = call builtin.console.log(%42)
+      %44 = is_exception %43
+      branch %44, bb6, bb5
+    bb4:
+      %34 = call builtin.exception_value(%32)
+      throw %34
+    bb5:
       return
+    bb6:
+      %45 = call builtin.exception_value(%43)
+      throw %45
 }

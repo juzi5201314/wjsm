@@ -564,6 +564,7 @@ pub(crate) fn enumerate_object_keys(
 
 /// 分配描述符对象，用于 Object.getOwnPropertyDescriptor 返回值
 /// 对象格式：header(16 bytes) + 4 slots * 32 bytes = 144 bytes
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn allocate_descriptor_object(
     caller: &mut Caller<'_, RuntimeState>,
     is_accessor: bool,
@@ -764,10 +765,10 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
             .bigint_table
             .lock()
             .expect("bigint_table mutex");
-        if let Some(bi) = table.get(handle) {
-            if let Some(f) = bi.to_f64() {
-                return f.to_bits() as i64;
-            }
+        if let Some(bi) = table.get(handle)
+            && let Some(f) = bi.to_f64()
+        {
+            return f.to_bits() as i64;
         }
         return f64::NAN.to_bits() as i64;
     }
@@ -816,18 +817,18 @@ pub(crate) fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i
     }
 
     // object/function → 调用 render_value 返回字符串表示
-    if value::is_object(val) || value::is_callable(val) {
-        if let Ok(s) = render_value(caller, val) {
-            // 将字符串存入 runtime_strings
-            let mut strings = caller
-                .data()
-                .runtime_strings
-                .lock()
-                .expect("runtime strings mutex");
-            let handle = strings.len() as u32;
-            strings.push(s);
-            return value::encode_runtime_string_handle(handle);
-        }
+    if (value::is_object(val) || value::is_callable(val))
+        && let Ok(s) = render_value(caller, val)
+    {
+        // 将字符串存入 runtime_strings
+        let mut strings = caller
+            .data()
+            .runtime_strings
+            .lock()
+            .expect("runtime strings mutex");
+        let handle = strings.len() as u32;
+        strings.push(s);
+        return value::encode_runtime_string_handle(handle);
     }
 
     // 其他类型直接返回
@@ -1025,7 +1026,11 @@ pub(crate) fn resolve_callable_and_call(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(caller.data(), "TypeError: Cannot perform 'apply' on a proxy that has been revoked".to_string());
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Cannot perform 'apply' on a proxy that has been revoked"
+                        .to_string(),
+                );
                 return value::encode_undefined();
             }
             // 查找 apply trap
@@ -1034,22 +1039,40 @@ pub(crate) fn resolve_callable_and_call(
                     .unwrap_or_else(value::encode_undefined);
                 if !value::is_undefined(trap) && !value::is_null(trap) {
                     // 收集 shadow stack 参数到数组
-                    let args_arr = crate::runtime_host_helpers::alloc_array(caller, args_count as u32);
-                    let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+                    let args_arr =
+                        crate::runtime_host_helpers::alloc_array(caller, args_count as u32);
+                    let memory = caller
+                        .get_export("memory")
+                        .and_then(|e| e.into_memory())
+                        .unwrap();
                     for i in 0..args_count {
                         let mut buf = [0u8; 8];
                         let _ = memory.read(&mut *caller, (args_base + i * 8) as usize, &mut buf);
                         let arg_val = i64::from_le_bytes(buf);
                         crate::runtime_host_helpers::define_host_data_property(
-                            caller, args_arr, &i.to_string(), arg_val,
+                            caller,
+                            args_arr,
+                            &i.to_string(),
+                            arg_val,
                         );
                     }
-                    return call_wasm_callback(caller, trap, entry.handler, &[entry.target, this_val, args_arr])
-                        .unwrap_or_else(|_| value::encode_undefined());
+                    return call_wasm_callback(
+                        caller,
+                        trap,
+                        entry.handler,
+                        &[entry.target, this_val, args_arr],
+                    )
+                    .unwrap_or_else(|_| value::encode_undefined());
                 }
             }
             // 无 apply trap，转发到 target
-            return resolve_callable_and_call(caller, entry.target, this_val, args_base, args_count);
+            return resolve_callable_and_call(
+                caller,
+                entry.target,
+                this_val,
+                args_base,
+                args_count,
+            );
         }
         return value::encode_undefined();
     } else {

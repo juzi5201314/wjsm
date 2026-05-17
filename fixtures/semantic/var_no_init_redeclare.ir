@@ -20,7 +20,8 @@ module {
     c17 = number(NaN)
     c18 = number(-inf)
     c19 = number(inf)
-    c20 = number(1)
+    c20 = undefined
+    c21 = number(1)
 
   fn @main [entry=bb0]:
     bb0:
@@ -64,9 +65,19 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %18
       %19 = const c19
       store var $0.Number.POSITIVE_INFINITY, %19
-      %20 = const c20
-      store var $0.x, %20
-      %21 = load var $0.x
-      %22 = call builtin.console.log(%21)
+      %20 = call builtin.create_global_object()
+      store var $0.$global, %20
+      %21 = const c20
+      store var $0.$this, %21
+      %22 = const c21
+      store var $0.x, %22
+      %23 = load var $0.x
+      %24 = call builtin.console.log(%23)
+      %25 = is_exception %24
+      branch %25, bb2, bb1
+    bb1:
       return
+    bb2:
+      %26 = call builtin.exception_value(%24)
+      throw %26
 }

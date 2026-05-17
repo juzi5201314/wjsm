@@ -71,11 +71,10 @@
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
-                if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
-                    if elem == val {
+                if let Some(elem) = read_array_elem(&mut caller, ptr, i)
+                    && elem == val {
                         return value::encode_bool(true);
                     }
-                }
             }
             value::encode_bool(false)
         },
@@ -96,11 +95,10 @@
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
-                if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
-                    if elem == val {
+                if let Some(elem) = read_array_elem(&mut caller, ptr, i)
+                    && elem == val {
                         return value::encode_f64(i as f64);
                     }
-                }
             }
             value::encode_f64(-1.0)
         },
@@ -875,19 +873,15 @@
                 let elem =
                     read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(
+                if let Ok(r) = call_wasm_callback(
                     &mut caller,
                     cb,
                     value::encode_undefined(),
                     &[elem, idx_val, this_val],
-                ) {
-                    Ok(r) => {
-                        if value::is_truthy(r) {
-                            return elem;
-                        }
+                )
+                    && value::is_truthy(r) {
+                        return elem;
                     }
-                    Err(_) => {}
-                }
             }
             value::encode_undefined()
         },
@@ -914,19 +908,15 @@
                 let elem =
                     read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(
+                if let Ok(r) = call_wasm_callback(
                     &mut caller,
                     cb,
                     value::encode_undefined(),
                     &[elem, idx_val, this_val],
-                ) {
-                    Ok(r) => {
-                        if value::is_truthy(r) {
-                            return value::encode_f64(i as f64);
-                        }
+                )
+                    && value::is_truthy(r) {
+                        return value::encode_f64(i as f64);
                     }
-                    Err(_) => {}
-                }
             }
             value::encode_f64(-1.0)
         },
@@ -953,19 +943,15 @@
                 let elem =
                     read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(
+                if let Ok(r) = call_wasm_callback(
                     &mut caller,
                     cb,
                     value::encode_undefined(),
                     &[elem, idx_val, this_val],
-                ) {
-                    Ok(r) => {
-                        if value::is_truthy(r) {
-                            return value::encode_bool(true);
-                        }
+                )
+                    && value::is_truthy(r) {
+                        return value::encode_bool(true);
                     }
-                    Err(_) => {}
-                }
             }
             value::encode_bool(false)
         },
@@ -1102,7 +1088,7 @@
                 (len - start_idx).max(0)
             };
             let actual_delete = delete_count.min(len - start_idx);
-            let insert_count = (args_count - 2).max(0) as i32;
+            let insert_count = (args_count - 2).max(0);
             let new_len = len - actual_delete + insert_count;
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0) as i32;
             let mut ptr = ptr;

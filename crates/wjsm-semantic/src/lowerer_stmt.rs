@@ -73,24 +73,31 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<BasicBlockId, LoweringError> {
         let result = self.lower_call_expr(call, block)?;
-        
+
+        // eval 调用已在 lower_direct_eval_call 内处理异常分叉，
+        // 此时 block 可能已被终结；resolve_store_block 获取正确的继续块
+        let working_block = self.resolve_store_block(block);
+
         // 跨函数异常检查：call 返回值可能是 TAG_EXCEPTION
         let is_exception = self.alloc_value();
         self.current_function.append_instruction(
-            block,
-            Instruction::IsException { dest: is_exception, value: result },
+            working_block,
+            Instruction::IsException {
+                dest: is_exception,
+                value: result,
+            },
         );
         let continue_block = self.current_function.new_block();
         let exc_block = self.current_function.new_block();
         self.current_function.set_terminator(
-            block,
+            working_block,
             Terminator::Branch {
                 condition: is_exception,
                 true_block: exc_block,
                 false_block: continue_block,
             },
         );
-        
+
         // 异常路径：解封装并传播
         let thrown_val = self.alloc_value();
         self.current_function.append_instruction(
@@ -102,7 +109,7 @@ impl Lowerer {
             },
         );
         self.emit_throw_value(exc_block, thrown_val)?;
-        
+
         // 返回继续 block
         Ok(self.resolve_store_block(continue_block))
     }
@@ -157,11 +164,12 @@ impl Lowerer {
         let block = self.ensure_open(flow)?;
 
         let cond = self.lower_expr(&if_stmt.test, block)?;
+        let branch_block = self.resolve_store_block(block);
         let then_block = self.current_function.new_block();
         let else_or_merge = self.current_function.new_block();
 
         self.current_function.set_terminator(
-            block,
+            branch_block,
             Terminator::Branch {
                 condition: cond,
                 true_block: then_block,
@@ -219,6 +227,7 @@ impl Lowerer {
         Ok(has_else)
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn merge_eval_completion_after_if(
         &mut self,
         merge: BasicBlockId,
@@ -290,8 +299,9 @@ impl Lowerer {
         );
 
         let cond = self.lower_expr(&while_stmt.test, header)?;
+        let branch_header = self.resolve_store_block(header);
         self.current_function.set_terminator(
-            header,
+            branch_header,
             Terminator::Branch {
                 condition: cond,
                 true_block: body,
@@ -347,8 +357,9 @@ impl Lowerer {
             .ensure_jump_or_terminated(body_flow, condition);
 
         let cond = self.lower_expr(&do_while.test, condition)?;
+        let branch_condition = self.resolve_store_block(condition);
         self.current_function.set_terminator(
-            condition,
+            branch_condition,
             Terminator::Branch {
                 condition: cond,
                 true_block: body,
@@ -382,13 +393,14 @@ impl Lowerer {
             }
         }
 
+        let init_end = self.resolve_store_block(block);
         let header = self.current_function.new_block();
         let body_block = self.current_function.new_block();
         let update = self.current_function.new_block();
         let exit = self.current_function.new_block();
 
         self.current_function
-            .set_terminator(block, Terminator::Jump { target: header });
+            .set_terminator(init_end, Terminator::Jump { target: header });
 
         self.label_stack.push(LabelContext {
             label: self.pending_loop_label.take(),
@@ -401,8 +413,9 @@ impl Lowerer {
         // condition
         if let Some(test) = &for_stmt.test {
             let cond = self.lower_expr(test, header)?;
+            let branch_header = self.resolve_store_block(header);
             self.current_function.set_terminator(
-                header,
+                branch_header,
                 Terminator::Branch {
                     condition: cond,
                     true_block: body_block,
@@ -432,8 +445,9 @@ impl Lowerer {
         if let Some(update_expr) = &for_stmt.update {
             let _ = self.lower_expr(update_expr, update)?;
         }
+        let update_end = self.resolve_store_block(update);
         self.current_function
-            .set_terminator(update, Terminator::Jump { target: header });
+            .set_terminator(update_end, Terminator::Jump { target: header });
 
         self.label_stack.pop();
 

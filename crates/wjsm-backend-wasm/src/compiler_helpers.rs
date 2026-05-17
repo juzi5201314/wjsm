@@ -168,7 +168,7 @@ impl Compiler {
             // local 2 = num_props (i32), local 3 = i (i32), local 4 = slot_addr (i32)
             // local 5 = resolved ptr (i32), local 6 = flags (i32), local 7 = getter (i64)
             // local 8 = getter env_obj (i64), local 9 = getter func_idx (i32)
-            let length_name_id = self.ensure_string_ptr_const(&"length".to_string());
+            let length_name_id = self.ensure_string_ptr_const("length");
             let mut func = Function::new(vec![
                 (5, ValType::I32),
                 (2, ValType::I64),

@@ -76,8 +76,7 @@ impl ScopeTree {
             id: 0,
             variables: std::collections::HashMap::new(),
         };
-        let mut arenas = Vec::new();
-        arenas.push(root);
+        let arenas = vec![root];
         Self { arenas, current: 0 }
     }
 
@@ -146,9 +145,14 @@ impl ScopeTree {
             }
         }
 
-        scope
-            .variables
-            .insert(name.to_string(), VarInfo { kind, initialised, implicit_arguments: false });
+        scope.variables.insert(
+            name.to_string(),
+            VarInfo {
+                kind,
+                initialised,
+                implicit_arguments: false,
+            },
+        );
         Ok(scope.id)
     }
 
@@ -196,12 +200,11 @@ impl ScopeTree {
             let mut names: Vec<_> = scope.variables.keys().cloned().collect();
             names.sort();
             for name in names {
-                if seen.insert(name.clone()) {
-                    if let Some(info) = scope.variables.get(&name) {
-                        if info.initialised {
-                            result.push((scope.id, name, info.kind));
-                        }
-                    }
+                if seen.insert(name.clone())
+                    && let Some(info) = scope.variables.get(&name)
+                    && info.initialised
+                {
+                    result.push((scope.id, name, info.kind));
                 }
             }
             cursor = scope.parent;
@@ -300,21 +303,6 @@ impl ScopeTree {
         }
         Err(format!("undeclared identifier `{name}`"))
     }
-    
-    /// 检查当前作用域链中是否有显式（非 implicit）的 `arguments` 声明
-    pub(crate) fn has_explicit_arguments_in_scope(&self) -> bool {
-        let mut cursor = Some(self.current);
-        while let Some(scope_id) = cursor {
-            let scope = &self.arenas[scope_id];
-            if let Some(info) = scope.variables.get("arguments") {
-                if !info.implicit_arguments {
-                    return true;
-                }
-            }
-            cursor = scope.parent;
-        }
-        false
-    }
 }
 
 // ── CFG Builder ─────────────────────────────────────────────────────────
@@ -392,7 +380,7 @@ impl FunctionBuilder {
             StmtFlow::Open(block) => {
                 let is_unreachable = self
                     .block(block)
-                    .map_or(false, |b| matches!(b.terminator(), Terminator::Unreachable));
+                    .is_some_and(|b| matches!(b.terminator(), Terminator::Unreachable));
                 if is_unreachable {
                     self.set_terminator(block, Terminator::Jump { target });
                 }
@@ -467,7 +455,7 @@ fn has_top_level_await(module: &swc_ast::Module) -> bool {
             swc_ast::Expr::Array(a) => a
                 .elems
                 .iter()
-                .any(|e| e.as_ref().map_or(false, |e| expr_has_await(&e.expr))),
+                .any(|e| e.as_ref().is_some_and(|e| expr_has_await(&e.expr))),
             swc_ast::Expr::Object(o) => o.props.iter().any(|p| match p {
                 swc_ast::PropOrSpread::Spread(s) => expr_has_await(&s.expr),
                 swc_ast::PropOrSpread::Prop(p) => match &**p {
@@ -497,14 +485,14 @@ fn has_top_level_await(module: &swc_ast::Module) -> bool {
                 expr_has_await(&n.callee)
                     || n.args
                         .as_ref()
-                        .map_or(false, |a| a.iter().any(|a| expr_has_await(&a.expr)))
+                        .is_some_and(|a| a.iter().any(|a| expr_has_await(&a.expr)))
             }
             swc_ast::Expr::Seq(s) => s.exprs.iter().any(|e| expr_has_await(e)),
             swc_ast::Expr::Tpl(t) => t.exprs.iter().any(|e| expr_has_await(e)),
             swc_ast::Expr::TaggedTpl(t) => {
                 expr_has_await(&t.tag) || t.tpl.exprs.iter().any(|e| expr_has_await(e))
             }
-            swc_ast::Expr::Yield(y) => y.arg.as_ref().map_or(false, |a| expr_has_await(a)),
+            swc_ast::Expr::Yield(y) => y.arg.as_ref().is_some_and(|a| expr_has_await(a)),
             swc_ast::Expr::Paren(p) => expr_has_await(&p.expr),
             _ => false,
         }
@@ -515,7 +503,7 @@ fn has_top_level_await(module: &swc_ast::Module) -> bool {
             swc_ast::Decl::Var(v) => v
                 .decls
                 .iter()
-                .any(|d| d.init.as_ref().map_or(false, |i| expr_has_await(i))),
+                .any(|d| d.init.as_ref().is_some_and(|i| expr_has_await(i))),
             swc_ast::Decl::Fn(_) | swc_ast::Decl::Class(_) => false,
             _ => false,
         }
@@ -529,40 +517,40 @@ fn has_top_level_await(module: &swc_ast::Module) -> bool {
             swc_ast::Stmt::If(i) => {
                 expr_has_await(&i.test)
                     || stmt_has_await(&i.cons)
-                    || i.alt.as_ref().map_or(false, |a| stmt_has_await(a))
+                    || i.alt.as_ref().is_some_and(|a| stmt_has_await(a))
             }
             swc_ast::Stmt::While(w) => expr_has_await(&w.test) || stmt_has_await(&w.body),
             swc_ast::Stmt::DoWhile(d) => expr_has_await(&d.test) || stmt_has_await(&d.body),
             swc_ast::Stmt::For(f) => {
-                f.init.as_ref().map_or(false, |init| match init {
+                f.init.as_ref().is_some_and(|init| match init {
                     swc_ast::VarDeclOrExpr::VarDecl(v) => v
                         .decls
                         .iter()
-                        .any(|d| d.init.as_ref().map_or(false, |i| expr_has_await(i))),
+                        .any(|d| d.init.as_ref().is_some_and(|i| expr_has_await(i))),
                     swc_ast::VarDeclOrExpr::Expr(e) => expr_has_await(e),
-                }) || f.test.as_ref().map_or(false, |t| expr_has_await(t))
-                    || f.update.as_ref().map_or(false, |u| expr_has_await(u))
+                }) || f.test.as_ref().is_some_and(|t| expr_has_await(t))
+                    || f.update.as_ref().is_some_and(|u| expr_has_await(u))
                     || stmt_has_await(&f.body)
             }
             swc_ast::Stmt::ForIn(f) => expr_has_await(&f.right) || stmt_has_await(&f.body),
             swc_ast::Stmt::ForOf(f) => {
                 f.is_await || expr_has_await(&f.right) || stmt_has_await(&f.body)
             }
-            swc_ast::Stmt::Return(r) => r.arg.as_ref().map_or(false, |a| expr_has_await(a)),
+            swc_ast::Stmt::Return(r) => r.arg.as_ref().is_some_and(|a| expr_has_await(a)),
             swc_ast::Stmt::Throw(t) => expr_has_await(&t.arg),
             swc_ast::Stmt::Try(t) => {
                 t.block.stmts.iter().any(stmt_has_await)
                     || t.handler
                         .as_ref()
-                        .map_or(false, |h| h.body.stmts.iter().any(stmt_has_await))
+                        .is_some_and(|h| h.body.stmts.iter().any(stmt_has_await))
                     || t.finalizer
                         .as_ref()
-                        .map_or(false, |f| f.stmts.iter().any(stmt_has_await))
+                        .is_some_and(|f| f.stmts.iter().any(stmt_has_await))
             }
             swc_ast::Stmt::Switch(s) => {
                 expr_has_await(&s.discriminant)
                     || s.cases.iter().any(|c| {
-                        c.test.as_ref().map_or(false, |t| expr_has_await(t))
+                        c.test.as_ref().is_some_and(|t| expr_has_await(t))
                             || c.cons.iter().any(stmt_has_await)
                     })
             }
@@ -585,10 +573,8 @@ fn has_top_level_await(module: &swc_ast::Module) -> bool {
                         return true;
                     }
                 }
-                swc_ast::ModuleDecl::ExportDefaultExpr(e) => {
-                    if expr_has_await(&e.expr) {
-                        return true;
-                    }
+                swc_ast::ModuleDecl::ExportDefaultExpr(e) if expr_has_await(&e.expr) => {
+                    return true;
                 }
                 _ => {}
             },
@@ -712,29 +698,28 @@ pub fn lower_modules(
                     return Err(LoweringError::Diagnostic(Diagnostic::new(
                         0,
                         0,
-                        format!("namespace import (import * as ...) is not yet supported"),
+                        "namespace import (import * as ...) is not yet supported".to_string(),
                     )));
                 }
                 if imported_name == "default" {
                     if let Some(source_ir_name) = lowerer
                         .export_map
                         .get(&(binding.source_module, "default".to_string()))
+                        && local_name != "default"
                     {
-                        if local_name != "default" {
-                            lowerer
-                                .import_aliases
-                                .insert(local_name.clone(), source_ir_name.clone());
-                        }
+                        lowerer
+                            .import_aliases
+                            .insert(local_name.clone(), source_ir_name.clone());
                     }
                     continue;
                 }
-                if local_name != imported_name {
-                    if let Ok(scope_id) = lowerer.scopes.resolve_scope_id(imported_name) {
-                        let source_ir_name = format!("${scope_id}.{imported_name}");
-                        lowerer
-                            .import_aliases
-                            .insert(local_name.clone(), source_ir_name);
-                    }
+                if local_name != imported_name
+                    && let Ok(scope_id) = lowerer.scopes.resolve_scope_id(imported_name)
+                {
+                    let source_ir_name = format!("${scope_id}.{imported_name}");
+                    lowerer
+                        .import_aliases
+                        .insert(local_name.clone(), source_ir_name);
                 }
             }
         }
@@ -953,19 +938,18 @@ pub fn lower_modules(
                                         outer_block,
                                     )?;
                                     let outer_block = lowerer.ensure_open(flow)?;
-                                    if let Some(current_mid) = lowerer.current_module_id {
-                                        if let Some(ir_name) = lowerer
+                                    if let Some(current_mid) = lowerer.current_module_id
+                                        && let Some(ir_name) = lowerer
                                             .export_map
                                             .get(&(current_mid, "default".to_string()))
-                                        {
-                                            lowerer.current_function.append_instruction(
-                                                outer_block,
-                                                Instruction::StoreVar {
-                                                    name: ir_name.clone(),
-                                                    value: fn_val,
-                                                },
-                                            );
-                                        }
+                                    {
+                                        lowerer.current_function.append_instruction(
+                                            outer_block,
+                                            Instruction::StoreVar {
+                                                name: ir_name.clone(),
+                                                value: fn_val,
+                                            },
+                                        );
                                     }
                                     StmtFlow::Open(outer_block)
                                 }
@@ -979,19 +963,18 @@ pub fn lower_modules(
                                         outer_block,
                                     )?;
                                     let outer_block = lowerer.ensure_open(flow)?;
-                                    if let Some(current_mid) = lowerer.current_module_id {
-                                        if let Some(ir_name) = lowerer
+                                    if let Some(current_mid) = lowerer.current_module_id
+                                        && let Some(ir_name) = lowerer
                                             .export_map
                                             .get(&(current_mid, "default".to_string()))
-                                        {
-                                            lowerer.current_function.append_instruction(
-                                                outer_block,
-                                                Instruction::StoreVar {
-                                                    name: ir_name.clone(),
-                                                    value: class_val,
-                                                },
-                                            );
-                                        }
+                                    {
+                                        lowerer.current_function.append_instruction(
+                                            outer_block,
+                                            Instruction::StoreVar {
+                                                name: ir_name.clone(),
+                                                value: class_val,
+                                            },
+                                        );
                                     }
                                     StmtFlow::Open(outer_block)
                                 }
@@ -1223,7 +1206,7 @@ struct Lowerer {
     anon_counter: u32,
     // ── Function context stack ────────────────────────────────────────────
     function_stack: Vec<FunctionBuilder>,
-    function_hoisted_stack: Vec<(Vec<HoistedVar>, std::collections::HashSet<(usize, String)>)>,
+    function_hoisted_stack: Vec<FunctionHoistedState>,
     function_next_value_stack: Vec<u32>,
     function_next_temp_stack: Vec<u32>,
     async_context_stack: Vec<AsyncContextState>,
@@ -1286,6 +1269,9 @@ struct Lowerer {
     eval_has_scope_bridge: bool,
     eval_var_writes_to_scope: bool,
     eval_completion: Option<ValueId>,
+    /// eval 调用在表达式上下文时的异常检查分叉后的 continue block。
+    /// 由 lower_direct_eval_call 设置，由 resolve_store_block 消费。
+    pub(crate) eval_continue_block: Option<BasicBlockId>,
     /// 当前作用域中活跃的 using 变量（用于作用域退出时自动 dispose）
     active_using_vars: Vec<ActiveUsingVar>,
 }
@@ -1319,6 +1305,9 @@ struct HoistedVar {
     scope_id: usize,
     name: String,
 }
+
+type HoistedBindingSet = std::collections::HashSet<(usize, String)>;
+type FunctionHoistedState = (Vec<HoistedVar>, HoistedBindingSet);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct CapturedBinding {

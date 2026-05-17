@@ -233,40 +233,76 @@ pub(crate) fn perform_eval_from_caller(
     // ── SyntaxError 检测：eval 代码中声明 var/function arguments ──
     // 检查规则（EvalDeclarationInstantiation）：
     // 如果 eval 代码声明 var arguments 且调用上下文没有 arguments 绑定 → SyntaxError
-    if let Some(env) = scope_env {
-        if code.contains("var arguments") || code.contains("function arguments") {
-            let has_arguments = resolve_handle(caller, env)
-                .and_then(|ptr| read_object_property_by_name(caller, ptr, "arguments"))
-                .is_some();
-            
-            if !has_arguments {
-                let msg = "SyntaxError: declaring 'arguments' in eval code is invalid";
-                let msg_str = store_runtime_string(&caller, msg.to_string());
-                let _error_val = create_error_object(caller, "SyntaxError", msg_str);
-                set_runtime_error(caller.data(), msg.to_string());
-                return value::encode_handle(value::TAG_EXCEPTION, 0);
-            }
+    if let Some(env) = scope_env
+        && (code.contains("var arguments") || code.contains("function arguments"))
+    {
+        let has_arguments = resolve_handle(caller, env)
+            .and_then(|ptr| read_object_property_by_name(caller, ptr, "arguments"))
+            .is_some();
+
+        if !has_arguments {
+            let msg = "SyntaxError: declaring 'arguments' in eval code is invalid";
+            set_runtime_error(caller.data(), msg.to_string());
+            return value::encode_undefined();
         }
     }
-    
+
     let module = match wjsm_parser::parse_script_as_module(&code) {
         Ok(module) => module,
         Err(error) => {
             set_runtime_error(caller.data(), format!("SyntaxError: {error}"));
-            return value::encode_handle(value::TAG_EXCEPTION, 0);
+            return value::encode_undefined();
         }
     };
     let strict_eval_source = runtime_module_has_use_strict_directive(&module);
-    
+
     let var_writes_to_scope = scope_env
         .map(|env| !strict_eval_source && !eval_scope_has_strict_marker(caller, env))
         .unwrap_or(false);
-    
+
+    let output_len = caller
+        .data()
+        .output
+        .lock()
+        .expect("runtime output buffer mutex")
+        .len();
+    let previous_runtime_error = caller
+        .data()
+        .runtime_error
+        .lock()
+        .expect("runtime_error mutex")
+        .clone();
+    let previous_error_count = caller.data().error_table.lock().unwrap().len();
+
     match try_compiled_eval_from_caller(caller, &code, &module, scope_env, var_writes_to_scope) {
         Ok(value) => value,
         Err(error) => {
+            let thrown_exception = {
+                let errors = caller.data().error_table.lock().unwrap();
+                if errors.len() > previous_error_count {
+                    Some((errors.len() - 1) as u32)
+                } else {
+                    None
+                }
+            };
+
+            if let Some(idx) = thrown_exception {
+                caller
+                    .data()
+                    .output
+                    .lock()
+                    .expect("runtime output buffer mutex")
+                    .truncate(output_len);
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime_error mutex") = previous_runtime_error;
+                return value::encode_handle(value::TAG_EXCEPTION, idx);
+            }
+
             set_runtime_error(caller.data(), format_eval_error(error));
-            value::encode_handle(value::TAG_EXCEPTION, 0)
+            value::encode_undefined()
         }
     }
 }
@@ -296,9 +332,7 @@ pub(crate) fn format_eval_error(error: anyhow::Error) -> String {
         format!("SyntaxError: {normalized}")
     } else if message.starts_with("const declarations must be initialised") {
         format!("SyntaxError: {message}")
-    } else if message.starts_with("cannot access") {
-        format!("ReferenceError: {message}")
-    } else if message.starts_with("undeclared identifier") {
+    } else if message.starts_with("cannot access") || message.starts_with("undeclared identifier") {
         format!("ReferenceError: {message}")
     } else {
         format!("RuntimeError: {raw}")
@@ -619,32 +653,29 @@ pub(crate) fn eval_call(
     eval_locals: &mut HashMap<String, EvalLocalBinding>,
 ) -> Result<i64, String> {
     if let swc_ast::Callee::Expr(callee) = &call.callee {
-        if let swc_ast::Expr::Ident(ident) = callee.as_ref() {
-            if ident.sym.as_ref() == "eval" {
-                let arg = if let Some(first) = call.args.first() {
-                    eval_expr(caller, &first.expr, scope_env, eval_locals)?
-                } else {
-                    value::encode_undefined()
-                };
-                return Ok(perform_eval_from_caller(caller, arg, scope_env));
-            }
+        if let swc_ast::Expr::Ident(ident) = callee.as_ref()
+            && ident.sym.as_ref() == "eval"
+        {
+            let arg = if let Some(first) = call.args.first() {
+                eval_expr(caller, &first.expr, scope_env, eval_locals)?
+            } else {
+                value::encode_undefined()
+            };
+            return Ok(perform_eval_from_caller(caller, arg, scope_env));
         }
-        if let swc_ast::Expr::Member(member) = callee.as_ref() {
-            if let swc_ast::Expr::Ident(obj) = member.obj.as_ref() {
-                if obj.sym.as_ref() == "console" {
-                    if let swc_ast::MemberProp::Ident(prop) = &member.prop {
-                        if prop.sym.as_ref() == "log" {
-                            let arg = if let Some(first) = call.args.first() {
-                                eval_expr(caller, &first.expr, scope_env, eval_locals)?
-                            } else {
-                                value::encode_undefined()
-                            };
-                            write_console_value(caller, arg, None);
-                            return Ok(value::encode_undefined());
-                        }
-                    }
-                }
-            }
+        if let swc_ast::Expr::Member(member) = callee.as_ref()
+            && let swc_ast::Expr::Ident(obj) = member.obj.as_ref()
+            && obj.sym.as_ref() == "console"
+            && let swc_ast::MemberProp::Ident(prop) = &member.prop
+            && prop.sym.as_ref() == "log"
+        {
+            let arg = if let Some(first) = call.args.first() {
+                eval_expr(caller, &first.expr, scope_env, eval_locals)?
+            } else {
+                value::encode_undefined()
+            };
+            write_console_value(caller, arg, None);
+            return Ok(value::encode_undefined());
         }
     }
     let swc_ast::Callee::Expr(callee_expr) = &call.callee else {

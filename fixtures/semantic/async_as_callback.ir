@@ -19,51 +19,52 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(0)
-    c20 = number(1)
-    c21 = number(2)
-    c22 = number(3)
-    c23 = number(4)
-    c24 = number(2)
-    c25 = functionref(@0)
-    c26 = number(5)
-    c27 = number(2)
-    c28 = number(3)
-    c29 = undefined
-    c30 = number(4)
-    c31 = number(0)
-    c32 = undefined
-    c33 = bool(false)
-    c34 = functionref(@1)
-    c35 = undefined
-    c36 = number(5)
-    c37 = undefined
-    c38 = functionref(@2)
-    c39 = undefined
+    c19 = undefined
+    c20 = number(0)
+    c21 = number(1)
+    c22 = number(2)
+    c23 = number(3)
+    c24 = number(4)
+    c25 = number(2)
+    c26 = functionref(@0)
+    c27 = number(5)
+    c28 = number(2)
+    c29 = number(3)
+    c30 = undefined
+    c31 = number(4)
+    c32 = number(0)
+    c33 = undefined
+    c34 = bool(false)
+    c35 = functionref(@1)
+    c36 = undefined
+    c37 = number(5)
+    c38 = undefined
+    c39 = functionref(@2)
     c40 = undefined
-    c41 = number(10)
-    c42 = undefined
-    c43 = functionref(@3)
-    c44 = undefined
+    c41 = undefined
+    c42 = number(10)
+    c43 = undefined
+    c44 = functionref(@3)
+    c45 = undefined
 
   fn @double$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = load var $1.$env
-      %1 = const c19
+      %1 = const c20
       %2 = call builtin.continuation.load_var(%0, %1)
       store var $1.$state, %2
-      %3 = const c20
+      %3 = const c21
       %4 = call builtin.continuation.load_var(%0, %3)
       store var $1.$is_rejected, %4
       %5 = load var $1.$this
       store var $1.$resume_val, %5
-      %6 = const c21
+      %6 = const c22
       %7 = call builtin.continuation.load_var(%0, %6)
       store var $1.$promise, %7
-      %8 = const c22
+      %8 = const c23
       %9 = call builtin.continuation.load_var(%0, %8)
       store var $1.$closure_env, %9
-      %10 = const c23
+      %10 = const c24
       %11 = call builtin.continuation.load_var(%0, %10)
       store var $1.x, %11
       %12 = collect_rest_args skip=0
@@ -73,7 +74,7 @@ module {
       jump bb2
     bb2:
       %13 = load var $1.x
-      %14 = const c24
+      %14 = const c25
       %15 = mul %13, %14
       %16 = load var $1.$promise
       promise_resolve %16, %15
@@ -84,20 +85,20 @@ module {
       %0 = collect_rest_args skip=0
       store var $2.arguments, %0
       %1 = new_promise
-      %2 = const c25
-      %3 = const c26
+      %2 = const c26
+      %3 = const c27
       %4 = call builtin.continuation.create(%2, %1, %3)
-      %5 = const c27
+      %5 = const c28
       call builtin.continuation.save_var(%4, %5, %1)
-      %6 = const c28
-      %7 = const c29
+      %6 = const c29
+      %7 = const c30
       call builtin.continuation.save_var(%4, %6, %7)
       %8 = load var $2.x
-      %9 = const c30
+      %9 = const c31
       call builtin.continuation.save_var(%4, %9, %8)
-      %10 = const c31
-      %11 = const c32
-      %12 = const c33
+      %10 = const c32
+      %11 = const c33
+      %12 = const c34
       call builtin.async_function.resume(%2, %4, %10, %11, %12)
       return %1
 
@@ -153,25 +154,41 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c34
-      store var $0.double, %19
-      %20 = const c35
-      %21 = const c36
-      %22 = call builtin.promise.resolve_static(%20, %21)
-      %23 = load var $0.double
-      %24 = const c37
-      %25 = call builtin.promise.then(%22, %23, %24)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c35
+      store var $0.double, %21
+      %22 = const c36
+      %23 = const c37
+      %24 = call builtin.promise.resolve_static(%22, %23)
+      %25 = load var $0.double
       %26 = const c38
-      %27 = const c39
-      %28 = call builtin.promise.then(%25, %26, %27)
+      %27 = call builtin.promise.then(%24, %25, %26)
+      %28 = const c39
       %29 = const c40
-      %30 = const c41
-      %31 = call builtin.promise.resolve_static(%29, %30)
-      %32 = load var $0.double
-      %33 = const c42
-      %34 = call builtin.promise.then(%31, %32, %33)
-      %35 = const c43
-      %36 = const c44
-      %37 = call builtin.promise.then(%34, %35, %36)
+      %30 = call builtin.promise.then(%27, %28, %29)
+      %31 = is_exception %30
+      branch %31, bb2, bb1
+    bb1:
+      %33 = const c41
+      %34 = const c42
+      %35 = call builtin.promise.resolve_static(%33, %34)
+      %36 = load var $0.double
+      %37 = const c43
+      %38 = call builtin.promise.then(%35, %36, %37)
+      %39 = const c44
+      %40 = const c45
+      %41 = call builtin.promise.then(%38, %39, %40)
+      %42 = is_exception %41
+      branch %42, bb4, bb3
+    bb2:
+      %32 = call builtin.exception_value(%30)
+      throw %32
+    bb3:
       return
+    bb4:
+      %43 = call builtin.exception_value(%41)
+      throw %43
 }

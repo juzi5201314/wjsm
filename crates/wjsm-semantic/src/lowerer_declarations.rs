@@ -52,7 +52,7 @@ impl Lowerer {
                 if matches!(kind, VarKind::Var) {
                     // var without init: already initialised in pre-scan, skip
                     let mut names = Vec::new();
-                    Self::extract_pat_bindings(&[declarator.name.clone()], &mut names);
+                    Self::extract_pat_bindings(std::slice::from_ref(&declarator.name), &mut names);
                     for name in names {
                         self.scopes
                             .mark_initialised(&name)
@@ -376,7 +376,9 @@ impl Lowerer {
         // arguments may already be declared (var arguments in body or eval predeclare)
         let scope_id = match self.scopes.declare("arguments", VarKind::Let, true) {
             Ok(id) => {
-                self.scopes.set_implicit_arguments("arguments").expect("arguments should have been declared");
+                self.scopes
+                    .set_implicit_arguments("arguments")
+                    .expect("arguments should have been declared");
                 id
             }
             Err(_) => {
@@ -490,7 +492,8 @@ impl Lowerer {
                 }
             }
             ir_name_idx += 1;
-            block = self.resolve_open_after_expr(block, self.resolve_store_block(block));
+            let store_block = self.resolve_store_block(block);
+            block = self.resolve_open_after_expr(block, store_block);
         }
         Ok(block)
     }
@@ -669,7 +672,7 @@ impl Lowerer {
         let mut idx: i32 = 0;
         let mut has_rest = false;
 
-        for (_i, elem) in array_pat.elems.iter().enumerate() {
+        for elem in array_pat.elems.iter() {
             let elem = match elem {
                 Some(e) => e,
                 None => {

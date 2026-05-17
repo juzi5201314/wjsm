@@ -19,14 +19,15 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(1)
+    c19 = undefined
     c20 = number(1)
-    c21 = number(2)
-    c22 = number(3)
-    c23 = string("one")
-    c24 = string("two")
-    c25 = string("three")
-    c26 = string("default")
+    c21 = number(1)
+    c22 = number(2)
+    c23 = number(3)
+    c24 = string("one")
+    c25 = string("two")
+    c26 = string("three")
+    c27 = string("default")
 
   fn @main [entry=bb0]:
     bb0:
@@ -68,26 +69,54 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      store var $0.x, %19
-      %20 = load var $0.x
-      switch %20 [case c20 -> bb2, case c21 -> bb3, case c22 -> bb4], default bb5, exit bb1
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      store var $0.x, %21
+      %22 = load var $0.x
+      switch %22 [case c21 -> bb2, case c22 -> bb3, case c23 -> bb4], default bb5, exit bb1
     bb1:
       return
     bb2:
-      %21 = const c23
-      %22 = call builtin.console.log(%21)
-      jump bb3
-    bb3:
       %23 = const c24
       %24 = call builtin.console.log(%23)
-      jump bb4
-    bb4:
-      %25 = const c25
-      %26 = call builtin.console.log(%25)
-      jump bb1
-    bb5:
-      %27 = const c26
+      %25 = is_exception %24
+      branch %25, bb7, bb6
+    bb3:
+      %27 = const c25
       %28 = call builtin.console.log(%27)
+      %29 = is_exception %28
+      branch %29, bb9, bb8
+    bb4:
+      %31 = const c26
+      %32 = call builtin.console.log(%31)
+      %33 = is_exception %32
+      branch %33, bb11, bb10
+    bb5:
+      %35 = const c27
+      %36 = call builtin.console.log(%35)
+      %37 = is_exception %36
+      branch %37, bb13, bb12
+    bb6:
+      jump bb3
+    bb7:
+      %26 = call builtin.exception_value(%24)
+      throw %26
+    bb8:
+      jump bb4
+    bb9:
+      %30 = call builtin.exception_value(%28)
+      throw %30
+    bb10:
       jump bb1
+    bb11:
+      %34 = call builtin.exception_value(%32)
+      throw %34
+    bb12:
+      jump bb1
+    bb13:
+      %38 = call builtin.exception_value(%36)
+      throw %38
 }

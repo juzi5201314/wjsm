@@ -20,24 +20,25 @@ module {
     c17 = number(-inf)
     c18 = number(inf)
     c19 = undefined
-    c20 = number(42)
-    c21 = functionref(@0)
-    c22 = undefined
+    c20 = undefined
+    c21 = number(42)
+    c22 = functionref(@0)
     c23 = undefined
-    c24 = string("hello")
-    c25 = functionref(@1)
-    c26 = undefined
+    c24 = undefined
+    c25 = string("hello")
+    c26 = functionref(@1)
     c27 = undefined
-    c28 = bool(true)
-    c29 = functionref(@2)
-    c30 = undefined
+    c28 = undefined
+    c29 = bool(true)
+    c30 = functionref(@2)
     c31 = undefined
-    c32 = null
-    c33 = functionref(@3)
-    c34 = undefined
+    c32 = undefined
+    c33 = null
+    c34 = functionref(@3)
     c35 = undefined
-    c36 = functionref(@4)
-    c37 = undefined
+    c36 = undefined
+    c37 = functionref(@4)
+    c38 = undefined
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
     bb0:
@@ -109,35 +110,69 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      %20 = const c20
-      %21 = call builtin.promise.resolve_static(%19, %20)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
       %22 = const c21
-      %23 = const c22
-      %24 = call builtin.promise.then(%21, %22, %23)
+      %23 = call builtin.promise.resolve_static(%21, %22)
+      %24 = const c22
       %25 = const c23
-      %26 = const c24
-      %27 = call builtin.promise.resolve_static(%25, %26)
-      %28 = const c25
-      %29 = const c26
-      %30 = call builtin.promise.then(%27, %28, %29)
-      %31 = const c27
-      %32 = const c28
-      %33 = call builtin.promise.resolve_static(%31, %32)
-      %34 = const c29
-      %35 = const c30
-      %36 = call builtin.promise.then(%33, %34, %35)
-      %37 = const c31
-      %38 = const c32
+      %26 = call builtin.promise.then(%23, %24, %25)
+      %27 = is_exception %26
+      branch %27, bb2, bb1
+    bb1:
+      %29 = const c24
+      %30 = const c25
+      %31 = call builtin.promise.resolve_static(%29, %30)
+      %32 = const c26
+      %33 = const c27
+      %34 = call builtin.promise.then(%31, %32, %33)
+      %35 = is_exception %34
+      branch %35, bb4, bb3
+    bb2:
+      %28 = call builtin.exception_value(%26)
+      throw %28
+    bb3:
+      %37 = const c28
+      %38 = const c29
       %39 = call builtin.promise.resolve_static(%37, %38)
-      %40 = const c33
-      %41 = const c34
+      %40 = const c30
+      %41 = const c31
       %42 = call builtin.promise.then(%39, %40, %41)
-      %43 = const c35
-      %44 = load var $0.undefined
-      %45 = call builtin.promise.resolve_static(%43, %44)
-      %46 = const c36
-      %47 = const c37
-      %48 = call builtin.promise.then(%45, %46, %47)
+      %43 = is_exception %42
+      branch %43, bb6, bb5
+    bb4:
+      %36 = call builtin.exception_value(%34)
+      throw %36
+    bb5:
+      %45 = const c32
+      %46 = const c33
+      %47 = call builtin.promise.resolve_static(%45, %46)
+      %48 = const c34
+      %49 = const c35
+      %50 = call builtin.promise.then(%47, %48, %49)
+      %51 = is_exception %50
+      branch %51, bb8, bb7
+    bb6:
+      %44 = call builtin.exception_value(%42)
+      throw %44
+    bb7:
+      %53 = const c36
+      %54 = load var $0.undefined
+      %55 = call builtin.promise.resolve_static(%53, %54)
+      %56 = const c37
+      %57 = const c38
+      %58 = call builtin.promise.then(%55, %56, %57)
+      %59 = is_exception %58
+      branch %59, bb10, bb9
+    bb8:
+      %52 = call builtin.exception_value(%50)
+      throw %52
+    bb9:
       return
+    bb10:
+      %60 = call builtin.exception_value(%58)
+      throw %60
 }

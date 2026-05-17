@@ -263,11 +263,10 @@
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
-                if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
-                    if elem == val {
+                if let Some(elem) = read_array_elem(&mut caller, ptr, i)
+                    && elem == val {
                         return value::encode_bool(true);
                     }
-                }
             }
             value::encode_bool(false)
         },
@@ -290,11 +289,10 @@
                 ((len + from_idx).max(0)) as usize
             };
             for i in start..len as usize {
-                if let Some(elem) = read_array_elem(&mut caller, ptr, i as u32) {
-                    if elem == val {
+                if let Some(elem) = read_array_elem(&mut caller, ptr, i as u32)
+                    && elem == val {
                         return value::encode_f64(i as f64);
                     }
-                }
             }
             value::encode_f64(-1.0)
         },

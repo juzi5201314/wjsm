@@ -19,12 +19,13 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(0)
-    c20 = bool(true)
-    c21 = number(5)
-    c22 = number(1)
-    c23 = number(2)
-    c24 = number(4)
+    c19 = undefined
+    c20 = number(0)
+    c21 = bool(true)
+    c22 = number(5)
+    c23 = number(1)
+    c24 = number(2)
+    c25 = number(4)
 
   fn @main [entry=bb0]:
     bb0:
@@ -66,30 +67,40 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      store var $0.i, %19
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      store var $0.i, %21
       jump bb1
     bb1:
-      %20 = const c20
-      %21 = load var $0.i
       %22 = const c21
-      %23 = call builtin.abstract_compare(%21, %22)
-      branch %23, bb2, bb3
+      %23 = load var $0.i
+      %24 = const c22
+      %25 = call builtin.abstract_compare(%23, %24)
+      branch %25, bb2, bb3
     bb2:
-      %24 = load var $0.i
-      %25 = const c22
-      %26 = add %24, %25
-      store var $0.i, %26
-      %27 = load var $0.i
-      switch %27 [case c23 -> bb5, case c24 -> bb6], default bb4, exit bb4
+      %26 = load var $0.i
+      %27 = const c23
+      %28 = add %26, %27
+      store var $0.i, %28
+      %29 = load var $0.i
+      switch %29 [case c24 -> bb5, case c25 -> bb6], default bb4, exit bb4
     bb3:
       return
     bb4:
-      %28 = load var $0.i
-      %29 = call builtin.console.log(%28)
-      jump bb1
+      %30 = load var $0.i
+      %31 = call builtin.console.log(%30)
+      %32 = is_exception %31
+      branch %32, bb8, bb7
     bb5:
       jump bb1
     bb6:
       jump bb1
+    bb7:
+      jump bb1
+    bb8:
+      %33 = call builtin.exception_value(%31)
+      throw %33
 }

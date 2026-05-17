@@ -19,24 +19,25 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(1)
-    c20 = undefined
-    c21 = number(3)
-    c22 = functionref(@0)
-    c23 = undefined
-    c24 = number(2)
-    c25 = functionref(@1)
-    c26 = number(0)
+    c19 = undefined
+    c20 = number(1)
+    c21 = undefined
+    c22 = number(3)
+    c23 = functionref(@0)
+    c24 = undefined
+    c25 = number(2)
+    c26 = functionref(@1)
+    c27 = number(0)
 
   fn @arrow_0 [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
-      %0 = const c21
+      %0 = const c22
       %1 = call builtin.console.log(%0)
       return %1
 
   fn @arrow_1 [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
-      %0 = const c24
+      %0 = const c25
       %1 = call builtin.console.log(%0)
       return %1
 
@@ -80,17 +81,45 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      %20 = call builtin.console.log(%19)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
       %21 = const c20
-      %22 = const c20
-      %23 = call builtin.promise.resolve_static(%21, %22)
-      %24 = const c22
-      %25 = const c23
-      %26 = call builtin.promise.then(%23, %24, %25)
-      %27 = const c25
-      %28 = call builtin.queue_microtask(%27)
-      %29 = const c26
-      %30 = call builtin.console.log(%29)
+      %22 = call builtin.console.log(%21)
+      %23 = is_exception %22
+      branch %23, bb2, bb1
+    bb1:
+      %25 = const c21
+      %26 = const c21
+      %27 = call builtin.promise.resolve_static(%25, %26)
+      %28 = const c23
+      %29 = const c24
+      %30 = call builtin.promise.then(%27, %28, %29)
+      %31 = is_exception %30
+      branch %31, bb4, bb3
+    bb2:
+      %24 = call builtin.exception_value(%22)
+      throw %24
+    bb3:
+      %33 = const c26
+      %34 = call builtin.queue_microtask(%33)
+      %35 = is_exception %34
+      branch %35, bb6, bb5
+    bb4:
+      %32 = call builtin.exception_value(%30)
+      throw %32
+    bb5:
+      %37 = const c27
+      %38 = call builtin.console.log(%37)
+      %39 = is_exception %38
+      branch %39, bb8, bb7
+    bb6:
+      %36 = call builtin.exception_value(%34)
+      throw %36
+    bb7:
       return
+    bb8:
+      %40 = call builtin.exception_value(%38)
+      throw %40
 }

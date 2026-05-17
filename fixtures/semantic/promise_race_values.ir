@@ -20,17 +20,18 @@ module {
     c17 = number(-inf)
     c18 = number(inf)
     c19 = undefined
-    c20 = number(7)
-    c21 = undefined
-    c22 = number(9)
-    c23 = functionref(@0)
-    c24 = undefined
+    c20 = undefined
+    c21 = number(7)
+    c22 = undefined
+    c23 = number(9)
+    c24 = functionref(@0)
     c25 = undefined
     c26 = undefined
-    c27 = number(4)
-    c28 = undefined
-    c29 = number(9)
-    c30 = functionref(@1)
+    c27 = undefined
+    c28 = number(4)
+    c29 = undefined
+    c30 = number(9)
+    c31 = functionref(@1)
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
     bb0:
@@ -84,30 +85,46 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      %20 = new_array(capacity=4)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
       %21 = const c20
-      call builtin.array.push(%20, %21)
-      %22 = const c21
-      %23 = const c22
-      %24 = call builtin.promise.resolve_static(%22, %23)
-      call builtin.array.push(%20, %24)
-      %25 = call builtin.promise.race(%19, %20)
-      %26 = const c23
-      %27 = const c24
-      %28 = call builtin.promise.then(%25, %26, %27)
+      %22 = new_array(capacity=4)
+      %23 = const c21
+      call builtin.array.push(%22, %23)
+      %24 = const c22
+      %25 = const c23
+      %26 = call builtin.promise.resolve_static(%24, %25)
+      call builtin.array.push(%22, %26)
+      %27 = call builtin.promise.race(%21, %22)
+      %28 = const c24
       %29 = const c25
-      %30 = new_array(capacity=4)
-      %31 = const c26
-      %32 = const c27
-      %33 = call builtin.promise.reject_static(%31, %32)
-      call builtin.array.push(%30, %33)
-      %34 = const c28
-      %35 = const c29
-      %36 = call builtin.promise.resolve_static(%34, %35)
-      call builtin.array.push(%30, %36)
-      %37 = call builtin.promise.race(%29, %30)
-      %38 = const c30
-      %39 = call builtin.promise.catch(%37, %38)
+      %30 = call builtin.promise.then(%27, %28, %29)
+      %31 = is_exception %30
+      branch %31, bb2, bb1
+    bb1:
+      %33 = const c26
+      %34 = new_array(capacity=4)
+      %35 = const c27
+      %36 = const c28
+      %37 = call builtin.promise.reject_static(%35, %36)
+      call builtin.array.push(%34, %37)
+      %38 = const c29
+      %39 = const c30
+      %40 = call builtin.promise.resolve_static(%38, %39)
+      call builtin.array.push(%34, %40)
+      %41 = call builtin.promise.race(%33, %34)
+      %42 = const c31
+      %43 = call builtin.promise.catch(%41, %42)
+      %44 = is_exception %43
+      branch %44, bb4, bb3
+    bb2:
+      %32 = call builtin.exception_value(%30)
+      throw %32
+    bb3:
       return
+    bb4:
+      %45 = call builtin.exception_value(%43)
+      throw %45
 }

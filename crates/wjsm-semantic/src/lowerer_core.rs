@@ -68,6 +68,7 @@ impl Lowerer {
             eval_has_scope_bridge: false,
             eval_var_writes_to_scope: false,
             active_using_vars: Vec::new(),
+            eval_continue_block: None,
             eval_completion: None,
         }
     }
@@ -227,10 +228,10 @@ impl Lowerer {
     }
 
     pub(crate) fn record_capture(&mut self, binding: CapturedBinding) {
-        if let Some(captured) = self.captured_names_stack.last_mut() {
-            if !captured.contains(&binding) {
-                captured.push(binding);
-            }
+        if let Some(captured) = self.captured_names_stack.last_mut()
+            && !captured.contains(&binding)
+        {
+            captured.push(binding);
         }
     }
 
@@ -242,7 +243,7 @@ impl Lowerer {
         self.shared_env_stack
             .last()
             .and_then(|shared| shared.as_ref())
-            .map_or(false, |(_, names)| names.contains(binding))
+            .is_some_and(|(_, names)| names.contains(binding))
     }
 
     pub(crate) fn shared_env_value(&self) -> Option<ValueId> {
@@ -443,7 +444,7 @@ impl Lowerer {
                 value: global_obj,
             },
         );
-        
+
         // 设置 $this：script 模式 = 全局对象，module 模式 = undefined
         let this_val = if self.script_mode {
             global_obj
@@ -452,7 +453,10 @@ impl Lowerer {
             let v = self.alloc_value();
             self.current_function.append_instruction(
                 entry,
-                Instruction::Const { dest: v, constant: undef_const },
+                Instruction::Const {
+                    dest: v,
+                    constant: undef_const,
+                },
             );
             v
         };
@@ -577,7 +581,7 @@ impl Lowerer {
                     let is_unreachable = self
                         .current_function
                         .block(block)
-                        .map_or(false, |b| matches!(b.terminator(), Terminator::Unreachable));
+                        .is_some_and(|b| matches!(b.terminator(), Terminator::Unreachable));
                     if self.eval_mode {
                         let return_value = if let Some(value) = self.eval_completion {
                             value

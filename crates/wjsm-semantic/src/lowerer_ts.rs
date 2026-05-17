@@ -278,60 +278,56 @@ impl Lowerer {
         obj_dest: ValueId,
         block: BasicBlockId,
     ) -> Result<(), LoweringError> {
-        match module_decl {
-            swc_ast::ModuleDecl::ExportDecl(export_decl) => {
-                let decl_name = match &export_decl.decl {
-                    swc_ast::Decl::Fn(fn_decl) => Some(fn_decl.ident.sym.to_string()),
-                    swc_ast::Decl::Var(var_decl) => {
-                        var_decl.decls.first().and_then(|d| match &d.name {
-                            swc_ast::Pat::Ident(ident) => Some(ident.id.sym.to_string()),
-                            _ => None,
-                        })
-                    }
-                    swc_ast::Decl::TsEnum(ts_enum) => Some(ts_enum.id.sym.to_string()),
-                    swc_ast::Decl::TsModule(ts_module) => match &ts_module.id {
-                        swc_ast::TsModuleName::Ident(ident) => Some(ident.sym.to_string()),
+        if let swc_ast::ModuleDecl::ExportDecl(export_decl) = module_decl {
+            let decl_name = match &export_decl.decl {
+                swc_ast::Decl::Fn(fn_decl) => Some(fn_decl.ident.sym.to_string()),
+                swc_ast::Decl::Var(var_decl) => {
+                    var_decl.decls.first().and_then(|d| match &d.name {
+                        swc_ast::Pat::Ident(ident) => Some(ident.id.sym.to_string()),
                         _ => None,
-                    },
-                    _ => None,
-                };
-                self.lower_stmt(
-                    &swc_ast::Stmt::Decl(export_decl.decl.clone()),
-                    StmtFlow::Open(block),
-                )?;
-                if let Some(name) = decl_name {
-                    if let Ok(scope_id) = self.scopes.resolve_scope_id(&name) {
-                        let ir_name = format!("${scope_id}.{name}");
-                        let val = self.alloc_value();
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::LoadVar {
-                                dest: val,
-                                name: ir_name,
-                            },
-                        );
-                        let key_const = self.module.add_constant(Constant::String(name));
-                        let key_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::Const {
-                                dest: key_dest,
-                                constant: key_const,
-                            },
-                        );
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::SetProp {
-                                object: obj_dest,
-                                key: key_dest,
-                                value: val,
-                            },
-                        );
-                    }
+                    })
                 }
+                swc_ast::Decl::TsEnum(ts_enum) => Some(ts_enum.id.sym.to_string()),
+                swc_ast::Decl::TsModule(ts_module) => match &ts_module.id {
+                    swc_ast::TsModuleName::Ident(ident) => Some(ident.sym.to_string()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            self.lower_stmt(
+                &swc_ast::Stmt::Decl(export_decl.decl.clone()),
+                StmtFlow::Open(block),
+            )?;
+            if let Some(name) = decl_name
+                && let Ok(scope_id) = self.scopes.resolve_scope_id(&name)
+            {
+                let ir_name = format!("${scope_id}.{name}");
+                let val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::LoadVar {
+                        dest: val,
+                        name: ir_name,
+                    },
+                );
+                let key_const = self.module.add_constant(Constant::String(name));
+                let key_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: key_dest,
+                        constant: key_const,
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::SetProp {
+                        object: obj_dest,
+                        key: key_dest,
+                        value: val,
+                    },
+                );
             }
-
-            _ => {}
         }
         Ok(())
     }
@@ -347,7 +343,7 @@ impl Lowerer {
 
         for declarator in &using_decl.decls {
             let mut names = Vec::new();
-            Self::extract_pat_bindings(&[declarator.name.clone()], &mut names);
+            Self::extract_pat_bindings(std::slice::from_ref(&declarator.name), &mut names);
             for name in names {
                 let scope_id = self
                     .scopes

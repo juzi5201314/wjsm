@@ -142,8 +142,8 @@ pub fn should_run_test(test: &Test, run_all: bool) -> bool {
 
     // 检查是否有支持的 feature
     test.metadata.features.iter().any(|feature| {
-        SUPPORTED_FEATURES.iter().any(|&supported| {
-            feature == supported || feature.starts_with(&format!("{}", supported))
-        })
+        SUPPORTED_FEATURES
+            .iter()
+            .any(|&supported| feature == supported || feature.starts_with(&supported.to_string()))
     })
 }

@@ -226,20 +226,11 @@ struct PipelineResult {
     timings: PipelineTimings,
 }
 
+#[derive(Default)]
 struct PipelineTimings {
     parse_us: u64,
     lower_us: u64,
     compile_us: u64,
-}
-
-impl Default for PipelineTimings {
-    fn default() -> Self {
-        Self {
-            parse_us: 0,
-            lower_us: 0,
-            compile_us: 0,
-        }
-    }
 }
 
 impl PipelineTimings {
@@ -466,10 +457,10 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
 
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<Event, notify::Error>| {
-            if let Ok(event) = res {
-                if matches!(event.kind, EventKind::Modify(_)) {
-                    let _ = tx.send(event);
-                }
+            if let Ok(event) = res
+                && matches!(event.kind, EventKind::Modify(_))
+            {
+                let _ = tx.send(event);
             }
         },
         Config::default(),
@@ -495,7 +486,14 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
 fn cmd_check(cli: &Cli, input: &str) -> Result<ExitCode> {
     let source = read_input(input)?;
 
-    let result = run_pipeline(&source, Stage::Lower, cli.verbose, cli.time, cli.target, false)?;
+    let result = run_pipeline(
+        &source,
+        Stage::Lower,
+        cli.verbose,
+        cli.time,
+        cli.target,
+        false,
+    )?;
 
     if cli.verbose >= 1 {
         eprintln!("✓ No errors found");
@@ -512,13 +510,20 @@ fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
     // Wrap the expression in a module that logs it
     let source = format!("console.log({});", code);
 
-    let result = run_pipeline(&source, Stage::Execute, cli.verbose, cli.time, cli.target, false)?;
+    let result = run_pipeline(
+        &source,
+        Stage::Execute,
+        cli.verbose,
+        cli.time,
+        cli.target,
+        false,
+    )?;
 
-    if let Some(wasm) = &result.wasm {
-        if let Err(e) = runtime::execute(wasm) {
-            eprintln!("Runtime error: {:#}", e);
-            return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
-        }
+    if let Some(wasm) = &result.wasm
+        && let Err(e) = runtime::execute(wasm)
+    {
+        eprintln!("Runtime error: {:#}", e);
+        return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
     }
 
     Ok(ExitCode::from(EXIT_SUCCESS))
@@ -527,7 +532,14 @@ fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
 fn cmd_dump_ir(cli: &Cli, input: &str, format: DumpFormat) -> Result<ExitCode> {
     let source = read_input(input)?;
 
-    let result = run_pipeline(&source, Stage::Lower, cli.verbose, cli.time, cli.target, false)?;
+    let result = run_pipeline(
+        &source,
+        Stage::Lower,
+        cli.verbose,
+        cli.time,
+        cli.target,
+        false,
+    )?;
 
     if let Some(program) = &result.program {
         match format {
@@ -542,7 +554,14 @@ fn cmd_dump_ir(cli: &Cli, input: &str, format: DumpFormat) -> Result<ExitCode> {
 fn cmd_dump_ast(cli: &Cli, input: &str) -> Result<ExitCode> {
     let source = read_input(input)?;
 
-    let result = run_pipeline(&source, Stage::Parse, cli.verbose, cli.time, cli.target, false)?;
+    let result = run_pipeline(
+        &source,
+        Stage::Parse,
+        cli.verbose,
+        cli.time,
+        cli.target,
+        false,
+    )?;
 
     if let Some(ast) = &result.ast {
         let json = serde_json::to_string_pretty(ast)?;
@@ -555,7 +574,14 @@ fn cmd_dump_ast(cli: &Cli, input: &str) -> Result<ExitCode> {
 fn cmd_dump_wat(cli: &Cli, input: &str, _root: Option<&str>) -> Result<ExitCode> {
     let source = read_input(input)?;
 
-    let result = run_pipeline(&source, Stage::Compile, cli.verbose, cli.time, cli.target, false)?;
+    let result = run_pipeline(
+        &source,
+        Stage::Compile,
+        cli.verbose,
+        cli.time,
+        cli.target,
+        false,
+    )?;
 
     if let Some(wasm) = &result.wasm {
         let wat = wasmprinter::print_bytes(wasm)?;
@@ -609,29 +635,27 @@ fn cmd_size(input: &str) -> Result<ExitCode> {
     // Parse WASM sections
     let parser = wasmparser::Parser::new(0);
 
-    for payload in parser.parse_all(&bytes) {
-        if let Ok(payload) = payload {
-            use wasmparser::Payload::*;
-            let (name, size) = match payload {
-                TypeSection(s) => ("Type", s.range().len()),
-                ImportSection(s) => ("Import", s.range().len()),
-                FunctionSection(s) => ("Function", s.range().len()),
-                TableSection(s) => ("Table", s.range().len()),
-                MemorySection(s) => ("Memory", s.range().len()),
-                GlobalSection(s) => ("Global", s.range().len()),
-                ExportSection(s) => ("Export", s.range().len()),
-                StartSection { range, .. } => ("Start", range.len()),
-                ElementSection(s) => ("Element", s.range().len()),
-                CodeSectionEntry(s) => {
-                    code_size += s.range().len();
-                    continue;
-                }
-                DataSection(s) => ("Data", s.range().len()),
-                CustomSection(s) => ("Custom", s.range().len()),
-                _ => continue,
-            };
-            sizes.push((name, size));
-        }
+    for payload in parser.parse_all(&bytes).flatten() {
+        use wasmparser::Payload::*;
+        let (name, size) = match payload {
+            TypeSection(s) => ("Type", s.range().len()),
+            ImportSection(s) => ("Import", s.range().len()),
+            FunctionSection(s) => ("Function", s.range().len()),
+            TableSection(s) => ("Table", s.range().len()),
+            MemorySection(s) => ("Memory", s.range().len()),
+            GlobalSection(s) => ("Global", s.range().len()),
+            ExportSection(s) => ("Export", s.range().len()),
+            StartSection { range, .. } => ("Start", range.len()),
+            ElementSection(s) => ("Element", s.range().len()),
+            CodeSectionEntry(s) => {
+                code_size += s.range().len();
+                continue;
+            }
+            DataSection(s) => ("Data", s.range().len()),
+            CustomSection(s) => ("Custom", s.range().len()),
+            _ => continue,
+        };
+        sizes.push((name, size));
     }
     if code_size > 0 {
         sizes.push(("Code", code_size));
@@ -714,11 +738,10 @@ fn cmd_version(verbose: bool) -> Result<ExitCode> {
         if let Ok(output) = std::process::Command::new("git")
             .args(["rev-parse", "--short", "HEAD"])
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                let hash = String::from_utf8_lossy(&output.stdout);
-                println!("  Git: {}", hash.trim());
-            }
+            let hash = String::from_utf8_lossy(&output.stdout);
+            println!("  Git: {}", hash.trim());
         }
 
         // Features (derived from Cargo.toml dependencies)

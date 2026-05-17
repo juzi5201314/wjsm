@@ -111,15 +111,15 @@ impl Lowerer {
         ];
         if let Some(ctor) = constructor {
             for param in &ctor.params {
-                if let swc_ast::ParamOrTsParamProp::Param(p) = param {
-                    if let swc_ast::Pat::Ident(binding_ident) = &p.pat {
-                        let name = binding_ident.id.sym.to_string();
-                        let scope_id = self
-                            .scopes
-                            .declare(&name, VarKind::Let, true)
-                            .map_err(|msg| self.error(class_decl.span(), msg))?;
-                        param_ir_names.push(format!("${scope_id}.{name}"));
-                    }
+                if let swc_ast::ParamOrTsParamProp::Param(p) = param
+                    && let swc_ast::Pat::Ident(binding_ident) = &p.pat
+                {
+                    let name = binding_ident.id.sym.to_string();
+                    let scope_id = self
+                        .scopes
+                        .declare(&name, VarKind::Let, true)
+                        .map_err(|msg| self.error(class_decl.span(), msg))?;
+                    param_ir_names.push(format!("${scope_id}.{name}"));
                 }
             }
 
@@ -191,15 +191,15 @@ impl Lowerer {
                 _ => entry,
             })?);
         }
-        if let Some(ctor) = constructor {
-            if let Some(body) = &ctor.body {
-                for stmt in &body.stmts {
-                    // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
-                    if matches!(inner_flow, StmtFlow::Terminated) {
-                        continue;
-                    }
-                    inner_flow = self.lower_stmt(stmt, inner_flow)?;
+        if let Some(ctor) = constructor
+            && let Some(body) = &ctor.body
+        {
+            for stmt in &body.stmts {
+                // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+                if matches!(inner_flow, StmtFlow::Terminated) {
+                    continue;
                 }
+                inner_flow = self.lower_stmt(stmt, inner_flow)?;
             }
         }
 
@@ -772,15 +772,15 @@ impl Lowerer {
         ];
         if let Some(ctor) = constructor {
             for param in &ctor.params {
-                if let swc_ast::ParamOrTsParamProp::Param(p) = param {
-                    if let swc_ast::Pat::Ident(binding_ident) = &p.pat {
-                        let name = binding_ident.id.sym.to_string();
-                        let scope_id = self
-                            .scopes
-                            .declare(&name, VarKind::Let, true)
-                            .map_err(|msg| self.error(class_expr.span(), msg))?;
-                        param_ir_names.push(format!("${scope_id}.{name}"));
-                    }
+                if let swc_ast::ParamOrTsParamProp::Param(p) = param
+                    && let swc_ast::Pat::Ident(binding_ident) = &p.pat
+                {
+                    let name = binding_ident.id.sym.to_string();
+                    let scope_id = self
+                        .scopes
+                        .declare(&name, VarKind::Let, true)
+                        .map_err(|msg| self.error(class_expr.span(), msg))?;
+                    param_ir_names.push(format!("${scope_id}.{name}"));
                 }
             }
 
@@ -943,15 +943,15 @@ impl Lowerer {
                 _ => entry,
             })?);
         }
-        if let Some(ctor) = constructor {
-            if let Some(body) = &ctor.body {
-                for stmt in &body.stmts {
-                    // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
-                    if matches!(inner_flow, StmtFlow::Terminated) {
-                        continue;
-                    }
-                    inner_flow = self.lower_stmt(stmt, inner_flow)?;
+        if let Some(ctor) = constructor
+            && let Some(body) = &ctor.body
+        {
+            for stmt in &body.stmts {
+                // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
+                if matches!(inner_flow, StmtFlow::Terminated) {
+                    continue;
                 }
+                inner_flow = self.lower_stmt(stmt, inner_flow)?;
             }
         }
 

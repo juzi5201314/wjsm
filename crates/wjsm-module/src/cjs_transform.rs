@@ -124,16 +124,16 @@ impl Visit for CjsDetector {
         if self.found {
             return;
         }
-        if let ast::AssignTarget::Simple(simple) = &n.left {
-            if let ast::SimpleAssignTarget::Member(member) = simple {
-                if is_module_exports_member(&member.obj) || is_exports_ident(&member.obj) {
-                    self.found = true;
-                    return;
-                }
-                if is_module_exports_member_no_prop(&member.obj, &member.prop) {
-                    self.found = true;
-                    return;
-                }
+        if let ast::AssignTarget::Simple(simple) = &n.left
+            && let ast::SimpleAssignTarget::Member(member) = simple
+        {
+            if is_module_exports_member(&member.obj) || is_exports_ident(&member.obj) {
+                self.found = true;
+                return;
+            }
+            if is_module_exports_member_no_prop(&member.obj, &member.prop) {
+                self.found = true;
+                return;
             }
         }
         n.visit_children_with(self);
@@ -151,20 +151,20 @@ struct RequireCollector {
 impl Visit for RequireCollector {
     fn visit_var_decl(&mut self, n: &ast::VarDecl) {
         for decl in &n.decls {
-            if let Some(init) = &decl.init {
-                if let ast::Expr::Call(call) = init.as_ref() {
-                    if let Some(specifier) = extract_require_specifier(call) {
-                        if let ast::Pat::Ident(binding) = &decl.name {
-                            let local_name = binding.id.sym.to_string();
-                            if !local_name.starts_with("__cjs_req_") {
-                                if !self.require_map.contains_key(&specifier) {
-                                    self.require_map.insert(specifier, local_name.clone());
-                                    self.direct_imports.insert(local_name);
-                                }
-                                continue;
-                            }
-                        }
+            if let Some(init) = &decl.init
+                && let ast::Expr::Call(call) = init.as_ref()
+                && let Some(specifier) = extract_require_specifier(call)
+                && let ast::Pat::Ident(binding) = &decl.name
+            {
+                let local_name = binding.id.sym.to_string();
+                if !local_name.starts_with("__cjs_req_") {
+                    if let std::collections::btree_map::Entry::Vacant(e) =
+                        self.require_map.entry(specifier)
+                    {
+                        e.insert(local_name.clone());
+                        self.direct_imports.insert(local_name);
                     }
+                    continue;
                 }
             }
         }
@@ -522,18 +522,16 @@ impl CjsTransformer {
     fn transform_var_decl(&mut self, var_decl: &ast::VarDecl) -> ast::VarDecl {
         let mut new_decls = Vec::new();
         for decl in &var_decl.decls {
-            if let Some(init) = &decl.init {
-                if let ast::Expr::Call(call) = init.as_ref() {
-                    if let Some(specifier) = extract_require_specifier(call) {
-                        if let ast::Pat::Ident(binding) = &decl.name {
-                            let local_name = binding.id.sym.to_string();
-                            if self.require_map.get(&specifier) == Some(&local_name)
-                                && self.direct_imports.contains(&local_name)
-                            {
-                                continue;
-                            }
-                        }
-                    }
+            if let Some(init) = &decl.init
+                && let ast::Expr::Call(call) = init.as_ref()
+                && let Some(specifier) = extract_require_specifier(call)
+                && let ast::Pat::Ident(binding) = &decl.name
+            {
+                let local_name = binding.id.sym.to_string();
+                if self.require_map.get(&specifier) == Some(&local_name)
+                    && self.direct_imports.contains(&local_name)
+                {
+                    continue;
                 }
             }
             let init = decl.init.as_ref().map(|e| Box::new(self.transform_expr(e)));
@@ -556,14 +554,14 @@ impl CjsTransformer {
     fn transform_expr(&mut self, expr: &ast::Expr) -> ast::Expr {
         match expr {
             ast::Expr::Call(call) => {
-                if let Some(specifier) = extract_require_specifier(call) {
-                    if let Some(local_name) = self.require_map.get(&specifier) {
-                        return ast::Expr::Ident(ast::Ident::new(
-                            local_name.clone().into(),
-                            DUMMY_SP,
-                            SyntaxContext::default(),
-                        ));
-                    }
+                if let Some(specifier) = extract_require_specifier(call)
+                    && let Some(local_name) = self.require_map.get(&specifier)
+                {
+                    return ast::Expr::Ident(ast::Ident::new(
+                        local_name.clone().into(),
+                        DUMMY_SP,
+                        SyntaxContext::default(),
+                    ));
                 }
                 let new_callee = match &call.callee {
                     ast::Callee::Expr(callee) => {
@@ -801,14 +799,13 @@ impl CjsTransformer {
 // ── 辅助函数 ──────────────────────────────────────────────────────
 
 fn extract_require_specifier(call: &ast::CallExpr) -> Option<String> {
-    if let ast::Callee::Expr(expr) = &call.callee {
-        if let ast::Expr::Ident(ident) = expr.as_ref() {
-            if ident.sym.as_ref() == "require" && call.args.len() == 1 {
-                if let ast::Expr::Lit(ast::Lit::Str(s)) = call.args[0].expr.as_ref() {
-                    return Some(s.value.to_string_lossy().into_owned());
-                }
-            }
-        }
+    if let ast::Callee::Expr(expr) = &call.callee
+        && let ast::Expr::Ident(ident) = expr.as_ref()
+        && ident.sym.as_ref() == "require"
+        && call.args.len() == 1
+        && let ast::Expr::Lit(ast::Lit::Str(s)) = call.args[0].expr.as_ref()
+    {
+        return Some(s.value.to_string_lossy().into_owned());
     }
     None
 }
@@ -816,14 +813,12 @@ fn extract_require_specifier(call: &ast::CallExpr) -> Option<String> {
 fn is_module_exports_member(expr: &ast::Expr) -> bool {
     match expr {
         ast::Expr::Member(member) => {
-            if let ast::Expr::Ident(module_ident) = member.obj.as_ref() {
-                if module_ident.sym.as_ref() == "module" {
-                    if let ast::MemberProp::Ident(exports_ident) = &member.prop {
-                        if exports_ident.sym.as_ref() == "exports" {
-                            return true;
-                        }
-                    }
-                }
+            if let ast::Expr::Ident(module_ident) = member.obj.as_ref()
+                && module_ident.sym.as_ref() == "module"
+                && let ast::MemberProp::Ident(exports_ident) = &member.prop
+                && exports_ident.sym.as_ref() == "exports"
+            {
+                return true;
             }
             false
         }
@@ -832,14 +827,12 @@ fn is_module_exports_member(expr: &ast::Expr) -> bool {
 }
 
 fn is_module_exports_member_no_prop(obj: &ast::Expr, prop: &ast::MemberProp) -> bool {
-    if let ast::Expr::Ident(module_ident) = obj {
-        if module_ident.sym.as_ref() == "module" {
-            if let ast::MemberProp::Ident(exports_ident) = prop {
-                if exports_ident.sym.as_ref() == "exports" {
-                    return true;
-                }
-            }
-        }
+    if let ast::Expr::Ident(module_ident) = obj
+        && module_ident.sym.as_ref() == "module"
+        && let ast::MemberProp::Ident(exports_ident) = prop
+        && exports_ident.sym.as_ref() == "exports"
+    {
+        return true;
     }
     false
 }
@@ -847,10 +840,10 @@ fn is_module_exports_member_no_prop(obj: &ast::Expr, prop: &ast::MemberProp) -> 
 fn is_exports_member(expr: &ast::Expr) -> bool {
     match expr {
         ast::Expr::Member(member) => {
-            if let ast::Expr::Ident(exports_ident) = member.obj.as_ref() {
-                if exports_ident.sym.as_ref() == "exports" {
-                    return true;
-                }
+            if let ast::Expr::Ident(exports_ident) = member.obj.as_ref()
+                && exports_ident.sym.as_ref() == "exports"
+            {
+                return true;
             }
             false
         }

@@ -1,6 +1,16 @@
 use super::*;
 
 impl Lowerer {
+    pub(crate) fn lower_expr_then_continue(
+        &mut self,
+        expr: &swc_ast::Expr,
+        block: &mut BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let value = self.lower_expr(expr, *block)?;
+        *block = self.resolve_store_block(*block);
+        Ok(value)
+    }
+
     pub(crate) fn lower_binary(
         &mut self,
         bin: &swc_ast::BinExpr,
@@ -17,8 +27,9 @@ impl Lowerer {
             }
             // Standard arithmetic
             Add | Sub | Mul | Div => {
-                let lhs = self.lower_expr(bin.left.as_ref(), block)?;
-                let rhs = self.lower_expr(bin.right.as_ref(), block)?;
+                let mut current_block = block;
+                let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
+                let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
                 let dest = self.alloc_value();
                 let op = match bin.op {
                     Add => BinaryOp::Add,
@@ -28,16 +39,17 @@ impl Lowerer {
                     _ => unreachable!(),
                 };
                 self.current_function
-                    .append_instruction(block, Instruction::Binary { dest, op, lhs, rhs });
+                    .append_instruction(current_block, Instruction::Binary { dest, op, lhs, rhs });
                 Ok(dest)
             }
             // Mod / Exp → CallBuiltin
             Mod => {
-                let lhs = self.lower_expr(bin.left.as_ref(), block)?;
-                let rhs = self.lower_expr(bin.right.as_ref(), block)?;
+                let mut current_block = block;
+                let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
+                let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::F64Mod,
@@ -47,11 +59,12 @@ impl Lowerer {
                 Ok(dest)
             }
             Exp => {
-                let lhs = self.lower_expr(bin.left.as_ref(), block)?;
-                let rhs = self.lower_expr(bin.right.as_ref(), block)?;
+                let mut current_block = block;
+                let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
+                let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::F64Exp,
@@ -62,8 +75,9 @@ impl Lowerer {
             }
             // Bitwise operators — convert to i32, operate, NaN-box back
             BitOr | BitXor | BitAnd | LShift | RShift | ZeroFillRShift => {
-                let lhs = self.lower_expr(bin.left.as_ref(), block)?;
-                let rhs = self.lower_expr(bin.right.as_ref(), block)?;
+                let mut current_block = block;
+                let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
+                let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
                 let dest = self.alloc_value();
                 let op = match bin.op {
                     BitOr => BinaryOp::BitOr,
@@ -75,16 +89,18 @@ impl Lowerer {
                     _ => unreachable!(),
                 };
                 self.current_function
-                    .append_instruction(block, Instruction::Binary { dest, op, lhs, rhs });
+                    .append_instruction(current_block, Instruction::Binary { dest, op, lhs, rhs });
                 Ok(dest)
             }
             // in 操作符：检查对象是否有属性
             In => {
-                let prop = self.lower_expr(bin.left.as_ref(), block)?;
-                let object = self.lower_expr(bin.right.as_ref(), block)?;
+                let mut current_block = block;
+                let prop = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
+                let object =
+                    self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::In,
@@ -95,11 +111,13 @@ impl Lowerer {
             }
             // instanceof 操作符：检查原型链
             InstanceOf => {
-                let value = self.lower_expr(bin.left.as_ref(), block)?;
-                let constructor = self.lower_expr(bin.right.as_ref(), block)?;
+                let mut current_block = block;
+                let value = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
+                let constructor =
+                    self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::InstanceOf,
@@ -118,15 +136,16 @@ impl Lowerer {
         bin: &swc_ast::BinExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
-        let lhs = self.lower_expr(bin.left.as_ref(), block)?;
-        let rhs = self.lower_expr(bin.right.as_ref(), block)?;
+        let mut current_block = block;
+        let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
+        let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
         let dest = self.alloc_value();
 
         match bin.op {
             // == 使用 abstract_eq builtin
             swc_ast::BinaryOp::EqEq => {
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::AbstractEq,
@@ -138,7 +157,7 @@ impl Lowerer {
             swc_ast::BinaryOp::NotEq => {
                 let eq_result = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::CallBuiltin {
                         dest: Some(eq_result),
                         builtin: Builtin::AbstractEq,
@@ -146,7 +165,7 @@ impl Lowerer {
                     },
                 );
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::Unary {
                         dest,
                         op: UnaryOp::Not,
@@ -157,7 +176,7 @@ impl Lowerer {
             // < 使用 abstract_compare builtin
             swc_ast::BinaryOp::Lt => {
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::AbstractCompare,
@@ -168,7 +187,7 @@ impl Lowerer {
             // > 相当于 (rhs < lhs)
             swc_ast::BinaryOp::Gt => {
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::AbstractCompare,
@@ -180,7 +199,7 @@ impl Lowerer {
             swc_ast::BinaryOp::LtEq => {
                 let cmp_result = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::CallBuiltin {
                         dest: Some(cmp_result),
                         builtin: Builtin::AbstractCompare,
@@ -188,7 +207,7 @@ impl Lowerer {
                     },
                 );
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::Unary {
                         dest,
                         op: UnaryOp::Not,
@@ -200,7 +219,7 @@ impl Lowerer {
             swc_ast::BinaryOp::GtEq => {
                 let cmp_result = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::CallBuiltin {
                         dest: Some(cmp_result),
                         builtin: Builtin::AbstractCompare,
@@ -208,7 +227,7 @@ impl Lowerer {
                     },
                 );
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::Unary {
                         dest,
                         op: UnaryOp::Not,
@@ -224,7 +243,7 @@ impl Lowerer {
                     _ => unreachable!(),
                 };
                 self.current_function
-                    .append_instruction(block, Instruction::Compare { dest, op, lhs, rhs });
+                    .append_instruction(current_block, Instruction::Compare { dest, op, lhs, rhs });
             }
         }
 
@@ -239,13 +258,14 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let lhs = self.lower_expr(bin.left.as_ref(), block)?;
+        let branch_block = self.resolve_store_block(block);
         let rhs_block = self.current_function.new_block();
         let merge = self.current_function.new_block();
 
         let condition = if matches!(bin.op, swc_ast::BinaryOp::NullishCoalescing) {
             let is_nullish = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                branch_block,
                 Instruction::Unary {
                     dest: is_nullish,
                     op: UnaryOp::IsNullish,
@@ -265,7 +285,7 @@ impl Lowerer {
         };
 
         self.current_function.set_terminator(
-            block,
+            branch_block,
             Terminator::Branch {
                 condition,
                 true_block,
@@ -285,7 +305,7 @@ impl Lowerer {
                 dest: result,
                 sources: vec![
                     PhiSource {
-                        predecessor: block,
+                        predecessor: branch_block,
                         value: lhs,
                     },
                     PhiSource {
@@ -310,10 +330,11 @@ impl Lowerer {
 
         match unary.op {
             Bang => {
-                let value = self.lower_expr(&unary.arg, block)?;
+                let mut current_block = block;
+                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::Unary {
                         dest,
                         op: UnaryOp::Not,
@@ -323,10 +344,11 @@ impl Lowerer {
                 Ok(dest)
             }
             Minus => {
-                let value = self.lower_expr(&unary.arg, block)?;
+                let mut current_block = block;
+                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::Unary {
                         dest,
                         op: UnaryOp::Neg,
@@ -336,10 +358,11 @@ impl Lowerer {
                 Ok(dest)
             }
             Plus => {
-                let value = self.lower_expr(&unary.arg, block)?;
+                let mut current_block = block;
+                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::Unary {
                         dest,
                         op: UnaryOp::Pos,
@@ -349,10 +372,11 @@ impl Lowerer {
                 Ok(dest)
             }
             Tilde => {
-                let value = self.lower_expr(&unary.arg, block)?;
+                let mut current_block = block;
+                let value = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::Unary {
                         dest,
                         op: UnaryOp::BitNot,
@@ -362,12 +386,13 @@ impl Lowerer {
                 Ok(dest)
             }
             Void => {
-                let _ = self.lower_expr(&unary.arg, block)?;
+                let mut current_block = block;
+                let _ = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
                 // void returns undefined
                 let undef = self.module.add_constant(Constant::Undefined);
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::Const {
                         dest,
                         constant: undef,
@@ -376,10 +401,11 @@ impl Lowerer {
                 Ok(dest)
             }
             TypeOf => {
-                let arg = self.lower_expr(&unary.arg, block)?;
+                let mut current_block = block;
+                let arg = self.lower_expr_then_continue(&unary.arg, &mut current_block)?;
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::TypeOf,
@@ -393,14 +419,16 @@ impl Lowerer {
                 match unary.arg.as_ref() {
                     // delete obj.prop → DeleteProp 指令
                     swc_ast::Expr::Member(member) => {
-                        let object = self.lower_expr(&member.obj, block)?;
+                        let mut current_block = block;
+                        let object =
+                            self.lower_expr_then_continue(&member.obj, &mut current_block)?;
                         let key = match &member.prop {
                             swc_ast::MemberProp::Ident(ident) => {
                                 let key_str = ident.sym.to_string();
                                 let key_const = self.module.add_constant(Constant::String(key_str));
                                 let key_val = self.alloc_value();
                                 self.current_function.append_instruction(
-                                    block,
+                                    current_block,
                                     Instruction::Const {
                                         dest: key_val,
                                         constant: key_const,
@@ -409,7 +437,7 @@ impl Lowerer {
                                 key_val
                             }
                             swc_ast::MemberProp::Computed(computed) => {
-                                self.lower_expr(&computed.expr, block)?
+                                self.lower_expr_then_continue(&computed.expr, &mut current_block)?
                             }
                             _ => {
                                 return Err(self.error(
@@ -420,7 +448,7 @@ impl Lowerer {
                         };
                         let dest = self.alloc_value();
                         self.current_function.append_instruction(
-                            block,
+                            current_block,
                             Instruction::DeleteProp { dest, object, key },
                         );
                         Ok(dest)
@@ -452,7 +480,7 @@ impl Lowerer {
     pub(crate) fn lower_update(
         &mut self,
         update: &swc_ast::UpdateExpr,
-        block: BasicBlockId,
+        mut block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         use swc_ast::UpdateOp;
 
@@ -473,7 +501,8 @@ impl Lowerer {
                 Target::Var(format!("${scope_id}.{name}"))
             }
             swc_ast::Expr::Member(member) => {
-                let obj = self.lower_expr(&member.obj, block)?;
+                let mut current_block = block;
+                let obj = self.lower_expr_then_continue(&member.obj, &mut current_block)?;
                 let key = match &member.prop {
                     swc_ast::MemberProp::Ident(ident) => {
                         let key_const = self
@@ -481,7 +510,7 @@ impl Lowerer {
                             .add_constant(Constant::String(ident.sym.to_string()));
                         let key_dest = self.alloc_value();
                         self.current_function.append_instruction(
-                            block,
+                            current_block,
                             Instruction::Const {
                                 dest: key_dest,
                                 constant: key_const,
@@ -490,7 +519,7 @@ impl Lowerer {
                         key_dest
                     }
                     swc_ast::MemberProp::Computed(computed) => {
-                        self.lower_expr(&computed.expr, block)?
+                        self.lower_expr_then_continue(&computed.expr, &mut current_block)?
                     }
                     _ => {
                         return Err(self.error(
@@ -499,6 +528,7 @@ impl Lowerer {
                         ));
                     }
                 };
+                block = current_block;
                 Target::Member { obj, key }
             }
             _ => {
@@ -604,12 +634,13 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         // 评估条件表达式
         let test = self.lower_expr(&cond.test, block)?;
+        let branch_block = self.resolve_store_block(block);
 
         let cons_block = self.current_function.new_block();
         let alt_block = self.current_function.new_block();
         let merge = self.current_function.new_block();
         self.current_function.set_terminator(
-            block,
+            branch_block,
             Terminator::Branch {
                 condition: test,
                 true_block: cons_block,
@@ -652,11 +683,15 @@ impl Lowerer {
     pub(crate) fn lower_seq(
         &mut self,
         seq: &swc_ast::SeqExpr,
-        block: BasicBlockId,
+        mut block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let mut last = self.alloc_value();
-        for expr in &seq.exprs {
+        let last_index = seq.exprs.len().saturating_sub(1);
+        for (index, expr) in seq.exprs.iter().enumerate() {
             last = self.lower_expr(expr, block)?;
+            if index != last_index {
+                block = self.resolve_store_block(block);
+            }
         }
         Ok(last)
     }
