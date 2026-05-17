@@ -19,22 +19,23 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(10)
-    c20 = number(3)
-    c21 = number(2)
-    c22 = number(3)
-    c23 = number(8)
-    c24 = number(1)
-    c25 = number(4)
-    c26 = number(1)
+    c19 = undefined
+    c20 = number(10)
+    c21 = number(3)
+    c22 = number(2)
+    c23 = number(3)
+    c24 = number(8)
+    c25 = number(1)
+    c26 = number(4)
     c27 = number(1)
     c28 = number(1)
-    c29 = number(5)
-    c30 = number(2)
-    c31 = number(5)
-    c32 = number(3)
-    c33 = number(5)
-    c34 = number(3)
+    c29 = number(1)
+    c30 = number(5)
+    c31 = number(2)
+    c32 = number(5)
+    c33 = number(3)
+    c34 = number(5)
+    c35 = number(3)
 
   fn @main [entry=bb0]:
     bb0:
@@ -76,70 +77,122 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      store var $0.x, %19
-      %20 = load var $0.x
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
       %21 = const c20
-      %22 = call builtin.f64.mod(%20, %21)
-      store var $0.x, %22
-      %23 = load var $0.x
-      %24 = call builtin.console.log(%23)
-      %25 = const c21
-      store var $0.y, %25
-      %26 = load var $0.y
-      %27 = const c22
-      %28 = call builtin.f64.exp(%26, %27)
-      store var $0.y, %28
-      %29 = load var $0.y
-      %30 = call builtin.console.log(%29)
+      store var $0.x, %21
+      %22 = load var $0.x
+      %23 = const c21
+      %24 = call builtin.f64.mod(%22, %23)
+      store var $0.x, %24
+      %25 = load var $0.x
+      %26 = call builtin.console.log(%25)
+      %27 = is_exception %26
+      branch %27, bb2, bb1
+    bb1:
+      %29 = const c22
+      store var $0.y, %29
+      %30 = load var $0.y
       %31 = const c23
-      store var $0.z, %31
-      %32 = load var $0.z
-      %33 = const c24
-      %34 = shr %32, %33
-      store var $0.z, %34
-      %35 = load var $0.z
-      %36 = call builtin.console.log(%35)
-      %37 = const c25
-      store var $0.w, %37
-      %38 = load var $0.w
-      %39 = const c26
-      %40 = shl %38, %39
-      store var $0.w, %40
-      %41 = load var $0.w
+      %32 = call builtin.f64.exp(%30, %31)
+      store var $0.y, %32
+      %33 = load var $0.y
+      %34 = call builtin.console.log(%33)
+      %35 = is_exception %34
+      branch %35, bb4, bb3
+    bb2:
+      %28 = call builtin.exception_value(%26)
+      throw %28
+    bb3:
+      %37 = const c24
+      store var $0.z, %37
+      %38 = load var $0.z
+      %39 = const c25
+      %40 = shr %38, %39
+      store var $0.z, %40
+      %41 = load var $0.z
       %42 = call builtin.console.log(%41)
-      %43 = const c27
-      %44 = neg %43
-      store var $0.u, %44
-      %45 = load var $0.u
-      %46 = const c28
-      %47 = ushr %45, %46
-      store var $0.u, %47
-      %48 = load var $0.u
-      %49 = call builtin.console.log(%48)
-      %50 = const c29
-      store var $0.v, %50
-      %51 = load var $0.v
-      %52 = const c30
-      %53 = bitor %51, %52
-      store var $0.v, %53
-      %54 = load var $0.v
-      %55 = call builtin.console.log(%54)
-      %56 = const c31
-      store var $0.a, %56
-      %57 = load var $0.a
-      %58 = const c32
-      %59 = bitand %57, %58
-      store var $0.a, %59
-      %60 = load var $0.a
-      %61 = call builtin.console.log(%60)
-      %62 = const c33
-      store var $0.b, %62
-      %63 = load var $0.b
-      %64 = const c34
-      %65 = bitxor %63, %64
-      store var $0.b, %65
-      %66 = load var $0.b
+      %43 = is_exception %42
+      branch %43, bb6, bb5
+    bb4:
+      %36 = call builtin.exception_value(%34)
+      throw %36
+    bb5:
+      %45 = const c26
+      store var $0.w, %45
+      %46 = load var $0.w
+      %47 = const c27
+      %48 = shl %46, %47
+      store var $0.w, %48
+      %49 = load var $0.w
+      %50 = call builtin.console.log(%49)
+      %51 = is_exception %50
+      branch %51, bb8, bb7
+    bb6:
+      %44 = call builtin.exception_value(%42)
+      throw %44
+    bb7:
+      %53 = const c28
+      %54 = neg %53
+      store var $0.u, %54
+      %55 = load var $0.u
+      %56 = const c29
+      %57 = ushr %55, %56
+      store var $0.u, %57
+      %58 = load var $0.u
+      %59 = call builtin.console.log(%58)
+      %60 = is_exception %59
+      branch %60, bb10, bb9
+    bb8:
+      %52 = call builtin.exception_value(%50)
+      throw %52
+    bb9:
+      %62 = const c30
+      store var $0.v, %62
+      %63 = load var $0.v
+      %64 = const c31
+      %65 = bitor %63, %64
+      store var $0.v, %65
+      %66 = load var $0.v
       %67 = call builtin.console.log(%66)
+      %68 = is_exception %67
+      branch %68, bb12, bb11
+    bb10:
+      %61 = call builtin.exception_value(%59)
+      throw %61
+    bb11:
+      %70 = const c32
+      store var $0.a, %70
+      %71 = load var $0.a
+      %72 = const c33
+      %73 = bitand %71, %72
+      store var $0.a, %73
+      %74 = load var $0.a
+      %75 = call builtin.console.log(%74)
+      %76 = is_exception %75
+      branch %76, bb14, bb13
+    bb12:
+      %69 = call builtin.exception_value(%67)
+      throw %69
+    bb13:
+      %78 = const c34
+      store var $0.b, %78
+      %79 = load var $0.b
+      %80 = const c35
+      %81 = bitxor %79, %80
+      store var $0.b, %81
+      %82 = load var $0.b
+      %83 = call builtin.console.log(%82)
+      %84 = is_exception %83
+      branch %84, bb16, bb15
+    bb14:
+      %77 = call builtin.exception_value(%75)
+      throw %77
+    bb15:
       return
+    bb16:
+      %85 = call builtin.exception_value(%83)
+      throw %85
 }

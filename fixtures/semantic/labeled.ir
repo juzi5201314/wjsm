@@ -19,12 +19,13 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(0)
+    c19 = undefined
     c20 = number(0)
-    c21 = number(5)
-    c22 = number(1)
-    c23 = number(3)
-    c24 = number(1)
+    c21 = number(0)
+    c22 = number(5)
+    c23 = number(1)
+    c24 = number(3)
+    c25 = number(1)
 
   fn @main [entry=bb0]:
     bb0:
@@ -66,44 +67,54 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      store var $0.total, %19
-      %20 = const c20
-      store var $0.i, %20
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      store var $0.total, %21
+      %22 = const c21
+      store var $0.i, %22
       jump bb1
     bb1:
-      %21 = load var $0.i
-      %22 = const c21
-      %23 = call builtin.abstract_compare(%21, %22)
-      branch %23, bb2, bb4
+      %23 = load var $0.i
+      %24 = const c22
+      %25 = call builtin.abstract_compare(%23, %24)
+      branch %25, bb2, bb4
     bb2:
-      %24 = load var $0.i
-      %25 = const c22
-      %26 = stricteq %24, %25
-      branch %26, bb5, bb6
+      %26 = load var $0.i
+      %27 = const c23
+      %28 = stricteq %26, %27
+      branch %28, bb5, bb6
     bb3:
-      %33 = load var $0.i
-      %34 = const c24
-      %35 = add %33, %34
-      store var $0.i, %35
+      %35 = load var $0.i
+      %36 = const c25
+      %37 = add %35, %36
+      store var $0.i, %37
       jump bb1
     bb4:
-      %36 = load var $0.total
-      %37 = call builtin.console.log(%36)
-      return
+      %38 = load var $0.total
+      %39 = call builtin.console.log(%38)
+      %40 = is_exception %39
+      branch %40, bb10, bb9
     bb5:
       jump bb3
     bb6:
-      %27 = load var $0.i
-      %28 = const c23
-      %29 = stricteq %27, %28
-      branch %29, bb7, bb8
+      %29 = load var $0.i
+      %30 = const c24
+      %31 = stricteq %29, %30
+      branch %31, bb7, bb8
     bb7:
       jump bb4
     bb8:
-      %30 = load var $0.total
-      %31 = load var $0.i
-      %32 = add %30, %31
-      store var $0.total, %32
+      %32 = load var $0.total
+      %33 = load var $0.i
+      %34 = add %32, %33
+      store var $0.total, %34
       jump bb3
+    bb9:
+      return
+    bb10:
+      %41 = call builtin.exception_value(%39)
+      throw %41
 }

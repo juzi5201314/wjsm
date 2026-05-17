@@ -20,12 +20,13 @@ module {
     c17 = number(NaN)
     c18 = number(-inf)
     c19 = number(inf)
-    c20 = number(1)
-    c21 = string("x = 4")
-    c22 = string("Symbol")
-    c23 = string("x")
-    c24 = string("Symbol")
-    c25 = string("x")
+    c20 = undefined
+    c21 = number(1)
+    c22 = string("x = 4")
+    c23 = string("Symbol")
+    c24 = string("x")
+    c25 = string("Symbol")
+    c26 = string("x")
 
   fn @main [has_eval] [entry=bb0]:
     bb0:
@@ -69,25 +70,49 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %18
       %19 = const c19
       store var $0.Number.POSITIVE_INFINITY, %19
-      %20 = const c20
-      store var $0.x, %20
-      %21 = const c21
-      %22 = new_object(capacity=2)
+      %20 = call builtin.create_global_object()
+      store var $0.$global, %20
+      %21 = const c20
+      store var $0.$this, %21
+      %22 = const c21
+      store var $0.x, %22
       %23 = const c22
-      %24 = load var $0.Symbol
-      set_prop %22, %23, %24
+      %24 = new_object(capacity=2)
       %25 = const c23
-      %26 = load var $0.x
-      set_prop %22, %25, %26
-      %27 = call builtin.eval(%21, %22)
-      %28 = const c24
-      %29 = get_prop %22, %28
-      store var $0.Symbol, %29
-      %30 = const c25
-      %31 = get_prop %22, %30
-      store var $0.x, %31
-      %32 = call builtin.console.log(%27)
-      %33 = load var $0.x
-      %34 = call builtin.console.log(%33)
+      %26 = load var $0.Symbol
+      set_prop %24, %25, %26
+      %27 = const c24
+      %28 = load var $0.x
+      set_prop %24, %27, %28
+      %29 = call builtin.eval(%23, %24)
+      %30 = is_exception %29
+      branch %30, bb2, bb1
+    bb1:
+      %32 = const c25
+      %33 = get_prop %24, %32
+      store var $0.Symbol, %33
+      %34 = const c26
+      %35 = get_prop %24, %34
+      store var $0.x, %35
+      jump bb3
+    bb2:
+      %31 = call builtin.exception_value(%29)
+      throw %31
+    bb3:
+      %36 = call builtin.console.log(%29)
+      %37 = is_exception %36
+      branch %37, bb5, bb4
+    bb4:
+      %39 = load var $0.x
+      %40 = call builtin.console.log(%39)
+      %41 = is_exception %40
+      branch %41, bb7, bb6
+    bb5:
+      %38 = call builtin.exception_value(%36)
+      throw %38
+    bb6:
       return
+    bb7:
+      %42 = call builtin.exception_value(%40)
+      throw %42
 }

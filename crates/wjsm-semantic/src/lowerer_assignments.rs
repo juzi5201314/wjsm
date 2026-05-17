@@ -107,228 +107,228 @@ impl Lowerer {
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         // Handle member expression assignment targets (e.g. obj.prop = value).
-        if let swc_ast::AssignTarget::Simple(simple) = &assign.left {
-            if let swc_ast::SimpleAssignTarget::Member(member_expr) = simple {
-                let obj_val = self.lower_expr(&member_expr.obj, block)?;
-                let key = match &member_expr.prop {
-                    swc_ast::MemberProp::Ident(ident) => {
-                        let key_const = self
-                            .module
-                            .add_constant(Constant::String(ident.sym.to_string()));
-                        let key_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::Const {
-                                dest: key_dest,
-                                constant: key_const,
-                            },
-                        );
-                        key_dest
-                    }
-                    swc_ast::MemberProp::Computed(computed) => {
-                        self.lower_expr(&computed.expr, block)?
-                    }
-                    swc_ast::MemberProp::PrivateName(name) => {
-                        let field_name = format!("#{}", name.name);
-                        let key_const = self.module.add_constant(Constant::String(field_name));
-                        let key_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::Const {
-                                dest: key_dest,
-                                constant: key_const,
-                            },
-                        );
-                        if assign.op == swc_ast::AssignOp::Assign {
-                            let value_val = self.lower_expr(assign.right.as_ref(), block)?;
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: Builtin::PrivateSet,
-                                    args: vec![obj_val, key_dest, value_val],
-                                },
-                            );
-                            return Ok(value_val);
-                        }
-                        let old_val = self.alloc_value();
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::CallBuiltin {
-                                dest: Some(old_val),
-                                builtin: Builtin::PrivateGet,
-                                args: vec![obj_val, key_dest],
-                            },
-                        );
-                        let rhs_val = self.lower_expr(assign.right.as_ref(), block)?;
-                        let bin_op = assign_op_to_binary(assign.op).ok_or_else(|| {
-                            self.error(assign.span, "unsupported compound assignment operator")
-                        })?;
-                        let result = self.alloc_value();
-                        match bin_op {
-                            BinaryOp::Mod => {
-                                self.current_function.append_instruction(
-                                    block,
-                                    Instruction::CallBuiltin {
-                                        dest: Some(result),
-                                        builtin: Builtin::F64Mod,
-                                        args: vec![old_val, rhs_val],
-                                    },
-                                );
-                            }
-                            BinaryOp::Exp => {
-                                self.current_function.append_instruction(
-                                    block,
-                                    Instruction::CallBuiltin {
-                                        dest: Some(result),
-                                        builtin: Builtin::F64Exp,
-                                        args: vec![old_val, rhs_val],
-                                    },
-                                );
-                            }
-                            _ => {
-                                self.current_function.append_instruction(
-                                    block,
-                                    Instruction::Binary {
-                                        dest: result,
-                                        op: bin_op,
-                                        lhs: old_val,
-                                        rhs: rhs_val,
-                                    },
-                                );
-                            }
-                        }
+        if let swc_ast::AssignTarget::Simple(simple) = &assign.left
+            && let swc_ast::SimpleAssignTarget::Member(member_expr) = simple
+        {
+            let obj_val = self.lower_expr(&member_expr.obj, block)?;
+            let key = match &member_expr.prop {
+                swc_ast::MemberProp::Ident(ident) => {
+                    let key_const = self
+                        .module
+                        .add_constant(Constant::String(ident.sym.to_string()));
+                    let key_dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: key_dest,
+                            constant: key_const,
+                        },
+                    );
+                    key_dest
+                }
+                swc_ast::MemberProp::Computed(computed) => {
+                    self.lower_expr(&computed.expr, block)?
+                }
+                swc_ast::MemberProp::PrivateName(name) => {
+                    let field_name = format!("#{}", name.name);
+                    let key_const = self.module.add_constant(Constant::String(field_name));
+                    let key_dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: key_dest,
+                            constant: key_const,
+                        },
+                    );
+                    if assign.op == swc_ast::AssignOp::Assign {
+                        let value_val = self.lower_expr(assign.right.as_ref(), block)?;
                         let dest = self.alloc_value();
                         self.current_function.append_instruction(
                             block,
                             Instruction::CallBuiltin {
                                 dest: Some(dest),
                                 builtin: Builtin::PrivateSet,
-                                args: vec![obj_val, key_dest, result],
+                                args: vec![obj_val, key_dest, value_val],
                             },
                         );
-                        return Ok(result);
+                        return Ok(value_val);
                     }
-                };
-
-                let is_computed = matches!(&member_expr.prop, swc_ast::MemberProp::Computed(_));
-                if assign.op == swc_ast::AssignOp::Assign {
-                    // 简单赋值: obj.x = value 或 arr[computed] = value
-                    let value_val = self.lower_expr(assign.right.as_ref(), block)?;
-                    match &member_expr.prop {
-                        swc_ast::MemberProp::Computed(_) => {
+                    let old_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::CallBuiltin {
+                            dest: Some(old_val),
+                            builtin: Builtin::PrivateGet,
+                            args: vec![obj_val, key_dest],
+                        },
+                    );
+                    let rhs_val = self.lower_expr(assign.right.as_ref(), block)?;
+                    let bin_op = assign_op_to_binary(assign.op).ok_or_else(|| {
+                        self.error(assign.span, "unsupported compound assignment operator")
+                    })?;
+                    let result = self.alloc_value();
+                    match bin_op {
+                        BinaryOp::Mod => {
                             self.current_function.append_instruction(
                                 block,
-                                Instruction::SetElem {
-                                    object: obj_val,
-                                    index: key,
-                                    value: value_val,
+                                Instruction::CallBuiltin {
+                                    dest: Some(result),
+                                    builtin: Builtin::F64Mod,
+                                    args: vec![old_val, rhs_val],
+                                },
+                            );
+                        }
+                        BinaryOp::Exp => {
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(result),
+                                    builtin: Builtin::F64Exp,
+                                    args: vec![old_val, rhs_val],
                                 },
                             );
                         }
                         _ => {
                             self.current_function.append_instruction(
                                 block,
-                                Instruction::SetProp {
-                                    object: obj_val,
-                                    key,
-                                    value: value_val,
+                                Instruction::Binary {
+                                    dest: result,
+                                    op: bin_op,
+                                    lhs: old_val,
+                                    rhs: rhs_val,
                                 },
                             );
                         }
                     }
-                    return Ok(value_val);
+                    let dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::CallBuiltin {
+                            dest: Some(dest),
+                            builtin: Builtin::PrivateSet,
+                            args: vec![obj_val, key_dest, result],
+                        },
+                    );
+                    return Ok(result);
                 }
+            };
 
-                // 逻辑复合赋值需要短路求值，走专用路径
-                if matches!(
-                    assign.op,
-                    swc_ast::AssignOp::AndAssign
-                        | swc_ast::AssignOp::OrAssign
-                        | swc_ast::AssignOp::NullishAssign
-                ) {
-                    return self.lower_logical_assign_member(assign, block, obj_val, key);
-                }
-
-                // 算术/位运算复合赋值
-                let bin_op = assign_op_to_binary(assign.op).ok_or_else(|| {
-                    self.error(assign.span, "unsupported compound assignment operator")
-                })?;
-
-                // 用 GetElem/GetProp 读取当前值（取决于是否为 computed 成员）
-                let loaded = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    if is_computed {
-                        Instruction::GetElem {
-                            dest: loaded,
-                            object: obj_val,
-                            index: key,
-                        }
-                    } else {
-                        Instruction::GetProp {
-                            dest: loaded,
-                            object: obj_val,
-                            key,
-                        }
-                    },
-                );
-
-                let rhs = self.lower_expr(assign.right.as_ref(), block)?;
-                let dest = self.alloc_value();
-
-                // Mod 和 Exp 需要使用 CallBuiltin
-                match bin_op {
-                    BinaryOp::Mod => {
+            let is_computed = matches!(&member_expr.prop, swc_ast::MemberProp::Computed(_));
+            if assign.op == swc_ast::AssignOp::Assign {
+                // 简单赋值: obj.x = value 或 arr[computed] = value
+                let value_val = self.lower_expr(assign.right.as_ref(), block)?;
+                match &member_expr.prop {
+                    swc_ast::MemberProp::Computed(_) => {
                         self.current_function.append_instruction(
                             block,
-                            Instruction::CallBuiltin {
-                                dest: Some(dest),
-                                builtin: Builtin::F64Mod,
-                                args: vec![loaded, rhs],
-                            },
-                        );
-                    }
-                    BinaryOp::Exp => {
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::CallBuiltin {
-                                dest: Some(dest),
-                                builtin: Builtin::F64Exp,
-                                args: vec![loaded, rhs],
+                            Instruction::SetElem {
+                                object: obj_val,
+                                index: key,
+                                value: value_val,
                             },
                         );
                     }
                     _ => {
                         self.current_function.append_instruction(
                             block,
-                            Instruction::Binary {
-                                dest,
-                                op: bin_op,
-                                lhs: loaded,
-                                rhs,
+                            Instruction::SetProp {
+                                object: obj_val,
+                                key,
+                                value: value_val,
                             },
                         );
                     }
                 }
-                let instr = if is_computed {
-                    Instruction::SetElem {
+                return Ok(value_val);
+            }
+
+            // 逻辑复合赋值需要短路求值，走专用路径
+            if matches!(
+                assign.op,
+                swc_ast::AssignOp::AndAssign
+                    | swc_ast::AssignOp::OrAssign
+                    | swc_ast::AssignOp::NullishAssign
+            ) {
+                return self.lower_logical_assign_member(assign, block, obj_val, key);
+            }
+
+            // 算术/位运算复合赋值
+            let bin_op = assign_op_to_binary(assign.op).ok_or_else(|| {
+                self.error(assign.span, "unsupported compound assignment operator")
+            })?;
+
+            // 用 GetElem/GetProp 读取当前值（取决于是否为 computed 成员）
+            let loaded = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                if is_computed {
+                    Instruction::GetElem {
+                        dest: loaded,
                         object: obj_val,
                         index: key,
-                        value: dest,
                     }
                 } else {
-                    Instruction::SetProp {
+                    Instruction::GetProp {
+                        dest: loaded,
                         object: obj_val,
                         key,
-                        value: dest,
                     }
-                };
-                self.current_function.append_instruction(block, instr);
+                },
+            );
 
-                return Ok(dest);
+            let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+            let dest = self.alloc_value();
+
+            // Mod 和 Exp 需要使用 CallBuiltin
+            match bin_op {
+                BinaryOp::Mod => {
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::CallBuiltin {
+                            dest: Some(dest),
+                            builtin: Builtin::F64Mod,
+                            args: vec![loaded, rhs],
+                        },
+                    );
+                }
+                BinaryOp::Exp => {
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::CallBuiltin {
+                            dest: Some(dest),
+                            builtin: Builtin::F64Exp,
+                            args: vec![loaded, rhs],
+                        },
+                    );
+                }
+                _ => {
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Binary {
+                            dest,
+                            op: bin_op,
+                            lhs: loaded,
+                            rhs,
+                        },
+                    );
+                }
             }
+            let instr = if is_computed {
+                Instruction::SetElem {
+                    object: obj_val,
+                    index: key,
+                    value: dest,
+                }
+            } else {
+                Instruction::SetProp {
+                    object: obj_val,
+                    key,
+                    value: dest,
+                }
+            };
+            self.current_function.append_instruction(block, instr);
+
+            return Ok(dest);
         }
 
         let name = match &assign.left {

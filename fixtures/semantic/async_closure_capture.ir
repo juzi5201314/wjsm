@@ -21,61 +21,62 @@ module {
     c18 = number(-inf)
     c19 = number(inf)
     c20 = undefined
-    c21 = number(0)
+    c21 = undefined
     c22 = number(0)
-    c23 = number(1)
-    c24 = number(2)
-    c25 = number(3)
-    c26 = undefined
-    c27 = string("$0.undefined")
-    c28 = undefined
-    c29 = number(4)
+    c23 = number(0)
+    c24 = number(1)
+    c25 = number(2)
+    c26 = number(3)
+    c27 = undefined
+    c28 = string("$0.undefined")
+    c29 = undefined
     c30 = number(4)
-    c31 = string("$1.count")
+    c31 = number(4)
     c32 = string("$1.count")
-    c33 = number(1)
-    c34 = string("$1.count")
-    c35 = number(0)
-    c36 = number(1)
-    c37 = functionref(@0)
-    c38 = number(5)
-    c39 = number(2)
-    c40 = number(3)
-    c41 = number(0)
-    c42 = undefined
-    c43 = bool(false)
-    c44 = functionref(@1)
-    c45 = string("$0.undefined")
+    c33 = string("$1.count")
+    c34 = number(1)
+    c35 = string("$1.count")
+    c36 = number(0)
+    c37 = number(1)
+    c38 = functionref(@0)
+    c39 = number(5)
+    c40 = number(2)
+    c41 = number(3)
+    c42 = number(0)
+    c43 = undefined
+    c44 = bool(false)
+    c45 = functionref(@1)
     c46 = string("$0.undefined")
-    c47 = string("$1.count")
-    c48 = functionref(@2)
-    c49 = string("$0.undefined")
-    c50 = undefined
+    c47 = string("$0.undefined")
+    c48 = string("$1.count")
+    c49 = functionref(@2)
+    c50 = string("$0.undefined")
     c51 = undefined
-    c52 = functionref(@3)
-    c53 = undefined
+    c52 = undefined
+    c53 = functionref(@3)
     c54 = undefined
-    c55 = functionref(@4)
-    c56 = undefined
+    c55 = undefined
+    c56 = functionref(@4)
     c57 = undefined
-    c58 = functionref(@5)
-    c59 = undefined
+    c58 = undefined
+    c59 = functionref(@5)
+    c60 = undefined
 
   fn @anon_0$async [captures: $0.undefined, $1.count] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = load var $2.$env
-      %1 = const c22
+      %1 = const c23
       %2 = call builtin.continuation.load_var(%0, %1)
       store var $2.$state, %2
-      %3 = const c23
+      %3 = const c24
       %4 = call builtin.continuation.load_var(%0, %3)
       store var $2.$is_rejected, %4
       %5 = load var $2.$this
       store var $2.$resume_val, %5
-      %6 = const c24
+      %6 = const c25
       %7 = call builtin.continuation.load_var(%0, %6)
       store var $2.$promise, %7
-      %8 = const c25
+      %8 = const c26
       %9 = call builtin.continuation.load_var(%0, %8)
       store var $2.$closure_env, %9
       %10 = collect_rest_args skip=0
@@ -83,24 +84,24 @@ module {
       jump bb1
     bb1:
       %39 = load var $2.$state
-      switch %39 [case c35 -> bb2, case c36 -> bb3], default bb6, exit bb7
+      switch %39 [case c36 -> bb2, case c37 -> bb3], default bb6, exit bb7
     bb2:
-      %11 = const c26
+      %11 = const c27
       %12 = load var $2.$closure_env
-      %13 = const c27
+      %13 = const c28
       %14 = get_prop %12, %13
       %15 = call builtin.promise.resolve_static(%11, %14)
-      %17 = const c28
+      %17 = const c29
       %16 = call builtin.promise.resolve_static(%17, %15)
       %18 = load var $2.$env
-      %19 = const c29
+      %19 = const c30
       %20 = load var $2.arguments
       call builtin.continuation.save_var(%18, %19, %20)
       suspend %16, state=1
       jump bb5
     bb3:
       %21 = load var $2.$env
-      %22 = const c30
+      %22 = const c31
       %23 = call builtin.continuation.load_var(%21, %22)
       store var $2.arguments, %23
       %24 = load var $2.$resume_val
@@ -113,15 +114,15 @@ module {
     bb5:
       %27 = load var $2.$resume_val
       %28 = load var $2.$closure_env
-      %29 = const c31
+      %29 = const c32
       %30 = load var $2.$closure_env
-      %31 = const c32
+      %31 = const c33
       %32 = get_prop %30, %31
-      %33 = const c33
+      %33 = const c34
       %34 = add %32, %33
       set_prop %28, %29, %34
       %35 = load var $2.$closure_env
-      %36 = const c34
+      %36 = const c35
       %37 = get_prop %35, %36
       %38 = load var $2.$promise
       promise_resolve %38, %37
@@ -136,38 +137,38 @@ module {
       %0 = collect_rest_args skip=0
       store var $3.arguments, %0
       %1 = new_promise
-      %2 = const c37
+      %2 = const c38
       %3 = load var $3.$env
       %4 = call builtin.create_closure(%2, %3)
-      %5 = const c38
+      %5 = const c39
       %6 = call builtin.continuation.create(%4, %1, %5)
-      %7 = const c39
+      %7 = const c40
       call builtin.continuation.save_var(%6, %7, %1)
-      %8 = const c40
+      %8 = const c41
       call builtin.continuation.save_var(%6, %8, %3)
-      %9 = const c41
-      %10 = const c42
-      %11 = const c43
+      %9 = const c42
+      %10 = const c43
+      %11 = const c44
       call builtin.async_function.resume(%4, %6, %9, %10, %11)
       return %1
 
   fn @makeCounter [captures: $0.undefined] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
-      %0 = const c20
+      %0 = const c21
       store var $1.count, %0
       %1 = collect_rest_args skip=0
       store var $1.arguments, %1
-      %2 = const c21
+      %2 = const c22
       store var $1.count, %2
-      %3 = const c44
+      %3 = const c45
       %4 = load var $env
       %5 = load var $env
-      %6 = const c45
+      %6 = const c46
       %7 = get_prop %5, %6
-      %8 = const c46
+      %8 = const c47
       set_prop %4, %8, %7
       %9 = load var $1.count
-      %10 = const c47
+      %10 = const c48
       set_prop %4, %10, %9
       %11 = call builtin.create_closure(%3, %4)
       return %11
@@ -232,34 +233,56 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %18
       %19 = const c19
       store var $0.Number.POSITIVE_INFINITY, %19
-      %20 = const c48
-      %21 = new_object(capacity=1)
-      %22 = load var $0.undefined
-      %23 = const c49
-      set_prop %21, %23, %22
-      %24 = call builtin.create_closure(%20, %21)
-      store var $0.makeCounter, %24
+      %20 = call builtin.create_global_object()
+      store var $0.$global, %20
+      %21 = const c20
+      store var $0.$this, %21
+      %22 = const c49
+      %23 = new_object(capacity=1)
+      %24 = load var $0.undefined
       %25 = const c50
-      %26 = load var $0.makeCounter
-      %27 = call %26, this=%25
-      store var $0.counter, %27
-      %28 = const c51
-      %29 = load var $0.counter
-      %30 = call %29, this=%28
-      %31 = const c52
-      %32 = const c53
-      %33 = call builtin.promise.then(%30, %31, %32)
+      set_prop %23, %25, %24
+      %26 = call builtin.create_closure(%22, %23)
+      store var $0.makeCounter, %26
+      %27 = const c51
+      %28 = load var $0.makeCounter
+      %29 = call %28, this=%27
+      store var $0.counter, %29
+      %30 = const c52
+      %31 = load var $0.counter
+      %32 = call %31, this=%30
+      %33 = const c53
       %34 = const c54
-      %35 = load var $0.counter
-      %36 = call %35, this=%34
-      %37 = const c55
-      %38 = const c56
-      %39 = call builtin.promise.then(%36, %37, %38)
-      %40 = const c57
-      %41 = load var $0.counter
-      %42 = call %41, this=%40
-      %43 = const c58
-      %44 = const c59
-      %45 = call builtin.promise.then(%42, %43, %44)
+      %35 = call builtin.promise.then(%32, %33, %34)
+      %36 = is_exception %35
+      branch %36, bb2, bb1
+    bb1:
+      %38 = const c55
+      %39 = load var $0.counter
+      %40 = call %39, this=%38
+      %41 = const c56
+      %42 = const c57
+      %43 = call builtin.promise.then(%40, %41, %42)
+      %44 = is_exception %43
+      branch %44, bb4, bb3
+    bb2:
+      %37 = call builtin.exception_value(%35)
+      throw %37
+    bb3:
+      %46 = const c58
+      %47 = load var $0.counter
+      %48 = call %47, this=%46
+      %49 = const c59
+      %50 = const c60
+      %51 = call builtin.promise.then(%48, %49, %50)
+      %52 = is_exception %51
+      branch %52, bb6, bb5
+    bb4:
+      %45 = call builtin.exception_value(%43)
+      throw %45
+    bb5:
       return
+    bb6:
+      %53 = call builtin.exception_value(%51)
+      throw %53
 }

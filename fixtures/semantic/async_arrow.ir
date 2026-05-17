@@ -19,50 +19,51 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(0)
-    c20 = number(1)
-    c21 = number(2)
-    c22 = number(3)
-    c23 = number(4)
-    c24 = number(5)
-    c25 = functionref(@0)
-    c26 = number(6)
-    c27 = number(2)
-    c28 = number(3)
-    c29 = undefined
-    c30 = number(4)
-    c31 = number(5)
-    c32 = number(0)
-    c33 = undefined
-    c34 = bool(false)
-    c35 = functionref(@1)
-    c36 = undefined
-    c37 = number(10)
-    c38 = number(20)
-    c39 = functionref(@2)
-    c40 = undefined
+    c19 = undefined
+    c20 = number(0)
+    c21 = number(1)
+    c22 = number(2)
+    c23 = number(3)
+    c24 = number(4)
+    c25 = number(5)
+    c26 = functionref(@0)
+    c27 = number(6)
+    c28 = number(2)
+    c29 = number(3)
+    c30 = undefined
+    c31 = number(4)
+    c32 = number(5)
+    c33 = number(0)
+    c34 = undefined
+    c35 = bool(false)
+    c36 = functionref(@1)
+    c37 = undefined
+    c38 = number(10)
+    c39 = number(20)
+    c40 = functionref(@2)
+    c41 = undefined
 
   fn @arrow_0$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = load var $1.$env
-      %1 = const c19
+      %1 = const c20
       %2 = call builtin.continuation.load_var(%0, %1)
       store var $1.$state, %2
-      %3 = const c20
+      %3 = const c21
       %4 = call builtin.continuation.load_var(%0, %3)
       store var $1.$is_rejected, %4
       %5 = load var $1.$this
       store var $1.$resume_val, %5
-      %6 = const c21
+      %6 = const c22
       %7 = call builtin.continuation.load_var(%0, %6)
       store var $1.$promise, %7
-      %8 = const c22
+      %8 = const c23
       %9 = call builtin.continuation.load_var(%0, %8)
       store var $1.$closure_env, %9
-      %10 = const c23
+      %10 = const c24
       %11 = call builtin.continuation.load_var(%0, %10)
       store var $1.a, %11
-      %12 = const c24
+      %12 = const c25
       %13 = call builtin.continuation.load_var(%0, %12)
       store var $1.b, %13
       jump bb1
@@ -79,23 +80,23 @@ module {
   fn @arrow_0 [params: $2.$env, $2.$this, $2.a, $2.b] [entry=bb0]:
     bb0:
       %0 = new_promise
-      %1 = const c25
-      %2 = const c26
+      %1 = const c26
+      %2 = const c27
       %3 = call builtin.continuation.create(%1, %0, %2)
-      %4 = const c27
+      %4 = const c28
       call builtin.continuation.save_var(%3, %4, %0)
-      %5 = const c28
-      %6 = const c29
+      %5 = const c29
+      %6 = const c30
       call builtin.continuation.save_var(%3, %5, %6)
       %7 = load var $2.a
-      %8 = const c30
+      %8 = const c31
       call builtin.continuation.save_var(%3, %8, %7)
       %9 = load var $2.b
-      %10 = const c31
+      %10 = const c32
       call builtin.continuation.save_var(%3, %10, %9)
-      %11 = const c32
-      %12 = const c33
-      %13 = const c34
+      %11 = const c33
+      %12 = const c34
+      %13 = const c35
       call builtin.async_function.resume(%1, %3, %11, %12, %13)
       return %0
 
@@ -145,15 +146,25 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c35
-      store var $0.add, %19
-      %20 = const c36
-      %21 = load var $0.add
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c36
+      store var $0.add, %21
       %22 = const c37
-      %23 = const c38
-      %24 = call %21, this=%20, args=[%22, %23]
+      %23 = load var $0.add
+      %24 = const c38
       %25 = const c39
-      %26 = const c40
-      %27 = call builtin.promise.then(%24, %25, %26)
+      %26 = call %23, this=%22, args=[%24, %25]
+      %27 = const c40
+      %28 = const c41
+      %29 = call builtin.promise.then(%26, %27, %28)
+      %30 = is_exception %29
+      branch %30, bb2, bb1
+    bb1:
       return
+    bb2:
+      %31 = call builtin.exception_value(%29)
+      throw %31
 }

@@ -19,19 +19,20 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(1)
-    c20 = number(2)
-    c21 = number(3)
-    c22 = number(4)
-    c23 = number(2)
-    c24 = functionref(@0)
+    c19 = undefined
+    c20 = number(1)
+    c21 = number(2)
+    c22 = number(3)
+    c23 = number(4)
+    c24 = number(2)
+    c25 = functionref(@0)
 
   fn @anon_0 [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       store var $1.arguments, %0
       %1 = load var $1.x
-      %2 = const c23
+      %2 = const c24
       %3 = call builtin.abstract_compare(%2, %1)
       return %3
 
@@ -75,19 +76,23 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = new_array(capacity=4)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
       %20 = const c19
-      call builtin.array.push(%19, %20)
-      %21 = const c20
-      call builtin.array.push(%19, %21)
-      %22 = const c21
-      call builtin.array.push(%19, %22)
-      %23 = const c22
-      call builtin.array.push(%19, %23)
-      store var $0.a, %19
-      %24 = load var $0.a
-      %25 = const c24
-      %26 = call builtin.array.filter(%24, %25)
-      store var $0.b, %26
+      store var $0.$this, %20
+      %21 = new_array(capacity=4)
+      %22 = const c20
+      call builtin.array.push(%21, %22)
+      %23 = const c21
+      call builtin.array.push(%21, %23)
+      %24 = const c22
+      call builtin.array.push(%21, %24)
+      %25 = const c23
+      call builtin.array.push(%21, %25)
+      store var $0.a, %21
+      %26 = load var $0.a
+      %27 = const c25
+      %28 = call builtin.array.filter(%26, %27)
+      store var $0.b, %28
       return
 }

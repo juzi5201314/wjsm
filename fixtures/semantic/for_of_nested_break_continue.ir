@@ -19,10 +19,11 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(0)
-    c20 = string("abc")
-    c21 = number(1)
+    c19 = undefined
+    c20 = number(0)
+    c21 = string("abc")
     c22 = number(1)
+    c23 = number(1)
 
   fn @main [entry=bb0]:
     bb0:
@@ -64,40 +65,57 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      store var $0.total, %19
-      %20 = const c20
-      %21 = call builtin.iterator.from(%20)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      store var $0.total, %21
+      %22 = const c21
+      %23 = call builtin.iterator.from(%22)
       jump bb1
     bb1:
-      %22 = call builtin.iterator.done(%21)
-      %23 = not %22
-      branch %23, bb2, bb5
+      %24 = call builtin.iterator.done(%23)
+      %25 = not %24
+      branch %25, bb2, bb5
     bb2:
-      %24 = call builtin.iterator.value(%21)
-      store var $0.ch, %24
-      %25 = load var $0.total
-      %26 = const c21
-      %27 = add %25, %26
-      store var $0.total, %27
-      %28 = load var $0.total
-      %29 = const c22
-      %30 = stricteq %28, %29
-      branch %30, bb6, bb7
+      %26 = call builtin.iterator.value(%23)
+      store var $0.ch, %26
+      %27 = load var $0.total
+      %28 = const c22
+      %29 = add %27, %28
+      store var $0.total, %29
+      %30 = load var $0.total
+      %31 = const c23
+      %32 = stricteq %30, %31
+      branch %32, bb6, bb7
     bb3:
-      call builtin.iterator.next(%21)
+      call builtin.iterator.next(%23)
       jump bb1
     bb4:
-      call builtin.iterator.close(%21)
+      call builtin.iterator.close(%23)
       jump bb5
     bb5:
-      %33 = load var $0.total
-      %34 = call builtin.console.log(%33)
-      return
+      %37 = load var $0.total
+      %38 = call builtin.console.log(%37)
+      %39 = is_exception %38
+      branch %39, bb11, bb10
     bb6:
       jump bb3
     bb7:
-      %31 = load var $0.ch
-      %32 = call builtin.console.log(%31)
+      %33 = load var $0.ch
+      %34 = call builtin.console.log(%33)
+      %35 = is_exception %34
+      branch %35, bb9, bb8
+    bb8:
       jump bb3
+    bb9:
+      %36 = call builtin.exception_value(%34)
+      call builtin.iterator.close(%23)
+      throw %36
+    bb10:
+      return
+    bb11:
+      %40 = call builtin.exception_value(%38)
+      throw %40
 }

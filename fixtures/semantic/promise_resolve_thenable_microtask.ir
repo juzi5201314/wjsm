@@ -20,30 +20,31 @@ module {
     c17 = number(-inf)
     c18 = number(inf)
     c19 = undefined
-    c20 = number(7)
-    c21 = functionref(@0)
-    c22 = string("then")
-    c23 = undefined
-    c24 = number(0)
-    c25 = string("$0.thenable")
-    c26 = functionref(@1)
-    c27 = string("$0.thenable")
-    c28 = undefined
-    c29 = functionref(@2)
-    c30 = undefined
+    c20 = undefined
+    c21 = number(7)
+    c22 = functionref(@0)
+    c23 = string("then")
+    c24 = undefined
+    c25 = number(0)
+    c26 = string("$0.thenable")
+    c27 = functionref(@1)
+    c28 = string("$0.thenable")
+    c29 = undefined
+    c30 = functionref(@2)
+    c31 = undefined
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
     bb0:
-      %0 = const c19
+      %0 = const c20
       %1 = load var $1.resolve
-      %2 = const c20
+      %2 = const c21
       %3 = call %1, this=%0, args=[%2]
       return %3
 
   fn @arrow_1 [captures: $0.thenable] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c25
+      %1 = const c26
       %2 = get_prop %0, %1
       return %2
 
@@ -93,24 +94,34 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = new_object(capacity=4)
-      %20 = const c21
-      %21 = const c22
-      set_prop %19, %21, %20
-      store var $0.thenable, %19
-      %22 = const c23
-      %23 = const c24
-      %24 = call builtin.promise.resolve_static(%22, %23)
-      %25 = const c26
-      %26 = new_object(capacity=1)
-      %27 = load var $0.thenable
-      %28 = const c27
-      set_prop %26, %28, %27
-      %29 = call builtin.create_closure(%25, %26)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = new_object(capacity=4)
+      %22 = const c22
+      %23 = const c23
+      set_prop %21, %23, %22
+      store var $0.thenable, %21
+      %24 = const c24
+      %25 = const c25
+      %26 = call builtin.promise.resolve_static(%24, %25)
+      %27 = const c27
+      %28 = new_object(capacity=1)
+      %29 = load var $0.thenable
       %30 = const c28
-      %31 = call builtin.promise.then(%24, %29, %30)
+      set_prop %28, %30, %29
+      %31 = call builtin.create_closure(%27, %28)
       %32 = const c29
-      %33 = const c30
-      %34 = call builtin.promise.then(%31, %32, %33)
+      %33 = call builtin.promise.then(%26, %31, %32)
+      %34 = const c30
+      %35 = const c31
+      %36 = call builtin.promise.then(%33, %34, %35)
+      %37 = is_exception %36
+      branch %37, bb2, bb1
+    bb1:
       return
+    bb2:
+      %38 = call builtin.exception_value(%36)
+      throw %38
 }

@@ -1056,73 +1056,71 @@ impl Lowerer {
                 return Ok(dest);
             }
             // Error constructors: new Error(msg), new TypeError(msg), etc.
-            if self.scopes.lookup(&ident.sym).is_err() {
-                if let Some(builtin) = builtin_from_global_ident(&ident.sym) {
-                    if matches!(
-                        builtin,
-                        Builtin::ErrorConstructor
-                            | Builtin::TypeErrorConstructor
-                            | Builtin::RangeErrorConstructor
-                            | Builtin::SyntaxErrorConstructor
-                            | Builtin::ReferenceErrorConstructor
-                            | Builtin::URIErrorConstructor
-                            | Builtin::EvalErrorConstructor
-                            | Builtin::MapConstructor
-                            | Builtin::SetConstructor
-                            | Builtin::WeakMapConstructor
-                            | Builtin::WeakSetConstructor
-                            | Builtin::DateConstructor
-                            | Builtin::ArrayBufferConstructor
-                            | Builtin::DataViewConstructor
-                            | Builtin::Int8ArrayConstructor
-                            | Builtin::Uint8ArrayConstructor
-                            | Builtin::Uint8ClampedArrayConstructor
-                            | Builtin::Int16ArrayConstructor
-                            | Builtin::Uint16ArrayConstructor
-                            | Builtin::Int32ArrayConstructor
-                            | Builtin::Uint32ArrayConstructor
-                            | Builtin::Float32ArrayConstructor
-                            | Builtin::Float64ArrayConstructor
-                    ) {
-                        let mut arg_vals = Vec::new();
-                        if let Some(args) = &new_expr.args {
-                            for arg in args {
-                                let arg_val = self.lower_expr(&arg.expr, block)?;
-                                arg_vals.push(arg_val);
-                            }
-                        }
-                        if arg_vals.is_empty() {
-                            arg_vals.push({
-                                let c = self.module.add_constant(Constant::Undefined);
-                                let dest = self.alloc_value();
-                                self.current_function.append_instruction(
-                                    block,
-                                    Instruction::Const { dest, constant: c },
-                                );
-                                dest
-                            });
-                        }
-                        let dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::CallBuiltin {
-                                dest: Some(dest),
-                                builtin,
-                                args: arg_vals,
-                            },
-                        );
-                        return Ok(dest);
+            if self.scopes.lookup(&ident.sym).is_err()
+                && let Some(builtin) = builtin_from_global_ident(&ident.sym)
+                && matches!(
+                    builtin,
+                    Builtin::ErrorConstructor
+                        | Builtin::TypeErrorConstructor
+                        | Builtin::RangeErrorConstructor
+                        | Builtin::SyntaxErrorConstructor
+                        | Builtin::ReferenceErrorConstructor
+                        | Builtin::URIErrorConstructor
+                        | Builtin::EvalErrorConstructor
+                        | Builtin::MapConstructor
+                        | Builtin::SetConstructor
+                        | Builtin::WeakMapConstructor
+                        | Builtin::WeakSetConstructor
+                        | Builtin::DateConstructor
+                        | Builtin::ArrayBufferConstructor
+                        | Builtin::DataViewConstructor
+                        | Builtin::Int8ArrayConstructor
+                        | Builtin::Uint8ArrayConstructor
+                        | Builtin::Uint8ClampedArrayConstructor
+                        | Builtin::Int16ArrayConstructor
+                        | Builtin::Uint16ArrayConstructor
+                        | Builtin::Int32ArrayConstructor
+                        | Builtin::Uint32ArrayConstructor
+                        | Builtin::Float32ArrayConstructor
+                        | Builtin::Float64ArrayConstructor
+                )
+            {
+                let mut arg_vals = Vec::new();
+                if let Some(args) = &new_expr.args {
+                    for arg in args {
+                        let arg_val = self.lower_expr(&arg.expr, block)?;
+                        arg_vals.push(arg_val);
                     }
                 }
+                if arg_vals.is_empty() {
+                    arg_vals.push({
+                        let c = self.module.add_constant(Constant::Undefined);
+                        let dest = self.alloc_value();
+                        self.current_function
+                            .append_instruction(block, Instruction::Const { dest, constant: c });
+                        dest
+                    });
+                }
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin,
+                        args: arg_vals,
+                    },
+                );
+                return Ok(dest);
             }
         }
 
-        let callee_val = self.lower_expr(&new_expr.callee, block)?;
+        let mut call_block = block;
+        let callee_val = self.lower_expr_then_continue(&new_expr.callee, &mut call_block)?;
 
         // Create new object.
         let obj_val = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            call_block,
             Instruction::NewObject {
                 dest: obj_val,
                 capacity: 4,
@@ -1135,7 +1133,7 @@ impl Lowerer {
         // 2. 若非 Object 类型（包含 Array、Function、Closure 等），回退到 Object.prototype
         let proto_val = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            call_block,
             Instruction::CallBuiltin {
                 dest: Some(proto_val),
                 builtin: Builtin::GetPrototypeFromConstructor,
@@ -1145,7 +1143,7 @@ impl Lowerer {
 
         // Set __proto__ on the new object directly via SetProto.
         self.current_function.append_instruction(
-            block,
+            call_block,
             Instruction::SetProto {
                 object: obj_val,
                 value: proto_val,
@@ -1158,16 +1156,15 @@ impl Lowerer {
         let mut arg_vals = Vec::with_capacity(cap);
         if let Some(args) = &new_expr.args {
             for arg in args {
-                let arg_val = self.lower_expr(&arg.expr, block)?;
+                let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
                 arg_vals.push(arg_val);
             }
         }
 
         // Call the constructor with the new object as `this`.
         self.current_function.append_instruction(
-            block,
-            Instruction::Call {
-                dest: None,
+            call_block,
+            Instruction::ConstructCall {
                 callee: callee_val,
                 this_val: obj_val,
                 args: arg_vals,
@@ -1186,50 +1183,50 @@ impl Lowerer {
         self.current_function
             .append_instruction(block, Instruction::NewPromise { dest: promise_val });
 
-        if let Some(args) = &new_expr.args {
-            if let Some(first_arg) = args.first() {
-                let callback_val = self.lower_expr(&first_arg.expr, block)?;
+        if let Some(args) = &new_expr.args
+            && let Some(first_arg) = args.first()
+        {
+            let callback_val = self.lower_expr(&first_arg.expr, block)?;
 
-                let resolve_fn = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::CallBuiltin {
-                        dest: Some(resolve_fn),
-                        builtin: Builtin::PromiseCreateResolveFunction,
-                        args: vec![promise_val],
-                    },
-                );
+            let resolve_fn = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(resolve_fn),
+                    builtin: Builtin::PromiseCreateResolveFunction,
+                    args: vec![promise_val],
+                },
+            );
 
-                let reject_fn = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::CallBuiltin {
-                        dest: Some(reject_fn),
-                        builtin: Builtin::PromiseCreateRejectFunction,
-                        args: vec![promise_val],
-                    },
-                );
+            let reject_fn = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(reject_fn),
+                    builtin: Builtin::PromiseCreateRejectFunction,
+                    args: vec![promise_val],
+                },
+            );
 
-                let undef_const = self.module.add_constant(Constant::Undefined);
-                let undef_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Const {
-                        dest: undef_val,
-                        constant: undef_const,
-                    },
-                );
+            let undef_const = self.module.add_constant(Constant::Undefined);
+            let undef_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: undef_val,
+                    constant: undef_const,
+                },
+            );
 
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Call {
-                        dest: None,
-                        callee: callback_val,
-                        this_val: undef_val,
-                        args: vec![resolve_fn, reject_fn],
-                    },
-                );
-            }
+            self.current_function.append_instruction(
+                block,
+                Instruction::Call {
+                    dest: None,
+                    callee: callback_val,
+                    this_val: undef_val,
+                    args: vec![resolve_fn, reject_fn],
+                },
+            );
         }
 
         Ok(promise_val)
@@ -1252,13 +1249,13 @@ impl Lowerer {
         }
 
         let mut args = Vec::with_capacity(call.args.len().max(1));
+        let mut call_block = block;
         for arg in &call.args {
-            let arg_val = self.lower_expr(&arg.expr, block)?;
+            let arg_val = self.lower_expr_then_continue(&arg.expr, &mut call_block)?;
             args.push(arg_val);
         }
 
         let dest = self.alloc_value();
-        let call_block = self.resolve_store_block(block);
         self.current_function.append_instruction(
             call_block,
             Instruction::CallBuiltin {

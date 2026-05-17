@@ -490,7 +490,8 @@ impl Compiler {
         function: &IrFunction,
     ) -> Result<()> {
         self.current_func_is_main = function.name() == "main";
-        self.current_func_returns_value = self.mode == CompileMode::Eval || self.current_func_is_main;
+        self.current_func_returns_value =
+            self.mode == CompileMode::Eval || self.current_func_is_main;
         self.ssa_local_base = if self.mode == CompileMode::Eval {
             function.params().len() as u32
         } else {
@@ -531,8 +532,8 @@ impl Compiler {
         // 对应 obj_table[0..num_functions-1]，存储函数属性对象的 ptr。
         // 这样后续 GetProp/SetProp 可以通过 obj_table 统一查找。
         if function.name() == "main" {
-            let length_name_id = self.intern_data_string(&"length".to_string());
-            let name_name_id = self.intern_data_string(&"name".to_string());
+            let length_name_id = self.intern_data_string("length");
+            let name_name_id = self.intern_data_string("name");
             let box_base = value::BOX_BASE as i64;
             let tag_object = (value::TAG_OBJECT << 32) as i64;
             for i in 0..self.num_ir_functions as usize {
@@ -746,7 +747,7 @@ impl Compiler {
         let var_rebase_start = self.ssa_local_base;
         // rebase: 所有 >= ssa_local_base 的 var/phi local 索引偏移到 ssa_max 之后
         let offset = ssa_max.saturating_sub(var_rebase_start);
-        for (_name, idx) in self.var_locals.iter_mut() {
+        for idx in self.var_locals.values_mut() {
             if *idx >= var_rebase_start {
                 *idx += offset;
             }

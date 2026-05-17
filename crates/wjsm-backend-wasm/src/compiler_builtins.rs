@@ -93,8 +93,7 @@ impl Compiler {
                 // func_ref_val 是 NaN-boxed 函数值 → 提取 table_idx (i32.wrap_i64)
                 // env_obj_val 是 NaN-boxed 环境对象 (i64)
                 // 调用 closure_create(table_idx, env_obj) → i64 (TAG_CLOSURE 编码)
-                let func_ref_val = args
-                    .get(0)
+                let func_ref_val = args.first()
                     .with_context(|| "CreateClosure expects func_ref arg")?;
                 let env_obj_val = args
                     .get(1)
@@ -164,6 +163,46 @@ impl Compiler {
             Builtin::EvalResult => {
                 let value = args.first().context("eval.result expects value arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::IsException => {
+                let value = args.first().context("is_exception expects value arg")?;
+                let value_local = self.local_idx(value.0);
+                // Check if value is TAG_EXCEPTION
+                self.emit(WasmInstruction::LocalGet(value_local));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::I32Const(value::TAG_EXCEPTION as i32));
+                self.emit(WasmInstruction::I32Eq);
+                // Result is i32 (0 or 1). Convert to NaN-boxed bool
+                self.emit(WasmInstruction::I64ExtendI32U);
+                let box_base = value::BOX_BASE as i64;
+                let bool_tag_shifted = (value::TAG_BOOL as i64) << 32;
+                self.emit(WasmInstruction::I64Const(box_base | bool_tag_shifted));
+                self.emit(WasmInstruction::I64Or);
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::NewTarget => {
+                // new.target meta property: (i64 dummy) -> i64
+                let arg = args.first().context("new.target expects 1 dummy arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 } else {
@@ -1550,5 +1589,5 @@ impl Compiler {
                 Ok(())
             }
     }
-}
+    }
 }

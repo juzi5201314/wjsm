@@ -388,6 +388,8 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::Eval => ("eval", 2),
         Builtin::EvalIndirect => ("eval.indirect", 1),
         Builtin::EvalResult => ("eval.result", 1),
+        Builtin::IsException => ("is_exception", 1),
+        Builtin::NewTarget => ("new_target", 1),
         Builtin::JsonStringify => ("JSON.stringify", 1),
         Builtin::JsonParse => ("JSON.parse", 1),
         Builtin::AbstractEq => ("abstract-eq", 2),

@@ -19,21 +19,22 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = bool(true)
-    c20 = bool(false)
+    c19 = undefined
+    c20 = bool(true)
     c21 = bool(false)
-    c22 = bool(true)
-    c23 = null
-    c24 = number(42)
-    c25 = number(1)
-    c26 = number(2)
-    c27 = bool(false)
-    c28 = bool(true)
+    c22 = bool(false)
+    c23 = bool(true)
+    c24 = null
+    c25 = number(42)
+    c26 = number(1)
+    c27 = number(2)
+    c28 = bool(false)
     c29 = bool(true)
     c30 = bool(true)
-    c31 = bool(false)
-    c32 = bool(true)
-    c33 = bool(false)
+    c31 = bool(true)
+    c32 = bool(false)
+    c33 = bool(true)
+    c34 = bool(false)
 
   fn @main [entry=bb0]:
     bb0:
@@ -75,89 +76,141 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      store var $0.a, %19
-      %20 = load var $0.a
-      branch %20, bb1, bb2
-    bb1:
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
       %21 = const c20
       store var $0.a, %21
+      %22 = load var $0.a
+      branch %22, bb1, bb2
+    bb1:
+      %23 = const c21
+      store var $0.a, %23
       jump bb2
     bb2:
-      %22 = phi [(bb0, %20), (bb1, %21)]
-      %23 = load var $0.a
-      %24 = call builtin.console.log(%23)
-      %25 = const c21
-      store var $0.b, %25
-      %26 = load var $0.b
-      branch %26, bb4, bb3
+      %24 = phi [(bb0, %22), (bb1, %23)]
+      %25 = load var $0.a
+      %26 = call builtin.console.log(%25)
+      %27 = is_exception %26
+      branch %27, bb4, bb3
     bb3:
-      %27 = const c22
-      store var $0.b, %27
-      jump bb4
+      %29 = const c22
+      store var $0.b, %29
+      %30 = load var $0.b
+      branch %30, bb6, bb5
     bb4:
-      %28 = phi [(bb2, %26), (bb3, %27)]
-      %29 = load var $0.b
-      %30 = call builtin.console.log(%29)
-      %31 = const c23
-      store var $0.c, %31
-      %32 = load var $0.c
-      %33 = is_nullish %32
-      branch %33, bb5, bb6
+      %28 = call builtin.exception_value(%26)
+      throw %28
     bb5:
-      %34 = const c24
-      store var $0.c, %34
+      %31 = const c23
+      store var $0.b, %31
       jump bb6
     bb6:
-      %35 = phi [(bb4, %32), (bb5, %34)]
-      %36 = load var $0.c
-      %37 = call builtin.console.log(%36)
-      %38 = const c25
-      store var $0.d, %38
-      %39 = load var $0.d
-      %40 = is_nullish %39
-      branch %40, bb7, bb8
+      %32 = phi [(bb3, %30), (bb5, %31)]
+      %33 = load var $0.b
+      %34 = call builtin.console.log(%33)
+      %35 = is_exception %34
+      branch %35, bb8, bb7
     bb7:
-      %41 = const c26
-      store var $0.d, %41
-      jump bb8
+      %37 = const c24
+      store var $0.c, %37
+      %38 = load var $0.c
+      %39 = is_nullish %38
+      branch %39, bb9, bb10
     bb8:
-      %42 = phi [(bb6, %39), (bb7, %41)]
-      %43 = load var $0.d
-      %44 = call builtin.console.log(%43)
-      %45 = const c27
-      store var $0.sideEffect, %45
-      %46 = const c28
-      store var $0.e, %46
-      %47 = load var $0.e
-      branch %47, bb10, bb9
+      %36 = call builtin.exception_value(%34)
+      throw %36
     bb9:
-      %49 = const c29
-      store var $0.sideEffect, %49
-      %50 = const c30
-      store var $0.e, %50
+      %40 = const c25
+      store var $0.c, %40
       jump bb10
     bb10:
-      %51 = phi [(bb8, %47), (bb9, %50)]
-      %52 = load var $0.sideEffect
-      %53 = call builtin.console.log(%52)
-      %54 = load var $0.e
-      %55 = call builtin.console.log(%54)
-      %56 = const c31
-      store var $0.f, %56
-      %57 = load var $0.f
-      branch %57, bb11, bb12
+      %41 = phi [(bb7, %38), (bb9, %40)]
+      %42 = load var $0.c
+      %43 = call builtin.console.log(%42)
+      %44 = is_exception %43
+      branch %44, bb12, bb11
     bb11:
-      %59 = const c32
-      store var $0.sideEffect, %59
-      %60 = const c33
-      store var $0.f, %60
-      jump bb12
+      %46 = const c26
+      store var $0.d, %46
+      %47 = load var $0.d
+      %48 = is_nullish %47
+      branch %48, bb13, bb14
     bb12:
-      %61 = phi [(bb10, %57), (bb11, %60)]
+      %45 = call builtin.exception_value(%43)
+      throw %45
+    bb13:
+      %49 = const c27
+      store var $0.d, %49
+      jump bb14
+    bb14:
+      %50 = phi [(bb11, %47), (bb13, %49)]
+      %51 = load var $0.d
+      %52 = call builtin.console.log(%51)
+      %53 = is_exception %52
+      branch %53, bb16, bb15
+    bb15:
+      %55 = const c28
+      store var $0.sideEffect, %55
+      %56 = const c29
+      store var $0.e, %56
+      %57 = load var $0.e
+      branch %57, bb18, bb17
+    bb16:
+      %54 = call builtin.exception_value(%52)
+      throw %54
+    bb17:
+      %59 = const c30
+      store var $0.sideEffect, %59
+      %60 = const c31
+      store var $0.e, %60
+      jump bb18
+    bb18:
+      %61 = phi [(bb15, %57), (bb17, %60)]
       %62 = load var $0.sideEffect
       %63 = call builtin.console.log(%62)
-      %64 = load var $0.f
-      %65 = call builtin.console.log(%64)
+      %64 = is_exception %63
+      branch %64, bb20, bb19
+    bb19:
+      %66 = load var $0.e
+      %67 = call builtin.console.log(%66)
+      %68 = is_exception %67
+      branch %68, bb22, bb21
+    bb20:
+      %65 = call builtin.exception_value(%63)
+      throw %65
+    bb21:
+      %70 = const c32
+      store var $0.f, %70
+      %71 = load var $0.f
+      branch %71, bb23, bb24
+    bb22:
+      %69 = call builtin.exception_value(%67)
+      throw %69
+    bb23:
+      %73 = const c33
+      store var $0.sideEffect, %73
+      %74 = const c34
+      store var $0.f, %74
+      jump bb24
+    bb24:
+      %75 = phi [(bb21, %71), (bb23, %74)]
+      %76 = load var $0.sideEffect
+      %77 = call builtin.console.log(%76)
+      %78 = is_exception %77
+      branch %78, bb26, bb25
+    bb25:
+      %80 = load var $0.f
+      %81 = call builtin.console.log(%80)
+      %82 = is_exception %81
+      branch %82, bb28, bb27
+    bb26:
+      %79 = call builtin.exception_value(%77)
+      throw %79
+    bb27:
       return
+    bb28:
+      %83 = call builtin.exception_value(%81)
+      throw %83
 }

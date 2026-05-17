@@ -62,6 +62,15 @@
     let throw_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, val: i64| {
+            // 将异常值存入 error_table，以便 eval 调用方能通过 ExceptionValue 恢复原始值
+            {
+                let mut errors = caller.data().error_table.lock().unwrap();
+                errors.push(ErrorEntry {
+                    name: String::new(),
+                    message: String::new(),
+                    value: val,
+                });
+            }
             let rendered = render_value(&mut caller, val).unwrap_or_else(|_| "unknown".to_string());
             let mut buffer = caller
                 .data()
@@ -91,8 +100,8 @@
                 return value::encode_handle(value::TAG_ITERATOR, handle);
             }
 
-            if value::is_array(val) {
-                if let Some(ptr) = resolve_handle(&mut caller, val) {
+            if value::is_array(val)
+                && let Some(ptr) = resolve_handle(&mut caller, val) {
                     let length = read_array_length(&mut caller, ptr).unwrap_or(0);
                     let mut iters = caller.data().iterators.lock().expect("iterators mutex");
                     let handle = iters.len() as u32;
@@ -103,12 +112,11 @@
                     });
                     return value::encode_handle(value::TAG_ITERATOR, handle);
                 }
-            }
 
-            if value::is_object(val) || value::is_function(val) {
-                if let Some(ptr) = resolve_handle(&mut caller, val) {
-                    if let Some(next) = read_object_property_by_name(&mut caller, ptr, "next") {
-                        if value::is_callable(next) {
+            if (value::is_object(val) || value::is_function(val))
+                && let Some(ptr) = resolve_handle(&mut caller, val)
+                    && let Some(next) = read_object_property_by_name(&mut caller, ptr, "next")
+                        && value::is_callable(next) {
                             let return_method =
                                 read_object_property_by_name(&mut caller, ptr, "return")
                                     .filter(|candidate| value::is_callable(*candidate));
@@ -124,9 +132,6 @@
                             });
                             return value::encode_handle(value::TAG_ITERATOR, handle);
                         }
-                    }
-                }
-            }
 
             let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             let handle = iters.len() as u32;
@@ -212,8 +217,8 @@
                 return_method,
                 value::encode_undefined(),
             );
-            if let Some(result) = result {
-                if !(value::is_object(result)
+            if let Some(result) = result
+                && !(value::is_object(result)
                     || value::is_function(result)
                     || value::is_array(result))
                 {
@@ -222,7 +227,6 @@
                         "TypeError: iterator return must return an object".to_string(),
                     );
                 }
-            }
             if let Some(IteratorState::ObjectIter { done, .. }) = caller
                 .data()
                 .iterators
@@ -517,9 +521,10 @@
                 } else {
                     value::encode_typeof_object()
                 }
-            } else if value::is_object(val) {
-                value::encode_typeof_object()
-            } else if value::is_iterator(val) || value::is_enumerator(val) {
+            } else if value::is_object(val)
+                || value::is_iterator(val)
+                || value::is_enumerator(val)
+            {
                 value::encode_typeof_object()
             } else if value::is_bigint(val) {
                 value::encode_typeof_bigint()
@@ -904,8 +909,8 @@
             let prop_set = read_object_property_by_name(&mut caller, desc_ptr, "set");
 
             // 检查是否为访问器属性（有 get 或 set）
-            if let Some(getter) = prop_get {
-                if !value::is_undefined(getter) && !value::is_callable(getter) {
+            if let Some(getter) = prop_get
+                && !value::is_undefined(getter) && !value::is_callable(getter) {
                     *caller
                         .data()
                         .runtime_error
@@ -914,9 +919,8 @@
                         Some("TypeError: property getter must be callable".to_string());
                     return;
                 }
-            }
-            if let Some(setter) = prop_set {
-                if !value::is_undefined(setter) && !value::is_callable(setter) {
+            if let Some(setter) = prop_set
+                && !value::is_undefined(setter) && !value::is_callable(setter) {
                     *caller
                         .data()
                         .runtime_error
@@ -925,7 +929,6 @@
                         Some("TypeError: property setter must be callable".to_string());
                     return;
                 }
-            }
 
             let is_accessor = prop_get.is_some() || prop_set.is_some();
 
@@ -951,13 +954,13 @@
             if is_accessor {
                 flags |= constants::FLAG_IS_ACCESSOR; // is_accessor
             }
-            if !is_accessor && prop_writable.map_or(false, |v| !value::is_falsy(v)) {
+            if !is_accessor && prop_writable.is_some_and(|v| !value::is_falsy(v)) {
                 flags |= constants::FLAG_WRITABLE; // writable (仅数据属性)
             }
-            if prop_enumerable.map_or(false, |v| !value::is_falsy(v)) {
+            if prop_enumerable.is_some_and(|v| !value::is_falsy(v)) {
                 flags |= constants::FLAG_ENUMERABLE; // enumerable
             }
-            if prop_configurable.map_or(false, |v| !value::is_falsy(v)) {
+            if prop_configurable.is_some_and(|v| !value::is_falsy(v)) {
                 flags |= constants::FLAG_CONFIGURABLE; // configurable
             }
 
@@ -1160,7 +1163,8 @@
             let writable = (flags & (1 << 2)) != 0;
 
             // 分配描述符对象（需要 4 个属性）
-            let desc_handle = match allocate_descriptor_object(
+
+            match allocate_descriptor_object(
                 &mut caller,
                 is_accessor,
                 value,
@@ -1171,10 +1175,8 @@
                 setter,
             ) {
                 Some(h) => h,
-                None => return value::encode_undefined(),
-            };
-
-            desc_handle
+                None => value::encode_undefined(),
+            }
         },
     );
 
@@ -1422,7 +1424,7 @@
                     .gc_mark_bits
                     .lock()
                     .expect("gc_mark_bits mutex");
-                let needed_words = ((obj_table_count as usize + 63) / 64).max(mark_bits.len());
+                let needed_words = (obj_table_count as usize).div_ceil(64).max(mark_bits.len());
                 if mark_bits.len() < needed_words {
                     mark_bits.resize(needed_words, 0);
                 } else {
@@ -1490,13 +1492,12 @@
                                 let closure_idx = value::decode_closure_idx(val) as usize;
                                 let closures =
                                     caller.data().closures.lock().expect("closures mutex");
-                                if let Some(entry) = closures.get(closure_idx) {
-                                    if value::is_object(entry.env_obj) {
+                                if let Some(entry) = closures.get(closure_idx)
+                                    && value::is_object(entry.env_obj) {
                                         let handle_idx =
                                             value::decode_object_handle(entry.env_obj) as usize;
                                         add_root(handle_idx, data, &mut roots);
                                     }
-                                }
                             }
                         }
                     }
@@ -1521,13 +1522,12 @@
                             // 闭包回调：将 env_obj 中的对象标记为根
                             let closure_idx = value::decode_closure_idx(val) as usize;
                             let closures = caller.data().closures.lock().expect("closures mutex");
-                            if let Some(entry) = closures.get(closure_idx) {
-                                if value::is_object(entry.env_obj) {
+                            if let Some(entry) = closures.get(closure_idx)
+                                && value::is_object(entry.env_obj) {
                                     let handle_idx =
                                         value::decode_object_handle(entry.env_obj) as usize;
                                     add_root(handle_idx, data, &mut roots);
                                 }
-                            }
                         }
                     }
                 }

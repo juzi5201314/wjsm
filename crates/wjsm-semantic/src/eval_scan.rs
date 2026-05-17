@@ -179,10 +179,10 @@ pub(crate) fn is_word_at(bytes: &[u8], index: usize, word: &[u8]) -> bool {
     bytes.get(index..index + word.len()) == Some(word)
         && index
             .checked_sub(1)
-            .map_or(true, |prev| !is_ident_continue(bytes[prev]))
+            .is_none_or(|prev| !is_ident_continue(bytes[prev]))
         && bytes
             .get(index + word.len())
-            .map_or(true, |next| !is_ident_continue(*next))
+            .is_none_or(|next| !is_ident_continue(*next))
 }
 
 pub(crate) fn is_ident_start(byte: u8) -> bool {

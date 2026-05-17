@@ -21,18 +21,19 @@ module {
     c18 = number(inf)
     c19 = undefined
     c20 = undefined
-    c21 = number(1)
-    c22 = undefined
-    c23 = number(5)
-    c24 = functionref(@0)
-    c25 = undefined
+    c21 = undefined
+    c22 = number(1)
+    c23 = undefined
+    c24 = number(5)
+    c25 = functionref(@0)
     c26 = undefined
     c27 = undefined
-    c28 = number(1)
-    c29 = undefined
-    c30 = number(2)
-    c31 = string("rejected")
-    c32 = functionref(@1)
+    c28 = undefined
+    c29 = number(1)
+    c30 = undefined
+    c31 = number(2)
+    c32 = string("rejected")
+    c33 = functionref(@1)
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.value] [entry=bb0]:
     bb0:
@@ -42,7 +43,7 @@ module {
 
   fn @arrow_1 [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
-      %0 = const c31
+      %0 = const c32
       %1 = call builtin.console.log(%0)
       return %1
 
@@ -86,32 +87,48 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      %20 = new_array(capacity=4)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
       %21 = const c20
-      %22 = const c21
-      %23 = call builtin.promise.reject_static(%21, %22)
-      call builtin.array.push(%20, %23)
+      %22 = new_array(capacity=4)
+      %23 = const c21
       %24 = const c22
-      %25 = const c23
-      %26 = call builtin.promise.resolve_static(%24, %25)
-      call builtin.array.push(%20, %26)
-      %27 = call builtin.promise.any(%19, %20)
-      %28 = const c24
-      %29 = const c25
-      %30 = call builtin.promise.then(%27, %28, %29)
+      %25 = call builtin.promise.reject_static(%23, %24)
+      call builtin.array.push(%22, %25)
+      %26 = const c23
+      %27 = const c24
+      %28 = call builtin.promise.resolve_static(%26, %27)
+      call builtin.array.push(%22, %28)
+      %29 = call builtin.promise.any(%21, %22)
+      %30 = const c25
       %31 = const c26
-      %32 = new_array(capacity=4)
-      %33 = const c27
-      %34 = const c28
-      %35 = call builtin.promise.reject_static(%33, %34)
-      call builtin.array.push(%32, %35)
-      %36 = const c29
-      %37 = const c30
-      %38 = call builtin.promise.reject_static(%36, %37)
-      call builtin.array.push(%32, %38)
-      %39 = call builtin.promise.any(%31, %32)
-      %40 = const c32
-      %41 = call builtin.promise.catch(%39, %40)
+      %32 = call builtin.promise.then(%29, %30, %31)
+      %33 = is_exception %32
+      branch %33, bb2, bb1
+    bb1:
+      %35 = const c27
+      %36 = new_array(capacity=4)
+      %37 = const c28
+      %38 = const c29
+      %39 = call builtin.promise.reject_static(%37, %38)
+      call builtin.array.push(%36, %39)
+      %40 = const c30
+      %41 = const c31
+      %42 = call builtin.promise.reject_static(%40, %41)
+      call builtin.array.push(%36, %42)
+      %43 = call builtin.promise.any(%35, %36)
+      %44 = const c33
+      %45 = call builtin.promise.catch(%43, %44)
+      %46 = is_exception %45
+      branch %46, bb4, bb3
+    bb2:
+      %34 = call builtin.exception_value(%32)
+      throw %34
+    bb3:
       return
+    bb4:
+      %47 = call builtin.exception_value(%45)
+      throw %47
 }

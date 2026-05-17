@@ -2,6 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, Datelike, Local, TimeZone, Timelike, Utc};
 use num_traits::cast::ToPrimitive;
 use rand::Rng;
+use std::cell::Cell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
@@ -161,11 +162,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             arraybuffer_table: Arc::clone(&arraybuffer_table),
             dataview_table: Arc::clone(&dataview_table),
             typedarray_table: Arc::clone(&typedarray_table),
+            new_target: Cell::new(value::encode_undefined()),
         },
     );
 
     // ── Import 0: console_log(i64) → () ─────────────────────────────────
-    let mut imports: Vec<Extern> = Vec::with_capacity(322);
+    let mut imports: Vec<Extern> = Vec::with_capacity(324);
     imports.extend(include!("host_imports/core.rs"));
     imports.extend(include!("host_imports/timers_arrays.rs"));
     imports.extend(include!("host_imports/array_object.rs"));
@@ -176,6 +178,22 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     imports.extend(include!("host_imports/collections_buffers.rs"));
     imports.extend(include!("host_imports/proxy_traps.rs"));
     imports.push(include!("host_imports/get_builtin_global_entry.rs"));
+    // Import 322: new_target
+    let new_target_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, _dummy: i64| -> i64 { caller.data().new_target.get() },
+    );
+    imports.push(new_target_fn.into());
+    // Import 323: new_target_set
+    let new_target_set_fn = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, new_target: i64| -> i64 {
+            let previous = caller.data().new_target.get();
+            caller.data().new_target.set(new_target);
+            previous
+        },
+    );
+    imports.push(new_target_set_fn.into());
     let instance = Instance::new(&mut store, &module, &imports)?;
 
     // ── Run main ──
@@ -190,42 +208,52 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 true
             }
         }
-        Err(trap) => {
-            return Err(anyhow::anyhow!("WASM trap: {:?}", trap));
-        }
-    };
-    
-    // ── Drain microtasks after main() ────────────────────────────────────
-    if main_ok {
-        if let Some(Extern::Table(func_table)) = instance.get_export(&mut store, "__table") {
-            if let (
-                Some(Extern::Memory(memory)),
-                Some(Extern::Global(shadow_sp_global)),
-                Some(Extern::Global(heap_ptr_global)),
-                Some(Extern::Global(obj_table_ptr_global)),
-                Some(Extern::Global(obj_table_count_global)),
-            ) = (
-                instance.get_export(&mut store, "memory"),
-                instance.get_export(&mut store, "__shadow_sp"),
-                instance.get_export(&mut store, "__heap_ptr"),
-                instance.get_export(&mut store, "__obj_table_ptr"),
-                instance.get_export(&mut store, "__obj_table_count"),
-            ) {
-                drain_microtasks_from_store(
-                    &mut store,
-                    &func_table,
-                    &memory,
-                    &shadow_sp_global,
-                    &heap_ptr_global,
-                    &obj_table_ptr_global,
-                    &obj_table_count_global,
-                );
+        Err(ref trap) => {
+            if store
+                .data()
+                .runtime_error
+                .lock()
+                .expect("runtime_error mutex")
+                .is_some()
+            {
+                // throw import 已经记录了 JS 层异常；先走统一输出/错误收集路径。
+                false
+            } else {
+                return Err(anyhow::anyhow!("WASM trap: {:?}", trap));
             }
         }
+    };
+
+    // ── Drain microtasks after main() ────────────────────────────────────
+    if main_ok
+        && let Some(Extern::Table(func_table)) = instance.get_export(&mut store, "__table")
+        && let (
+            Some(Extern::Memory(memory)),
+            Some(Extern::Global(shadow_sp_global)),
+            Some(Extern::Global(heap_ptr_global)),
+            Some(Extern::Global(obj_table_ptr_global)),
+            Some(Extern::Global(obj_table_count_global)),
+        ) = (
+            instance.get_export(&mut store, "memory"),
+            instance.get_export(&mut store, "__shadow_sp"),
+            instance.get_export(&mut store, "__heap_ptr"),
+            instance.get_export(&mut store, "__obj_table_ptr"),
+            instance.get_export(&mut store, "__obj_table_count"),
+        )
+    {
+        drain_microtasks_from_store(
+            &mut store,
+            &func_table,
+            &memory,
+            &shadow_sp_global,
+            &heap_ptr_global,
+            &obj_table_ptr_global,
+            &obj_table_count_global,
+        );
     }
-    
+
     // ── Timer event loop (only if main succeeded) ─────────────────────────
-    // Poll timers; fire expired callbacks via the WASM function table.  
+    // Poll timers; fire expired callbacks via the WASM function table.
     if main_ok {
         loop {
             let now = Instant::now();
@@ -270,22 +298,22 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 // Call the callback via WASM function table call_indirect
                 let raw_idx = value::decode_function_idx(callback) as u64;
                 if let Some(Extern::Table(tbl)) = instance.get_export(&mut store, "__table") {
-                    if let Some(Ref::Func(Some(func))) = tbl.get(&mut store, raw_idx) {
-                        if let Ok(typed) = func.typed::<(i64, i32, i32), i64>(&store) {
-                            match typed.call(&mut store, (value::encode_undefined(), 0i32, 0i32)) {
-                                Ok(_) => {}
-                                Err(e) => {
-                                    let msg = format!("timer callback error: {}", e);
-                                    let mut error_lock = store
-                                        .data()
-                                        .runtime_error
-                                        .lock()
-                                        .expect("runtime_error mutex");
-                                    if error_lock.is_none() {
-                                        *error_lock = Some(msg);
-                                    }
-                                    break;
+                    if let Some(Ref::Func(Some(func))) = tbl.get(&mut store, raw_idx)
+                        && let Ok(typed) = func.typed::<(i64, i32, i32), i64>(&store)
+                    {
+                        match typed.call(&mut store, (value::encode_undefined(), 0i32, 0i32)) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                let msg = format!("timer callback error: {}", e);
+                                let mut error_lock = store
+                                    .data()
+                                    .runtime_error
+                                    .lock()
+                                    .expect("runtime_error mutex");
+                                if error_lock.is_none() {
+                                    *error_lock = Some(msg);
                                 }
+                                break;
                             }
                         }
                     }
@@ -417,6 +445,8 @@ struct RuntimeState {
     dataview_table: Arc<Mutex<Vec<DataViewEntry>>>,
     /// TypedArray 侧表：存储 TypedArray 的 buffer 引用、偏移量和长度
     typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>>,
+    /// new.target 值元属性
+    new_target: Cell<i64>,
 }
 
 /// 绑定函数记录
@@ -563,7 +593,9 @@ enum NativeCallable {
     DataViewConstructorGlobal,
     TypedArrayConstructor(()),
     ProxyConstructor,
-    ProxyRevoker { proxy_handle: u32 },
+    ProxyRevoker {
+        proxy_handle: u32,
+    },
     StubGlobal(()),
 }
 
@@ -825,7 +857,7 @@ enum ReactionType {
     FinallyReject,
 }
 
-#[allow(dead_code)]
+#[allow(clippy::enum_variant_names, dead_code)]
 enum Microtask {
     PromiseReaction {
         promise: i64,
@@ -896,7 +928,7 @@ mod tests {
 
     fn compile_source(source: &str) -> Result<Vec<u8>> {
         let module = wjsm_parser::parse_module(source)?;
-        let program = wjsm_semantic::lower_module(module)?;
+        let program = wjsm_semantic::lower_module(module, false)?;
         wjsm_backend_wasm::compile(&program)
     }
 

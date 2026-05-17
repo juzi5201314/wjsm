@@ -75,16 +75,14 @@ impl ModuleGraph {
                         .names
                         .iter()
                         .any(|(_, imported_name)| imported_name == "default");
-                    if has_default_import {
-                        if let Ok(dep_path) =
+                    if has_default_import
+                        && let Ok(dep_path) =
                             ModuleResolver::resolve_path(&import.specifier, &module.path)
-                        {
-                            if let Some(dep_id) = resolver.get_id_by_path(&dep_path) {
-                                let dep_module = resolver.get_module(dep_id).unwrap();
-                                if !dep_module.is_cjs {
-                                    needs_default_export.insert(dep_id);
-                                }
-                            }
+                        && let Some(dep_id) = resolver.get_id_by_path(&dep_path)
+                    {
+                        let dep_module = resolver.get_module(dep_id).unwrap();
+                        if !dep_module.is_cjs {
+                            needs_default_export.insert(dep_id);
                         }
                     }
                 }

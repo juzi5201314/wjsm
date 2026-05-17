@@ -19,7 +19,8 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = string("abc")
+    c19 = undefined
+    c20 = string("abc")
 
   fn @main [entry=bb0]:
     bb0:
@@ -61,22 +62,32 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      %20 = call builtin.enumerator.from(%19)
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      %22 = call builtin.enumerator.from(%21)
       jump bb1
     bb1:
-      %21 = call builtin.enumerator.done(%20)
-      %22 = not %21
-      branch %22, bb2, bb4
+      %23 = call builtin.enumerator.done(%22)
+      %24 = not %23
+      branch %24, bb2, bb4
     bb2:
-      %23 = call builtin.enumerator.key(%20)
-      store var $0.k, %23
-      %24 = load var $0.k
-      %25 = call builtin.console.log(%24)
-      jump bb3
+      %25 = call builtin.enumerator.key(%22)
+      store var $0.k, %25
+      %26 = load var $0.k
+      %27 = call builtin.console.log(%26)
+      %28 = is_exception %27
+      branch %28, bb6, bb5
     bb3:
-      call builtin.enumerator.next(%20)
+      call builtin.enumerator.next(%22)
       jump bb1
     bb4:
       return
+    bb5:
+      jump bb3
+    bb6:
+      %29 = call builtin.exception_value(%27)
+      throw %29
 }

@@ -420,11 +420,10 @@
             let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
             let key_handle = value::decode_object_handle(key);
             let table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
-            if handle < table.len() {
-                if let Some(&val) = table[handle].map.get(&key_handle) {
+            if handle < table.len()
+                && let Some(&val) = table[handle].map.get(&key_handle) {
                     return val;
                 }
-            }
             value::encode_undefined()
         },
     );
@@ -611,7 +610,7 @@
             };
             let start = begin_idx.min(buf_len);
             let stop = end_idx.min(buf_len);
-            let new_len = if stop > start { stop - start } else { 0 };
+            let new_len = stop.saturating_sub(start);
             let new_buf_handle;
             {
                 let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
@@ -1063,7 +1062,7 @@
 
     let create_exception_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, thrown_value: i64| -> i64 {
+        |caller: Caller<'_, RuntimeState>, thrown_value: i64| -> i64 {
             let mut errors = caller.data().error_table.lock().unwrap();
             let idx = errors.len() as u32;
             errors.push(ErrorEntry {
@@ -1077,7 +1076,7 @@
 
     let exception_value_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, exception_handle: i64| -> i64 {
+        |caller: Caller<'_, RuntimeState>, exception_handle: i64| -> i64 {
             let idx = value::decode_handle(exception_handle) as usize;
             let errors = caller.data().error_table.lock().unwrap();
             errors.get(idx).map(|e| e.value).unwrap_or(value::encode_undefined())

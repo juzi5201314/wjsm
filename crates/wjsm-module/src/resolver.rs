@@ -224,10 +224,8 @@ impl ModuleResolver {
                         export_names.push(exported.clone());
                     }
                 }
-                ExportEntry::Declaration { name } => {
-                    if seen.insert(name.clone()) {
-                        export_names.push(name.clone());
-                    }
+                ExportEntry::Declaration { name } if seen.insert(name.clone()) => {
+                    export_names.push(name.clone());
                 }
                 _ => {}
             }
@@ -553,10 +551,8 @@ impl ModuleResolver {
                 }
             }
             ast::Expr::Array(arr) => {
-                for elem in &arr.elems {
-                    if let Some(elem) = elem {
-                        Self::extract_dynamic_imports_from_expr(&elem.expr, specifiers)?;
-                    }
+                for elem in arr.elems.iter().flatten() {
+                    Self::extract_dynamic_imports_from_expr(&elem.expr, specifiers)?;
                 }
             }
             ast::Expr::Arrow(arrow) => match &*arrow.body {
@@ -689,8 +685,8 @@ impl ModuleResolver {
         let mut exports = Vec::new();
 
         for item in &module.body {
-            match item {
-                ast::ModuleItem::ModuleDecl(decl) => match decl {
+            if let ast::ModuleItem::ModuleDecl(decl) = item {
+                match decl {
                     ast::ModuleDecl::ExportNamed(named_export) => {
                         if let Some(src) = &named_export.src {
                             // export { ... } from './foo' — 命名重导出
@@ -846,8 +842,7 @@ impl ModuleResolver {
                         exports.push(ExportEntry::Declaration { name });
                     }
                     _ => {}
-                },
-                _ => {}
+                }
             }
         }
 

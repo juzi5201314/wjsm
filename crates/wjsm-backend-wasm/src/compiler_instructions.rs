@@ -328,97 +328,15 @@ impl Compiler {
                 this_val,
                 args,
             } => {
-                // 使用影子栈传递参数
-                // Type 12 签名: (i64 env_obj, i64 this_val, i32 args_base, i32 args_count) -> i64
-                // callee 可能是 TAG_FUNCTION 或 TAG_CLOSURE，运行时解析
-
-                // Step 1: 保存 shadow_sp 到 scratch local
-                self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
-                self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
-
-                // Step 1b: 影子栈边界检查
-                self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
-
-                // Step 2: 将所有参数写入影子栈
-                for arg in args.iter() {
-                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
-                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
-                    self.emit(WasmInstruction::I64Store(MemArg {
-                        offset: 0,
-                        align: 3,
-                        memory_index: 0,
-                    }));
-                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
-                    self.emit(WasmInstruction::I32Const(8));
-                    self.emit(WasmInstruction::I32Add);
-                    self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
-                }
-
-                // Step 3: native callable 由宿主运行时执行，普通 JS 函数继续走函数表。
-                let call_func_idx_scratch = self.call_func_idx_scratch();
-                let call_env_obj_scratch = self.call_env_obj_scratch();
-
-                self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
-                self.emit(WasmInstruction::I64Const(32));
-                self.emit(WasmInstruction::I64ShrU);
-                self.emit(WasmInstruction::I64Const(0xF));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(value::TAG_NATIVE_CALLABLE as i64));
-                self.emit(WasmInstruction::I64Eq);
-                self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
-                self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
-                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
-                self.emit(WasmInstruction::I32Const(args.len() as i32));
-                self.emit(WasmInstruction::Call(self.native_call_func_idx));
-                self.emit(WasmInstruction::Else);
-
-                // 运行时解析 callee → (func_idx, env_obj)。callee 可能是 TAG_FUNCTION 或 TAG_CLOSURE。
-                self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
-                self.emit(WasmInstruction::I64Const(32));
-                self.emit(WasmInstruction::I64ShrU);
-                self.emit(WasmInstruction::I64Const(0xF));
-                self.emit(WasmInstruction::I64And);
-                self.emit(WasmInstruction::I64Const(0xA)); // TAG_CLOSURE
-                self.emit(WasmInstruction::I64Eq);
-                self.emit(WasmInstruction::If(BlockType::Empty));
-                self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
-                self.emit(WasmInstruction::I32WrapI64);
-                self.emit(WasmInstruction::Call(self.closure_get_func_idx));
-                self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
-                self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
-                self.emit(WasmInstruction::I32WrapI64);
-                self.emit(WasmInstruction::Call(self.closure_get_env_idx));
-                self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
-                self.emit(WasmInstruction::Else);
-                self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
-                self.emit(WasmInstruction::I32WrapI64);
-                self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
-                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-                self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
-                self.emit(WasmInstruction::End);
-
-                self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
-                self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
-                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
-                self.emit(WasmInstruction::I32Const(args.len() as i32));
-                self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
-                self.emit(WasmInstruction::CallIndirect {
-                    type_index: 12,
-                    table_index: 0,
-                });
-                self.emit(WasmInstruction::End);
-
-                // Step 4: 恢复 shadow_sp
-                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
-                self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
-
-                // Step 5: 处理返回值
-                if let Some(d) = dest {
-                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
-                } else {
-                    self.emit(WasmInstruction::Drop);
-                }
+                self.compile_call_with_new_target(dest, *callee, *this_val, args, None)?;
+                Ok(false)
+            }
+            Instruction::ConstructCall {
+                callee,
+                this_val,
+                args,
+            } => {
+                self.compile_call_with_new_target(&None, *callee, *this_val, args, Some(*callee))?;
                 Ok(false)
             }
             Instruction::NewObject { dest, capacity } => {
@@ -767,6 +685,123 @@ impl Compiler {
                 Ok(false)
             }
         }
+    }
+
+    pub(crate) fn compile_call_with_new_target(
+        &mut self,
+        dest: &Option<ValueId>,
+        callee: ValueId,
+        this_val: ValueId,
+        args: &[ValueId],
+        new_target: Option<ValueId>,
+    ) -> Result<()> {
+        // Type 12 签名: (i64 env_obj, i64 this_val, i32 args_base, i32 args_count) -> i64。
+        // new.target 是调用上下文，普通调用压入 undefined，构造调用压入构造目标。
+        let saved_new_target = self.string_concat_scratch_idx;
+        let result_scratch = self.call_env_obj_scratch();
+
+        match new_target {
+            Some(value) => self.emit(WasmInstruction::LocalGet(self.local_idx(value.0))),
+            None => self.emit(WasmInstruction::I64Const(value::encode_undefined())),
+        }
+        self.emit(WasmInstruction::Call(self.new_target_set_func_idx));
+        self.emit(WasmInstruction::LocalSet(saved_new_target));
+
+        // Step 1: 保存 shadow_sp 到 scratch local
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+
+        // Step 1b: 影子栈边界检查
+        self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
+
+        // Step 2: 将所有参数写入影子栈
+        for arg in args {
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+            self.emit(WasmInstruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::I32Const(8));
+            self.emit(WasmInstruction::I32Add);
+            self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+        }
+
+        // Step 3: native callable 由宿主运行时执行，普通 JS 函数继续走函数表。
+        let call_func_idx_scratch = self.call_func_idx_scratch();
+        let call_env_obj_scratch = self.call_env_obj_scratch();
+
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_NATIVE_CALLABLE as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        self.emit(WasmInstruction::Call(self.native_call_func_idx));
+        self.emit(WasmInstruction::Else);
+
+        // 运行时解析 callee → (func_idx, env_obj)。callee 可能是 TAG_FUNCTION 或 TAG_CLOSURE。
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(0xA)); // TAG_CLOSURE
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::Call(self.closure_get_func_idx));
+        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::Call(self.closure_get_env_idx));
+        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+        self.emit(WasmInstruction::End);
+
+        self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
+        self.emit(WasmInstruction::CallIndirect {
+            type_index: 12,
+            table_index: 0,
+        });
+        self.emit(WasmInstruction::End);
+
+        self.emit(WasmInstruction::LocalSet(result_scratch));
+
+        // Step 4: 恢复 new.target 和 shadow_sp
+        self.emit(WasmInstruction::LocalGet(saved_new_target));
+        self.emit(WasmInstruction::Call(self.new_target_set_func_idx));
+        self.emit(WasmInstruction::Drop);
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+
+        // Step 5: 处理返回值
+        self.emit(WasmInstruction::LocalGet(result_scratch));
+        if let Some(d) = dest {
+            self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+        } else {
+            self.emit(WasmInstruction::Drop);
+        }
+
+        Ok(())
     }
 
     pub(crate) fn compile_compare(

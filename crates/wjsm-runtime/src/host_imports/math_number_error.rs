@@ -386,20 +386,20 @@
             } else {
                 0
             };
-            if radix != 0 && (radix < 2 || radix > 36) {
+            if radix != 0 && !(2..=36).contains(&radix) {
                 return value::encode_f64(f64::NAN);
             }
             let (actual_radix, parse_str): (i32, &str) = if radix == 0 {
                 if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
                     (16, &trimmed[2..])
                 } else {
-                    (10, &trimmed[..])
+                    (10, trimmed)
                 }
             } else {
                 let s: &str = if (radix == 16) && (trimmed.starts_with("0x") || trimmed.starts_with("0X")) {
                     &trimmed[2..]
                 } else {
-                    &trimmed[..]
+                    trimmed
                 };
                 (radix, s)
             };
@@ -501,7 +501,7 @@
                 10
             } else if value::is_f64(radix_val) {
                 let r = f64::from_bits(radix_val as u64) as i32;
-                if r < 2 || r > 36 {
+                if !(2..=36).contains(&r) {
                     return store_runtime_string(&caller, "NaN".to_string());
                 }
                 r
@@ -547,7 +547,7 @@
             } else {
                 0
             };
-            if digits < 0 || digits > 100 {
+            if !(0..=100).contains(&digits) {
                 return store_runtime_string(&caller, "RangeError: toFixed() digits argument must be between 0 and 100".to_string());
             }
             if x.is_nan() {
@@ -616,7 +616,7 @@
             } else {
                 -1
             };
-            if precision < 1 || precision > 21 {
+            if !(1..=21).contains(&precision) {
                 if value::is_undefined(digits_val) {
                     let s = format_number_js(x);
                     return store_runtime_string(&caller, s);

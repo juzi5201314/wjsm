@@ -163,11 +163,11 @@ pub fn analyze_module_links(graph: &ModuleGraph) -> Result<ModuleLinkResult> {
 fn collect_dynamic_import_targets(graph: &ModuleGraph) -> HashMap<ModuleId, Vec<ModuleId>> {
     let mut targets = HashMap::new();
     for module_id in graph.all_module_ids() {
-        if let Some(node) = graph.get_module(module_id) {
-            if !node.dynamic_imports.is_empty() {
-                let ids: Vec<ModuleId> = node.dynamic_imports.iter().map(|(_, id)| *id).collect();
-                targets.insert(module_id, ids);
-            }
+        if let Some(node) = graph.get_module(module_id)
+            && !node.dynamic_imports.is_empty()
+        {
+            let ids: Vec<ModuleId> = node.dynamic_imports.iter().map(|(_, id)| *id).collect();
+            targets.insert(module_id, ids);
         }
     }
     targets
@@ -179,10 +179,10 @@ fn collect_dynamic_import_specifiers(
 ) -> HashMap<ModuleId, Vec<(String, ModuleId)>> {
     let mut specifiers = HashMap::new();
     for module_id in graph.all_module_ids() {
-        if let Some(node) = graph.get_module(module_id) {
-            if !node.dynamic_imports.is_empty() {
-                specifiers.insert(module_id, node.dynamic_imports.clone());
-            }
+        if let Some(node) = graph.get_module(module_id)
+            && !node.dynamic_imports.is_empty()
+        {
+            specifiers.insert(module_id, node.dynamic_imports.clone());
         }
     }
     specifiers

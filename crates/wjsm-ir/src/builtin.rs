@@ -341,6 +341,10 @@ pub enum Builtin {
     CreateGlobalObject,
     CreateException,
     ExceptionValue,
+    // ── Eval exception check ──
+    IsException,
+    // ── new.target meta property ──
+    NewTarget,
 }
 
 impl fmt::Display for Builtin {
@@ -652,6 +656,8 @@ impl fmt::Display for Builtin {
             Self::CreateGlobalObject => "create_global_object",
             Self::CreateException => "create_exception",
             Self::ExceptionValue => "exception_value",
+            Self::IsException => "is_exception",
+            Self::NewTarget => "new.target",
         })
     }
 }

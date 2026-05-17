@@ -5,19 +5,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::Deserialize;
 
 /// Test262 测试文件的 YAML frontmatter 元数据。
 #[derive(Debug, Clone, Deserialize)]
 pub struct MetaData {
-    pub description: String,
-    pub esid: Option<String>,
-    #[allow(dead_code)]
-    pub es5id: Option<String>,
-    pub es6id: Option<String>,
-    #[serde(default)]
-    pub info: String,
     #[serde(default)]
     pub features: Vec<String>,
     #[serde(default)]
@@ -47,6 +40,7 @@ pub enum Phase {
 }
 
 /// 错误类型。
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 pub enum ErrorType {
     Test262Error,
@@ -91,16 +85,14 @@ pub enum TestFlag {
 /// 单个测试文件。
 #[derive(Debug, Clone)]
 pub struct Test {
-    pub name: String,
     pub path: PathBuf,
     pub metadata: MetaData,
     pub source: String,
 }
 
 impl Test {
-    pub fn new(name: String, path: PathBuf, metadata: MetaData, source: String) -> Self {
+    pub fn new(path: PathBuf, metadata: MetaData, source: String) -> Self {
         Self {
-            name,
             path,
             metadata,
             source,
@@ -109,10 +101,6 @@ impl Test {
 
     pub fn is_strict(&self) -> bool {
         self.metadata.flags.contains(&TestFlag::OnlyStrict)
-    }
-
-    pub fn is_module(&self) -> bool {
-        self.metadata.flags.contains(&TestFlag::Module)
     }
 
     pub fn is_async(&self) -> bool {
@@ -128,7 +116,6 @@ impl Test {
 #[derive(Debug, Clone)]
 pub struct HarnessFile {
     pub content: String,
-    pub path: PathBuf,
 }
 
 /// 测试所需的 harness 文件集合。
@@ -143,8 +130,6 @@ pub struct Harness {
 /// 测试套件（目录）。
 #[derive(Debug, Clone)]
 pub struct TestSuite {
-    pub name: String,
-    pub path: PathBuf,
     pub suites: Vec<TestSuite>,
     pub tests: Vec<Test>,
 }
@@ -199,7 +184,7 @@ fn read_harness_dir(
         let content = fs::read_to_string(&path)
             .with_context(|| format!("error reading harness file: {}", path.display()))?;
 
-        includes.insert(key, HarnessFile { content, path });
+        includes.insert(key, HarnessFile { content });
     }
 
     Ok(())
@@ -207,12 +192,6 @@ fn read_harness_dir(
 
 /// 递归读取测试套件。
 pub fn read_suite(path: &Path) -> Result<TestSuite> {
-    let name = path
-        .file_name()
-        .and_then(OsStr::to_str)
-        .unwrap_or("")
-        .to_string();
-
     let mut suites = Vec::new();
     let mut tests = Vec::new();
 
@@ -247,28 +226,17 @@ pub fn read_suite(path: &Path) -> Result<TestSuite> {
         }
     }
 
-    Ok(TestSuite {
-        name,
-        path: path.to_path_buf(),
-        suites,
-        tests,
-    })
+    Ok(TestSuite { suites, tests })
 }
 
 /// 读取单个测试文件。
 pub fn read_test(path: &Path) -> Result<Test> {
-    let name = path
-        .file_stem()
-        .and_then(OsStr::to_str)
-        .unwrap_or("")
-        .to_string();
-
     let code = fs::read_to_string(path)
         .with_context(|| format!("could not read test file: {}", path.display()))?;
 
     let metadata = read_metadata(&code)?;
 
-    Ok(Test::new(name, path.to_path_buf(), metadata, code))
+    Ok(Test::new(path.to_path_buf(), metadata, code))
 }
 
 /// 从测试代码中解析 YAML frontmatter。

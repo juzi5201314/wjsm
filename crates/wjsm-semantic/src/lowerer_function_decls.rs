@@ -1086,7 +1086,7 @@ impl Lowerer {
             wrapper_this_scope_id,
         )?;
 
-        let _wrapper_param_ir_names = vec![
+        let _wrapper_param_ir_names = [
             format!("${wrapper_env_scope_id}.$env"),
             format!("${wrapper_this_scope_id}.$this"),
         ];

@@ -61,7 +61,7 @@ fn block_var_hoist_before_block_fixture_matches_ir_snapshot() {
 #[test]
 fn undeclared_var_reports_diagnostic() {
     let source = "console.log(z);\n";
-    let error = lower_module(parse_module(source).expect("parse should succeed"))
+    let error = lower_module(parse_module(source).expect("parse should succeed"), false)
         .expect_err("lowering should fail");
 
     match error {
@@ -75,7 +75,7 @@ fn undeclared_var_reports_diagnostic() {
 #[test]
 fn const_reassign_reports_diagnostic() {
     let source = "const x = 1; x = 2;\n";
-    let error = lower_module(parse_module(source).expect("parse should succeed"))
+    let error = lower_module(parse_module(source).expect("parse should succeed"), false)
         .expect_err("lowering should fail");
 
     match error {
@@ -92,7 +92,7 @@ fn const_reassign_reports_diagnostic() {
 #[test]
 fn tdz_access_reports_diagnostic() {
     let source = "{ console.log(x); let x = 1; }\n";
-    let error = lower_module(parse_module(source).expect("parse should succeed"))
+    let error = lower_module(parse_module(source).expect("parse should succeed"), false)
         .expect_err("lowering should fail");
 
     match error {
@@ -109,7 +109,7 @@ fn tdz_access_reports_diagnostic() {
 #[test]
 fn let_redeclare_reports_diagnostic() {
     let source = "let x = 1; let x = 2;\n";
-    let error = lower_module(parse_module(source).expect("parse should succeed"))
+    let error = lower_module(parse_module(source).expect("parse should succeed"), false)
         .expect_err("lowering should fail");
 
     match error {
@@ -121,7 +121,7 @@ fn let_redeclare_reports_diagnostic() {
 #[test]
 fn function_decl_is_supported() {
     let source = "function greet() {}\n";
-    let result = lower_module(parse_module(source).expect("parse should succeed"));
+    let result = lower_module(parse_module(source).expect("parse should succeed"), false);
     assert!(result.is_ok(), "function declarations should be supported");
     let program = result.unwrap();
     let text = program.dump_text();
@@ -137,7 +137,7 @@ fn function_decl_is_supported() {
 #[test]
 fn console_log_without_arguments_reports_diagnostic() {
     let source = "console.log();\n";
-    let error = lower_module(parse_module(source).expect("parse should succeed"))
+    let error = lower_module(parse_module(source).expect("parse should succeed"), false)
         .expect_err("lowering should fail");
 
     match error {
@@ -590,7 +590,7 @@ fn assert_snapshot(name: &str) {
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", source_path.display()));
 
     let module = parse_module(&source).expect("fixture source should parse");
-    let lowered = lower_module(module).expect("fixture lowering should succeed");
+    let lowered = lower_module(module, false).expect("fixture lowering should succeed");
     let actual = lowered.dump_text();
 
     if std::env::var("WJSM_UPDATE_SNAPSHOTS").is_ok() {
@@ -610,4 +610,19 @@ fn workspace_root() -> PathBuf {
         .join("../..")
         .canonicalize()
         .expect("workspace root should resolve")
+}
+
+#[test]
+fn eval_predeclare_function_name() {
+    // Test that eval('function fun() {}') predeclares fun in non-strict mode
+    let source = "let typeofInside; function outer() { eval('function fun() {}'); typeofInside = typeof fun; }\n";
+    let result = lower_module(
+        wjsm_parser::parse_module(source).expect("parse should succeed"),
+        false,
+    );
+    assert!(
+        result.is_ok(),
+        "lowering should succeed, got: {:?}",
+        result.err()
+    );
 }

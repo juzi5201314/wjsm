@@ -33,15 +33,15 @@ pub(crate) fn advance_object_iterator_from_caller(
     let result =
         call_host_function_from_caller(caller, func_table, next, value::encode_undefined())
             .unwrap_or_else(value::encode_undefined);
-    if value::is_object(result) || value::is_function(result) || value::is_array(result) {
-        if let Some(ptr) = resolve_handle(caller, result) {
-            let done = read_object_property_by_name(caller, ptr, "done")
-                .map(nanbox_to_bool)
-                .unwrap_or(false);
-            let current_value = read_object_property_by_name(caller, ptr, "value")
-                .unwrap_or_else(value::encode_undefined);
-            return (result, current_value, done, true);
-        }
+    if (value::is_object(result) || value::is_function(result) || value::is_array(result))
+        && let Some(ptr) = resolve_handle(caller, result)
+    {
+        let done = read_object_property_by_name(caller, ptr, "done")
+            .map(nanbox_to_bool)
+            .unwrap_or(false);
+        let current_value = read_object_property_by_name(caller, ptr, "value")
+            .unwrap_or_else(value::encode_undefined);
+        return (result, current_value, done, true);
     }
     if !value::is_undefined(result) {
         set_runtime_error(
@@ -111,7 +111,7 @@ pub(crate) fn read_date_ms(caller: &mut Caller<'_, RuntimeState>, this_val: i64)
         return f64::NAN;
     };
     let ms_val = read_object_property_by_name(caller, op, "__date_ms__");
-    ms_val.map(|v| value::decode_f64(v)).unwrap_or(f64::NAN)
+    ms_val.map(value::decode_f64).unwrap_or(f64::NAN)
 }
 
 pub(crate) fn write_date_ms(caller: &mut Caller<'_, RuntimeState>, this_val: i64, ms: f64) {
@@ -236,7 +236,7 @@ pub(crate) fn date_args_to_ms(args: &[i64], is_utc: bool) -> f64 {
     let s = second as u32;
     let ms = millisecond as u32;
 
-    let adjusted_year = if y >= 0 && y <= 99 { 1900 + y } else { y };
+    let adjusted_year = if (0..=99).contains(&y) { 1900 + y } else { y };
 
     if is_utc {
         Utc.with_ymd_and_hms(adjusted_year, m + 1, d.max(1), h, min, s)
@@ -753,38 +753,38 @@ pub(crate) fn call_date_method_from_caller(
         }
         DateMethodKind::ToString => {
             if ms.is_nan() {
-                return store_runtime_string(&caller, "Invalid Date".to_string());
+                return store_runtime_string(caller, "Invalid Date".to_string());
             }
             match ms_to_datetime_local(ms) {
                 Some(dt) => {
                     let s = dt.format("%a %b %e %Y %H:%M:%S GMT%:z").to_string();
-                    store_runtime_string(&caller, s)
+                    store_runtime_string(caller, s)
                 }
-                None => store_runtime_string(&caller, "Invalid Date".to_string()),
+                None => store_runtime_string(caller, "Invalid Date".to_string()),
             }
         }
         DateMethodKind::ToDateString => {
             if ms.is_nan() {
-                return store_runtime_string(&caller, "Invalid Date".to_string());
+                return store_runtime_string(caller, "Invalid Date".to_string());
             }
             match ms_to_datetime_local(ms) {
                 Some(dt) => {
                     let s = dt.format("%Y-%m-%d").to_string();
-                    store_runtime_string(&caller, s)
+                    store_runtime_string(caller, s)
                 }
-                None => store_runtime_string(&caller, "Invalid Date".to_string()),
+                None => store_runtime_string(caller, "Invalid Date".to_string()),
             }
         }
         DateMethodKind::ToTimeString => {
             if ms.is_nan() {
-                return store_runtime_string(&caller, "Invalid Date".to_string());
+                return store_runtime_string(caller, "Invalid Date".to_string());
             }
             match ms_to_datetime_local(ms) {
                 Some(dt) => {
                     let s = dt.format("%H:%M:%S GMT%:z").to_string();
-                    store_runtime_string(&caller, s)
+                    store_runtime_string(caller, s)
                 }
-                None => store_runtime_string(&caller, "Invalid Date".to_string()),
+                None => store_runtime_string(caller, "Invalid Date".to_string()),
             }
         }
         DateMethodKind::ToISOString => {
@@ -795,7 +795,7 @@ pub(crate) fn call_date_method_from_caller(
                 Some(dt) => {
                     let frac_sec = (ms % 1000.0).trunc().abs() as u32;
                     let year = dt.year();
-                    let s = if year >= 0 && year <= 9999 {
+                    let s = if (0..=9999).contains(&year) {
                         format!(
                             "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
                             year,
@@ -818,21 +818,21 @@ pub(crate) fn call_date_method_from_caller(
                             frac_sec
                         )
                     };
-                    store_runtime_string(&caller, s)
+                    store_runtime_string(caller, s)
                 }
                 None => value::encode_f64(f64::NAN),
             }
         }
         DateMethodKind::ToUTCString => {
             if ms.is_nan() {
-                return store_runtime_string(&caller, "Invalid Date".to_string());
+                return store_runtime_string(caller, "Invalid Date".to_string());
             }
             match ms_to_datetime_utc(ms) {
                 Some(dt) => {
                     let s = dt.format("%a, %d %b %Y %H:%M:%S GMT").to_string();
-                    store_runtime_string(&caller, s)
+                    store_runtime_string(caller, s)
                 }
-                None => store_runtime_string(&caller, "Invalid Date".to_string()),
+                None => store_runtime_string(caller, "Invalid Date".to_string()),
             }
         }
         DateMethodKind::ToJSON => {
@@ -843,7 +843,7 @@ pub(crate) fn call_date_method_from_caller(
                 Some(dt) => {
                     let frac_sec = (ms % 1000.0).trunc().abs() as u32;
                     let year = dt.year();
-                    let s = if year >= 0 && year <= 9999 {
+                    let s = if (0..=9999).contains(&year) {
                         format!(
                             "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
                             year,
@@ -866,7 +866,7 @@ pub(crate) fn call_date_method_from_caller(
                             frac_sec
                         )
                     };
-                    store_runtime_string(&caller, s)
+                    store_runtime_string(caller, s)
                 }
                 None => value::encode_f64(f64::NAN),
             }
@@ -951,10 +951,10 @@ pub(crate) fn call_weakmap_method_from_caller(
                 .weakmap_table
                 .lock()
                 .expect("weakmap_table mutex");
-            if handle < table.len() {
-                if let Some(&val) = table[handle].map.get(&key_handle) {
-                    return val;
-                }
+            if handle < table.len()
+                && let Some(&val) = table[handle].map.get(&key_handle)
+            {
+                return val;
             }
             value::encode_undefined()
         }

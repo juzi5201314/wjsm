@@ -690,27 +690,24 @@ pub(crate) fn resolve_promise_from_caller(
         return;
     }
 
-    if value::is_object(resolution)
+    if (value::is_object(resolution)
         || value::is_function(resolution)
-        || value::is_callable(resolution)
+        || value::is_callable(resolution))
+        && let Some(ptr) = resolve_handle(caller, resolution)
+        && let Some(then) = read_object_property_by_name(caller, ptr, "then")
+        && value::is_callable(then)
     {
-        if let Some(ptr) = resolve_handle(caller, resolution) {
-            if let Some(then) = read_object_property_by_name(caller, ptr, "then") {
-                if value::is_callable(then) {
-                    let mut queue = caller
-                        .data()
-                        .microtask_queue
-                        .lock()
-                        .expect("microtask queue mutex");
-                    queue.push_back(Microtask::PromiseResolveThenable {
-                        promise,
-                        thenable: resolution,
-                        then,
-                    });
-                    return;
-                }
-            }
-        }
+        let mut queue = caller
+            .data()
+            .microtask_queue
+            .lock()
+            .expect("microtask queue mutex");
+        queue.push_back(Microtask::PromiseResolveThenable {
+            promise,
+            thenable: resolution,
+            then,
+        });
+        return;
     }
 
     settle_promise(
@@ -741,30 +738,25 @@ pub(crate) fn resolve_promise_from_store(
         return;
     }
 
-    if value::is_object(resolution)
+    if (value::is_object(resolution)
         || value::is_function(resolution)
-        || value::is_callable(resolution)
-    {
-        if let Some(ptr) =
+        || value::is_callable(resolution))
+        && let Some(ptr) =
             resolve_handle_from_store(store, memory, obj_table_ptr_global, resolution)
-        {
-            if let Some(then) = read_object_property_by_name_from_store(store, memory, ptr, "then")
-            {
-                if value::is_callable(then) {
-                    let mut queue = store
-                        .data()
-                        .microtask_queue
-                        .lock()
-                        .expect("microtask queue mutex");
-                    queue.push_back(Microtask::PromiseResolveThenable {
-                        promise,
-                        thenable: resolution,
-                        then,
-                    });
-                    return;
-                }
-            }
-        }
+        && let Some(then) = read_object_property_by_name_from_store(store, memory, ptr, "then")
+        && value::is_callable(then)
+    {
+        let mut queue = store
+            .data()
+            .microtask_queue
+            .lock()
+            .expect("microtask queue mutex");
+        queue.push_back(Microtask::PromiseResolveThenable {
+            promise,
+            thenable: resolution,
+            then,
+        });
+        return;
     }
 
     settle_promise(

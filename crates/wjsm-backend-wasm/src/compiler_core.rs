@@ -836,6 +836,10 @@ impl Compiler {
         imports.import("env", "proxy_trap_delete", EntityType::Function(8));
         // Import index 321: get_builtin_global: (i64) -> i64
         imports.import("env", "get_builtin_global", EntityType::Function(3));
+        // Import index 322: new_target: (i64) -> i64
+        imports.import("env", "new_target", EntityType::Function(3));
+        // Import index 323: new_target_set: (i64) -> i64
+        imports.import("env", "new_target_set", EntityType::Function(3));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1182,6 +1186,7 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::CreateException, 313);
         builtin_func_indices.insert(Builtin::ExceptionValue, 314);
         builtin_func_indices.insert(Builtin::GetBuiltinGlobal, 321);
+        builtin_func_indices.insert(Builtin::NewTarget, 322);
         builtin_func_indices.insert(Builtin::PrivateGet, 316);
         builtin_func_indices.insert(Builtin::PrivateSet, 317);
         builtin_func_indices.insert(Builtin::PrivateHas, 318);
@@ -1192,6 +1197,8 @@ impl Compiler {
         for (index, name) in HOST_IMPORT_NAMES.iter().enumerate() {
             exports.export(name, ExportKind::Func, index as u32);
         }
+        exports.export("new_target", ExportKind::Func, 322);
+        exports.export("new_target_set", ExportKind::Func, 323);
 
         let mut memory = MemorySection::new();
         if mode == CompileMode::Normal {
@@ -1227,7 +1234,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: HOST_IMPORT_NAMES.len() as u32,
+            _next_import_func: HOST_IMPORT_NAMES.len() as u32 + 2, // +2 for new_target imports
             builtin_func_indices,
             function_table: Vec::new(),
             function_table_reverse: HashMap::new(),
@@ -1262,6 +1269,7 @@ impl Compiler {
             closure_get_func_idx: 36,
             closure_get_env_idx: 37,
             native_call_func_idx: 141,
+            new_target_set_func_idx: 323,
             array_proto_handle_global_idx: 0,
             arr_proto_table_base: 0,
             obj_spread_func_idx: 0,

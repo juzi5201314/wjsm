@@ -479,6 +479,7 @@ pub(crate) fn define_host_data_property_from_store(
     Some(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn alloc_all_settled_result_from_store(
     store: &mut Store<RuntimeState>,
     memory: &Memory,

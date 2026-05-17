@@ -19,12 +19,13 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(0)
-    c20 = bool(true)
-    c21 = number(10)
-    c22 = number(1)
-    c23 = number(3)
-    c24 = number(6)
+    c19 = undefined
+    c20 = number(0)
+    c21 = bool(true)
+    c22 = number(10)
+    c23 = number(1)
+    c24 = number(3)
+    c25 = number(6)
 
   fn @main [entry=bb0]:
     bb0:
@@ -66,37 +67,47 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      store var $0.i, %19
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      store var $0.i, %21
       jump bb1
     bb1:
-      %20 = const c20
-      %21 = load var $0.i
       %22 = const c21
-      %23 = call builtin.abstract_compare(%21, %22)
-      branch %23, bb2, bb3
+      %23 = load var $0.i
+      %24 = const c22
+      %25 = call builtin.abstract_compare(%23, %24)
+      branch %25, bb2, bb3
     bb2:
-      %24 = load var $0.i
-      %25 = const c22
-      %26 = add %24, %25
-      store var $0.i, %26
-      %27 = load var $0.i
-      %28 = const c23
-      %29 = call builtin.abstract_eq(%27, %28)
-      branch %29, bb4, bb5
+      %26 = load var $0.i
+      %27 = const c23
+      %28 = add %26, %27
+      store var $0.i, %28
+      %29 = load var $0.i
+      %30 = const c24
+      %31 = call builtin.abstract_eq(%29, %30)
+      branch %31, bb4, bb5
     bb3:
       return
     bb4:
       jump bb1
     bb5:
-      %30 = load var $0.i
-      %31 = const c24
-      %32 = call builtin.abstract_eq(%30, %31)
-      branch %32, bb6, bb7
+      %32 = load var $0.i
+      %33 = const c25
+      %34 = call builtin.abstract_eq(%32, %33)
+      branch %34, bb6, bb7
     bb6:
       jump bb3
     bb7:
-      %33 = load var $0.i
-      %34 = call builtin.console.log(%33)
+      %35 = load var $0.i
+      %36 = call builtin.console.log(%35)
+      %37 = is_exception %36
+      branch %37, bb9, bb8
+    bb8:
       jump bb1
+    bb9:
+      %38 = call builtin.exception_value(%36)
+      throw %38
 }

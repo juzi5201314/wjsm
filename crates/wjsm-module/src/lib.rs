@@ -62,24 +62,23 @@ fn decl_has_dynamic_import(decl: &ast::Decl) -> bool {
             .function
             .body
             .as_ref()
-            .map_or(false, |body| body.stmts.iter().any(stmt_has_dynamic_import)),
+            .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
         ast::Decl::Class(class_decl) => class_decl.class.body.iter().any(|member| match member {
             ast::ClassMember::Method(method) => method
                 .function
                 .body
                 .as_ref()
-                .map_or(false, |body| body.stmts.iter().any(stmt_has_dynamic_import)),
+                .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
             ast::ClassMember::Constructor(ctor) => ctor
                 .body
                 .as_ref()
-                .map_or(false, |body| body.stmts.iter().any(stmt_has_dynamic_import)),
+                .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
             _ => false,
         }),
-        ast::Decl::Var(var_decl) => var_decl.decls.iter().any(|d| {
-            d.init
-                .as_ref()
-                .map_or(false, |e| expr_has_dynamic_import(e))
-        }),
+        ast::Decl::Var(var_decl) => var_decl
+            .decls
+            .iter()
+            .any(|d| d.init.as_ref().is_some_and(|e| expr_has_dynamic_import(e))),
         _ => false,
     }
 }
@@ -95,33 +94,29 @@ fn stmt_has_dynamic_import(stmt: &ast::Stmt) -> bool {
                 || if_stmt
                     .alt
                     .as_ref()
-                    .map_or(false, |alt| stmt_has_dynamic_import(alt))
+                    .is_some_and(|alt| stmt_has_dynamic_import(alt))
         }
         ast::Stmt::While(while_stmt) => {
             expr_has_dynamic_import(&while_stmt.test) || stmt_has_dynamic_import(&while_stmt.body)
         }
         ast::Stmt::For(for_stmt) => {
-            for_stmt.init.as_ref().map_or(false, |init| match init {
-                ast::VarDeclOrExpr::VarDecl(decl) => decl.decls.iter().any(|d| {
-                    d.init
-                        .as_ref()
-                        .map_or(false, |e| expr_has_dynamic_import(e))
-                }),
+            for_stmt.init.as_ref().is_some_and(|init| match init {
+                ast::VarDeclOrExpr::VarDecl(decl) => decl
+                    .decls
+                    .iter()
+                    .any(|d| d.init.as_ref().is_some_and(|e| expr_has_dynamic_import(e))),
                 ast::VarDeclOrExpr::Expr(e) => expr_has_dynamic_import(e),
             }) || for_stmt
                 .test
                 .as_ref()
-                .map_or(false, |e| expr_has_dynamic_import(e))
+                .is_some_and(|e| expr_has_dynamic_import(e))
                 || for_stmt
                     .update
                     .as_ref()
-                    .map_or(false, |e| expr_has_dynamic_import(e))
+                    .is_some_and(|e| expr_has_dynamic_import(e))
                 || stmt_has_dynamic_import(&for_stmt.body)
         }
-        ast::Stmt::Return(ret) => ret
-            .arg
-            .as_ref()
-            .map_or(false, |e| expr_has_dynamic_import(e)),
+        ast::Stmt::Return(ret) => ret.arg.as_ref().is_some_and(|e| expr_has_dynamic_import(e)),
         ast::Stmt::Decl(decl) => decl_has_dynamic_import(decl),
         ast::Stmt::Throw(throw) => expr_has_dynamic_import(&throw.arg),
         ast::Stmt::Try(try_stmt) => {
@@ -129,18 +124,16 @@ fn stmt_has_dynamic_import(stmt: &ast::Stmt) -> bool {
                 || try_stmt
                     .handler
                     .as_ref()
-                    .map_or(false, |h| h.body.stmts.iter().any(stmt_has_dynamic_import))
+                    .is_some_and(|h| h.body.stmts.iter().any(stmt_has_dynamic_import))
                 || try_stmt
                     .finalizer
                     .as_ref()
-                    .map_or(false, |f| f.stmts.iter().any(stmt_has_dynamic_import))
+                    .is_some_and(|f| f.stmts.iter().any(stmt_has_dynamic_import))
         }
         ast::Stmt::Switch(switch) => {
             expr_has_dynamic_import(&switch.discriminant)
                 || switch.cases.iter().any(|c| {
-                    c.test
-                        .as_ref()
-                        .map_or(false, |e| expr_has_dynamic_import(e))
+                    c.test.as_ref().is_some_and(|e| expr_has_dynamic_import(e))
                         || c.cons.iter().any(stmt_has_dynamic_import)
                 })
         }
@@ -188,7 +181,7 @@ fn expr_has_dynamic_import(expr: &ast::Expr) -> bool {
             .as_ref()
             .body
             .as_ref()
-            .map_or(false, |body| body.stmts.iter().any(stmt_has_dynamic_import)),
+            .is_some_and(|body| body.stmts.iter().any(stmt_has_dynamic_import)),
         _ => false,
     }
 }

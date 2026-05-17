@@ -19,11 +19,12 @@ module {
     c16 = number(NaN)
     c17 = number(-inf)
     c18 = number(inf)
-    c19 = number(0)
-    c20 = number(10)
-    c21 = number(3)
-    c22 = number(1)
-    c23 = number(999)
+    c19 = undefined
+    c20 = number(0)
+    c21 = number(10)
+    c22 = number(3)
+    c23 = number(1)
+    c24 = number(999)
 
   fn @main [entry=bb0]:
     bb0:
@@ -65,33 +66,49 @@ module {
       store var $0.Number.NEGATIVE_INFINITY, %17
       %18 = const c18
       store var $0.Number.POSITIVE_INFINITY, %18
-      %19 = const c19
-      store var $0.i, %19
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $0.$this, %20
+      %21 = const c20
+      store var $0.i, %21
       jump bb1
     bb1:
-      %20 = load var $0.i
-      %21 = const c20
-      %22 = call builtin.abstract_compare(%20, %21)
-      branch %22, bb2, bb4
+      %22 = load var $0.i
+      %23 = const c21
+      %24 = call builtin.abstract_compare(%22, %23)
+      branch %24, bb2, bb4
     bb2:
-      %23 = load var $0.i
-      %24 = const c21
-      %25 = call builtin.abstract_eq(%23, %24)
-      branch %25, bb5, bb6
+      %25 = load var $0.i
+      %26 = const c22
+      %27 = call builtin.abstract_eq(%25, %26)
+      branch %27, bb5, bb6
     bb3:
-      %28 = load var $0.i
-      %29 = const c22
-      %30 = add %28, %29
-      store var $0.i, %30
+      %32 = load var $0.i
+      %33 = const c23
+      %34 = add %32, %33
+      store var $0.i, %34
       jump bb1
     bb4:
-      %31 = const c23
-      %32 = call builtin.console.log(%31)
-      return
+      %35 = const c24
+      %36 = call builtin.console.log(%35)
+      %37 = is_exception %36
+      branch %37, bb10, bb9
     bb5:
       return
     bb6:
-      %26 = load var $0.i
-      %27 = call builtin.console.log(%26)
+      %28 = load var $0.i
+      %29 = call builtin.console.log(%28)
+      %30 = is_exception %29
+      branch %30, bb8, bb7
+    bb7:
       jump bb3
+    bb8:
+      %31 = call builtin.exception_value(%29)
+      throw %31
+    bb9:
+      return
+    bb10:
+      %38 = call builtin.exception_value(%36)
+      throw %38
 }
