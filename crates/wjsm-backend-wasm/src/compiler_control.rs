@@ -527,16 +527,16 @@ impl Compiler {
                     }
                 }
                 Terminator::Throw { value } => {
-                    // 调用 runtime throw host function，然后 trap
+                    // 将异常值编码为 TAG_EXCEPTION 返回给调用方
                     self.emit_eval_var_frame_exit();
                     self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                     let func_idx = self
                         .builtin_func_indices
-                        .get(&Builtin::Throw)
+                        .get(&Builtin::CreateException)
                         .copied()
-                        .unwrap_or(3);
+                        .unwrap_or(313);
                     self.emit(WasmInstruction::Call(func_idx));
-                    self.emit(WasmInstruction::Unreachable);
+                    self.emit(WasmInstruction::Return);
                     idx += 1;
                 }
             }
@@ -927,11 +927,11 @@ impl Compiler {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                     let func_idx = self
                         .builtin_func_indices
-                        .get(&Builtin::Throw)
+                        .get(&Builtin::CreateException)
                         .copied()
-                        .unwrap_or(3);
+                        .unwrap_or(313);
                     self.emit(WasmInstruction::Call(func_idx));
-                    self.emit(WasmInstruction::Unreachable);
+                    self.emit(WasmInstruction::Return);
                     break;
                 }
             }
@@ -1046,11 +1046,11 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 let func_idx = self
                     .builtin_func_indices
-                    .get(&Builtin::Throw)
+                    .get(&Builtin::CreateException)
                     .copied()
-                    .unwrap_or(3);
+                    .unwrap_or(313);
                 self.emit(WasmInstruction::Call(func_idx));
-                self.emit(WasmInstruction::Unreachable);
+                self.emit(WasmInstruction::Return);
                 Ok(true)
             }
             Terminator::Unreachable => Ok(true),

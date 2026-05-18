@@ -202,7 +202,33 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let main_ok = match main_result {
         Ok(return_val) => {
             if value::is_exception(return_val) {
-                // 未捕获异常被抛出顶层，跳过后续 microtasks/timers
+                // 未捕获异常被抛出顶层：将异常信息写入输出并设置 runtime_error
+                let idx = value::decode_handle(return_val) as usize;
+                if let Some(entry) = store
+                    .data()
+                    .error_table
+                    .lock()
+                    .expect("error_table mutex")
+                    .get(idx)
+                {
+                    let msg = if entry.message.is_empty() {
+                        "Uncaught exception".to_string()
+                    } else {
+                        format!("Uncaught exception: {}", entry.message)
+                    };
+                    let mut buffer = store
+                        .data()
+                        .output
+                        .lock()
+                        .expect("output mutex");
+                    writeln!(&mut *buffer, "{msg}").ok();
+                    *store
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime_error mutex") = Some(msg);
+                }
+                // 跳过后续 microtasks/timers
                 false
             } else {
                 true

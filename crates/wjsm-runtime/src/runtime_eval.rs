@@ -255,10 +255,34 @@ pub(crate) fn perform_eval_from_caller(
         }
     };
     let strict_eval_source = runtime_module_has_use_strict_directive(&module);
-
     let var_writes_to_scope = scope_env
         .map(|env| !strict_eval_source && !eval_scope_has_strict_marker(caller, env))
         .unwrap_or(false);
+
+    // ── 非可定义函数检查（CanDeclareGlobalFunction）──
+    // eval 代码中声明 function NaN/Infinity/undefined → TypeError
+    for item in &module.body {
+        if let swc_ast::ModuleItem::Stmt(swc_ast::Stmt::Decl(swc_ast::Decl::Fn(fn_decl))) = item {
+            let name = fn_decl.ident.sym.as_ref();
+            if matches!(name, "NaN" | "Infinity" | "undefined") {
+                let msg = format!("Cannot define function '{}' in eval", fn_decl.ident.sym);
+                let msg_val = store_runtime_string(caller, msg.clone());
+                let error_obj = create_error_object(caller, "TypeError", msg_val);
+                {
+                    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+                    let idx = errors.len() as u32;
+                    // create_error_object 已 push 了第一项（value=undefined），
+                    // 我们需要再 push 一项（value=错误对象），以便 ExceptionValue 能恢复
+                    errors.push(crate::ErrorEntry {
+                        name: "TypeError".to_string(),
+                        message: msg,
+                        value: error_obj,
+                    });
+                    return value::encode_handle(value::TAG_EXCEPTION, idx + 1);
+                }
+            }
+        }
+    }
 
     let output_len = caller
         .data()

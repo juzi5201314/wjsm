@@ -1062,12 +1062,14 @@
 
     let create_exception_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, thrown_value: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, thrown_value: i64| -> i64 {
+            let rendered = render_value(&mut caller, thrown_value)
+                .unwrap_or_else(|_| "unknown".to_string());
             let mut errors = caller.data().error_table.lock().unwrap();
             let idx = errors.len() as u32;
             errors.push(ErrorEntry {
                 name: String::new(),
-                message: String::new(),
+                message: rendered,
                 value: thrown_value,
             });
             value::encode_handle(value::TAG_EXCEPTION, idx)

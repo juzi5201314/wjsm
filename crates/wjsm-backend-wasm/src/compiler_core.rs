@@ -876,6 +876,7 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::F64Mod, 1);
         builtin_func_indices.insert(Builtin::F64Exp, 2);
         builtin_func_indices.insert(Builtin::Throw, 3);
+        builtin_func_indices.insert(Builtin::Throw, 3); // 已弃用：Terminator::Throw 现在编译为 CreateException + return
         builtin_func_indices.insert(Builtin::AbortShadowStackOverflow, 77);
         builtin_func_indices.insert(Builtin::IteratorFrom, 4);
         builtin_func_indices.insert(Builtin::IteratorNext, 5);
