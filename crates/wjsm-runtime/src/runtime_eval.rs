@@ -167,6 +167,22 @@ pub(crate) fn compiled_eval_import(
                 },
             );
         }
+        "create_unmapped_arguments_object" => {
+            return Func::wrap(
+                &mut *caller,
+                |mut caller: Caller<'_, RuntimeState>, args_array: i64, param_count: i64| -> i64 {
+                    create_unmapped_arguments_object(&mut caller, args_array, param_count)
+                },
+            );
+        }
+        "create_mapped_arguments_object" => {
+            return Func::wrap(
+                &mut *caller,
+                |mut caller: Caller<'_, RuntimeState>, args_array: i64, param_count: i64, func_ref: i64| -> i64 {
+                    create_mapped_arguments_object(&mut caller, args_array, param_count, func_ref)
+                },
+            );
+        }
         _ => {}
     }
 

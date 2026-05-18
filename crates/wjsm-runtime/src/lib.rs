@@ -19,11 +19,13 @@ mod runtime_builtins;
 mod runtime_eval;
 mod runtime_heap;
 mod runtime_host_helpers;
+mod runtime_arguments;
 mod runtime_promises;
 mod runtime_render;
 mod runtime_values;
 
 use runtime_builtins::*;
+use runtime_arguments::*;
 use runtime_eval::*;
 use runtime_heap::*;
 use runtime_host_helpers::*;
@@ -167,7 +169,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     );
 
     // ── Import 0: console_log(i64) → () ─────────────────────────────────
-    let mut imports: Vec<Extern> = Vec::with_capacity(324);
+    let mut imports: Vec<Extern> = Vec::with_capacity(326);
     imports.extend(include!("host_imports/core.rs"));
     imports.extend(include!("host_imports/timers_arrays.rs"));
     imports.extend(include!("host_imports/array_object.rs"));
@@ -194,6 +196,22 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     imports.push(new_target_set_fn.into());
+    // Import 324: create_unmapped_arguments_object: (i64, i64) -> i64
+    let create_unmapped_arguments_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_array: i64, param_count: i64| -> i64 {
+            create_unmapped_arguments_object(&mut caller, args_array, param_count)
+        },
+    );
+    imports.push(create_unmapped_arguments_fn.into());
+    // Import 325: create_mapped_arguments_object: (i64, i64, i64) -> i64
+    let create_mapped_arguments_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_array: i64, param_count: i64, func_ref: i64| -> i64 {
+            create_mapped_arguments_object(&mut caller, args_array, param_count, func_ref)
+        },
+    );
+    imports.push(create_mapped_arguments_fn.into());
     let instance = Instance::new(&mut store, &module, &imports)?;
 
     // ── Run main ──

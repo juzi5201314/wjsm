@@ -1588,6 +1588,50 @@ impl Compiler {
                 }
                 Ok(())
             }
+            Builtin::CreateUnmappedArgumentsObject => {
+                let args_array = args.first().with_context(|| {
+                    format!("{builtin} expects 2 arguments (args_array, param_count)")
+                })?;
+                let param_count = args.get(1).with_context(|| {
+                    format!("{builtin} expects 2 arguments (args_array, param_count)")
+                })?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(args_array.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(param_count.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::CreateMappedArgumentsObject => {
+                let args_array = args.first().with_context(|| {
+                    format!("{builtin} expects 3 arguments (args_array, param_count, func_ref)")
+                })?;
+                let param_count = args.get(1).with_context(|| {
+                    format!("{builtin} expects 3 arguments (args_array, param_count, func_ref)")
+                })?;
+                let func_ref = args.get(2).with_context(|| {
+                    format!("{builtin} expects 3 arguments (args_array, param_count, func_ref)")
+                })?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(args_array.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(param_count.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(func_ref.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
     }
     }
 }

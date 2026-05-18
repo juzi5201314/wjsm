@@ -24,17 +24,20 @@ module {
     c21 = number(2)
     c22 = number(3)
     c23 = number(4)
-    c24 = number(2)
-    c25 = functionref(@0)
+    c24 = number(0)
+    c25 = number(2)
+    c26 = functionref(@0)
 
   fn @anon_0 [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      store var $1.arguments, %0
-      %1 = load var $1.x
-      %2 = const c24
-      %3 = call builtin.abstract_compare(%2, %1)
-      return %3
+      %1 = const c24
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      store var $1.arguments, %2
+      %3 = load var $1.x
+      %4 = const c25
+      %5 = call builtin.abstract_compare(%4, %3)
+      return %5
 
   fn @main [entry=bb0]:
     bb0:
@@ -91,7 +94,7 @@ module {
       call builtin.array.push(%21, %25)
       store var $0.a, %21
       %26 = load var $0.a
-      %27 = const c25
+      %27 = const c26
       %28 = call builtin.array.filter(%26, %27)
       store var $0.b, %28
       return

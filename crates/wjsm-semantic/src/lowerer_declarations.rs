@@ -383,28 +383,54 @@ impl Lowerer {
             }
             Err(_) => {
                 // Already declared (var/let arguments in body or eval predeclare)
-                // Find the existing scope id
                 self.scopes.resolve_scope_id("arguments").unwrap_or(0)
             }
         };
         let ir_name = format!("${scope_id}.arguments");
-        let dest = self.alloc_value();
+
+        // 1) Collect all arguments into an array
+        let args_array = self.alloc_value();
         self.current_function
-            .append_instruction(block, Instruction::CollectRestArgs { dest, skip: 0 });
+            .append_instruction(block, Instruction::CollectRestArgs { dest: args_array, skip: 0 });
+
+        // 2) Build param_count constant (0 = unused for unmapped mode, needed for future mapped mode)
+        let param_count = 0.0;
+        let param_count_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: param_count_val,
+                constant: self.module.add_constant(Constant::Number(param_count)),
+            },
+        );
+
+        // 3) Call CreateUnmappedArgumentsObject (produces proper Arguments exotic object)
+        let arguments_obj = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(arguments_obj),
+                builtin: Builtin::CreateUnmappedArgumentsObject,
+                args: vec![args_array, param_count_val],
+            },
+        );
+
+        // 4) Store to arguments variable
         let store_block = self.resolve_store_block(block);
         self.current_function.append_instruction(
             store_block,
             Instruction::StoreVar {
                 name: ir_name,
-                value: dest,
+                value: arguments_obj,
             },
         );
-        // Only mark initialised if we declared it (skip if pre-declared)
+
         if self.scopes.mark_initialised("arguments").is_err() {
             // Already initialised, that's fine
         }
         Ok(self.resolve_store_block(block))
     }
+
     pub(crate) fn emit_pat_inits_impl(
         &mut self,
         pats: &[&swc_ast::Pat],

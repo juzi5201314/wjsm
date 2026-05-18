@@ -840,6 +840,10 @@ impl Compiler {
         imports.import("env", "new_target", EntityType::Function(3));
         // Import index 323: new_target_set: (i64) -> i64
         imports.import("env", "new_target_set", EntityType::Function(3));
+        // Import index 324: create_unmapped_arguments_object: (i64, i64) -> i64
+        imports.import("env", "create_unmapped_arguments_object", EntityType::Function(2));
+        // Import index 325: create_mapped_arguments_object: (i64, i64, i64) -> i64
+        imports.import("env", "create_mapped_arguments_object", EntityType::Function(16));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1188,6 +1192,8 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::ExceptionValue, 314);
         builtin_func_indices.insert(Builtin::GetBuiltinGlobal, 321);
         builtin_func_indices.insert(Builtin::NewTarget, 322);
+        builtin_func_indices.insert(Builtin::CreateUnmappedArgumentsObject, 324);
+        builtin_func_indices.insert(Builtin::CreateMappedArgumentsObject, 325);
         builtin_func_indices.insert(Builtin::PrivateGet, 316);
         builtin_func_indices.insert(Builtin::PrivateSet, 317);
         builtin_func_indices.insert(Builtin::PrivateHas, 318);
@@ -1198,9 +1204,11 @@ impl Compiler {
         for (index, name) in HOST_IMPORT_NAMES.iter().enumerate() {
             exports.export(name, ExportKind::Func, index as u32);
         }
+
         exports.export("new_target", ExportKind::Func, 322);
         exports.export("new_target_set", ExportKind::Func, 323);
-
+        exports.export("create_unmapped_arguments_object", ExportKind::Func, 324);
+        exports.export("create_mapped_arguments_object", ExportKind::Func, 325);
         let mut memory = MemorySection::new();
         if mode == CompileMode::Normal {
             memory.memory(MemoryType {
@@ -1235,7 +1243,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: HOST_IMPORT_NAMES.len() as u32 + 2, // +2 for new_target imports
+            _next_import_func: HOST_IMPORT_NAMES.len() as u32 + 4, // +4 for new_target, new_target_set, create_unmapped, create_mapped
             builtin_func_indices,
             function_table: Vec::new(),
             function_table_reverse: HashMap::new(),

@@ -22,68 +22,83 @@ module {
     c19 = undefined
     c20 = undefined
     c21 = number(42)
-    c22 = functionref(@0)
-    c23 = functionref(@1)
-    c24 = undefined
-    c25 = undefined
-    c26 = string("err")
-    c27 = functionref(@2)
-    c28 = functionref(@3)
-    c29 = functionref(@4)
+    c22 = number(0)
+    c23 = functionref(@0)
+    c24 = number(0)
+    c25 = functionref(@1)
+    c26 = undefined
+    c27 = undefined
+    c28 = string("err")
+    c29 = number(0)
+    c30 = functionref(@2)
+    c31 = number(0)
+    c32 = functionref(@3)
+    c33 = number(0)
+    c34 = functionref(@4)
 
   fn @anon_0 [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      store var $1.arguments, %0
+      %1 = const c22
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      store var $1.arguments, %2
       return
 
   fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      store var $2.arguments, %0
-      %1 = load var $2.v
-      %2 = call builtin.console.log(%1)
-      %3 = is_exception %2
-      branch %3, bb2, bb1
+      %1 = const c24
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      store var $2.arguments, %2
+      %3 = load var $2.v
+      %4 = call builtin.console.log(%3)
+      %5 = is_exception %4
+      branch %5, bb2, bb1
     bb1:
       return
     bb2:
-      %4 = call builtin.exception_value(%2)
-      throw %4
+      %6 = call builtin.exception_value(%4)
+      throw %6
 
   fn @anon_2 [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      store var $3.arguments, %0
+      %1 = const c29
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      store var $3.arguments, %2
       return
 
   fn @anon_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      store var $4.arguments, %0
-      %1 = load var $4.v
-      %2 = call builtin.console.log(%1)
-      %3 = is_exception %2
-      branch %3, bb2, bb1
+      %1 = const c31
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      store var $4.arguments, %2
+      %3 = load var $4.v
+      %4 = call builtin.console.log(%3)
+      %5 = is_exception %4
+      branch %5, bb2, bb1
     bb1:
       return
     bb2:
-      %4 = call builtin.exception_value(%2)
-      throw %4
+      %6 = call builtin.exception_value(%4)
+      throw %6
 
   fn @anon_4 [params: $5.$env, $5.$this, $5.e] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      store var $5.arguments, %0
-      %1 = load var $5.e
-      %2 = call builtin.console.log(%1)
-      %3 = is_exception %2
-      branch %3, bb2, bb1
+      %1 = const c33
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      store var $5.arguments, %2
+      %3 = load var $5.e
+      %4 = call builtin.console.log(%3)
+      %5 = is_exception %4
+      branch %5, bb2, bb1
     bb1:
       return
     bb2:
-      %4 = call builtin.exception_value(%2)
-      throw %4
+      %6 = call builtin.exception_value(%4)
+      throw %6
 
   fn @main [entry=bb0]:
     bb0:
@@ -132,21 +147,21 @@ module {
       %21 = const c20
       %22 = const c21
       %23 = call builtin.promise.resolve_static(%21, %22)
-      %24 = const c22
+      %24 = const c23
       %25 = call builtin.promise.finally(%23, %24)
-      %26 = const c23
-      %27 = const c24
+      %26 = const c25
+      %27 = const c26
       %28 = call builtin.promise.then(%25, %26, %27)
       %29 = is_exception %28
       branch %29, bb2, bb1
     bb1:
-      %31 = const c25
-      %32 = const c26
+      %31 = const c27
+      %32 = const c28
       %33 = call builtin.promise.reject_static(%31, %32)
-      %34 = const c27
+      %34 = const c30
       %35 = call builtin.promise.finally(%33, %34)
-      %36 = const c28
-      %37 = const c29
+      %36 = const c32
+      %37 = const c34
       %38 = call builtin.promise.then(%35, %36, %37)
       %39 = is_exception %38
       branch %39, bb4, bb3

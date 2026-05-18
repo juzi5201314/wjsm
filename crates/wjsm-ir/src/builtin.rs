@@ -345,6 +345,9 @@ pub enum Builtin {
     IsException,
     // ── new.target meta property ──
     NewTarget,
+    // ── Arguments Exotic Object ──
+    CreateUnmappedArgumentsObject,
+    CreateMappedArgumentsObject,
 }
 
 impl fmt::Display for Builtin {
@@ -658,6 +661,8 @@ impl fmt::Display for Builtin {
             Self::ExceptionValue => "exception_value",
             Self::IsException => "is_exception",
             Self::NewTarget => "new.target",
+            Self::CreateUnmappedArgumentsObject => "create_unmapped_arguments_object",
+            Self::CreateMappedArgumentsObject => "create_mapped_arguments_object",
         })
     }
 }

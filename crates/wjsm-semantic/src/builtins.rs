@@ -543,6 +543,9 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::DateNow => ("Date.now", 0),
         Builtin::DateParse => ("Date.parse", 1),
         Builtin::DateUTC => ("Date.UTC", 2),
+        // ── Arguments Exotic Object ──
+        Builtin::CreateUnmappedArgumentsObject => ("create_unmapped_arguments_object", 2),
+        Builtin::CreateMappedArgumentsObject => ("create_mapped_arguments_object", 3),
         _ => ("builtin", 0),
     }
 }

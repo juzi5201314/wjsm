@@ -96,7 +96,8 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
                     return Ok(format!("Map {{{}}}", parts.join(", ")));
                 }
             }
-            let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+
+                let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
                 let vals = {

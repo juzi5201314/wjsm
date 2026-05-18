@@ -23,17 +23,20 @@ module {
     c20 = number(1)
     c21 = number(2)
     c22 = number(3)
-    c23 = number(2)
-    c24 = functionref(@0)
+    c23 = number(0)
+    c24 = number(2)
+    c25 = functionref(@0)
 
   fn @anon_0 [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      store var $1.arguments, %0
-      %1 = load var $1.x
-      %2 = const c23
-      %3 = mul %1, %2
-      return %3
+      %1 = const c23
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      store var $1.arguments, %2
+      %3 = load var $1.x
+      %4 = const c24
+      %5 = mul %3, %4
+      return %5
 
   fn @main [entry=bb0]:
     bb0:
@@ -88,7 +91,7 @@ module {
       call builtin.array.push(%21, %24)
       store var $0.a, %21
       %25 = load var $0.a
-      %26 = const c24
+      %26 = const c25
       %27 = call builtin.array.map(%25, %26)
       store var $0.b, %27
       return
