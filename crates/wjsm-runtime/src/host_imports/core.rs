@@ -59,6 +59,9 @@
         },
     );
 
+    // 已弃用：异常传播现在通过 create_exception (import 313) + WASM return 实现。
+    // throw_fn 保留仅为兼容旧的 WASM 二进制，不再被新编译的代码调用。
+    // 注意：由于 import table 索引稳定性约束，不能移除此函数。
     let throw_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, val: i64| {

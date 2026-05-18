@@ -364,6 +364,41 @@ impl Lowerer {
             Err(msg)
                 if self.eval_scope_bridge_active() && msg.starts_with("undeclared identifier") =>
             {
+                if self.strict_mode {
+                    // strict eval: 对未声明变量赋值 → ReferenceError
+                    let msg_const = self.module.add_constant(Constant::String(
+                        format!("assignment to undeclared variable '{name}'"),
+                    ));
+                    let msg_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: msg_val,
+                            constant: msg_const,
+                        },
+                    );
+                    let error_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::CallBuiltin {
+                            dest: Some(error_val),
+                            builtin: Builtin::ReferenceErrorConstructor,
+                            args: vec![msg_val],
+                        },
+                    );
+                    // 创建 dummy 值（在 throw 终止块之前分配）
+                    let dummy = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: dummy,
+                            constant: self.module.add_constant(Constant::Undefined),
+                        },
+                    );
+                    self.emit_throw_value(block, error_val)?;
+                    // emit_throw_value 已终止块；返回的 dummy 不会被使用
+                    return Ok(dummy);
+                }
                 return self.lower_assign_eval_env(assign, block, &name);
             }
             Err(msg) => return Err(self.error(assign.span, msg)),
