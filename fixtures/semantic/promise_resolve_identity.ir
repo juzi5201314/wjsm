@@ -24,54 +24,63 @@ module {
     c21 = undefined
     c22 = number(42)
     c23 = undefined
-    c24 = functionref(@0)
-    c25 = undefined
+    c24 = number(0)
+    c25 = functionref(@0)
     c26 = undefined
-    c27 = string("err")
-    c28 = functionref(@1)
-    c29 = functionref(@2)
+    c27 = undefined
+    c28 = string("err")
+    c29 = number(0)
+    c30 = functionref(@1)
+    c31 = number(0)
+    c32 = functionref(@2)
 
   fn @anon_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      store var $1.arguments, %0
-      %1 = load var $1.v
-      %2 = call builtin.console.log(%1)
-      %3 = is_exception %2
-      branch %3, bb2, bb1
+      %1 = const c24
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      store var $1.arguments, %2
+      %3 = load var $1.v
+      %4 = call builtin.console.log(%3)
+      %5 = is_exception %4
+      branch %5, bb2, bb1
     bb1:
       return
     bb2:
-      %4 = call builtin.exception_value(%2)
-      throw %4
+      %6 = call builtin.exception_value(%4)
+      throw %6
 
   fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      store var $2.arguments, %0
-      %1 = load var $2.v
-      %2 = call builtin.console.log(%1)
-      %3 = is_exception %2
-      branch %3, bb2, bb1
+      %1 = const c29
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      store var $2.arguments, %2
+      %3 = load var $2.v
+      %4 = call builtin.console.log(%3)
+      %5 = is_exception %4
+      branch %5, bb2, bb1
     bb1:
       return
     bb2:
-      %4 = call builtin.exception_value(%2)
-      throw %4
+      %6 = call builtin.exception_value(%4)
+      throw %6
 
   fn @anon_2 [params: $3.$env, $3.$this, $3.e] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      store var $3.arguments, %0
-      %1 = load var $3.e
-      %2 = call builtin.console.log(%1)
-      %3 = is_exception %2
-      branch %3, bb2, bb1
+      %1 = const c31
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      store var $3.arguments, %2
+      %3 = load var $3.e
+      %4 = call builtin.console.log(%3)
+      %5 = is_exception %4
+      branch %5, bb2, bb1
     bb1:
       return
     bb2:
-      %4 = call builtin.exception_value(%2)
-      throw %4
+      %6 = call builtin.exception_value(%4)
+      throw %6
 
   fn @main [entry=bb0]:
     bb0:
@@ -137,8 +146,8 @@ module {
       branch %32, bb2, bb1
     bb1:
       %34 = load var $0.p2
-      %35 = const c24
-      %36 = const c25
+      %35 = const c25
+      %36 = const c26
       %37 = call builtin.promise.then(%34, %35, %36)
       %38 = is_exception %37
       branch %38, bb4, bb3
@@ -146,13 +155,13 @@ module {
       %33 = call builtin.exception_value(%31)
       throw %33
     bb3:
-      %40 = const c26
-      %41 = const c27
+      %40 = const c27
+      %41 = const c28
       %42 = call builtin.promise.reject_static(%40, %41)
       store var $0.p3, %42
       %43 = load var $0.p3
-      %44 = const c28
-      %45 = const c29
+      %44 = const c30
+      %45 = const c32
       %46 = call builtin.promise.then(%43, %44, %45)
       %47 = is_exception %46
       branch %47, bb6, bb5

@@ -21,41 +21,44 @@ module {
     c18 = number(inf)
     c19 = undefined
     c20 = number(0)
-    c21 = number(1)
-    c22 = number(2)
-    c23 = functionref(@0)
-    c24 = string("Hello, ")
-    c25 = string("! Goodbye, ")
-    c26 = string("!")
-    c27 = string("Hello, ")
-    c28 = string("! Goodbye, ")
-    c29 = string("!")
-    c30 = string("raw")
-    c31 = string("value")
-    c32 = undefined
-    c33 = string("World")
-    c34 = string("Moon")
+    c21 = number(0)
+    c22 = number(1)
+    c23 = number(2)
+    c24 = functionref(@0)
+    c25 = string("Hello, ")
+    c26 = string("! Goodbye, ")
+    c27 = string("!")
+    c28 = string("Hello, ")
+    c29 = string("! Goodbye, ")
+    c30 = string("!")
+    c31 = string("raw")
+    c32 = string("value")
+    c33 = undefined
+    c34 = string("World")
+    c35 = string("Moon")
 
   fn @tag [params: $1.$env, $1.$this, $1.strings, $1.a, $1.b] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      store var $1.arguments, %0
-      %1 = load var $1.strings
-      %2 = const c20
-      %3 = get_elem %1, %2
-      %4 = load var $1.a
-      %5 = add %3, %4
-      %6 = load var $1.strings
-      %7 = const c21
-      %8 = get_elem %6, %7
-      %9 = add %5, %8
-      %10 = load var $1.b
-      %11 = add %9, %10
-      %12 = load var $1.strings
-      %13 = const c22
-      %14 = get_elem %12, %13
-      %15 = add %11, %14
-      return %15
+      %1 = const c20
+      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      store var $1.arguments, %2
+      %3 = load var $1.strings
+      %4 = const c21
+      %5 = get_elem %3, %4
+      %6 = load var $1.a
+      %7 = add %5, %6
+      %8 = load var $1.strings
+      %9 = const c22
+      %10 = get_elem %8, %9
+      %11 = add %7, %10
+      %12 = load var $1.b
+      %13 = add %11, %12
+      %14 = load var $1.strings
+      %15 = const c23
+      %16 = get_elem %14, %15
+      %17 = add %13, %16
+      return %17
 
   fn @main [entry=bb0]:
     bb0:
@@ -101,31 +104,31 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $0.$this, %20
-      %21 = const c23
+      %21 = const c24
       store var $0.tag, %21
       %22 = new_array(capacity=3)
-      %23 = const c24
+      %23 = const c25
       call builtin.array.push(%22, %23)
-      %24 = const c25
+      %24 = const c26
       call builtin.array.push(%22, %24)
-      %25 = const c26
+      %25 = const c27
       call builtin.array.push(%22, %25)
       %26 = new_array(capacity=3)
-      %27 = const c27
+      %27 = const c28
       call builtin.array.push(%26, %27)
-      %28 = const c28
+      %28 = const c29
       call builtin.array.push(%26, %28)
-      %29 = const c29
+      %29 = const c30
       call builtin.array.push(%26, %29)
-      %30 = const c30
+      %30 = const c31
       %31 = new_object(capacity=4)
-      %32 = const c31
+      %32 = const c32
       set_prop %31, %32, %26
       call builtin.define_property(%22, %30, %31)
-      %33 = const c32
+      %33 = const c33
       %34 = load var $0.tag
-      %35 = const c33
-      %36 = const c34
+      %35 = const c34
+      %36 = const c35
       %37 = call %34, this=%33, args=[%22, %35, %36]
       %38 = call builtin.console.log(%37)
       %39 = is_exception %38

@@ -10,6 +10,8 @@ use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction,
     Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, constants, value,
 };
+
+// ── Import count assertion (must match HOST_IMPORT_NAMES) ──────────────
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
@@ -1278,6 +1280,8 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ExceptionValue => ("exception_value", 1),
         Builtin::IsException => ("is_exception", 1),
         Builtin::NewTarget => ("new_target", 1),
+        Builtin::CreateUnmappedArgumentsObject => ("create_unmapped_arguments_object", 2),
+        Builtin::CreateMappedArgumentsObject => ("create_mapped_arguments_object", 3),
     }
 }
 

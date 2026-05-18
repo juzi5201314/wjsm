@@ -869,3 +869,4 @@ pub const HEAP_TYPE_ARRAY: u8 = 0x01;
 pub const HEAP_TYPE_PROMISE: u8 = 0x02;
 pub const HEAP_TYPE_CONTINUATION: u8 = 0x03;
 pub const HEAP_TYPE_ASYNC_GENERATOR: u8 = 0x04;
+pub const HEAP_TYPE_ARGUMENTS: u8 = 0x05;

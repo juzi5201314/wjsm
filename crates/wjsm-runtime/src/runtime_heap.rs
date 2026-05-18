@@ -103,6 +103,12 @@ pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, ob
     } else if value::is_object(obj) {
         let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize);
         if let Some(op) = obj_ptr {
+            if let Some(Extern::Memory(mem)) = caller.get_export("memory") {
+                let data = mem.data(&caller);
+                if op + 4 < data.len() && data[op + 4] == wjsm_ir::HEAP_TYPE_ARGUMENTS {
+                    return store_runtime_string(caller, "[object Arguments]".to_string());
+                }
+            }
             let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
             if map_handle.is_some() {
                 return store_runtime_string(caller, "[object Map]".to_string());
