@@ -364,6 +364,36 @@ impl Lowerer {
             Err(msg)
                 if self.eval_scope_bridge_active() && msg.starts_with("undeclared identifier") =>
             {
+                if is_builtin_global(&name) {
+                    // 对 builtin global 的赋值 → 写入 $0.$global 属性
+                    let global_obj = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::LoadVar {
+                            dest: global_obj,
+                            name: "$0.$global".to_string(),
+                        },
+                    );
+                    let key_const = self.module.add_constant(Constant::String(name));
+                    let key_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: key_val,
+                            constant: key_const,
+                        },
+                    );
+                    let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::SetProp {
+                            object: global_obj,
+                            key: key_val,
+                            value: rhs,
+                        },
+                    );
+                    return Ok(rhs);
+                }
                 if self.strict_mode {
                     // strict eval: 对未声明变量赋值 → ReferenceError
                     let msg_const = self.module.add_constant(Constant::String(
