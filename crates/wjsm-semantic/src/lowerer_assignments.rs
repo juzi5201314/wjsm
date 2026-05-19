@@ -42,11 +42,6 @@ impl Lowerer {
 
         let (scope_id, _kind) = match self.scopes.lookup(&name) {
             Ok(found) => found,
-            Err(msg)
-                if self.eval_scope_bridge_active() && msg.starts_with("undeclared identifier") =>
-            {
-                return Ok(self.lower_eval_env_read(&name, block));
-            }
             Err(msg) if msg.starts_with("undeclared identifier") && is_builtin_global(&name) => {
                 // 变量查找失败 → 从全局对象按名读取属性
                 // 全局对象已在模块初始化阶段通过 CreateGlobalObject 创建并存入 $0.$global
@@ -77,6 +72,11 @@ impl Lowerer {
                     },
                 );
                 return Ok(dest);
+            }
+            Err(msg)
+                if self.eval_scope_bridge_active() && msg.starts_with("undeclared identifier") =>
+            {
+                return Ok(self.lower_eval_env_read(&name, block));
             }
             Err(msg) => return Err(self.error(ident.span, msg)),
         };
