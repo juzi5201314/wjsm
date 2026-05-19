@@ -68,7 +68,7 @@ module {
       %20 = call builtin.create_global_object()
       store var $0.$global, %20
       %21 = const c20
-      store var $0.$this, %21
+      store var $this, %21
       %22 = load var $0.x
       %23 = call builtin.console.log(%22)
       %24 = is_exception %23

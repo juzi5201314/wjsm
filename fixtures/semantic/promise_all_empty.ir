@@ -76,7 +76,7 @@ module {
       %19 = call builtin.create_global_object()
       store var $0.$global, %19
       %20 = const c19
-      store var $0.$this, %20
+      store var $this, %20
       %21 = const c20
       %22 = new_array(capacity=4)
       %23 = call builtin.promise.all(%21, %22)
