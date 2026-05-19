@@ -129,7 +129,7 @@ module {
       %20 = call builtin.create_global_object()
       store var $0.$global, %20
       %21 = const c20
-      store var $0.$this, %21
+      store var $this, %21
       %22 = const c21
       %23 = const c22
       %24 = call builtin.promise.resolve_static(%22, %23)

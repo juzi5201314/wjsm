@@ -74,7 +74,7 @@ module {
       %19 = call builtin.create_global_object()
       store var $0.$global, %19
       %20 = const c19
-      store var $0.$this, %20
+      store var $this, %20
       %21 = const c20
       branch %21, bb1, bb2
     bb1:

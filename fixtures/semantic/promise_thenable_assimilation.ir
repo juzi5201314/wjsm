@@ -85,7 +85,7 @@ module {
       %19 = call builtin.create_global_object()
       store var $0.$global, %19
       %20 = const c19
-      store var $0.$this, %20
+      store var $this, %20
       %21 = new_object(capacity=4)
       %22 = const c22
       %23 = const c23

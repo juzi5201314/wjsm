@@ -68,7 +68,7 @@ module {
       %19 = call builtin.create_global_object()
       store var $0.$global, %19
       %20 = const c19
-      store var $0.$this, %20
+      store var $this, %20
       %21 = const c20
       store var $0.i, %21
       jump bb1

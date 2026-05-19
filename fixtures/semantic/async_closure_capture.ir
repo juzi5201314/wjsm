@@ -245,7 +245,7 @@ module {
       %20 = call builtin.create_global_object()
       store var $0.$global, %20
       %21 = const c20
-      store var $0.$this, %21
+      store var $this, %21
       %22 = const c52
       %23 = new_object(capacity=1)
       %24 = load var $0.undefined

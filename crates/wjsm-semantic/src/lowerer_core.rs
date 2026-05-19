@@ -463,7 +463,7 @@ impl Lowerer {
         self.current_function.append_instruction(
             entry,
             Instruction::StoreVar {
-                name: "$0.$this".to_string(),
+                name: "$this".to_string(),
                 value: this_val,
             },
         );
