@@ -364,7 +364,7 @@ impl Lowerer {
             Err(msg)
                 if self.eval_scope_bridge_active() && msg.starts_with("undeclared identifier") =>
             {
-                if is_builtin_global(&name) {
+                if assign.op == swc_ast::AssignOp::Assign && is_builtin_global(&name) {
                     // 对 builtin global 的赋值 → 写入 $0.$global 属性
                     let global_obj = self.alloc_value();
                     self.current_function.append_instruction(
