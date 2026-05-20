@@ -518,7 +518,7 @@ pub(crate) fn value_to_number(arg: i64) -> f64 {
 }
 
 pub(crate) fn is_callable_in_runtime(caller: &mut Caller<'_, RuntimeState>, val: i64) -> bool {
-    if value::is_function(val) || value::is_closure(val) {
+    if value::is_function(val) || value::is_closure(val) || value::is_bound(val) || value::is_native_callable(val) {
         return true;
     }
     if value::is_proxy(val) {
@@ -537,17 +537,13 @@ pub(crate) fn is_callable_in_runtime(caller: &mut Caller<'_, RuntimeState>, val:
 }
 
 pub(crate) fn is_extensible_impl(caller: &mut Caller<'_, RuntimeState>, target: i64) -> bool {
-    if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
+    if !value::is_js_object(target) {
         return false;
     }
-    let handle = if value::is_object(target) {
-        value::decode_object_handle(target)
-    } else if value::is_array(target) {
-        value::decode_array_handle(target)
-    } else if value::is_proxy(target) {
+    if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap();
+            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -557,25 +553,19 @@ pub(crate) fn is_extensible_impl(caller: &mut Caller<'_, RuntimeState>, target: 
             return is_extensible_impl(caller, entry.target);
         }
         return false;
-    } else {
-        (target as u64 & 0xFFFF_FFFF) as u32
-    };
+    }
     let set = caller.data().non_extensible_handles.lock().expect("non_extensible_handles mutex");
-    !set.contains(&handle)
+    !set.contains(&(target as u64))
 }
 
 pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, target: i64) -> bool {
-    if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
+    if !value::is_js_object(target) {
         return false;
     }
-    let handle = if value::is_object(target) {
-        value::decode_object_handle(target)
-    } else if value::is_array(target) {
-        value::decode_array_handle(target)
-    } else if value::is_proxy(target) {
+    if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap();
+            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -585,11 +575,9 @@ pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, tar
             return prevent_extensions_impl(caller, entry.target);
         }
         return false;
-    } else {
-        (target as u64 & 0xFFFF_FFFF) as u32
-    };
+    }
     let mut set = caller.data().non_extensible_handles.lock().expect("non_extensible_handles mutex");
-    set.insert(handle);
+    set.insert(target as u64);
     true
 }
 
@@ -629,12 +617,12 @@ fn parse_descriptor(
     let prop_set = read_object_property_by_name(caller, desc_ptr, "set");
 
     if let Some(getter) = prop_get {
-        if !value::is_undefined(getter) && !value::is_null(getter) && !value::is_callable(getter) {
+        if !value::is_undefined(getter) && !value::is_null(getter) && !is_callable_in_runtime(caller, getter) {
             return Err("TypeError: property getter must be callable".to_string());
         }
     }
     if let Some(setter) = prop_set {
-        if !value::is_undefined(setter) && !value::is_null(setter) && !value::is_callable(setter) {
+        if !value::is_undefined(setter) && !value::is_null(setter) && !is_callable_in_runtime(caller, setter) {
             return Err("TypeError: property setter must be callable".to_string());
         }
     }
@@ -1137,55 +1125,38 @@ pub(crate) fn reflect_get_impl(
     }
 
     // 非 Proxy 对象
-    let mut existing_val = None;
     let obj_ptr = resolve_handle(caller, target);
-    if let Some(ptr) = obj_ptr
-        && let Ok(prop_name) = render_value(caller, prop)
-        && let Some(val) = read_object_property_by_name(caller, ptr, &prop_name) {
-            existing_val = Some(val);
-        }
+    let prop_name = render_value(caller, prop).ok();
+    let existing_val = obj_ptr.and_then(|ptr| {
+        prop_name.as_ref()
+            .and_then(|name| read_object_property_by_name(caller, ptr, name))
+    });
 
-    let is_proto_req = if let Ok(prop_name) = render_value(caller, prop) {
-        prop_name == "prototype"
-    } else {
-        false
-    };
+    let is_proto_req = prop_name.as_deref() == Some("prototype");
 
     if is_proto_req && (value::is_function(target) || value::is_closure(target) || value::is_bound(target)) {
-        let mut val_is_ok = false;
-        if let Some(v) = existing_val {
-            if !value::is_undefined(v) {
-                val_is_ok = true;
-            }
-        }
-        
-        if !val_is_ok {
-            let existing_proto = {
-                let tbl = caller.data().default_prototypes.lock().expect("default_prototypes mutex");
-                tbl.get(&target).cloned()
-            };
-            if let Some(proto_obj) = existing_proto {
-                return proto_obj;
-            }
-            
-            let default_proto = alloc_host_object_from_caller(caller, 4);
-            let ctor_prop_name_id = find_memory_c_string(caller, "constructor");
-            if let Some(name_c) = ctor_prop_name_id {
-                if let Some(dp_ptr) = resolve_handle(caller, default_proto) {
-                    write_object_property_by_name_id(
-                        caller,
-                        dp_ptr,
-                        default_proto,
-                        name_c as u32,
-                        target,
-                        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
-                    );
+        match existing_val {
+            Some(v) if !value::is_undefined(v) => return v,
+            _ => {
+                // 创建默认 prototype 对象并作为函数的 own property 写入，GC 可自然追踪
+                let default_proto = alloc_host_object_from_caller(caller, 4);
+                let _ = define_host_data_property_from_caller(caller, target, "prototype", default_proto);
+                // 设置 proto 的 constructor 属性
+                let ctor_prop_name_id = find_memory_c_string(caller, "constructor");
+                if let Some(name_c) = ctor_prop_name_id {
+                    if let Some(dp_ptr) = resolve_handle(caller, default_proto) {
+                        write_object_property_by_name_id(
+                            caller,
+                            dp_ptr,
+                            default_proto,
+                            name_c as u32,
+                            target,
+                            constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+                        );
+                    }
                 }
+                return default_proto;
             }
-            
-            let mut tbl = caller.data().default_prototypes.lock().expect("default_prototypes mutex");
-            tbl.insert(target, default_proto);
-            return default_proto;
         }
     }
 

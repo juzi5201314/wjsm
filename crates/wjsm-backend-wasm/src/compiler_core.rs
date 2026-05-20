@@ -89,8 +89,8 @@ impl Compiler {
             vec![ValType::I64],
         );
         let mut imports = ImportSection::new();
-        // Import index 0: console_log: (i64) -> ()
-        imports.import("env", "console_log", EntityType::Function(0));
+        // Import index 0: console_log: (i32, i32) -> ()
+        imports.import("env", "console_log", EntityType::Function(33));
         // Import index 1: f64_mod: (i64, i64) -> (i64)
         imports.import("env", "f64_mod", EntityType::Function(2));
         // Import index 2: f64_pow: (i64, i64) -> (i64)
@@ -135,16 +135,16 @@ impl Compiler {
         imports.import("env", "abstract_compare", EntityType::Function(2));
         // Import index 22: gc_collect: (i32) -> (i32)
         imports.import("env", "gc_collect", EntityType::Function(7)); // Type 7 = (i32) -> i32
-        // Import index 23: console_error: (i64) -> ()
-        imports.import("env", "console_error", EntityType::Function(0));
-        // Import index 24: console_warn: (i64) -> ()
-        imports.import("env", "console_warn", EntityType::Function(0));
-        // Import index 25: console_info: (i64) -> ()
-        imports.import("env", "console_info", EntityType::Function(0));
-        // Import index 26: console_debug: (i64) -> ()
-        imports.import("env", "console_debug", EntityType::Function(0));
-        // Import index 27: console_trace: (i64) -> ()
-        imports.import("env", "console_trace", EntityType::Function(0));
+        // Import index 23: console_error: (i32, i32) -> ()
+        imports.import("env", "console_error", EntityType::Function(33));
+        // Import index 24: console_warn: (i32, i32) -> ()
+        imports.import("env", "console_warn", EntityType::Function(33));
+        // Import index 25: console_info: (i32, i32) -> ()
+        imports.import("env", "console_info", EntityType::Function(33));
+        // Import index 26: console_debug: (i32, i32) -> ()
+        imports.import("env", "console_debug", EntityType::Function(33));
+        // Import index 27: console_trace: (i32, i32) -> ()
+        imports.import("env", "console_trace", EntityType::Function(33));
         // Import index 28: set_timeout: (i64, i64) -> (i64)
         imports.import("env", "set_timeout", EntityType::Function(2));
         // Import index 29: clear_timeout: (i64) -> ()
@@ -305,6 +305,8 @@ impl Compiler {
             vec![ValType::I64, ValType::I32, ValType::I64],
             vec![ValType::I64],
         );
+        // Type 33: (i32, i32) -> () — console varargs（args_base, args_count）
+        types.ty().function(vec![ValType::I32, ValType::I32], vec![]);
         // Import index 78: func_call — Type 12 (uses shadow stack for args)
         imports.import("env", "func_call", EntityType::Function(12));
         // Import index 79: func_apply — Type 16 (i64 func, i64 this, i64 argsArray) -> i64

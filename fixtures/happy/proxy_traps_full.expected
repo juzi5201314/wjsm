@@ -1,42 +1,42 @@
 exit_code: 0
 --- stdout ---
 === Basic Traps ===
-get trap:
-get:
-set trap:
-after set target:
-get trap:
-after set proxy:
-has trap:
-has:
-deleteProperty trap:
-after delete target:
-defineProperty trap:
-after defineProperty target:
-getOwnPropertyDescriptor trap:
-descriptor:
+get trap: a
+get: 11
+set trap: a to 100
+after set target: 1
+get trap: a
+after set proxy: 11
+has trap: a
+has: true
+deleteProperty trap: a
+after delete target: 105
+defineProperty trap: b
+after defineProperty target: 42
+getOwnPropertyDescriptor trap: b
+descriptor: [object Object]
 === Prototype & Extensibility Traps ===
 getPrototypeOf trap
-getPrototypeOf:
+getPrototypeOf: true
 setPrototypeOf trap
-setPrototypeOf:
+setPrototypeOf: true
 getPrototypeOf trap
-after setPrototypeOf:
+after setPrototypeOf: ok
 isExtensible trap
-isExtensible:
+isExtensible: true
 preventExtensions trap
-preventExtensions:
+preventExtensions: true
 isExtensible trap
-after preventExtensions isExtensible:
+after preventExtensions isExtensible: false
 === ownKeys Trap ===
 ownKeys trap
-ownKeys:
+ownKeys: null
 === apply & construct Traps ===
-apply trap:
-apply call:
-construct trap:
-constructed name:
-constructed flag:
-instanceof proxyPerson:
-instanceof Person:
+apply trap: null
+apply call: 22
+construct trap: null
+constructed name: undefined
+constructed flag: undefined
+instanceof proxyPerson: false
+instanceof Person: false
 --- stderr ---

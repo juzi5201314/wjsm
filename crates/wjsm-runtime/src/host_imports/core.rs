@@ -1,39 +1,38 @@
 {
     let console_log = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| {
-            write_console_value(&mut caller, val, None);
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+            write_console_values(&mut caller, args_base, args_count, None);
         },
     );
-
     let console_error = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| {
-            write_console_value(&mut caller, val, Some("error"));
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+            write_console_values(&mut caller, args_base, args_count, Some("error"));
         },
     );
     let console_warn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| {
-            write_console_value(&mut caller, val, Some("warn"));
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+            write_console_values(&mut caller, args_base, args_count, Some("warn"));
         },
     );
     let console_info = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| {
-            write_console_value(&mut caller, val, Some("info"));
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+            write_console_values(&mut caller, args_base, args_count, Some("info"));
         },
     );
     let console_debug = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| {
-            write_console_value(&mut caller, val, Some("debug"));
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+            write_console_values(&mut caller, args_base, args_count, Some("debug"));
         },
     );
     let console_trace = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| {
-            write_console_value(&mut caller, val, Some("trace"));
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+            write_console_values(&mut caller, args_base, args_count, Some("trace"));
         },
     );
 
@@ -704,12 +703,12 @@
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, value: i64, constructor: i64| -> i64 {
             // 1. 原始类型直接返回 false
-            if !value::is_object(value) && !value::is_function(value) && !value::is_proxy(value) {
+            if !value::is_js_object(value) {
                 return value::encode_bool(false);
             }
 
             // 2. 检查 constructor 是否是对象或函数或 Proxy
-            if !value::is_object(constructor) && !value::is_function(constructor) && !value::is_proxy(constructor) {
+            if !value::is_js_object(constructor) {
                 *caller
                     .data()
                     .runtime_error
@@ -724,7 +723,7 @@
             let prototype_val = reflect_get_impl(&mut caller, constructor, proto_prop);
 
             // 4. 如果 prototype 不是对象/函数/Proxy/null，抛出 TypeError
-            if !value::is_object(prototype_val) && !value::is_function(prototype_val) && !value::is_proxy(prototype_val) && !value::is_null(prototype_val) {
+            if !value::is_js_object(prototype_val) && !value::is_null(prototype_val) {
                 *caller
                     .data()
                     .runtime_error

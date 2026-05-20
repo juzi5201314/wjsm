@@ -776,8 +776,8 @@
     // ECMAScript §7.2.3 IsCallable(argument) → boolean
     let is_callable_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
-            value::encode_bool(value::is_callable(val))
+        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            value::encode_bool(is_callable_in_runtime(&mut caller, val))
         },
     );
 
@@ -1274,7 +1274,7 @@
                                 let trap_res = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, arr, new_target_val]);
                                 return match trap_res {
                                     Ok(res) => {
-                                        if !value::is_object(res) && !value::is_array(res) && !value::is_proxy(res) && !value::is_function(res) && !value::is_closure(res) {
+                                        if !value::is_js_object(res) {
                                             set_runtime_error(caller.data(), "TypeError: Proxy construct trap returned non-object".to_string());
                                             value::encode_undefined()
                                         } else {
@@ -1303,18 +1303,11 @@
                                     let arg = read_shadow_arg(&mut caller, args_base, i as u32);
                                     set_array_elem(&mut caller, arr, i, arg);
                                 }
-                                let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
-                                let shadow_sp_global = caller.get_export("__shadow_sp").and_then(|e| e.into_global()).unwrap();
-                                let saved_sp = shadow_sp_global.get(&mut caller).i32().unwrap();
-                                let trap_args = [entry.target, this_val, arr];
-                                let total_size = (trap_args.len() * 8) as i32;
-                                for (i, &arg) in trap_args.iter().enumerate() {
-                                    memory.write(&mut caller, (saved_sp + i as i32 * 8) as usize, &arg.to_le_bytes()).unwrap();
-                                }
-                                shadow_sp_global.set(&mut caller, Val::I32(saved_sp + total_size)).unwrap();
-                                let result = resolve_and_call(&mut caller, trap, entry.handler, saved_sp, trap_args.len() as i32);
-                                shadow_sp_global.set(&mut caller, Val::I32(saved_sp)).unwrap();
-                                return result;
+                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, this_val, arr]);
+                            return result.unwrap_or_else(|_| {
+                                set_runtime_error(caller.data(), "TypeError: Proxy apply trap failed".to_string());
+                                value::encode_undefined()
+                            });
                             }
                         }
                         return resolve_and_call(&mut caller, entry.target, this_val, args_base, args_count);
@@ -1437,12 +1430,12 @@
     let proxy_create_fn = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
-            if !value::is_object(target) && !value::is_function(target) && !value::is_array(target) && !value::is_proxy(target) {
+            if !value::is_js_object(target) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
                     Some("TypeError: Proxy target must be an object".to_string());
                 return value::encode_undefined();
             }
-            if !value::is_object(handler) && !value::is_function(handler) && !value::is_array(handler) && !value::is_proxy(handler) {
+            if !value::is_js_object(handler) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
                     Some("TypeError: Proxy handler must be an object".to_string());
                 return value::encode_undefined();
@@ -1460,7 +1453,6 @@
     let reflect_get_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, receiver: i64| -> i64 {
-            let _ = receiver;
             // Proxy target: 触发 get trap
             if value::is_proxy(target) {
                 let handle = value::decode_proxy_handle(target) as usize;
@@ -1477,7 +1469,7 @@
                         let trap = read_object_property_by_name(&mut caller, handler_ptr, "get")
                             .unwrap_or_else(value::encode_undefined);
                         if !value::is_undefined(trap) && !value::is_null(trap) {
-                            return call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop, target])
+                            return call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop, receiver])
                                 .unwrap_or_else(|_| value::encode_undefined());
                         }
                     }
@@ -1494,12 +1486,12 @@
     let proxy_revocable_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
-            if !value::is_object(target) && !value::is_function(target) && !value::is_array(target) && !value::is_proxy(target) {
+            if !value::is_js_object(target) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
                     Some("TypeError: Proxy target must be an object".to_string());
                 return value::encode_undefined();
             }
-            if !value::is_object(handler) && !value::is_function(handler) && !value::is_array(handler) && !value::is_proxy(handler) {
+            if !value::is_js_object(handler) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
                     Some("TypeError: Proxy handler must be an object".to_string());
                 return value::encode_undefined();
@@ -1526,7 +1518,7 @@
 
     let reflect_set_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64, _receiver: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64, receiver: i64| -> i64 {
             if value::is_proxy(target) {
                 let handle = value::decode_proxy_handle(target) as usize;
                 let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
@@ -1535,7 +1527,7 @@
                     if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
                         let trap = read_object_property_by_name(&mut caller, handler_ptr, "set").unwrap_or_else(value::encode_undefined);
                         if !value::is_undefined(trap) && !value::is_null(trap) {
-                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop, val, target]).unwrap_or_else(|_| value::encode_bool(false));
+                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop, val, receiver]).unwrap_or_else(|_| value::encode_bool(false));
                             return value::encode_bool(nanbox_to_bool(result));
                         }
                     }
@@ -1548,11 +1540,23 @@
     );
 
     fn reflect_set_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64) -> i64 {
-        if let Ok(prop_name) = render_value(caller, prop) {
-            let _ = define_host_data_property_from_caller(caller, target, &prop_name, val);
-            return value::encode_bool(true);
+        let Ok(prop_name) = render_value(caller, prop) else { return value::encode_bool(false); };
+        let name_id = find_memory_c_string(caller, &prop_name);
+        let existing = name_id.and_then(|id| {
+            let obj_ptr = resolve_handle(caller, target)?;
+            find_property_slot_by_name_id(caller, obj_ptr, id)
+        });
+        if let Some((_, flags, _)) = existing {
+            let is_accessor = (flags & constants::FLAG_IS_ACCESSOR) != 0;
+            if !is_accessor {
+                let writable = (flags & constants::FLAG_WRITABLE) != 0;
+                if !writable { return value::encode_bool(false); }
+            }
+        } else if !is_extensible_impl(caller, target) {
+            return value::encode_bool(false);
         }
-        value::encode_bool(false)
+        let _ = define_host_data_property_from_caller(caller, target, &prop_name, val);
+        value::encode_bool(true)
     }
 
     let reflect_has_fn = Func::wrap(
@@ -1795,7 +1799,7 @@
                             let trap_result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, arr, n_target]);
                             return match trap_result {
                                 Ok(res) => {
-                                    if !value::is_object(res) && !value::is_array(res) && !value::is_proxy(res) && !value::is_function(res) && !value::is_closure(res) {
+                                    if !value::is_js_object(res) {
                                         set_runtime_error(caller.data(), "TypeError: Proxy construct trap returned non-object".to_string());
                                         value::encode_undefined()
                                     } else {
@@ -1830,17 +1834,17 @@
             let _ = reflect_set_prototype_of_fn_impl(caller, this_obj, proto_val);
         }
 
-        let shadow_sp_global = caller.get_export("__shadow_sp").and_then(|e| e.into_global()).unwrap();
-        let saved_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
-        let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+        let shadow_sp_global = caller.get_export("__shadow_sp").and_then(|e| e.into_global()).expect("__shadow_sp in reflect_construct_impl");
+        let saved_sp = shadow_sp_global.get(&mut *caller).i32().expect("shadow_sp i32 in reflect_construct_impl");
+        let memory = caller.get_export("memory").and_then(|e| e.into_memory()).expect("memory in reflect_construct_impl");
         for (i, &arg) in args.iter().enumerate() {
-            memory.write(&mut *caller, (saved_sp + i as i32 * 8) as usize, &arg.to_le_bytes()).unwrap();
+            memory.write(&mut *caller, (saved_sp + i as i32 * 8) as usize, &arg.to_le_bytes()).expect("shadow stack write in reflect_construct_impl");
         }
-        shadow_sp_global.set(&mut *caller, Val::I32(saved_sp + args.len() as i32 * 8)).unwrap();
+        shadow_sp_global.set(&mut *caller, Val::I32(saved_sp + args.len() as i32 * 8)).expect("shadow_sp set in reflect_construct_impl");
         let result = resolve_and_call(caller, target, this_obj, saved_sp, args.len() as i32);
-        shadow_sp_global.set(&mut *caller, Val::I32(saved_sp)).unwrap();
+        shadow_sp_global.set(&mut *caller, Val::I32(saved_sp)).expect("shadow_sp restore in reflect_construct_impl");
 
-        if value::is_object(result) || value::is_array(result) || value::is_proxy(result) || value::is_function(result) || value::is_closure(result) {
+        if value::is_js_object(result) {
             result
         } else {
             this_obj
@@ -2113,8 +2117,34 @@
                     if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
                         let trap = read_object_property_by_name(&mut caller, handler_ptr, "getOwnPropertyDescriptor").unwrap_or_else(value::encode_undefined);
                         if !value::is_undefined(trap) && !value::is_null(trap) {
-                            return call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop])
-                                .unwrap_or_else(|_| value::encode_undefined());
+                            let trap_result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop]);
+                            let descriptor = match trap_result {
+                                Ok(desc) => desc,
+                                Err(e) => {
+                                    set_runtime_error(caller.data(), format!("TypeError: getOwnPropertyDescriptor trap failed: {}", e));
+                                    return value::encode_undefined();
+                                }
+                            };
+                            if value::is_undefined(descriptor) {
+                                let prop_name = render_value(&mut caller, prop).ok();
+                                if let Some(name) = prop_name {
+                                    if let Some(name_id) = find_memory_c_string(&mut caller, &name) {
+                                        if let Some(t_ptr) = resolve_handle(&mut caller, entry.target) {
+                                            if let Some((_, flags, _)) = find_property_slot_by_name_id(&mut caller, t_ptr, name_id) {
+                                                let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
+                                                if !configurable {
+                                                    set_runtime_error(caller.data(), "TypeError: Proxy getOwnPropertyDescriptor invariant violated: non-configurable property must not be reported as undefined".to_string());
+                                                    return value::encode_undefined();
+                                                }
+                                            } else if !is_extensible_impl(&mut caller, entry.target) {
+                                                set_runtime_error(caller.data(), "TypeError: Proxy getOwnPropertyDescriptor invariant violated: target is non-extensible and property exists".to_string());
+                                                return value::encode_undefined();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            return descriptor;
                         }
                     }
                     return reflect_get_own_property_descriptor_impl(&mut caller, entry.target, prop);
@@ -2236,6 +2266,8 @@
                             let target_keys = collect_own_property_names(&mut caller, t_ptr, false);
                             let mut trap_keys_str = Vec::new();
                             for &k in &keys {
+                                // 跳过 Symbol 键（不出现在 collect_own_property_names 的结果中）
+                                if value::is_symbol(k) { continue; }
                                 if let Ok(k_str) = render_value(&mut caller, k) {
                                     trap_keys_str.push(k_str);
                                 }

@@ -32,7 +32,7 @@
             .unwrap_or_else(value::encode_undefined);
         if value::is_undefined(trap) || value::is_null(trap) {
             None
-        } else if value::is_function(trap) || value::is_closure(trap) {
+        } else if value::is_callable(trap) {
             Some(trap)
         } else {
             set_runtime_error(
