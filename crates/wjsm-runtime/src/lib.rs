@@ -169,7 +169,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     );
 
     // ── Import 0: console_log(i64) → () ─────────────────────────────────
-    let mut imports: Vec<Extern> = Vec::with_capacity(326);
+    let mut imports: Vec<Extern> = Vec::with_capacity(348);
     imports.extend(include!("host_imports/core.rs"));
     imports.extend(include!("host_imports/timers_arrays.rs"));
     imports.extend(include!("host_imports/array_object.rs"));
@@ -212,6 +212,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     imports.push(create_mapped_arguments_fn.into());
+    imports.extend(include!("host_imports/typedarray_new_methods.rs"));
     let instance = Instance::new(&mut store, &module, &imports)?;
 
     // ── Run main ──
@@ -552,6 +553,8 @@ struct TypedArrayEntry {
     byte_offset: u32,
     length: u32,
     element_size: u8,
+    /// 0=Int, 1=Uint, 2=Clamped, 3=Float
+    element_kind: u8,
 }
 
 #[derive(Clone, Debug)]

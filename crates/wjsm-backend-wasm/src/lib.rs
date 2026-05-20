@@ -15,7 +15,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 322] = [
+const HOST_IMPORT_NAMES: [&str; 348] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -348,6 +348,34 @@ const HOST_IMPORT_NAMES: [&str; 322] = [
     "proxy_trap_set",
     "proxy_trap_delete",
     "get_builtin_global",
+    // ── Constructor helper imports ──
+    "new_target",
+    "new_target_set",
+    "create_unmapped_arguments_object",
+    "create_mapped_arguments_object",
+    // ── TypedArray 新增原型方法 ──
+    "typedarray_proto_fill",
+    "typedarray_proto_reverse",
+    "typedarray_proto_index_of",
+    "typedarray_proto_last_index_of",
+    "typedarray_proto_includes",
+    "typedarray_proto_join",
+    "typedarray_proto_to_string",
+    "typedarray_proto_copy_within",
+    "typedarray_proto_at",
+    "typedarray_proto_for_each",
+    "typedarray_proto_map",
+    "typedarray_proto_filter",
+    "typedarray_proto_reduce",
+    "typedarray_proto_reduce_right",
+    "typedarray_proto_find",
+    "typedarray_proto_find_index",
+    "typedarray_proto_some",
+    "typedarray_proto_every",
+    "typedarray_proto_sort",
+    "typedarray_proto_entries",
+    "typedarray_proto_keys",
+    "typedarray_proto_values",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -356,7 +384,7 @@ const HOST_IMPORT_NAMES: [&str; 322] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        322,
+        348,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1274,6 +1302,32 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::TypedArrayProtoSet => ("TypedArray.prototype.set", 3),
         Builtin::TypedArrayProtoSlice => ("TypedArray.prototype.slice", 3),
         Builtin::TypedArrayProtoSubarray => ("TypedArray.prototype.subarray", 3),
+        // ── TypedArray 新增构造器 ──
+        Builtin::BigInt64ArrayConstructor => ("BigInt64Array", 3),
+        Builtin::BigUint64ArrayConstructor => ("BigUint64Array", 3),
+        // ── TypedArray 新增原型方法 ──
+        Builtin::TypedArrayProtoFill => ("TypedArray.prototype.fill", 4),
+        Builtin::TypedArrayProtoReverse => ("TypedArray.prototype.reverse", 1),
+        Builtin::TypedArrayProtoIndexOf => ("TypedArray.prototype.indexOf", 3),
+        Builtin::TypedArrayProtoLastIndexOf => ("TypedArray.prototype.lastIndexOf", 3),
+        Builtin::TypedArrayProtoIncludes => ("TypedArray.prototype.includes", 3),
+        Builtin::TypedArrayProtoJoin => ("TypedArray.prototype.join", 2),
+        Builtin::TypedArrayProtoToString => ("TypedArray.prototype.toString", 1),
+        Builtin::TypedArrayProtoCopyWithin => ("TypedArray.prototype.copyWithin", 4),
+        Builtin::TypedArrayProtoAt => ("TypedArray.prototype.at", 2),
+        Builtin::TypedArrayProtoForEach => ("TypedArray.prototype.forEach", 3),
+        Builtin::TypedArrayProtoMap => ("TypedArray.prototype.map", 3),
+        Builtin::TypedArrayProtoFilter => ("TypedArray.prototype.filter", 3),
+        Builtin::TypedArrayProtoReduce => ("TypedArray.prototype.reduce", 4),
+        Builtin::TypedArrayProtoReduceRight => ("TypedArray.prototype.reduceRight", 4),
+        Builtin::TypedArrayProtoFind => ("TypedArray.prototype.find", 3),
+        Builtin::TypedArrayProtoFindIndex => ("TypedArray.prototype.findIndex", 3),
+        Builtin::TypedArrayProtoSome => ("TypedArray.prototype.some", 3),
+        Builtin::TypedArrayProtoEvery => ("TypedArray.prototype.every", 3),
+        Builtin::TypedArrayProtoSort => ("TypedArray.prototype.sort", 2),
+        Builtin::TypedArrayProtoEntries => ("TypedArray.prototype.entries", 1),
+        Builtin::TypedArrayProtoKeys => ("TypedArray.prototype.keys", 1),
+        Builtin::TypedArrayProtoValues => ("TypedArray.prototype.values", 1),
         Builtin::GetBuiltinGlobal => ("get_builtin_global", 1),
         Builtin::CreateGlobalObject => ("create_global_object", 0),
         Builtin::CreateException => ("create_exception", 1),

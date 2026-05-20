@@ -844,6 +844,52 @@ impl Compiler {
         imports.import("env", "create_unmapped_arguments_object", EntityType::Function(2));
         // Import index 325: create_mapped_arguments_object: (i64, i64, i64) -> i64
         imports.import("env", "create_mapped_arguments_object", EntityType::Function(16));
+        // Import index 326: typedarray_proto_fill: (i64, i64, i64, i64) -> i64 (receiver, value, start, end)
+        imports.import("env", "typedarray_proto_fill", EntityType::Function(17));
+        // Import index 327: typedarray_proto_reverse: (i64) -> i64
+        imports.import("env", "typedarray_proto_reverse", EntityType::Function(3));
+        // Import index 328: typedarray_proto_index_of: (i64, i64, i64) -> i64
+        imports.import("env", "typedarray_proto_index_of", EntityType::Function(16));
+        // Import index 329: typedarray_proto_last_index_of: (i64, i64, i64) -> i64
+        imports.import("env", "typedarray_proto_last_index_of", EntityType::Function(16));
+        // Import index 330: typedarray_proto_includes: (i64, i64, i64) -> i64
+        imports.import("env", "typedarray_proto_includes", EntityType::Function(16));
+        // Import index 331: typedarray_proto_join: (i64, i64) -> i64
+        imports.import("env", "typedarray_proto_join", EntityType::Function(2));
+        // Import index 332: typedarray_proto_to_string: (i64) -> i64
+        imports.import("env", "typedarray_proto_to_string", EntityType::Function(3));
+        // Import index 333: typedarray_proto_copy_within: (i64, i64, i64, i64) -> i64 (receiver, target, start, end)
+        imports.import("env", "typedarray_proto_copy_within", EntityType::Function(17));
+        // Import index 334: typedarray_proto_at: (i64, i64) -> i64
+        imports.import("env", "typedarray_proto_at", EntityType::Function(2));
+        // ── TypedArray 新增原型方法: 回调方法 (Type 12 shadow stack) ──
+        // Import index 335: typedarray_proto_for_each: Type 12
+        imports.import("env", "typedarray_proto_for_each", EntityType::Function(12));
+        // Import index 336: typedarray_proto_map: Type 12
+        imports.import("env", "typedarray_proto_map", EntityType::Function(12));
+        // Import index 337: typedarray_proto_filter: Type 12
+        imports.import("env", "typedarray_proto_filter", EntityType::Function(12));
+        // Import index 338: typedarray_proto_reduce: Type 12
+        imports.import("env", "typedarray_proto_reduce", EntityType::Function(12));
+        // Import index 339: typedarray_proto_reduce_right: Type 12
+        imports.import("env", "typedarray_proto_reduce_right", EntityType::Function(12));
+        // Import index 340: typedarray_proto_find: Type 12
+        imports.import("env", "typedarray_proto_find", EntityType::Function(12));
+        // Import index 341: typedarray_proto_find_index: Type 12
+        imports.import("env", "typedarray_proto_find_index", EntityType::Function(12));
+        // Import index 342: typedarray_proto_some: Type 12
+        imports.import("env", "typedarray_proto_some", EntityType::Function(12));
+        // Import index 343: typedarray_proto_every: Type 12
+        imports.import("env", "typedarray_proto_every", EntityType::Function(12));
+        // Import index 344: typedarray_proto_sort: Type 12
+        imports.import("env", "typedarray_proto_sort", EntityType::Function(12));
+        // ── TypedArray 迭代器方法: (i64) -> i64 ──
+        // Import index 345: typedarray_proto_entries: (i64) -> i64
+        imports.import("env", "typedarray_proto_entries", EntityType::Function(3));
+        // Import index 346: typedarray_proto_keys: (i64) -> i64
+        imports.import("env", "typedarray_proto_keys", EntityType::Function(3));
+        // Import index 347: typedarray_proto_values: (i64) -> i64
+        imports.import("env", "typedarray_proto_values", EntityType::Function(3));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1187,6 +1233,29 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::TypedArrayProtoSet, 309);
         builtin_func_indices.insert(Builtin::TypedArrayProtoSlice, 310);
         builtin_func_indices.insert(Builtin::TypedArrayProtoSubarray, 311);
+        // ── TypedArray 新增原型方法 ──
+        builtin_func_indices.insert(Builtin::TypedArrayProtoFill, 326);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoReverse, 327);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoIndexOf, 328);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoLastIndexOf, 329);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoIncludes, 330);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoJoin, 331);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoToString, 332);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoCopyWithin, 333);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoAt, 334);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoForEach, 335);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoMap, 336);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoFilter, 337);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoReduce, 338);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoReduceRight, 339);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoFind, 340);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoFindIndex, 341);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoSome, 342);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoEvery, 343);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoSort, 344);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoEntries, 345);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoKeys, 346);
+        builtin_func_indices.insert(Builtin::TypedArrayProtoValues, 347);
         builtin_func_indices.insert(Builtin::CreateGlobalObject, 312);
         builtin_func_indices.insert(Builtin::CreateException, 313);
         builtin_func_indices.insert(Builtin::ExceptionValue, 314);
@@ -1205,10 +1274,6 @@ impl Compiler {
             exports.export(name, ExportKind::Func, index as u32);
         }
 
-        exports.export("new_target", ExportKind::Func, 322);
-        exports.export("new_target_set", ExportKind::Func, 323);
-        exports.export("create_unmapped_arguments_object", ExportKind::Func, 324);
-        exports.export("create_mapped_arguments_object", ExportKind::Func, 325);
         let mut memory = MemorySection::new();
         if mode == CompileMode::Normal {
             memory.memory(MemoryType {
@@ -1243,7 +1308,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: HOST_IMPORT_NAMES.len() as u32 + 4, // +4 for new_target, new_target_set, create_unmapped, create_mapped
+            _next_import_func: HOST_IMPORT_NAMES.len() as u32,
             builtin_func_indices,
             function_table: Vec::new(),
             function_table_reverse: HashMap::new(),

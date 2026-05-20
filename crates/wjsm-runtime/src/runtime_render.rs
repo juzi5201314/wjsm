@@ -116,6 +116,33 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
                     return Ok(format!("Set {{{}}}", parts.join(", ")));
                 }
             }
+            // TypedArray 渲染
+            let ta_handle_val = read_object_property_by_name(caller, op, "__typedarray_handle__");
+            if let Some(th) = ta_handle_val {
+                let ta_handle = value::decode_f64(th) as usize;
+                let ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+                if let Some(entry) = ta_table.get(ta_handle) {
+                    let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                    if let Some(buf) = ab_table.get(entry.buffer_handle as usize) {
+                        let mut parts = Vec::new();
+                        for i in 0..entry.length {
+                            let byte_off = entry.byte_offset as usize + (i as usize) * (entry.element_size as usize);
+                            let end = byte_off + entry.element_size as usize;
+                            if end <= buf.data.len() {
+                                let s = match entry.element_size {
+                                    1 => format!("{}", buf.data[byte_off] as i8),
+                                    2 => format!("{}", i16::from_le_bytes([buf.data[byte_off], buf.data[byte_off + 1]])),
+                                    4 => format!("{}", i32::from_le_bytes([buf.data[byte_off], buf.data[byte_off + 1], buf.data[byte_off + 2], buf.data[byte_off + 3]])),
+                                    8 => format!("{}", f64::from_le_bytes([buf.data[byte_off], buf.data[byte_off + 1], buf.data[byte_off + 2], buf.data[byte_off + 3], buf.data[byte_off + 4], buf.data[byte_off + 5], buf.data[byte_off + 6], buf.data[byte_off + 7]])),
+                                    _ => "?".to_string(),
+                                };
+                                parts.push(s);
+                            }
+                        }
+                        return Ok(format!("TypedArray({}) [{}]", entry.length, parts.join(", ")));
+                    }
+                }
+            }
         }
         return Ok("[object Object]".to_string());
     }
