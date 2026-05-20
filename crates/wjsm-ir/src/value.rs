@@ -329,6 +329,11 @@ pub fn decode_closure_idx(val: i64) -> u32 {
 pub fn is_callable(val: i64) -> bool {
     is_function(val) || is_closure(val) || is_bound(val) || is_native_callable(val)
 }
+pub fn is_js_object(val: i64) -> bool {
+    is_object(val) || is_array(val) || is_function(val) || is_closure(val)
+        || is_bound(val) || is_proxy(val) || is_native_callable(val)
+}
+
 
 // ── Bound function ────────────────────────────────────────────────────
 

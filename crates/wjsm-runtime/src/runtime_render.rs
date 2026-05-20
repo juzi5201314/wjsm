@@ -232,6 +232,30 @@ pub(crate) fn write_console_value(
     }
     .expect("write_console_value should write to the configured output sink");
 }
+/// 从影子栈读取多个值并以空格拼接输出（console varargs 支持）
+pub(crate) fn write_console_values(
+    caller: &mut Caller<'_, RuntimeState>,
+    args_base: i32,
+    args_count: i32,
+    prefix: Option<&str>,
+) {
+    let mut rendered = Vec::new();
+    for i in 0..args_count as u32 {
+        let val = read_shadow_arg(caller, args_base, i);
+        rendered.push(render_value(caller, val).unwrap_or_else(|_| "unknown".to_string()));
+    }
+    let line = rendered.join(" ");
+    let mut buffer = caller
+        .data()
+        .output
+        .lock()
+        .expect("runtime output buffer mutex should not be poisoned");
+    match prefix {
+        Some(p) => writeln!(&mut *buffer, "[{p}] {line}"),
+        None => writeln!(&mut *buffer, "{line}"),
+    }
+    .expect("write_console_values should write to the configured output sink");
+}
 
 /// 简单的 URL 编码解码（支持 %XX 和 + → 空格）
 pub(crate) fn urlencoding_decode(input: &str) -> String {

@@ -28,12 +28,34 @@ impl Compiler {
             | Builtin::ConsoleInfo
             | Builtin::ConsoleDebug
             | Builtin::ConsoleTrace => {
-                let first_arg = args
-                    .first()
-                    .with_context(|| format!("{builtin} expects at least one argument"))?;
-                self.emit(WasmInstruction::LocalGet(self.local_idx(first_arg.0)));
+                // 使用影子栈传递所有参数，调用 console varargs (i32, i32) -> ()
+                // 保存 shadow_sp 基址
+                self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+                // 影子栈边界检查
+                self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
+                // 将所有参数写入影子栈
+                for arg in args {
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                    self.emit(WasmInstruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::I32Const(8));
+                    self.emit(WasmInstruction::I32Add);
+                    self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                }
+                // Type 33: (i32, i32) -> (): args_base, args_count
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(args.len() as i32));
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));
+                // 恢复 shadow_sp
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
