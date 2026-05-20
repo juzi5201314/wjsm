@@ -881,6 +881,7 @@
             let target_byte_offset = target_entry.byte_offset;
             let target_length = target_entry.length;
             let target_elem_size = target_entry.element_size;
+            let target_elem_kind = target_entry.element_kind;
             drop(ta_table);
 
             let offset = if value::is_undefined(offset_val) {
@@ -912,9 +913,9 @@
                 let src_buf_handle = src_entry.buffer_handle;
                 let src_byte_offset = src_entry.byte_offset;
                 let src_length = src_entry.length;
-                let src_elem_size = src_entry.element_size;
-                drop(src_ta_table);
-
+            let src_elem_size = src_entry.element_size;
+            let src_elem_kind = src_entry.element_kind;
+            drop(src_ta_table);
                 if offset + src_length > target_length {
                     return value::encode_undefined();
                 }
@@ -929,13 +930,21 @@
                     if off + (src_elem_size as usize) > src_buf.data.len() {
                         return value::encode_undefined();
                     }
-                    let v = match src_elem_size {
-                        1 => src_buf.data[off] as f64,
-                        2 => u16::from_le_bytes([src_buf.data[off], src_buf.data[off + 1]]) as f64,
-                        4 => f32::from_le_bytes([
+                    let v = match (src_elem_size, src_elem_kind) {
+                        (1, 0) => src_buf.data[off] as i8 as f64,
+                        (1, 1) | (1, 2) => src_buf.data[off] as f64,
+                        (2, 0) => i16::from_le_bytes([src_buf.data[off], src_buf.data[off + 1]]) as f64,
+                        (2, 1) => u16::from_le_bytes([src_buf.data[off], src_buf.data[off + 1]]) as f64,
+                        (4, 0) => i32::from_le_bytes([
                             src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
                         ]) as f64,
-                        8 => f64::from_le_bytes([
+                        (4, 1) => u32::from_le_bytes([
+                            src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
+                        ]) as f64,
+                        (4, 3) => f32::from_le_bytes([
+                            src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
+                        ]) as f64,
+                        (8, 3) => f64::from_le_bytes([
                             src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
                             src_buf.data[off + 4], src_buf.data[off + 5], src_buf.data[off + 6], src_buf.data[off + 7],
                         ]),
@@ -973,11 +982,15 @@
                 if off + (target_elem_size as usize) > target_buf.data.len() {
                     return value::encode_undefined();
                 }
-                match target_elem_size {
-                    1 => { target_buf.data[off] = *val as u8; }
-                    2 => { target_buf.data[off..off + 2].copy_from_slice(&(*val as u16).to_le_bytes()); }
-                    4 => { target_buf.data[off..off + 4].copy_from_slice(&(*val as f32).to_le_bytes()); }
-                    8 => { target_buf.data[off..off + 8].copy_from_slice(&val.to_le_bytes()); }
+                match (target_elem_size, target_elem_kind) {
+                    (1, 0) => { target_buf.data[off] = *val as i8 as u8; }
+                    (1, 1) | (1, 2) => { target_buf.data[off] = *val as u8; }
+                    (2, 0) => { target_buf.data[off..off + 2].copy_from_slice(&(*val as i16).to_le_bytes()); }
+                    (2, 1) => { target_buf.data[off..off + 2].copy_from_slice(&(*val as u16).to_le_bytes()); }
+                    (4, 0) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as i32).to_le_bytes()); }
+                    (4, 1) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as u32).to_le_bytes()); }
+                    (4, 3) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as f32).to_le_bytes()); }
+                    (8, 3) => { target_buf.data[off..off + 8].copy_from_slice(&val.to_le_bytes()); }
                     _ => return value::encode_undefined(),
                 }
             }

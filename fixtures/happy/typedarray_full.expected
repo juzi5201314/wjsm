@@ -3,9 +3,9 @@ exit_code: 0
 length: 8
 byteLength: 32
 byteOffset: 0
-at: i
-indexOf: -1
-includes: false
+at: 1
+indexOf: 4
+includes: true
 join: 1-2-3-4-5-6-7-8
-toString: [object Object]
+toString: 1,2,3,4,5,6,7,8
 --- stderr ---
