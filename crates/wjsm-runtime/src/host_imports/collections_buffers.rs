@@ -1,12 +1,57 @@
 {
     let map_constructor_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let handle;
             {
                 let mut table = caller.data().map_table.lock().expect("map table mutex");
                 table.push(MapEntry { keys: Vec::new(), values: Vec::new() });
                 handle = table.len() as u32 - 1;
+            }
+            // 处理可迭代参数：数组快速路径
+            if !value::is_undefined(arg) && !value::is_null(arg) {
+                if value::is_array(arg) {
+                    if let Some(arr_ptr) = resolve_handle(&mut caller, arg) {
+                        let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                        // 先提取所有键值对，避免锁冲突
+                        let mut pairs: Vec<(i64, i64)> = Vec::new();
+                        for i in 0..len {
+                            if let Some(entry_val) = read_array_elem(&mut caller, arr_ptr, i) {
+                                if value::is_array(entry_val) {
+                                    if let Some(entry_ptr) = resolve_handle(&mut caller, entry_val) {
+                                        let entry_len = read_array_length(&mut caller, entry_ptr).unwrap_or(0);
+                                        if entry_len >= 2 {
+                                            let key = read_array_elem(&mut caller, entry_ptr, 0)
+                                                .unwrap_or_else(value::encode_undefined);
+                                            let val = read_array_elem(&mut caller, entry_ptr, 1)
+                                                .unwrap_or_else(value::encode_undefined);
+                                            pairs.push((key, val));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // 锁定 table 并插入 pairs
+                        let mut table = caller.data().map_table.lock().expect("map table mutex");
+                        if (handle as usize) < table.len() {
+                            let map_entry = &mut table[handle as usize];
+                            for (key, val) in pairs {
+                                let mut found = false;
+                                for j in 0..map_entry.keys.len() {
+                                    if same_value_zero(map_entry.keys[j], key) {
+                                        map_entry.values[j] = val;
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if !found {
+                                    map_entry.keys.push(key);
+                                    map_entry.values.push(val);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             let (set_fn, get_fn, has_fn, delete_fn, clear_fn, size_fn, for_each_fn, keys_fn, values_fn, entries_fn) = {
                 let state = caller.data();
@@ -101,12 +146,53 @@
     // ── Set host functions ────────────────────────────────────────────
     let set_constructor_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let handle;
             {
                 let mut table = caller.data().set_table.lock().expect("set table mutex");
                 table.push(SetEntry { values: Vec::new() });
                 handle = table.len() as u32 - 1;
+            }
+            // 处理可迭代参数：数组快速路径
+            if !value::is_undefined(arg) && !value::is_null(arg) {
+                if value::is_array(arg) {
+                    if let Some(arr_ptr) = resolve_handle(&mut caller, arg) {
+                        let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                        // 先提取所有值，避免锁冲突
+                        let mut values: Vec<i64> = Vec::new();
+                        for i in 0..len {
+                            if let Some(val) = read_array_elem(&mut caller, arr_ptr, i) {
+                                let mut found = false;
+                                for &v in &values {
+                                    if same_value_zero(v, val) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if !found {
+                                    values.push(val);
+                                }
+                            }
+                        }
+                        // 锁定 table 并插入 values
+                        let mut table = caller.data().set_table.lock().expect("set table mutex");
+                        if (handle as usize) < table.len() {
+                            let set_entry = &mut table[handle as usize];
+                            for val in values {
+                                let mut found = false;
+                                for j in 0..set_entry.values.len() {
+                                    if same_value_zero(set_entry.values[j], val) {
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if !found {
+                                    set_entry.values.push(val);
+                                }
+                            }
+                        }
+                    }
+                }
             }
             let (add_fn, has_fn, delete_fn, clear_fn, size_fn, for_each_fn, keys_fn, values_fn, entries_fn) = {
                 let state = caller.data();

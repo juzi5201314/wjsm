@@ -193,7 +193,8 @@ impl Lowerer {
                         // 跳过运行时属性解析。
                         if let Some(ta_builtin) =
                             builtin_from_typedarray_proto_method(&prop_ident.sym)
-                        {
+                            && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
+                            && self.is_typedarray_binding(receiver_ident) {
                             this_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![this_val];
                             for arg in &call.args {
