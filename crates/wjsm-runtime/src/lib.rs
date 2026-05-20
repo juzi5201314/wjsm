@@ -107,6 +107,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let regex_table: Arc<Mutex<Vec<RegexEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
     let promise_table: Arc<Mutex<Vec<PromiseEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let non_extensible_handles: Arc<Mutex<HashSet<u32>>> = Arc::new(Mutex::new(HashSet::new()));
+    let default_prototypes: Arc<Mutex<HashMap<i64, i64>>> = Arc::new(Mutex::new(HashMap::new()));
     let microtask_queue: Arc<Mutex<VecDeque<Microtask>>> = Arc::new(Mutex::new(VecDeque::new()));
     let continuation_table: Arc<Mutex<Vec<ContinuationEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>> =
@@ -164,6 +166,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             arraybuffer_table: Arc::clone(&arraybuffer_table),
             dataview_table: Arc::clone(&dataview_table),
             typedarray_table: Arc::clone(&typedarray_table),
+            non_extensible_handles: Arc::clone(&non_extensible_handles),
+            default_prototypes: Arc::clone(&default_prototypes),
             new_target: Cell::new(value::encode_undefined()),
         },
     );
@@ -490,6 +494,10 @@ struct RuntimeState {
     dataview_table: Arc<Mutex<Vec<DataViewEntry>>>,
     /// TypedArray 侧表：存储 TypedArray 的 buffer 引用、偏移量和长度
     typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>>,
+    /// 被 preventExtensions 标记为不可扩展对象的 handle 集合
+    non_extensible_handles: Arc<Mutex<HashSet<u32>>>,
+    /// 函数/闭包到其默认 prototype 对象的映射：key = function_val (i64), value = prototype_obj (i64)
+    default_prototypes: Arc<Mutex<HashMap<i64, i64>>>,
     /// new.target 值元属性
     new_target: Cell<i64>,
 }
