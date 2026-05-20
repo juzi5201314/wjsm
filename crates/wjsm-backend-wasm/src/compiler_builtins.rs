@@ -682,15 +682,37 @@ impl Compiler {
             | Builtin::TypedArrayProtoSet
             | Builtin::TypedArrayProtoSlice
             | Builtin::TypedArrayProtoSubarray
-            // ── TypedArray 新增原型方法: Type 16 (3-arg) ──
+            // ── TypedArray 新增原型方法: Type 16 (3-arg: this, arg1, fromIndex) ──
+            // indexOf/lastIndexOf/includes 的第三个参数是可选的，缺省时用 undefined 填充。
             | Builtin::TypedArrayProtoIndexOf
             | Builtin::TypedArrayProtoLastIndexOf
-            | Builtin::TypedArrayProtoIncludes
-            // ── TypedArray 新增原型方法: Type 2 (2-arg) ──
+            | Builtin::TypedArrayProtoIncludes => {
+                for arg in args.iter().take(3) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                for _ in args.len()..3 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── TypedArray 新增原型方法: Type 2 (2-arg: this, arg1) ──
+            // join 的 separator 参数是可选的，缺省时用 undefined 填充。
             | Builtin::TypedArrayProtoJoin
             | Builtin::TypedArrayProtoAt => {
-                for arg in args {
+                for arg in args.iter().take(2) {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                for _ in args.len()..2 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
                 let func_idx = self
                     .builtin_func_indices

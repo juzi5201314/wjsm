@@ -83,6 +83,31 @@ impl Lowerer {
                         return self.lower_host_builtin_call_expr(call, block, builtin);
                     }
 
+                    // TypedArray.prototype 方法调用优化（必须在 String 之前，因为 at/indexOf/includes/toString
+                    // 在 String 和 TypedArray 上同名）。仅在 receiver 是已知 TypedArray 绑定时启用，
+                    // 避免错误拦截普通字符串的同名方法调用。
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
+                        && let Some(ta_builtin) =
+                            builtin_from_typedarray_proto_method(&prop_ident.sym)
+                        && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
+                        && self.is_typedarray_binding(receiver_ident)
+                    {
+                        this_val = self.lower_expr(&member_expr.obj, block)?;
+                        let mut builtin_args = vec![this_val];
+                        for arg in &call.args {
+                            builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                        }
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: ta_builtin,
+                                args: builtin_args,
+                            },
+                        );
+                        return Ok(dest);
+                    }
                     // String.prototype 方法调用优化（必须在 Array 之前，因为 at/slice/concat 等方法在 String 和 Array 上同名）
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(string_builtin) =

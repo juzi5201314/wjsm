@@ -68,6 +68,7 @@ impl Lowerer {
             eval_has_scope_bridge: false,
             eval_var_writes_to_scope: false,
             active_using_vars: Vec::new(),
+            typedarray_bindings: std::collections::HashSet::new(),
             eval_continue_block: None,
             eval_completion: None,
         }
@@ -628,5 +629,17 @@ impl Lowerer {
             self.module.push_function(function);
         }
         Ok(self.module)
+    }
+}
+
+impl Lowerer {
+    /// 检查指定 Ident 是否为已知的 TypedArray 绑定。
+    pub(crate) fn is_typedarray_binding(&self, ident: &swc_ast::Ident) -> bool {
+        let name = ident.sym.to_string();
+        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+            self.typedarray_bindings.contains(&(scope_id, name))
+        } else {
+            false
+        }
     }
 }

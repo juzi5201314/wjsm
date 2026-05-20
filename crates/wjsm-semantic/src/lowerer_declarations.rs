@@ -45,6 +45,15 @@ impl Lowerer {
                 let value = self.lower_expr(init, block)?;
                 self.lower_destructure_pattern(&declarator.name, value, block, kind)?;
                 block = self.resolve_store_block(block);
+                // 若为简单 ident = new TypedArrayConstructor(...)，记录绑定类型
+                if let swc_ast::Pat::Ident(binding) = &declarator.name {
+                    let name = binding.id.sym.to_string();
+                    if is_typedarray_constructor_expr(init) {
+                        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+                            self.typedarray_bindings.insert((scope_id, name));
+                        }
+                    }
+                }
             } else {
                 if matches!(kind, VarKind::Const) {
                     return Err(self.error(var_decl.span, "const declarations must be initialised"));

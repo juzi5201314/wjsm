@@ -452,6 +452,12 @@ impl Lowerer {
                     },
                 );
                 self.append_eval_var_leak_if_needed(&name, kind, rhs, block);
+                // 更新 TypedArray 绑定跟踪：arr = new Int32Array -> 标记；arr = 其他 -> 取消标记
+                if is_typedarray_constructor_expr(assign.right.as_ref()) {
+                    self.typedarray_bindings.insert((scope_id, name.clone()));
+                } else {
+                    self.typedarray_bindings.remove(&(scope_id, name.clone()));
+                }
                 Ok(rhs)
             }
             op => {

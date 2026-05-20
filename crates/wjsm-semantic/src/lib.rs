@@ -1274,6 +1274,10 @@ struct Lowerer {
     pub(crate) eval_continue_block: Option<BasicBlockId>,
     /// 当前作用域中活跃的 using 变量（用于作用域退出时自动 dispose）
     active_using_vars: Vec<ActiveUsingVar>,
+    /// 追踪当前作用域中已推断为 TypedArray 的绑定（scope_id, name）。
+    /// 用于在 lower_call_expr 中让 arr.at()/arr.indexOf() 等走 TypedArray dispatch，
+    /// 而不是被 String.prototype dispatch 错误拦截。
+    typedarray_bindings: std::collections::HashSet<(usize, String)>,
 }
 
 /// 追踪当前作用域中的 using 变量，用于在作用域退出时自动 dispose。
@@ -1409,3 +1413,25 @@ mod eval_scan;
 use ast_kinds::*;
 use builtins::*;
 use eval_scan::*;
+/// 判断表达式是否为 TypedArray 构造函数调用（`new Int8Array(...)` 等形式）。
+fn is_typedarray_constructor_expr(expr: &swc_ast::Expr) -> bool {
+    if let swc_ast::Expr::New(new_expr) = expr {
+        if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+            return matches!(
+                ident.sym.as_ref(),
+                "Int8Array"
+                    | "Uint8Array"
+                    | "Uint8ClampedArray"
+                    | "Int16Array"
+                    | "Uint16Array"
+                    | "Int32Array"
+                    | "Uint32Array"
+                    | "Float32Array"
+                    | "Float64Array"
+                    | "BigInt64Array"
+                    | "BigUint64Array"
+            );
+        }
+    }
+    false
+}
