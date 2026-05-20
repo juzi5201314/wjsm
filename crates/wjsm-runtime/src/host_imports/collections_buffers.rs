@@ -765,7 +765,7 @@
     dataview_set_fn!(dataview_proto_set_float64_fn, 8, |v: i64| value::decode_f64(v).to_le_bytes().to_vec());
 
     macro_rules! typedarray_constructor {
-        ($name:ident, $size:expr) => {
+        ($name:ident, $size:expr, $kind:expr) => {
             let $name = Func::wrap(
                 &mut store,
                 |mut caller: Caller<'_, RuntimeState>, buffer: i64, byte_offset: i64, length: i64| -> i64 {
@@ -785,7 +785,7 @@
                     {
                         let mut table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
                         handle = table.len() as u32;
-                        table.push(TypedArrayEntry { buffer_handle: buf_handle, byte_offset: offset, length: len, element_size: $size });
+                        table.push(TypedArrayEntry { buffer_handle: buf_handle, byte_offset: offset, length: len, element_size: $size, element_kind: $kind });
                     }
                     let obj = alloc_host_object_from_caller(&mut caller, 4);
                     let handle_val = value::encode_f64(handle as f64);
@@ -802,16 +802,15 @@
         };
     }
 
-    typedarray_constructor!(int8array_constructor_fn, 1);
-    typedarray_constructor!(uint8array_constructor_fn, 1);
-    typedarray_constructor!(uint8clampedarray_constructor_fn, 1);
-    typedarray_constructor!(int16array_constructor_fn, 2);
-    typedarray_constructor!(uint16array_constructor_fn, 2);
-    typedarray_constructor!(int32array_constructor_fn, 4);
-    typedarray_constructor!(uint32array_constructor_fn, 4);
-    typedarray_constructor!(float32array_constructor_fn, 4);
-    typedarray_constructor!(float64array_constructor_fn, 8);
-
+    typedarray_constructor!(int8array_constructor_fn, 1, 0);
+    typedarray_constructor!(uint8array_constructor_fn, 1, 1);
+    typedarray_constructor!(uint8clampedarray_constructor_fn, 1, 2);
+    typedarray_constructor!(int16array_constructor_fn, 2, 0);
+    typedarray_constructor!(uint16array_constructor_fn, 2, 1);
+    typedarray_constructor!(int32array_constructor_fn, 4, 0);
+    typedarray_constructor!(uint32array_constructor_fn, 4, 1);
+    typedarray_constructor!(float32array_constructor_fn, 4, 3);
+    typedarray_constructor!(float64array_constructor_fn, 8, 3);
     let typedarray_proto_length_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
@@ -862,22 +861,319 @@
 
     let typedarray_proto_set_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _this_val: i64, _source: i64, _offset: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, source: i64, offset_val: i64| -> i64 {
+            // Resolve target TypedArray
+            if !value::is_object(this_val) {
+                return value::encode_undefined();
+            }
+            let Some(ptr) = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize) else {
+                return value::encode_undefined();
+            };
+            let Some(h) = read_object_property_by_name(&mut caller, ptr, "__typedarray_handle__") else {
+                return value::encode_undefined();
+            };
+            let handle = value::decode_f64(h) as usize;
+            let ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+            let Some(target_entry) = ta_table.get(handle) else {
+                return value::encode_undefined();
+            };
+            let target_buf_handle = target_entry.buffer_handle;
+            let target_byte_offset = target_entry.byte_offset;
+            let target_length = target_entry.length;
+            let target_elem_size = target_entry.element_size;
+            drop(ta_table);
+
+            let offset = if value::is_undefined(offset_val) {
+                0u32
+            } else {
+                value::decode_f64(offset_val) as u32
+            };
+
+            if offset > target_length {
+                // RangeError would be appropriate per spec
+                return value::encode_undefined();
+            }
+
+            // Collect source values as f64, then write to target buffer.
+            // This handles overlapping-buffer copy correctly (ECMA-262 §23.2.3.28 step 15g).
+            let values: Vec<f64> = if value::is_object(source) {
+                // Check if source is a TypedArray
+                let Some(src_ptr) = resolve_handle_idx(&mut caller, value::decode_object_handle(source) as usize) else {
+                    return value::encode_undefined();
+                };
+                let Some(src_h) = read_object_property_by_name(&mut caller, src_ptr, "__typedarray_handle__") else {
+                    return value::encode_undefined();
+                };
+                let src_handle = value::decode_f64(src_h) as usize;
+                let src_ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+                let Some(src_entry) = src_ta_table.get(src_handle) else {
+                    return value::encode_undefined();
+                };
+                let src_buf_handle = src_entry.buffer_handle;
+                let src_byte_offset = src_entry.byte_offset;
+                let src_length = src_entry.length;
+                let src_elem_size = src_entry.element_size;
+                drop(src_ta_table);
+
+                if offset + src_length > target_length {
+                    return value::encode_undefined();
+                }
+
+                let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                let Some(src_buf) = ab_table.get(src_buf_handle as usize) else {
+                    return value::encode_undefined();
+                };
+                let mut vals = Vec::with_capacity(src_length as usize);
+                for i in 0..src_length {
+                    let off = src_byte_offset as usize + (i as usize) * (src_elem_size as usize);
+                    if off + (src_elem_size as usize) > src_buf.data.len() {
+                        return value::encode_undefined();
+                    }
+                    let v = match src_elem_size {
+                        1 => src_buf.data[off] as f64,
+                        2 => u16::from_le_bytes([src_buf.data[off], src_buf.data[off + 1]]) as f64,
+                        4 => f32::from_le_bytes([
+                            src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
+                        ]) as f64,
+                        8 => f64::from_le_bytes([
+                            src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
+                            src_buf.data[off + 4], src_buf.data[off + 5], src_buf.data[off + 6], src_buf.data[off + 7],
+                        ]),
+                        _ => return value::encode_undefined(),
+                    };
+                    vals.push(v);
+                }
+                drop(ab_table);
+                vals
+            } else if value::is_array(source) {
+                let Some(arr_ptr) = resolve_handle(&mut caller, source) else {
+                    return value::encode_undefined();
+                };
+                let src_length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                if offset + src_length > target_length {
+                    return value::encode_undefined();
+                }
+                let mut vals = Vec::with_capacity(src_length as usize);
+                for i in 0..src_length {
+                    let elem = read_array_elem(&mut caller, arr_ptr, i).unwrap_or(value::encode_undefined());
+                    vals.push(value::decode_f64(elem));
+                }
+                vals
+            } else {
+                return value::encode_undefined();
+            };
+
+            // Write collected values to target buffer
+            let mut target_ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+            let Some(target_buf) = target_ab_table.get_mut(target_buf_handle as usize) else {
+                return value::encode_undefined();
+            };
+            for (i, val) in values.iter().enumerate() {
+                let off = target_byte_offset as usize + ((offset as usize) + i) * (target_elem_size as usize);
+                if off + (target_elem_size as usize) > target_buf.data.len() {
+                    return value::encode_undefined();
+                }
+                match target_elem_size {
+                    1 => { target_buf.data[off] = *val as u8; }
+                    2 => { target_buf.data[off..off + 2].copy_from_slice(&(*val as u16).to_le_bytes()); }
+                    4 => { target_buf.data[off..off + 4].copy_from_slice(&(*val as f32).to_le_bytes()); }
+                    8 => { target_buf.data[off..off + 8].copy_from_slice(&val.to_le_bytes()); }
+                    _ => return value::encode_undefined(),
+                }
+            }
             value::encode_undefined()
         },
     );
 
     let typedarray_proto_slice_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _this_val: i64, _begin: i64, _end: i64| -> i64 {
-            value::encode_undefined()
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, begin_val: i64, end_val: i64| -> i64 {
+            // Resolve TypedArray
+            if !value::is_object(this_val) {
+                return value::encode_undefined();
+            }
+            let Some(ptr) = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize) else {
+                return value::encode_undefined();
+            };
+            let Some(h) = read_object_property_by_name(&mut caller, ptr, "__typedarray_handle__") else {
+                return value::encode_undefined();
+            };
+            let handle = value::decode_f64(h) as usize;
+            let ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+            let Some(entry) = ta_table.get(handle) else {
+                return value::encode_undefined();
+            };
+            let buf_handle = entry.buffer_handle;
+            let byte_offset = entry.byte_offset;
+            let length = entry.length;
+            let elem_size = entry.element_size;
+            let element_kind = entry.element_kind;
+            drop(ta_table);
+
+            // Clamp begin
+            let begin = if value::is_undefined(begin_val) {
+                0u32
+            } else {
+                let f = value::decode_f64(begin_val);
+                if f < 0.0 {
+                    (length as i32 + f as i32).max(0) as u32
+                } else {
+                    (f as u32).min(length)
+                }
+            };
+            // Clamp end
+            let end = if value::is_undefined(end_val) {
+                length
+            } else {
+                let f = value::decode_f64(end_val);
+                if f < 0.0 {
+                    (length as i32 + f as i32).max(0) as u32
+                } else {
+                    (f as u32).min(length)
+                }
+            };
+            let slice_len = end.saturating_sub(begin);
+            if slice_len == 0 {
+                // Create empty TypedArray
+                let new_buf_handle;
+                {
+                    let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                    new_buf_handle = ab_table.len() as u32;
+                    ab_table.push(ArrayBufferEntry { data: Vec::new() });
+                }
+                let new_ta_handle;
+                {
+                    let mut ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+                    new_ta_handle = ta_table.len() as u32;
+                    ta_table.push(TypedArrayEntry {
+                        buffer_handle: new_buf_handle,
+                        byte_offset: 0,
+                        length: 0,
+                        element_size: elem_size,
+                        element_kind,
+                    });
+                }
+                let obj = alloc_host_object_from_caller(&mut caller, 4);
+                let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", value::encode_f64(new_ta_handle as f64));
+                let _ = define_host_data_property_from_caller(&mut caller, obj, "length", value::encode_f64(0.0));
+                let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", value::encode_f64(0.0));
+                let _ = define_host_data_property_from_caller(&mut caller, obj, "byteOffset", value::encode_f64(0.0));
+                return obj;
+            }
+
+            // Create new ArrayBuffer with sliced bytes
+            let src_byte_start = byte_offset as usize + (begin as usize) * (elem_size as usize);
+            let slice_byte_len = slice_len as usize * elem_size as usize;
+            let new_buf_handle;
+            {
+                let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                let Some(buf_entry) = ab_table.get(buf_handle as usize) else {
+                    return value::encode_undefined();
+                };
+                let end_off = src_byte_start + slice_byte_len;
+                if end_off > buf_entry.data.len() {
+                    return value::encode_undefined();
+                }
+                let sliced_data = buf_entry.data[src_byte_start..end_off].to_vec();
+                drop(ab_table);
+                let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                new_buf_handle = ab_table.len() as u32;
+                ab_table.push(ArrayBufferEntry { data: sliced_data });
+            }
+
+            // Create new TypedArray entry pointing to the new buffer
+            let new_ta_handle;
+            {
+                let mut ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+                new_ta_handle = ta_table.len() as u32;
+                ta_table.push(TypedArrayEntry {
+                    buffer_handle: new_buf_handle,
+                    byte_offset: 0,
+                    length: slice_len,
+                    element_size: elem_size,
+                    element_kind,
+                });
+            }
+
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", value::encode_f64(new_ta_handle as f64));
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "length", value::encode_f64(slice_len as f64));
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", value::encode_f64((slice_len * elem_size as u32) as f64));
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteOffset", value::encode_f64(0.0));
+            obj
         },
     );
 
     let typedarray_proto_subarray_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _this_val: i64, _begin: i64, _end: i64| -> i64 {
-            value::encode_undefined()
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, begin_val: i64, end_val: i64| -> i64 {
+            // Resolve TypedArray
+            if !value::is_object(this_val) {
+                return value::encode_undefined();
+            }
+            let Some(ptr) = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize) else {
+                return value::encode_undefined();
+            };
+            let Some(h) = read_object_property_by_name(&mut caller, ptr, "__typedarray_handle__") else {
+                return value::encode_undefined();
+            };
+            let handle = value::decode_f64(h) as usize;
+            let ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+            let Some(entry) = ta_table.get(handle) else {
+                return value::encode_undefined();
+            };
+            let buf_handle = entry.buffer_handle;
+            let byte_offset = entry.byte_offset;
+            let length = entry.length;
+            let elem_size = entry.element_size;
+            let element_kind = entry.element_kind;
+            drop(ta_table);
+
+            // Clamp begin
+            let begin = if value::is_undefined(begin_val) {
+                0u32
+            } else {
+                let f = value::decode_f64(begin_val);
+                if f < 0.0 {
+                    (length as i32 + f as i32).max(0) as u32
+                } else {
+                    (f as u32).min(length)
+                }
+            };
+            // Clamp end
+            let end = if value::is_undefined(end_val) {
+                length
+            } else {
+                let f = value::decode_f64(end_val);
+                if f < 0.0 {
+                    (length as i32 + f as i32).max(0) as u32
+                } else {
+                    (f as u32).min(length)
+                }
+            };
+            let sub_len = end.saturating_sub(begin);
+            let new_byte_offset = byte_offset + begin * elem_size as u32;
+
+            // Create new TypedArray entry sharing the same ArrayBuffer
+            let new_ta_handle;
+            {
+                let mut ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+                new_ta_handle = ta_table.len() as u32;
+                ta_table.push(TypedArrayEntry {
+                    buffer_handle: buf_handle,
+                    byte_offset: new_byte_offset,
+                    length: sub_len,
+                    element_size: elem_size,
+                    element_kind,
+                });
+            }
+
+            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", value::encode_f64(new_ta_handle as f64));
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "length", value::encode_f64(sub_len as f64));
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", value::encode_f64((sub_len * elem_size as u32) as f64));
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteOffset", value::encode_f64(new_byte_offset as f64));
+            obj
         },
     );
 

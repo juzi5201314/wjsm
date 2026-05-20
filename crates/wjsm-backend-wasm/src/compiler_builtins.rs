@@ -665,6 +665,9 @@ impl Compiler {
             | Builtin::DataViewProtoSetUint16
             | Builtin::DataViewProtoSetInt8
             | Builtin::DataViewProtoSetUint8
+            // ── TypedArray 新增构造器 ──
+            | Builtin::BigInt64ArrayConstructor
+            | Builtin::BigUint64ArrayConstructor
             // ── TypedArray constructors ──
             | Builtin::Int8ArrayConstructor
             | Builtin::Uint8ArrayConstructor
@@ -678,7 +681,14 @@ impl Compiler {
             // ── TypedArray prototype multi-arg methods ──
             | Builtin::TypedArrayProtoSet
             | Builtin::TypedArrayProtoSlice
-            | Builtin::TypedArrayProtoSubarray => {
+            | Builtin::TypedArrayProtoSubarray
+            // ── TypedArray 新增原型方法: Type 16 (3-arg) ──
+            | Builtin::TypedArrayProtoIndexOf
+            | Builtin::TypedArrayProtoLastIndexOf
+            | Builtin::TypedArrayProtoIncludes
+            // ── TypedArray 新增原型方法: Type 2 (2-arg) ──
+            | Builtin::TypedArrayProtoJoin
+            | Builtin::TypedArrayProtoAt => {
                 for arg in args {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 }
@@ -693,6 +703,57 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── TypedArray 新增原型方法: Type 17 (4-arg) ──
+            Builtin::TypedArrayProtoCopyWithin
+            | Builtin::TypedArrayProtoFill => {
+                // fill 最多 4 个参数 (this, value, start, end)，缺失的用 undefined 填充
+                for arg in args.iter().take(4) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                for _ in args.len()..4 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── TypedArray 新增原型方法: Type 3 (1-arg) ──
+            Builtin::TypedArrayProtoReverse
+            | Builtin::TypedArrayProtoToString
+            | Builtin::TypedArrayProtoEntries
+            | Builtin::TypedArrayProtoKeys
+            | Builtin::TypedArrayProtoValues => {
+                let val = args.first().with_context(|| format!("{builtin} expects 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── TypedArray 新增原型方法: Type 12 shadow stack (回调方法) ──
+            Builtin::TypedArrayProtoForEach
+            | Builtin::TypedArrayProtoMap
+            | Builtin::TypedArrayProtoFilter
+            | Builtin::TypedArrayProtoReduce
+            | Builtin::TypedArrayProtoReduceRight
+            | Builtin::TypedArrayProtoFind
+            | Builtin::TypedArrayProtoFindIndex
+            | Builtin::TypedArrayProtoSome
+            | Builtin::TypedArrayProtoEvery
+            | Builtin::TypedArrayProtoSort => self.compile_proto_method_call(dest, builtin, args),
             // ── Date constructor (shadow stack, variadic args) ──
             Builtin::DateConstructor => {
                 self.compile_proto_method_call(dest, builtin, args)

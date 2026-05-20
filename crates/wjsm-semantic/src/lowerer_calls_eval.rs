@@ -164,6 +164,28 @@ impl Lowerer {
                             return Ok(dest);
                         }
 
+                        // TypedArray.prototype 方法调用优化：发出 CallBuiltin 代替 Call，
+                        // 跳过运行时属性解析。
+                        if let Some(ta_builtin) =
+                            builtin_from_typedarray_proto_method(&prop_ident.sym)
+                        {
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: ta_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+
                         // Function.prototype.call/apply/bind: func.call(thisArg, ...args)
                         if let Some(func_builtin) =
                             builtin_from_function_proto_method(&prop_ident.sym)

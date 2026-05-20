@@ -103,6 +103,8 @@ pub(crate) fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "Uint32Array" => Some(Builtin::Uint32ArrayConstructor),
         "Float32Array" => Some(Builtin::Float32ArrayConstructor),
         "Float64Array" => Some(Builtin::Float64ArrayConstructor),
+        "BigInt64Array" => Some(Builtin::BigInt64ArrayConstructor),
+        "BigUint64Array" => Some(Builtin::BigUint64ArrayConstructor),
         _ => None,
     }
 }
@@ -363,6 +365,40 @@ pub(crate) fn builtin_from_boolean_proto_method(name: &str) -> Option<Builtin> {
     None
 }
 
+/// 将 TypedArray.prototype 方法名映射到 Builtin 变体，用于语义层优化。
+/// 当 `ta.forEach(cb)` 被识别时，跳过运行时属性解析，直接发出 CallBuiltin。
+pub(crate) fn builtin_from_typedarray_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "set" => Some(TypedArrayProtoSet),
+        "subarray" => Some(TypedArrayProtoSubarray),
+        "slice" => Some(TypedArrayProtoSlice),
+        "fill" => Some(TypedArrayProtoFill),
+        "reverse" => Some(TypedArrayProtoReverse),
+        "indexOf" => Some(TypedArrayProtoIndexOf),
+        "lastIndexOf" => Some(TypedArrayProtoLastIndexOf),
+        "includes" => Some(TypedArrayProtoIncludes),
+        "join" => Some(TypedArrayProtoJoin),
+        "toString" => Some(TypedArrayProtoToString),
+        "copyWithin" => Some(TypedArrayProtoCopyWithin),
+        "at" => Some(TypedArrayProtoAt),
+        "forEach" => Some(TypedArrayProtoForEach),
+        "map" => Some(TypedArrayProtoMap),
+        "filter" => Some(TypedArrayProtoFilter),
+        "reduce" => Some(TypedArrayProtoReduce),
+        "reduceRight" => Some(TypedArrayProtoReduceRight),
+        "find" => Some(TypedArrayProtoFind),
+        "findIndex" => Some(TypedArrayProtoFindIndex),
+        "some" => Some(TypedArrayProtoSome),
+        "every" => Some(TypedArrayProtoEvery),
+        "sort" => Some(TypedArrayProtoSort),
+        "entries" => Some(TypedArrayProtoEntries),
+        "keys" => Some(TypedArrayProtoKeys),
+        "values" => Some(TypedArrayProtoValues),
+        _ => None,
+    }
+}
+
 pub(crate) fn builtin_from_error_proto_method(name: &str) -> Option<Builtin> {
     // Error.prototype methods (toString) are dispatched at runtime
     // via property lookup on the Error prototype object, not via CallBuiltin.
@@ -531,6 +567,9 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::Uint32ArrayConstructor => ("Uint32Array", 3),
         Builtin::Float32ArrayConstructor => ("Float32Array", 3),
         Builtin::Float64ArrayConstructor => ("Float64Array", 3),
+        // ── TypedArray constructors (new) ──
+        Builtin::BigInt64ArrayConstructor => ("BigInt64Array", 3),
+        Builtin::BigUint64ArrayConstructor => ("BigUint64Array", 3),
         // ── TypedArray prototype methods ──
         Builtin::TypedArrayProtoLength => ("TypedArray.prototype.length", 1),
         Builtin::TypedArrayProtoByteLength => ("TypedArray.prototype.byteLength", 1),
@@ -538,6 +577,29 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::TypedArrayProtoSet => ("TypedArray.prototype.set", 3),
         Builtin::TypedArrayProtoSlice => ("TypedArray.prototype.slice", 3),
         Builtin::TypedArrayProtoSubarray => ("TypedArray.prototype.subarray", 3),
+        // ── TypedArray new prototype methods ──
+        Builtin::TypedArrayProtoFill => ("TypedArray.prototype.fill", 3),
+        Builtin::TypedArrayProtoReverse => ("TypedArray.prototype.reverse", 1),
+        Builtin::TypedArrayProtoIndexOf => ("TypedArray.prototype.indexOf", 3),
+        Builtin::TypedArrayProtoLastIndexOf => ("TypedArray.prototype.lastIndexOf", 3),
+        Builtin::TypedArrayProtoIncludes => ("TypedArray.prototype.includes", 3),
+        Builtin::TypedArrayProtoJoin => ("TypedArray.prototype.join", 2),
+        Builtin::TypedArrayProtoToString => ("TypedArray.prototype.toString", 1),
+        Builtin::TypedArrayProtoCopyWithin => ("TypedArray.prototype.copyWithin", 4),
+        Builtin::TypedArrayProtoAt => ("TypedArray.prototype.at", 2),
+        Builtin::TypedArrayProtoForEach => ("TypedArray.prototype.forEach", 3),
+        Builtin::TypedArrayProtoMap => ("TypedArray.prototype.map", 3),
+        Builtin::TypedArrayProtoFilter => ("TypedArray.prototype.filter", 3),
+        Builtin::TypedArrayProtoReduce => ("TypedArray.prototype.reduce", 3),
+        Builtin::TypedArrayProtoReduceRight => ("TypedArray.prototype.reduceRight", 3),
+        Builtin::TypedArrayProtoFind => ("TypedArray.prototype.find", 3),
+        Builtin::TypedArrayProtoFindIndex => ("TypedArray.prototype.findIndex", 3),
+        Builtin::TypedArrayProtoSome => ("TypedArray.prototype.some", 3),
+        Builtin::TypedArrayProtoEvery => ("TypedArray.prototype.every", 3),
+        Builtin::TypedArrayProtoSort => ("TypedArray.prototype.sort", 2),
+        Builtin::TypedArrayProtoEntries => ("TypedArray.prototype.entries", 1),
+        Builtin::TypedArrayProtoKeys => ("TypedArray.prototype.keys", 1),
+        Builtin::TypedArrayProtoValues => ("TypedArray.prototype.values", 1),
         // ── Date builtins ──
         Builtin::DateConstructor => ("Date", 0),
         Builtin::DateNow => ("Date.now", 0),
