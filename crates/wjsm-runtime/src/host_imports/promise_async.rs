@@ -1245,9 +1245,9 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
-            // Update new.target for this call context
+            let new_target_val = caller.data().new_target.get();
             caller.data().new_target.set(value::encode_undefined());
-            // Proxy apply trap: if the callable is a proxy, handle via handler.apply
+
             if value::is_proxy(callable) {
                 let handle = value::decode_proxy_handle(callable) as usize;
                 let entry = {
@@ -1256,45 +1256,83 @@
                 };
                 if let Some(entry) = entry {
                     if entry.revoked {
-                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'apply' on a proxy that has been revoked".to_string());
+                        set_runtime_error(caller.data(), "TypeError: Cannot perform call on a proxy that has been revoked".to_string());
                         return value::encode_undefined();
                     }
-                    // Look up apply trap on handler
-                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "apply")
-                            .unwrap_or_else(value::encode_undefined);
-                        if !value::is_undefined(trap) && !value::is_null(trap) {
-                            // Create args array from shadow stack
-                            let arr = alloc_array(&mut caller, args_count as u32);
-                            for i in 0..args_count {
-                                let arg = read_shadow_arg(&mut caller, args_base, i as u32);
-                                set_array_elem(&mut caller, arr, i, arg);
+
+                    if !value::is_undefined(new_target_val) {
+                        // 构造调用
+                        if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                            let trap = read_object_property_by_name(&mut caller, handler_ptr, "construct")
+                                .unwrap_or_else(value::encode_undefined);
+                            if !value::is_undefined(trap) && !value::is_null(trap) {
+                                let arr = alloc_array(&mut caller, args_count as u32);
+                                for i in 0..args_count {
+                                    let arg = read_shadow_arg(&mut caller, args_base, i as u32);
+                                    set_array_elem(&mut caller, arr, i, arg);
+                                }
+                                let trap_res = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, arr, new_target_val]);
+                                return match trap_res {
+                                    Ok(res) => {
+                                        if !value::is_object(res) && !value::is_array(res) && !value::is_proxy(res) && !value::is_function(res) && !value::is_closure(res) {
+                                            set_runtime_error(caller.data(), "TypeError: Proxy construct trap returned non-object".to_string());
+                                            value::encode_undefined()
+                                        } else {
+                                            res
+                                        }
+                                    }
+                                    Err(e) => {
+                                        set_runtime_error(caller.data(), format!("TypeError: Proxy construct trap failed: {}", e));
+                                        value::encode_undefined()
+                                    }
+                                };
                             }
-                            // Call trap via resolve_and_call
-                            let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
-                            let shadow_sp_global = caller.get_export("__shadow_sp").and_then(|e| e.into_global()).unwrap();
-                            let saved_sp = shadow_sp_global.get(&mut caller).i32().unwrap();
-                            let trap_args = [entry.target, this_val, arr];
-                            let total_size = (trap_args.len() * 8) as i32;
-                            for (i, &arg) in trap_args.iter().enumerate() {
-                                memory.write(&mut caller, (saved_sp + i as i32 * 8) as usize, &arg.to_le_bytes()).unwrap();
-                            }
-                            shadow_sp_global.set(&mut caller, Val::I32(saved_sp + total_size)).unwrap();
-                            let result = resolve_and_call(&mut caller, trap, entry.handler, saved_sp, trap_args.len() as i32);
-                            shadow_sp_global.set(&mut caller, Val::I32(saved_sp)).unwrap();
-                            return result;
                         }
+                        caller.data().new_target.set(new_target_val);
+                        let result = resolve_and_call(&mut caller, entry.target, this_val, args_base, args_count);
+                        caller.data().new_target.set(value::encode_undefined());
+                        return result;
+                    } else {
+                        // 普通函数调用
+                        if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                            let trap = read_object_property_by_name(&mut caller, handler_ptr, "apply")
+                                .unwrap_or_else(value::encode_undefined);
+                            if !value::is_undefined(trap) && !value::is_null(trap) {
+                                let arr = alloc_array(&mut caller, args_count as u32);
+                                for i in 0..args_count {
+                                    let arg = read_shadow_arg(&mut caller, args_base, i as u32);
+                                    set_array_elem(&mut caller, arr, i, arg);
+                                }
+                                let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+                                let shadow_sp_global = caller.get_export("__shadow_sp").and_then(|e| e.into_global()).unwrap();
+                                let saved_sp = shadow_sp_global.get(&mut caller).i32().unwrap();
+                                let trap_args = [entry.target, this_val, arr];
+                                let total_size = (trap_args.len() * 8) as i32;
+                                for (i, &arg) in trap_args.iter().enumerate() {
+                                    memory.write(&mut caller, (saved_sp + i as i32 * 8) as usize, &arg.to_le_bytes()).unwrap();
+                                }
+                                shadow_sp_global.set(&mut caller, Val::I32(saved_sp + total_size)).unwrap();
+                                let result = resolve_and_call(&mut caller, trap, entry.handler, saved_sp, trap_args.len() as i32);
+                                shadow_sp_global.set(&mut caller, Val::I32(saved_sp)).unwrap();
+                                return result;
+                            }
+                        }
+                        return resolve_and_call(&mut caller, entry.target, this_val, args_base, args_count);
                     }
-                    // No apply trap, forward to target
-                    return resolve_and_call(&mut caller, entry.target, this_val, args_base, args_count);
                 }
                 return value::encode_undefined();
+            }
+
+            if !value::is_undefined(new_target_val) {
+                caller.data().new_target.set(new_target_val);
             }
             let args = (0..args_count.max(0))
                 .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
                 .collect();
-            call_native_callable_with_args_from_caller(&mut caller, callable, this_val, args)
-                .unwrap_or_else(value::encode_undefined)
+            let result = call_native_callable_with_args_from_caller(&mut caller, callable, this_val, args)
+                .unwrap_or_else(value::encode_undefined);
+            caller.data().new_target.set(value::encode_undefined());
+            result
         },
     );
 
@@ -1452,15 +1490,6 @@
         },
     );
 
-    fn reflect_get_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64) -> i64 {
-        let obj_ptr = resolve_handle(caller, target);
-        if let Some(ptr) = obj_ptr
-            && let Ok(prop_name) = render_value(caller, prop)
-                && let Some(val) = read_object_property_by_name(caller, ptr, &prop_name) {
-                    return val;
-                }
-        value::encode_undefined()
-    }
 
     let proxy_revocable_fn = Func::wrap(
         &mut store,
@@ -1627,75 +1656,234 @@
         value::encode_bool(true)
     }
 
-    let reflect_apply_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, target: i64, this_arg: i64, _args: i64| -> i64 {
-            resolve_and_call(&mut caller, target, this_arg, 0, 0)
-        },
-    );
-    let reflect_construct_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, target: i64, args_array: i64, _new_target: i64| -> i64 {
-            let is_callable = value::is_function(target) || value::is_closure(target) || value::is_proxy(target);
-            if !is_callable {
-                return alloc_host_object_from_caller(&mut caller, 4);
-            }
-            let this_obj = alloc_host_object_from_caller(&mut caller, 4);
-            // Read args from array and push to shadow stack
-            let arg_count = if value::is_array(args_array) {
-                let handle = value::decode_array_handle(args_array) as usize;
-                let Some(ptr) = resolve_handle_idx(&mut caller, handle) else { return this_obj; };
-                // Read shadow stack position first (mutable borrow)
-                let shadow_sp_global = caller.get_export("__shadow_sp").and_then(|e| e.into_global()).unwrap();
-                let saved_sp = shadow_sp_global.get(&mut caller).i32().unwrap();
-                // Read array length (immutable borrow on memory)
-                let len = {
-                    let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return this_obj; };
-                    let data = memory.data(&caller);
-                    if ptr + 12 > data.len() { return this_obj; };
-                    u32::from_le_bytes([data[ptr + 8], data[ptr + 9], data[ptr + 10], data[ptr + 11]]) as usize
-                };
-                let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
-                for i in 0..len {
-                    let mut buf = [0u8; 8];
-                    let _ = memory.read(&mut caller, ptr + 16 + i * 8, &mut buf);
-                    let arg_val = i64::from_le_bytes(buf);
-                    memory.write(&mut caller, (saved_sp + i as i32 * 8) as usize, &arg_val.to_le_bytes()).unwrap();
+    fn extract_array_like_elements(
+        caller: &mut Caller<'_, RuntimeState>,
+        arr_like: i64,
+    ) -> Result<Vec<i64>, String> {
+        let mut elements = Vec::new();
+        if value::is_array(arr_like) {
+            let handle = value::decode_array_handle(arr_like) as usize;
+            let Some(ptr) = resolve_handle_idx(caller, handle) else { return Ok(elements); };
+            let len = {
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return Ok(elements); };
+                let data = memory.data(&*caller);
+                if ptr + 12 > data.len() { return Ok(elements); }
+                u32::from_le_bytes([data[ptr + 8], data[ptr + 9], data[ptr + 10], data[ptr + 11]]) as usize
+            };
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return Ok(elements); };
+            for i in 0..len {
+                let mut buf = [0u8; 8];
+                if memory.read(&mut *caller, ptr + 16 + i * 8, &mut buf).is_ok() {
+                    elements.push(i64::from_le_bytes(buf));
                 }
-                shadow_sp_global.set(&mut caller, Val::I32(saved_sp + len as i32 * 8)).unwrap();
-                let result = resolve_and_call(&mut caller, target, this_obj, saved_sp, len as i32);
-                shadow_sp_global.set(&mut caller, Val::I32(saved_sp)).unwrap();
-                return result;
+            }
+        } else if value::is_object(arr_like) || value::is_proxy(arr_like) {
+            let len_prop = store_runtime_string(caller, "length".to_string());
+            let len_val = reflect_get_impl(caller, arr_like, len_prop);
+            let len = if value::is_f64(len_val) {
+                value::decode_f64(len_val) as usize
             } else {
                 0
             };
-            resolve_and_call(&mut caller, target, this_obj, 0, arg_count as i32)
+            for i in 0..len {
+                let idx_prop = value::encode_f64(i as f64);
+                let val = reflect_get_impl(caller, arr_like, idx_prop);
+                elements.push(val);
+            }
+        }
+        Ok(elements)
+    }
+
+    let reflect_apply_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, target: i64, this_arg: i64, args_array: i64| -> i64 {
+            if !is_callable_in_runtime(&mut caller, target) {
+                set_runtime_error(caller.data(), "TypeError: Reflect.apply target must be callable".to_string());
+                return value::encode_undefined();
+            }
+            let args = match extract_array_like_elements(&mut caller, args_array) {
+                Ok(arr) => arr,
+                Err(err) => {
+                    set_runtime_error(caller.data(), err);
+                    return value::encode_undefined();
+                }
+            };
+
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = { let table = caller.data().proxy_table.lock().unwrap(); table.get(handle).cloned() };
+                if let Some(entry) = entry {
+                    if entry.revoked {
+                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'apply' on a proxy that has been revoked".to_string());
+                        return value::encode_undefined();
+                    }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "apply").unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let arr = alloc_array(&mut caller, args.len() as u32);
+                            for (i, &arg) in args.iter().enumerate() {
+                                set_array_elem(&mut caller, arr, i as i32, arg);
+                            }
+                            let trap_result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, this_arg, arr]);
+                            return match trap_result {
+                                Ok(res) => res,
+                                Err(e) => {
+                                    set_runtime_error(caller.data(), format!("TypeError: Proxy apply trap failed: {}", e));
+                                    value::encode_undefined()
+                                }
+                            };
+                        }
+                    }
+                    return reflect_apply_impl(&mut caller, entry.target, this_arg, &args);
+                }
+            }
+
+            reflect_apply_impl(&mut caller, target, this_arg, &args)
         },
     );
+
+    fn reflect_apply_impl(
+        caller: &mut Caller<'_, RuntimeState>,
+        target: i64,
+        this_arg: i64,
+        args: &[i64],
+    ) -> i64 {
+        let shadow_sp_global = caller.get_export("__shadow_sp").and_then(|e| e.into_global()).unwrap();
+        let saved_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
+        let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+        for (i, &arg) in args.iter().enumerate() {
+            memory.write(&mut *caller, (saved_sp + i as i32 * 8) as usize, &arg.to_le_bytes()).unwrap();
+        }
+        shadow_sp_global.set(&mut *caller, Val::I32(saved_sp + args.len() as i32 * 8)).unwrap();
+        let result = resolve_and_call(caller, target, this_arg, saved_sp, args.len() as i32);
+        shadow_sp_global.set(&mut *caller, Val::I32(saved_sp)).unwrap();
+        result
+    }
+
+    let reflect_construct_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, target: i64, args_array: i64, new_target: i64| -> i64 {
+            let n_target = if value::is_undefined(new_target) { target } else { new_target };
+            if !is_callable_in_runtime(&mut caller, target) || !is_callable_in_runtime(&mut caller, n_target) {
+                set_runtime_error(caller.data(), "TypeError: Reflect.construct target and newTarget must be constructors".to_string());
+                return value::encode_undefined();
+            }
+
+            let args = match extract_array_like_elements(&mut caller, args_array) {
+                Ok(arr) => arr,
+                Err(err) => {
+                    set_runtime_error(caller.data(), err);
+                    return value::encode_undefined();
+                }
+            };
+
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = { let table = caller.data().proxy_table.lock().unwrap(); table.get(handle).cloned() };
+                if let Some(entry) = entry {
+                    if entry.revoked {
+                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'construct' on a proxy that has been revoked".to_string());
+                        return value::encode_undefined();
+                    }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "construct").unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let arr = alloc_array(&mut caller, args.len() as u32);
+                            for (i, &arg) in args.iter().enumerate() {
+                                set_array_elem(&mut caller, arr, i as i32, arg);
+                            }
+                            let trap_result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, arr, n_target]);
+                            return match trap_result {
+                                Ok(res) => {
+                                    if !value::is_object(res) && !value::is_array(res) && !value::is_proxy(res) && !value::is_function(res) && !value::is_closure(res) {
+                                        set_runtime_error(caller.data(), "TypeError: Proxy construct trap returned non-object".to_string());
+                                        value::encode_undefined()
+                                    } else {
+                                        res
+                                    }
+                                }
+                                Err(e) => {
+                                    set_runtime_error(caller.data(), format!("TypeError: Proxy construct trap failed: {}", e));
+                                    value::encode_undefined()
+                                }
+                            };
+                        }
+                    }
+                    return reflect_construct_impl(&mut caller, entry.target, &args, n_target);
+                }
+            }
+
+            reflect_construct_impl(&mut caller, target, &args, n_target)
+        },
+    );
+
+    fn reflect_construct_impl(
+        caller: &mut Caller<'_, RuntimeState>,
+        target: i64,
+        args: &[i64],
+        new_target: i64,
+    ) -> i64 {
+        let this_obj = alloc_host_object_from_caller(caller, 4);
+        let proto_prop = store_runtime_string(caller, "prototype".to_string());
+        let proto_val = reflect_get_impl(caller, new_target, proto_prop);
+        if value::is_object(proto_val) || value::is_array(proto_val) || value::is_proxy(proto_val) || value::is_null(proto_val) {
+            let _ = reflect_set_prototype_of_fn_impl(caller, this_obj, proto_val);
+        }
+
+        let shadow_sp_global = caller.get_export("__shadow_sp").and_then(|e| e.into_global()).unwrap();
+        let saved_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
+        let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+        for (i, &arg) in args.iter().enumerate() {
+            memory.write(&mut *caller, (saved_sp + i as i32 * 8) as usize, &arg.to_le_bytes()).unwrap();
+        }
+        shadow_sp_global.set(&mut *caller, Val::I32(saved_sp + args.len() as i32 * 8)).unwrap();
+        let result = resolve_and_call(caller, target, this_obj, saved_sp, args.len() as i32);
+        shadow_sp_global.set(&mut *caller, Val::I32(saved_sp)).unwrap();
+
+        if value::is_object(result) || value::is_array(result) || value::is_proxy(result) || value::is_function(result) || value::is_closure(result) {
+            result
+        } else {
+            this_obj
+        }
+    }
 
     let reflect_get_prototype_of_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
-            if value::is_proxy(target) {
-                let handle = value::decode_proxy_handle(target) as usize;
-                let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
-                if let Some(entry) = entry {
-                    if entry.revoked { set_runtime_error(caller.data(), "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked".to_string()); return value::encode_undefined(); }
-                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "getPrototypeOf").unwrap_or_else(value::encode_undefined);
-                        if !value::is_undefined(trap) && !value::is_null(trap) {
-                            return call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target]).unwrap_or_else(|_| value::encode_null());
-                        }
-                    }
-                    return reflect_get_prototype_of_impl(&mut caller, entry.target);
-                }
+            if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
+                set_runtime_error(caller.data(), "TypeError: Reflect.getPrototypeOf called on non-object".to_string());
+                return value::encode_undefined();
             }
             reflect_get_prototype_of_impl(&mut caller, target)
         },
     );
 
     fn reflect_get_prototype_of_impl(caller: &mut Caller<'_, RuntimeState>, target: i64) -> i64 {
-        let Some(ptr) = resolve_handle(caller, target) else { return value::encode_undefined(); };
+        if value::is_proxy(target) {
+            let handle = value::decode_proxy_handle(target) as usize;
+            let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
+            if let Some(entry) = entry {
+                if entry.revoked { set_runtime_error(caller.data(), "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked".to_string()); return value::encode_undefined(); }
+                if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
+                    let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf").unwrap_or_else(value::encode_undefined);
+                    if !value::is_undefined(trap) && !value::is_null(trap) {
+                        let res = call_wasm_callback(caller, trap, entry.handler, &[entry.target]).unwrap_or_else(|_| value::encode_null());
+                        // Invariant check: if target is non-extensible, returned prototype must match target prototype
+                        let ext = is_extensible_impl(caller, entry.target);
+                        if !ext {
+                            let target_proto = reflect_get_prototype_of_impl(caller, entry.target);
+                            if res != target_proto {
+                                set_runtime_error(caller.data(), "TypeError: Proxy getPrototypeOf invariant violated: target is not extensible and trap returned different prototype".to_string());
+                                return value::encode_null();
+                            }
+                        }
+                        return res;
+                    }
+                }
+                return reflect_get_prototype_of_impl(caller, entry.target);
+            }
+        }
+        let Some(ptr) = resolve_handle(caller, target) else { return value::encode_null(); };
         let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return value::encode_null(); };
         let data = memory.data(&*caller);
         if ptr + 4 > data.len() { return value::encode_null(); }
@@ -1703,24 +1891,213 @@
         if proto_handle == 0xFFFF_FFFF { value::encode_null() } else { value::encode_object_handle(proto_handle) }
     }
 
+    fn is_prototype_circular_chain(
+        caller: &mut Caller<'_, RuntimeState>,
+        target: i64,
+        proto: i64,
+    ) -> bool {
+        let mut current = proto;
+        let mut visited = std::collections::HashSet::new();
+        while !value::is_null(current) && !value::is_undefined(current) {
+            if current == target {
+                return true;
+            }
+            if value::is_proxy(current) {
+                let handle = value::decode_proxy_handle(current);
+                if !visited.insert(handle) {
+                    break;
+                }
+            } else if value::is_object(current) {
+                let handle = value::decode_object_handle(current);
+                if !visited.insert(handle) {
+                    break;
+                }
+            } else if value::is_array(current) {
+                let handle = value::decode_array_handle(current);
+                if !visited.insert(handle) {
+                    break;
+                }
+            }
+            current = reflect_get_prototype_of_impl(caller, current);
+        }
+        false
+    }
+
+    fn reflect_set_prototype_of_fn_impl(
+        caller: &mut Caller<'_, RuntimeState>,
+        target: i64,
+        proto: i64,
+    ) -> i64 {
+        if !is_extensible_impl(caller, target) {
+            let current_proto = reflect_get_prototype_of_impl(caller, target);
+            return value::encode_bool(current_proto == proto);
+        }
+        if is_prototype_circular_chain(caller, target, proto) {
+            return value::encode_bool(false);
+        }
+        let Some(ptr) = resolve_handle(caller, target) else { return value::encode_bool(false); };
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return value::encode_bool(false); };
+
+        let proto_handle = if value::is_null(proto) {
+            0xFFFF_FFFF
+        } else if value::is_object(proto) {
+            value::decode_object_handle(proto)
+        } else if value::is_array(proto) {
+            value::decode_array_handle(proto)
+        } else if value::is_proxy(proto) {
+            value::decode_proxy_handle(proto)
+        } else if value::is_function(proto) || value::is_closure(proto) {
+            value::decode_object_handle(proto)
+        } else {
+            0xFFFF_FFFF
+        };
+
+        let data = memory.data_mut(&mut *caller);
+        if ptr + 4 > data.len() { return value::encode_bool(false); }
+        data[ptr..ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
+        value::encode_bool(true)
+    }
+
     let reflect_set_prototype_of_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _target: i64, _proto: i64| -> i64 {
-            value::encode_bool(true)
+        |mut caller: Caller<'_, RuntimeState>, target: i64, proto: i64| -> i64 {
+            if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
+                set_runtime_error(caller.data(), "TypeError: Reflect.setPrototypeOf called on non-object".to_string());
+                return value::encode_bool(false);
+            }
+            if !value::is_object(proto) && !value::is_null(proto) && !value::is_proxy(proto) && !value::is_array(proto) && !value::is_function(proto) {
+                set_runtime_error(caller.data(), "TypeError: Reflect.setPrototypeOf prototype must be an object or null".to_string());
+                return value::encode_bool(false);
+            }
+
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = { let table = caller.data().proxy_table.lock().unwrap(); table.get(handle).cloned() };
+                if let Some(entry) = entry {
+                    if entry.revoked {
+                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'setPrototypeOf' on a proxy that has been revoked".to_string());
+                        return value::encode_bool(false);
+                    }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "setPrototypeOf").unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, proto]);
+                            let trap_res = match result {
+                                Ok(res) => !value::is_falsy(res),
+                                Err(e) => {
+                                    set_runtime_error(caller.data(), format!("TypeError: setPrototypeOf trap failed: {}", e));
+                                    return value::encode_bool(false);
+                                }
+                            };
+                            if trap_res {
+                                let ext = is_extensible_impl(&mut caller, entry.target);
+                                if !ext {
+                                    let current_proto = reflect_get_prototype_of_impl(&mut caller, entry.target);
+                                    if current_proto != proto {
+                                        set_runtime_error(caller.data(), "TypeError: Proxy setPrototypeOf invariant violated: target is not extensible and new prototype is different".to_string());
+                                        return value::encode_bool(false);
+                                    }
+                                }
+                            }
+                            return value::encode_bool(trap_res);
+                        }
+                    }
+                    return reflect_set_prototype_of_fn_impl(&mut caller, entry.target, proto);
+                }
+            }
+            reflect_set_prototype_of_fn_impl(&mut caller, target, proto)
         },
     );
 
     let reflect_is_extensible_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
-            value::encode_bool(true)
+        |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
+            if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
+                set_runtime_error(caller.data(), "TypeError: Reflect.isExtensible called on non-object".to_string());
+                return value::encode_bool(false);
+            }
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = {
+                    let table = caller.data().proxy_table.lock().unwrap();
+                    table.get(handle).cloned()
+                };
+                if let Some(entry) = entry {
+                    if entry.revoked {
+                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'isExtensible' on a proxy that has been revoked".to_string());
+                        return value::encode_bool(false);
+                    }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "isExtensible")
+                            .unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target]);
+                            let trap_res = match result {
+                                Ok(res) => !value::is_falsy(res),
+                                Err(e) => {
+                                    set_runtime_error(caller.data(), format!("TypeError: isExtensible trap failed: {}", e));
+                                    return value::encode_bool(false);
+                                }
+                            };
+                            let real_res = is_extensible_impl(&mut caller, entry.target);
+                            if trap_res != real_res {
+                                set_runtime_error(caller.data(), "TypeError: Proxy isExtensible trap returned result that does not match target's extensibility".to_string());
+                                return value::encode_bool(false);
+                            }
+                            return value::encode_bool(trap_res);
+                        }
+                    }
+                    return value::encode_bool(is_extensible_impl(&mut caller, entry.target));
+                }
+            }
+            value::encode_bool(is_extensible_impl(&mut caller, target))
         },
     );
 
     let reflect_prevent_extensions_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _target: i64| -> i64 {
-            value::encode_bool(true)
+        |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
+            if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
+                set_runtime_error(caller.data(), "TypeError: Reflect.preventExtensions called on non-object".to_string());
+                return value::encode_bool(false);
+            }
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = {
+                    let table = caller.data().proxy_table.lock().unwrap();
+                    table.get(handle).cloned()
+                };
+                if let Some(entry) = entry {
+                    if entry.revoked {
+                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'preventExtensions' on a proxy that has been revoked".to_string());
+                        return value::encode_bool(false);
+                    }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "preventExtensions")
+                            .unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target]);
+                            let trap_res = match result {
+                                Ok(res) => !value::is_falsy(res),
+                                Err(e) => {
+                                    set_runtime_error(caller.data(), format!("TypeError: preventExtensions trap failed: {}", e));
+                                    return value::encode_bool(false);
+                                }
+                            };
+                            if trap_res {
+                                let real_res = is_extensible_impl(&mut caller, entry.target);
+                                if real_res {
+                                    set_runtime_error(caller.data(), "TypeError: Proxy preventExtensions trap returned true, but target remains extensible".to_string());
+                                    return value::encode_bool(false);
+                                }
+                            }
+                            return value::encode_bool(trap_res);
+                        }
+                    }
+                    return value::encode_bool(prevent_extensions_impl(&mut caller, entry.target));
+                }
+            }
+            value::encode_bool(prevent_extensions_impl(&mut caller, target))
         },
     );
 
@@ -1798,24 +2175,109 @@
     let reflect_define_property_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, descriptor: i64| -> i64 {
-            let value_val = resolve_handle(&mut caller, descriptor)
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "value"))
-                .unwrap_or_else(value::encode_undefined);
-            reflect_set_impl(&mut caller, target, prop, value_val)
+            match define_property_internal(&mut caller, target, prop, descriptor) {
+                Ok(success) => value::encode_bool(success),
+                Err(e) => {
+                    set_runtime_error(caller.data(), e);
+                    value::encode_bool(false)
+                }
+            }
         },
     );
+
+    fn reflect_own_keys_impl(caller: &mut Caller<'_, RuntimeState>, target: i64) -> i64 {
+        let Some(ptr) = resolve_handle(caller, target) else { return value::encode_undefined(); };
+        let names = collect_own_property_names(caller, ptr, false);
+        let arr = alloc_array(caller, names.len() as u32);
+        for (i, name) in names.into_iter().enumerate() {
+            let name_val = store_runtime_string(caller, name);
+            let _ = define_host_data_property_from_caller(caller, arr, &i.to_string(), name_val);
+        }
+        arr
+    }
 
     let reflect_own_keys_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, target) else { return value::encode_undefined(); };
-            let names = collect_own_property_names(&mut caller, ptr, false);
-            let arr = alloc_array(&mut caller, names.len() as u32);
-            for (i, name) in names.into_iter().enumerate() {
-                let name_val = store_runtime_string(&caller, name);
-                let _ = define_host_data_property_from_caller(&mut caller, arr, &i.to_string(), name_val);
+            if value::is_proxy(target) {
+                let handle = value::decode_proxy_handle(target) as usize;
+                let entry = {
+                    let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    table.get(handle).cloned()
+                };
+                if let Some(entry) = entry {
+                    if entry.revoked {
+                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'ownKeys' on a proxy that has been revoked".to_string());
+                        return value::encode_undefined();
+                    }
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "ownKeys")
+                            .unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let trap_res = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target]);
+                            let keys_val = match trap_res {
+                                Ok(res) => res,
+                                Err(e) => {
+                                    set_runtime_error(caller.data(), format!("TypeError: Proxy ownKeys trap failed: {}", e));
+                                    return value::encode_undefined();
+                                }
+                            };
+                            let keys = match extract_array_like_elements(&mut caller, keys_val) {
+                                Ok(arr) => arr,
+                                Err(err) => {
+                                    set_runtime_error(caller.data(), err);
+                                    return value::encode_undefined();
+                                }
+                            };
+
+                            // Invariant checks
+                            let ext = is_extensible_impl(&mut caller, entry.target);
+                            let Some(t_ptr) = resolve_handle(&mut caller, entry.target) else { return value::encode_undefined(); };
+                            let target_keys = collect_own_property_names(&mut caller, t_ptr, false);
+                            let mut trap_keys_str = Vec::new();
+                            for &k in &keys {
+                                if let Ok(k_str) = render_value(&mut caller, k) {
+                                    trap_keys_str.push(k_str);
+                                }
+                            }
+
+                            if !ext {
+                                let mut match_all = true;
+                                for tk in &target_keys {
+                                    if !trap_keys_str.contains(tk) {
+                                        match_all = false;
+                                        break;
+                                    }
+                                }
+                                if !match_all || trap_keys_str.len() != target_keys.len() {
+                                    set_runtime_error(caller.data(), "TypeError: Proxy ownKeys invariant violated: target is non-extensible and keys do not match target keys".to_string());
+                                    return value::encode_undefined();
+                                }
+                            } else {
+                                for tk in &target_keys {
+                                    if let Some(tk_c) = find_memory_c_string(&mut caller, tk) {
+                                        if let Some((_, flags, _)) = find_property_slot_by_name_id(&mut caller, t_ptr, tk_c) {
+                                            let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
+                                            if !configurable && !trap_keys_str.contains(tk) {
+                                                set_runtime_error(caller.data(), format!("TypeError: Proxy ownKeys invariant violated: non-configurable property '{}' is missing in trap result", tk));
+                                                return value::encode_undefined();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            let arr = alloc_array(&mut caller, keys.len() as u32);
+                            for (i, &key) in keys.iter().enumerate() {
+                                set_array_elem(&mut caller, arr, i as i32, key);
+                            }
+                            return arr;
+                        }
+                    }
+                    return reflect_own_keys_impl(&mut caller, entry.target);
+                }
             }
-            arr
+            reflect_own_keys_impl(&mut caller, target)
         },
     );
     // ── Math builtins ────────────────────────────────────────────────────────

@@ -704,12 +704,12 @@
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, value: i64, constructor: i64| -> i64 {
             // 1. 原始类型直接返回 false
-            if !value::is_object(value) && !value::is_function(value) {
+            if !value::is_object(value) && !value::is_function(value) && !value::is_proxy(value) {
                 return value::encode_bool(false);
             }
 
-            // 2. 检查 constructor 是否是对象或函数
-            if !value::is_object(constructor) && !value::is_function(constructor) {
+            // 2. 检查 constructor 是否是对象或函数或 Proxy
+            if !value::is_object(constructor) && !value::is_function(constructor) && !value::is_proxy(constructor) {
                 *caller
                     .data()
                     .runtime_error
@@ -719,78 +719,22 @@
                 return value::encode_undefined();
             }
 
-            // 3. 获取 constructor 的属性列表并查找 "prototype" 属性
-            let ctor_ptr = match resolve_handle(&mut caller, constructor) {
-                Some(p) => p,
-                None => return value::encode_bool(false),
-            };
+            // 3. 获取 constructor 的 "prototype" 属性
+            let proto_prop = store_runtime_string(&caller, "prototype".to_string());
+            let prototype_val = reflect_get_impl(&mut caller, constructor, proto_prop);
 
-            // 扫描 constructor 的属性查找 "prototype"
-            let props: Vec<(u32, [u8; 8])> = {
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                    return value::encode_bool(false);
-                };
-                let data = memory.data(&caller);
-                if ctor_ptr + 16 > data.len() {
-                    return value::encode_bool(false);
-                }
-                let num_props = u32::from_le_bytes([
-                    data[ctor_ptr + 12],
-                    data[ctor_ptr + 13],
-                    data[ctor_ptr + 14],
-                    data[ctor_ptr + 15],
-                ]) as usize;
-
-                (0..num_props)
-                    .filter_map(|i| {
-                        let slot_offset = ctor_ptr + 16 + i * 32;
-                        if slot_offset + 32 <= data.len() {
-                            let name_id = u32::from_le_bytes([
-                                data[slot_offset],
-                                data[slot_offset + 1],
-                                data[slot_offset + 2],
-                                data[slot_offset + 3],
-                            ]);
-                            let val_bytes = [
-                                data[slot_offset + 8],
-                                data[slot_offset + 9],
-                                data[slot_offset + 10],
-                                data[slot_offset + 11],
-                                data[slot_offset + 12],
-                                data[slot_offset + 13],
-                                data[slot_offset + 14],
-                                data[slot_offset + 15],
-                            ];
-                            Some((name_id, val_bytes))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
-            };
-
-            let mut prototype: Option<i64> = None;
-            for (name_id, val_bytes) in &props {
-                let name_str = read_string_bytes(&mut caller, *name_id);
-                if name_str == b"prototype" {
-                    prototype = Some(i64::from_le_bytes(*val_bytes));
-                    break;
-                }
+            // 4. 如果 prototype 不是对象/函数/Proxy/null，抛出 TypeError
+            if !value::is_object(prototype_val) && !value::is_function(prototype_val) && !value::is_proxy(prototype_val) && !value::is_null(prototype_val) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: Function has non-object prototype property".to_string());
+                return value::encode_undefined();
             }
 
-            // 4. 如果 prototype 不是对象，抛出 TypeError
-            let prototype = match prototype {
-                Some(p) if value::is_object(p) || value::is_function(p) => p,
-                _ => {
-                    *caller
-                        .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") =
-                        Some("TypeError: Function has non-object prototype property".to_string());
-                    return value::encode_undefined();
-                }
-            };
+            let prototype = prototype_val;
 
             // 5. 遍历 value 的原型链
             let proto_target = match resolve_handle(&mut caller, prototype) {
