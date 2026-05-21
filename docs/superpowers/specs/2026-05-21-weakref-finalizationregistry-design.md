@@ -285,4 +285,4 @@ test262 中 WeakRef/FinalizationRegistry 测试依赖 `$262.gc()` 显式触发 G
 1. **`CleanupSome` 未实现** — ES2021 规范的可选方法，允许同步执行部分待处理的清理回调。wjsm 的单线程协作式模型中不适用，test262 也不依赖它。
 2. **WeakRef 侧表空洞** — 当 WeakRef 对象自身被回收时，其侧表 entry 保留在 Vec 中不会被复用。对于长时间运行的应用程序可能造成内存泄漏，但不会影响正确性。可在后续 GC 优化中处理（标记阶段识别存活 WeakRef，sweep 阶段清理未引用 entry）。
 3. **FinalizationRegistry 回调异常** — 规范要求回调抛出异常时不传播（类似 Promise 回调）。wjsm 通过微任务调度实现此行为（微任务中的异常会被捕获并记录，不中断事件循环）。
-4. **Symbol 作为 WeakRef target** — `new WeakRef(symbol)` 允许，但 `new FinalizationRegistry(...).register(symbol, ...)` 不允许（规范要求 target 必须是 Object，非 Symbol）。本设计遵循此规范。
+4. **Symbol 作为 WeakRef target** — `new WeakRef(symbol)` 不允许（Symbol 不是 Object 类型，符合规范）。`new FinalizationRegistry(...).register(symbol, ...)` 不允许（规范要求 target 必须是 Object，非 Symbol）。本设计遵循此规范。
