@@ -391,6 +391,8 @@ pub enum Builtin {
     EvalSuperBase,
     /// args[0]: record, args[1]: key (i64 integer tag), args[2]: value (i64)
     ScopeRecordSetMeta,
+    /// args[0]: record — removes the scope record from the runtime map
+    ScopeRecordDestroy,
 }
 
 impl fmt::Display for Builtin {
@@ -737,6 +739,7 @@ impl fmt::Display for Builtin {
             Self::EvalHasBinding => "eval_has_binding",
             Self::EvalSuperBase => "eval_super_base",
             Self::ScopeRecordSetMeta => "scope_record_set_meta",
+            Self::ScopeRecordDestroy => "scope_record_destroy",
         })
     }
 }

@@ -295,6 +295,14 @@ impl Compiler {
                 self.emit(WasmInstruction::Drop);
                 Ok(())
             }
+            Builtin::ScopeRecordDestroy => {
+                let rec = args.first().context("scope_record_destroy expects record")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                Ok(())
+            }
             Builtin::IsException => {
                 let value = args.first().context("is_exception expects value arg")?;
                 let value_local = self.local_idx(value.0);

@@ -116,8 +116,12 @@ pub fn eval_literal_binding_names(code: &str) -> Vec<String> {
     let bytes = code.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
-        if is_word_at(bytes, index, b"var") {
-            index += 3;
+        if is_word_at(bytes, index, b"var")
+            || is_word_at(bytes, index, b"let")
+            || is_word_at(bytes, index, b"const")
+        {
+            let keyword_len = if bytes[index] == b'v' { 3 } else if bytes[index] == b'l' { 3 } else { 5 };
+            index += keyword_len;
             loop {
                 while index < bytes.len()
                     && (bytes[index].is_ascii_whitespace() || bytes[index] == b',')

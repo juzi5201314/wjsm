@@ -1069,6 +1069,13 @@ pub(crate) fn eval_get_binding(
     if name_str.is_empty() {
         return value::encode_undefined();
     }
+    // Magic name for new.target stored via scope_record_set_meta(key=3)
+    if name_str == "__wjsm_new_target" {
+        if let Some(rec) = caller.data().scope_records.get(&handle) {
+            return rec.new_target.unwrap_or(value::encode_undefined());
+        }
+        return value::encode_undefined();
+    }
     if let Some(rec) = caller.data().scope_records.get(&handle) {
         for (n, v, init, _) in &rec.bindings {
             if n == &name_str {
@@ -1110,7 +1117,7 @@ pub(crate) fn eval_set_binding(
     if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
         for (n, v, init, is_const) in rec.bindings.iter_mut() {
             if n == &name_str {
-                if *is_const && *init {
+                if *is_const {
                     let msg = format!("assignment to constant `{}`", name_str);
                     let msg_val = store_runtime_string(&caller, msg.clone());
                     let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
@@ -1185,4 +1192,12 @@ pub(crate) fn scope_record_set_meta(
         }
     }
     0i64
+}
+
+pub(crate) fn scope_record_destroy(
+    mut caller: Caller<'_, RuntimeState>,
+    record: i64,
+) {
+    let handle = value::decode_scope_record_handle(record);
+    caller.data_mut().scope_records.remove(&handle);
 }

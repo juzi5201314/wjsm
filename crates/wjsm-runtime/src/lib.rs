@@ -217,7 +217,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     );
     imports.push(create_mapped_arguments_fn.into());
     imports.extend(include!("host_imports/typedarray_new_methods.rs"));
-    // ── ScopeRecord eval bridge (imports 348-354) ──
+    // ── ScopeRecord eval bridge (imports 348-355) ──
     let scope_record_create_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, capacity: i64| -> i64 {
@@ -267,6 +267,13 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     imports.push(scope_record_set_meta_fn.into());
+    let scope_record_destroy_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, record: i64| {
+            scope_record_destroy(caller, record)
+        },
+    );
+    imports.push(scope_record_destroy_fn.into());
     let instance = Instance::new(&mut store, &module, &imports)?;
 
     // ── Run main ──

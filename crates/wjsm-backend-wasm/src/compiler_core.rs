@@ -918,6 +918,8 @@ impl Compiler {
         imports.import("env", "eval_super_base", EntityType::Function(3));
         // Import index 354: scope_record_set_meta: (i64, i64, i64) -> i64
         imports.import("env", "scope_record_set_meta", EntityType::Function(16));
+        // Import index 355: scope_record_destroy: (i64) -> ()
+        imports.import("env", "scope_record_destroy", EntityType::Function(0));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1299,6 +1301,7 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::EvalHasBinding, 352);
         builtin_func_indices.insert(Builtin::EvalSuperBase, 353);
         builtin_func_indices.insert(Builtin::ScopeRecordSetMeta, 354);
+        builtin_func_indices.insert(Builtin::ScopeRecordDestroy, 355);
         builtin_func_indices.insert(Builtin::PrivateGet, 316);
         builtin_func_indices.insert(Builtin::PrivateSet, 317);
         builtin_func_indices.insert(Builtin::PrivateHas, 318);
