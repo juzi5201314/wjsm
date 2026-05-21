@@ -797,16 +797,36 @@ impl Lowerer {
         name: &str,
     ) -> Result<ValueId, LoweringError> {
         let env_val = self.load_eval_scope_env(block);
-        let key_val = self.append_eval_env_key_const(block, name);
         let loaded = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::GetProp {
-                dest: loaded,
-                object: env_val,
-                key: key_val,
-            },
-        );
+        if self.eval_scope_record {
+            let name_const = self.module.add_constant(Constant::String(name.to_string()));
+            let name_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: name_val,
+                    constant: name_const,
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(loaded),
+                    builtin: Builtin::EvalGetBinding,
+                    args: vec![env_val, name_val],
+                },
+            );
+        } else {
+            let key_val = self.append_eval_env_key_const(block, name);
+            self.current_function.append_instruction(
+                block,
+                Instruction::GetProp {
+                    dest: loaded,
+                    object: env_val,
+                    key: key_val,
+                },
+            );
+        }
 
         let assign_block = self.current_function.new_block();
         let merge = self.current_function.new_block();
