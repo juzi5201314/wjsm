@@ -1848,6 +1848,179 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── WeakRef / FinalizationRegistry builtins ──
+            Builtin::WeakRefConstructor => {
+                // Type 12: constructor - env=undefined, this=undefined, shadow_args=all args
+                self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+                self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
+                for arg in args {
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                    self.emit(WasmInstruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::I32Const(8));
+                    self.emit(WasmInstruction::I32Add);
+                    self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                }
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(args.len() as i32));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(356);
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::WeakRefProtoDeref => {
+                // Type 12: method - env=undefined, this=args[0], no shadow args
+                let this_val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects 1 argument (this_val)"))?;
+                self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I64Const(value::encode_undefined())); // env
+                self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0))); // this
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx)); // args_base
+                self.emit(WasmInstruction::I32Const(0)); // args_count
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(357);
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::FinalizationRegistryConstructor => {
+                // Type 12: constructor - env=undefined, this=undefined, shadow_args=all args
+                self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+                self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
+                for arg in args {
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                    self.emit(WasmInstruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::I32Const(8));
+                    self.emit(WasmInstruction::I32Add);
+                    self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                }
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(args.len() as i32));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(358);
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::FinalizationRegistryProtoRegister => {
+                // Type 12: method - env=undefined, this=args[0], shadow_args=args[1..]
+                let this_val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects 4 arguments"))?;
+                let shadow_args = &args[1..];
+                self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+                self.emit_shadow_stack_overflow_check((shadow_args.len() * 8) as i32);
+                for arg in shadow_args {
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                    self.emit(WasmInstruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::I32Const(8));
+                    self.emit(WasmInstruction::I32Add);
+                    self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                }
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(shadow_args.len() as i32));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(359);
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::FinalizationRegistryProtoUnregister => {
+                // Type 12: method - env=undefined, this=args[0], shadow_args=args[1..]
+                let this_val = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects 2 arguments"))?;
+                let shadow_args = &args[1..];
+                self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+                self.emit_shadow_stack_overflow_check((shadow_args.len() * 8) as i32);
+                for arg in shadow_args {
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                    self.emit(WasmInstruction::I64Store(MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                    self.emit(WasmInstruction::I32Const(8));
+                    self.emit(WasmInstruction::I32Add);
+                    self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                }
+                self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::I32Const(shadow_args.len() as i32));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .unwrap_or(360);
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+                self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
     }
     }
 }
