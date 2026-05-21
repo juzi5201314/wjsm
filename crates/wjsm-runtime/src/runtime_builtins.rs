@@ -1459,5 +1459,297 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::FinalizationRegistryRegisterMethod => Some(value::encode_undefined()),
         NativeCallable::FinalizationRegistryUnregisterMethod => Some(value::encode_undefined()),
         NativeCallable::StubGlobal(_) => Some(value::encode_undefined()),
+        NativeCallable::GcCollect => {
+            trigger_gc(caller);
+            Some(value::encode_undefined())
+        }
+    }
+}
+/// Trigger a mark-sweep GC cycle.
+pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
+    // Helper: read an i32 WASM global by name
+    fn get_global_i32(caller: &mut Caller<'_, RuntimeState>, name: &str) -> i32 {
+        match caller.get_export(name) {
+            Some(Extern::Global(g)) => g.get(caller).i32().unwrap_or(0),
+            _ => 0,
+        }
+    }
+
+    // Get WASM globals
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return };
+    let heap_ptr = get_global_i32(caller, "__heap_ptr");
+    let obj_table_ptr = get_global_i32(caller, "__obj_table_ptr");
+    let obj_table_count = get_global_i32(caller, "__obj_table_count");
+    let object_heap_start = get_global_i32(caller, "__object_heap_start");
+    let num_ir_functions = get_global_i32(caller, "__num_ir_functions");
+    let shadow_sp = get_global_i32(caller, "__shadow_sp");
+
+    if heap_ptr == 0 || obj_table_count == 0 { return; }
+
+    // Initialize/clear mark bits
+    {
+        let mut mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits");
+        let needed_words = (obj_table_count as usize).div_ceil(64).max(mark_bits.len());
+        if mark_bits.len() < needed_words {
+            mark_bits.resize(needed_words, 0);
+        } else {
+            mark_bits.fill(0);
+        }
+    }
+
+    // Build root set
+    let oht_usize = object_heap_start as usize;
+    let opt_usize = obj_table_ptr as usize;
+    let mut roots: Vec<(usize, usize)> = Vec::new();
+    let data = memory.data(&caller);
+    let shadow_stack_base = oht_usize.saturating_sub(65536);
+
+    let add_root = |handle_idx: usize, data: &[u8], roots: &mut Vec<(usize, usize)>| {
+        let slot_addr = opt_usize + handle_idx * 4;
+        if slot_addr + 4 <= data.len() {
+            let obj_ptr = u32::from_le_bytes([
+                data[slot_addr], data[slot_addr + 1],
+                data[slot_addr + 2], data[slot_addr + 3],
+            ]) as usize;
+            if obj_ptr != 0 {
+                roots.push((handle_idx, obj_ptr));
+            }
+        }
+    };
+
+    // 3a. Shadow stack
+    let shadow_sp_usize = shadow_sp as usize;
+    if shadow_sp_usize > shadow_stack_base {
+        let frame_count = (shadow_sp_usize - shadow_stack_base) / 8;
+        for frame in 0..frame_count {
+            let frame_addr = shadow_stack_base + frame * 8;
+            if frame_addr + 8 <= data.len() {
+                let val = i64::from_le_bytes([
+                    data[frame_addr], data[frame_addr + 1],
+                    data[frame_addr + 2], data[frame_addr + 3],
+                    data[frame_addr + 4], data[frame_addr + 5],
+                    data[frame_addr + 6], data[frame_addr + 7],
+                ]);
+                if value::is_object(val) {
+                    let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+                    add_root(handle_idx, data, &mut roots);
+                } else if value::is_function(val) {
+                    let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+                    if func_idx < num_ir_functions as usize {
+                        add_root(func_idx, data, &mut roots);
+                    }
+                } else if value::is_closure(val) {
+                    let closure_idx = value::decode_closure_idx(val) as usize;
+                    let closures = caller.data().closures.lock().expect("closures");
+                    if let Some(entry) = closures.get(closure_idx)
+                        && value::is_object(entry.env_obj)
+                    {
+                        let handle_idx = value::decode_object_handle(entry.env_obj) as usize;
+                        add_root(handle_idx, data, &mut roots);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3b. IR function property objects
+    for handle_idx in 0..num_ir_functions as usize {
+        add_root(handle_idx, data, &mut roots);
+    }
+
+    // 3c. Timer callbacks
+    {
+        let timers = caller.data().timers.lock().expect("timers");
+        for timer in timers.iter() {
+            let val = timer.callback;
+            if value::is_function(val) {
+                let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+                if func_idx < num_ir_functions as usize {
+                    add_root(func_idx, data, &mut roots);
+                }
+            } else if value::is_closure(val) {
+                let closure_idx = value::decode_closure_idx(val) as usize;
+                let closures = caller.data().closures.lock().expect("closures");
+                if let Some(entry) = closures.get(closure_idx)
+                    && value::is_object(entry.env_obj)
+                {
+                    let handle_idx = value::decode_object_handle(entry.env_obj) as usize;
+                    add_root(handle_idx, data, &mut roots);
+                }
+            }
+        }
+    }
+
+    // 3d. Closure env_obj
+    {
+        let closures = caller.data().closures.lock().expect("closures");
+        for entry in closures.iter() {
+            if value::is_object(entry.env_obj) {
+                let handle_idx = value::decode_object_handle(entry.env_obj) as usize;
+                add_root(handle_idx, data, &mut roots);
+            }
+        }
+    }
+
+    // 3e. Module namespace cache
+    {
+        let cache = caller.data().module_namespace_cache.lock().expect("module cache");
+        for &val in cache.values() {
+            if value::is_object(val) {
+                let handle_idx = value::decode_object_handle(val) as usize;
+                add_root(handle_idx, data, &mut roots);
+            }
+        }
+    }
+
+    // Deduplicate roots
+    roots.sort();
+    roots.dedup_by_key(|&mut (handle_idx, _)| handle_idx);
+    let _ = data;
+
+    // Phase 1: Mark
+    for (handle_idx, obj_ptr) in roots {
+        mark_object_recursive(
+            caller,
+            handle_idx,
+            obj_ptr,
+            opt_usize,
+            obj_table_count as usize,
+        );
+    }
+
+    // Phase 2: Sweep + Compact
+    let mark_snapshot: Vec<u64> = {
+        let mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits");
+        mark_bits.clone()
+    };
+    let heap_base = oht_usize;
+
+    // Collect live objects (reading from memory without holding caller borrow)
+    let mut live_objects: Vec<(usize, usize, usize)> = Vec::new();
+    {
+        let data = memory.data(&caller);
+        for handle_idx in 0..obj_table_count as usize {
+            let word_idx = handle_idx / 64;
+            let bit_idx = handle_idx % 64;
+            if word_idx < mark_snapshot.len()
+                && (mark_snapshot[word_idx] & (1u64 << bit_idx)) != 0
+            {
+                let slot_addr = opt_usize + handle_idx * 4;
+                if slot_addr + 4 > data.len() { continue; }
+                let old_ptr = u32::from_le_bytes([
+                    data[slot_addr], data[slot_addr + 1],
+                    data[slot_addr + 2], data[slot_addr + 3],
+                ]) as usize;
+                if old_ptr == 0 { continue; }
+                if old_ptr + 12 > data.len() { continue; }
+                let capacity = u32::from_le_bytes([
+                    data[old_ptr + 4], data[old_ptr + 5],
+                    data[old_ptr + 6], data[old_ptr + 7],
+                ]) as usize;
+                let size = 12 + capacity * 32;
+                live_objects.push((handle_idx, old_ptr, size));
+            }
+        }
+    }
+
+    // Sort by old pointer
+    live_objects.sort_by_key(|&(_, old_ptr, _)| old_ptr);
+
+    // Compact objects to heap_base
+    let mut current_ptr = heap_base;
+    for (_, _, size) in &live_objects {
+        current_ptr += size;
+    }
+    let new_heap_end = current_ptr;
+
+    // Move objects (independent data_mut calls, no held borrows)
+    let mut current_ptr = heap_base;
+    for &(handle_idx, old_ptr, size) in &live_objects {
+        if old_ptr != current_ptr && old_ptr < heap_ptr as usize && current_ptr + size <= heap_ptr as usize {
+            unsafe {
+                let data_ptr = memory.data_mut(&mut *caller);
+                std::ptr::copy(
+                    data_ptr.as_ptr().add(old_ptr),
+                    data_ptr.as_mut_ptr().add(current_ptr),
+                    size,
+                );
+            }
+        }
+        // Update handle table
+        {
+            let data = memory.data_mut(&mut *caller);
+            if opt_usize + handle_idx * 4 + 4 <= data.len() {
+                data[opt_usize + handle_idx * 4..opt_usize + handle_idx * 4 + 4]
+                    .copy_from_slice(&(current_ptr as u32).to_le_bytes());
+            }
+        }
+        current_ptr += size;
+    }
+
+    // Update heap_ptr global
+    if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
+        g.set(&mut *caller, Val::I32(new_heap_end as i32)).ok();
+    }
+
+    // Reset alloc counter
+    *caller.data().alloc_counter.lock().expect("alloc_counter") = 0;
+
+    // Process weak references
+    {
+        let mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits");
+        let is_marked = |handle_idx: u32| -> bool {
+            let word = (handle_idx as usize) / 64;
+            let bit = (handle_idx as usize) % 64;
+            word < mark_bits.len() && (mark_bits[word] & (1u64 << bit)) != 0
+        };
+        // WeakRef
+        {
+            let mut wr_table = caller.data().weakref_table.lock().expect("weakref_table");
+            for entry in wr_table.iter_mut() {
+                if entry.target_handle != 0 && !is_marked(entry.target_handle) {
+                    entry.target_handle = 0;
+                }
+            }
+        }
+        // FinalizationRegistry
+        {
+            let mut fr_table = caller.data().finalization_registry_table.lock().expect("fr_table");
+            for entry in fr_table.iter_mut() {
+                if !is_marked(entry.object_handle) { continue; }
+                let mut held_values = Vec::new();
+                entry.registrations.retain(|reg| {
+                    if !is_marked(reg.target_handle) {
+                        held_values.push(reg.held_value);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                if !held_values.is_empty() {
+                    let mut pending = caller.data().pending_cleanup_callbacks
+                        .lock().expect("pending_cleanup");
+                    pending.push((entry.callback, held_values));
+                }
+            }
+        }
+    }
+
+    // Schedule FinalizationRegistry cleanup microtasks
+    {
+        let mut pending = caller.data().pending_cleanup_callbacks
+            .lock().expect("pending_cleanup");
+        let microtasks_to_schedule: Vec<(i64, Vec<i64>)> = pending.drain(..).collect();
+        drop(pending);
+        let mut mq = caller.data().microtask_queue
+            .lock().expect("microtask_queue");
+        for (callback, held_values) in microtasks_to_schedule {
+            for held_value in held_values {
+                mq.push_back(Microtask::CleanupFinalizationRegistry {
+                    callback,
+                    held_value,
+                });
+            }
+        }
     }
 }

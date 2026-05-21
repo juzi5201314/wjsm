@@ -1402,6 +1402,10 @@
                     native_callables.push(NativeCallable::StubGlobal(()));
                     value::encode_native_callable_idx(idx)
                 }
+                "gc" => {
+                    native_callables.push(NativeCallable::GcCollect);
+                    value::encode_native_callable_idx(idx)
+                }
                 _ => value::encode_undefined(),
             }
         },
@@ -1440,6 +1444,7 @@
                 ("ArrayBuffer", NativeCallable::ArrayBufferConstructorGlobal),
                 ("DataView", NativeCallable::DataViewConstructorGlobal),
                 ("Proxy", NativeCallable::ProxyConstructor),
+                ("gc", NativeCallable::GcCollect),
             ];
             
             for (name, callable) in builtin_pairs {
