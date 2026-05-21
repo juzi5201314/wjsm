@@ -1305,6 +1305,13 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::PrivateGet, 316);
         builtin_func_indices.insert(Builtin::PrivateSet, 317);
         builtin_func_indices.insert(Builtin::PrivateHas, 318);
+        // ── WeakRef builtins ──
+        builtin_func_indices.insert(Builtin::WeakRefConstructor, 356);
+        builtin_func_indices.insert(Builtin::WeakRefProtoDeref, 357);
+        // ── FinalizationRegistry builtins ──
+        builtin_func_indices.insert(Builtin::FinalizationRegistryConstructor, 358);
+        builtin_func_indices.insert(Builtin::FinalizationRegistryProtoRegister, 359);
+        builtin_func_indices.insert(Builtin::FinalizationRegistryProtoUnregister, 360);
         let functions = FunctionSection::new();
 
         let mut exports = ExportSection::new();
