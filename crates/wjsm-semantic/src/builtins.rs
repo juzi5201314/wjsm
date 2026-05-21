@@ -91,6 +91,8 @@ pub(crate) fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "Set" => Some(Builtin::SetConstructor),
         "WeakMap" => Some(Builtin::WeakMapConstructor),
         "WeakSet" => Some(Builtin::WeakSetConstructor),
+        "WeakRef" => Some(Builtin::WeakRefConstructor),
+        "FinalizationRegistry" => Some(Builtin::FinalizationRegistryConstructor),
         "Date" => Some(Builtin::DateConstructor),
         "ArrayBuffer" => Some(Builtin::ArrayBufferConstructor),
         "DataView" => Some(Builtin::DataViewConstructor),
@@ -234,6 +236,15 @@ pub(crate) fn builtin_from_static_member(object: &str, property: &str) -> Option
             "now" => Some(Builtin::DateNow),
             "parse" => Some(Builtin::DateParse),
             "UTC" => Some(Builtin::DateUTC),
+            _ => None,
+        },
+        "WeakRef" => match property {
+            "deref" => Some(Builtin::WeakRefProtoDeref),
+            _ => None,
+        },
+        "FinalizationRegistry" => match property {
+            "register" => Some(Builtin::FinalizationRegistryProtoRegister),
+            "unregister" => Some(Builtin::FinalizationRegistryProtoUnregister),
             _ => None,
         },
         _ => None,
@@ -535,6 +546,13 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::WeakSetProtoAdd => ("WeakSet.prototype.add", 2),
         Builtin::WeakSetProtoHas => ("WeakSet.prototype.has", 2),
         Builtin::WeakSetProtoDelete => ("WeakSet.prototype.delete", 2),
+        // ── WeakRef builtins ──
+        Builtin::WeakRefConstructor => ("WeakRef", 1),
+        Builtin::WeakRefProtoDeref => ("WeakRef.prototype.deref", 1),
+        // ── FinalizationRegistry builtins ──
+        Builtin::FinalizationRegistryConstructor => ("FinalizationRegistry", 1),
+        Builtin::FinalizationRegistryProtoRegister => ("FinalizationRegistry.prototype.register", 4),
+        Builtin::FinalizationRegistryProtoUnregister => ("FinalizationRegistry.prototype.unregister", 2),
         // ── ArrayBuffer builtins ──
         Builtin::ArrayBufferConstructor => ("ArrayBuffer", 1),
         Builtin::ArrayBufferProtoByteLength => ("ArrayBuffer.prototype.byteLength", 1),
