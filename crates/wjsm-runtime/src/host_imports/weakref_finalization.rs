@@ -1,18 +1,4 @@
 {
-    // ── Data structures (local defs until Task 5 adds them to lib.rs) ──
-    struct WeakRefEntry {
-        target_handle: u32,
-    }
-    struct FinalizationRegistryEntry {
-        object_handle: u32,
-        callback: i64,
-        registrations: Vec<FinalizationRegistration>,
-    }
-    struct FinalizationRegistration {
-        target_handle: u32,
-        held_value: i64,
-        unregister_token: Option<i64>,
-    }
 
     // ── Method factory functions ──
     fn create_weakref_deref_method(state: &RuntimeState) -> i64 {

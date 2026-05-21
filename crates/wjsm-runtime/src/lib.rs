@@ -129,6 +129,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     let alloc_counter: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
     const GC_THRESHOLD: u64 = 1000; // 每 1000 次分配触发一次 GC 检查
+    let weakref_table: Arc<Mutex<Vec<WeakRefEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let finalization_registry_table: Arc<Mutex<Vec<FinalizationRegistryEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let pending_cleanup_callbacks: Arc<Mutex<Vec<(i64, Vec<i64>)>>> = Arc::new(Mutex::new(Vec::new()));
     let mut store = Store::new(
         &engine,
         RuntimeState {
@@ -161,6 +164,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             set_table: Arc::clone(&set_table),
             weakmap_table: Arc::clone(&weakmap_table),
             weakset_table: Arc::clone(&weakset_table),
+            weakref_table: Arc::clone(&weakref_table),
+            finalization_registry_table: Arc::clone(&finalization_registry_table),
+            pending_cleanup_callbacks: Arc::clone(&pending_cleanup_callbacks),
             proxy_table: Arc::clone(&proxy_table),
             arraybuffer_table: Arc::clone(&arraybuffer_table),
             dataview_table: Arc::clone(&dataview_table),
@@ -182,6 +188,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     imports.extend(include!("host_imports/string_methods.rs"));
     imports.extend(include!("host_imports/math_number_error.rs"));
     imports.extend(include!("host_imports/collections_buffers.rs"));
+    imports.extend(include!("host_imports/weakref_finalization.rs"));
     imports.extend(include!("host_imports/proxy_traps.rs"));
     imports.push(include!("host_imports/get_builtin_global_entry.rs"));
     // Import 322: new_target
@@ -543,6 +550,12 @@ struct RuntimeState {
     weakmap_table: Arc<Mutex<Vec<WeakMapEntry>>>,
     /// WeakSet 侧表：存储 WeakSet 对象的值
     weakset_table: Arc<Mutex<Vec<WeakSetEntry>>>,
+    /// WeakRef 侧表：存储 WeakRef 对象的 target handle
+    weakref_table: Arc<Mutex<Vec<WeakRefEntry>>>,
+    /// FinalizationRegistry 侧表：存储 registry 对象、callback 和注册信息
+    finalization_registry_table: Arc<Mutex<Vec<FinalizationRegistryEntry>>>,
+    /// GC 后待调度的清理回调
+    pending_cleanup_callbacks: Arc<Mutex<Vec<(i64, Vec<i64>)>>>,
     /// Proxy 侧表：存储 Proxy 对象的 target、handler 和 revoked 状态
     proxy_table: Arc<Mutex<Vec<ProxyEntry>>>,
     /// ArrayBuffer 侧表：存储 ArrayBuffer 的底层数据
@@ -602,6 +615,25 @@ struct WeakMapEntry {
 #[derive(Clone, Debug)]
 struct WeakSetEntry {
     set: HashSet<u32>,
+}
+
+#[derive(Clone, Debug)]
+struct WeakRefEntry {
+    target_handle: u32,
+}
+
+#[derive(Clone, Debug)]
+struct FinalizationRegistryEntry {
+    object_handle: u32,
+    callback: i64,
+    registrations: Vec<FinalizationRegistration>,
+}
+
+#[derive(Clone, Debug)]
+struct FinalizationRegistration {
+    target_handle: u32,
+    held_value: i64,
+    unregister_token: Option<i64>,
 }
 
 #[derive(Clone, Debug)]
@@ -682,6 +714,9 @@ enum NativeCallable {
     WeakSetMethod {
         kind: WeakSetMethodKind,
     },
+    WeakRefDerefMethod,
+    FinalizationRegistryRegisterMethod,
+    FinalizationRegistryUnregisterMethod,
     ArrayConstructor,
     ObjectConstructor,
     FunctionConstructor,
@@ -995,6 +1030,10 @@ enum Microtask {
         state: u32,
         resume_val: i64,
         is_rejected: bool,
+    },
+    CleanupFinalizationRegistry {
+        callback: i64,
+        held_value: i64,
     },
 }
 
