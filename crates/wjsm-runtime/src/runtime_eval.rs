@@ -1011,8 +1011,14 @@ pub(crate) fn scope_record_create(
     let data = caller.data_mut();
     let handle = data.scope_record_next_handle;
     data.scope_record_next_handle += 1;
+    let cap = f64::from_bits(capacity as u64);
+    let cap = if cap.is_finite() && cap >= 0.0 {
+        cap as usize
+    } else {
+        0
+    };
     data.scope_records.insert(handle, ScopeRecord {
-        bindings: Vec::with_capacity(capacity as usize),
+        bindings: Vec::with_capacity(cap),
         home_object: None,
         new_target: None,
         has_arguments_binding: false,
@@ -1028,19 +1034,20 @@ pub(crate) fn scope_record_add_binding(
     val: i64,
     is_tdz: i64,
     is_const: i64,
-) {
+) -> i64 {
     let handle = value::decode_scope_record_handle(record);
     let name_str = read_value_string_bytes(&mut caller, name)
         .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_default();
     if name_str.is_empty() {
-        return;
+        return 0i64;
     }
     let initialized = !value::decode_bool(is_tdz);
     let constant = value::decode_bool(is_const);
     if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
         rec.bindings.push((name_str, val, initialized, constant));
     }
+    0i64
 }
 
 pub(crate) fn eval_get_binding(
@@ -1158,7 +1165,7 @@ pub(crate) fn scope_record_set_meta(
     record: i64,
     key: i64,
     val: i64,
-) {
+) -> i64 {
     let handle = value::decode_scope_record_handle(record);
     let tag = key as u8;
     if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
@@ -1170,4 +1177,5 @@ pub(crate) fn scope_record_set_meta(
             _ => debug_assert!(false, "unknown scope record meta key: {}", tag),
         }
     }
+    0i64
 }
