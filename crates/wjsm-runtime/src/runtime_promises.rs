@@ -895,6 +895,14 @@ pub(crate) fn drain_microtasks_from_caller(
                     is_rejected,
                 );
             }
+            Some(Microtask::CleanupFinalizationRegistry { callback, held_value: _ }) => {
+                let _ = call_host_function_from_caller(
+                    caller,
+                    func_table,
+                    callback,
+                    value::encode_undefined(),
+                );
+            }
             None => break,
         }
     }
@@ -1060,6 +1068,9 @@ pub(crate) fn drain_microtasks_from_store(
                     resume_val,
                     is_rejected,
                 );
+            }
+            Some(Microtask::CleanupFinalizationRegistry { .. }) => {
+                // In the store variant, cleanup is handled separately via pending_cleanup_callbacks
             }
             None => break,
         }

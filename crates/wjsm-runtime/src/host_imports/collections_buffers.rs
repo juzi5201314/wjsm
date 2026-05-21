@@ -1433,6 +1433,8 @@
                 ("Set", NativeCallable::SetConstructor),
                 ("WeakMap", NativeCallable::WeakMapConstructor),
                 ("WeakSet", NativeCallable::WeakSetConstructor),
+                ("WeakRef", NativeCallable::WeakRefConstructor),
+                ("FinalizationRegistry", NativeCallable::FinalizationRegistryConstructor),
                 ("Date", NativeCallable::DateConstructorGlobal),
                 ("Promise", NativeCallable::PromiseConstructor),
                 ("ArrayBuffer", NativeCallable::ArrayBufferConstructorGlobal),
