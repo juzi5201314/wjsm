@@ -432,17 +432,42 @@ impl Lowerer {
                 swc_ast::MetaPropKind::NewTarget => {
                     // new.target is only valid in function code (not top-level)
                     if self.function_stack.is_empty() {
-                        if self.eval_mode {
-                            // eval at top-level: new.target is a SyntaxError
+                        if self.eval_scope_record {
+                            // Read new.target from scope record
+                            let env = self.load_eval_scope_env(block);
+                            let name_const = self.module.add_constant(
+                                Constant::String("__wjsm_new_target".to_string()),
+                            );
+                            let name_val = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::Const {
+                                    dest: name_val,
+                                    constant: name_const,
+                                },
+                            );
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: Builtin::EvalGetBinding,
+                                    args: vec![env, name_val],
+                                },
+                            );
+                            return Ok(dest);
+                        } else if self.eval_mode {
+                            // eval at top-level without scope record: new.target is a SyntaxError
                             return Err(self.error(
                                 meta.span,
                                 "SyntaxError: new.target expression is not valid in top-level eval",
                             ));
+                        } else {
+                            return Err(self.error(
+                                meta.span,
+                                "SyntaxError: new.target expression is not valid outside functions",
+                            ));
                         }
-                        return Err(self.error(
-                            meta.span,
-                            "SyntaxError: new.target expression is not valid outside functions",
-                        ));
                     }
                     // In eval mode: only valid if eval is inside a non-arrow function
                     if self.eval_mode

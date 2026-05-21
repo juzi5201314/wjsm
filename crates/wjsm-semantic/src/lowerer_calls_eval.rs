@@ -690,17 +690,39 @@ impl Lowerer {
 
     pub(crate) fn lower_eval_env_read(&mut self, name: &str, block: BasicBlockId) -> ValueId {
         let env = self.load_eval_scope_env(block);
-        let key = self.append_eval_env_key_const(block, name);
-        let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::GetProp {
-                dest,
-                object: env,
-                key,
-            },
-        );
-        dest
+        if self.eval_scope_record {
+            let name_const = self.module.add_constant(Constant::String(name.to_string()));
+            let name_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: name_val,
+                    constant: name_const,
+                },
+            );
+            let dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(dest),
+                    builtin: Builtin::EvalGetBinding,
+                    args: vec![env, name_val],
+                },
+            );
+            dest
+        } else {
+            let key = self.append_eval_env_key_const(block, name);
+            let dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::GetProp {
+                    dest,
+                    object: env,
+                    key,
+                },
+            );
+            dest
+        }
     }
 
     pub(crate) fn append_eval_env_write(
@@ -713,15 +735,35 @@ impl Lowerer {
             return;
         }
         let env = self.load_eval_scope_env(block);
-        let key = self.append_eval_env_key_const(block, name);
-        self.current_function.append_instruction(
-            block,
-            Instruction::SetProp {
-                object: env,
-                key,
-                value,
-            },
-        );
+        if self.eval_scope_record {
+            let name_const = self.module.add_constant(Constant::String(name.to_string()));
+            let name_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: name_val,
+                    constant: name_const,
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::EvalSetBinding,
+                    args: vec![env, name_val, value],
+                },
+            );
+        } else {
+            let key = self.append_eval_env_key_const(block, name);
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp {
+                    object: env,
+                    key,
+                    value,
+                },
+            );
+        }
     }
     fn const_val_i64(&mut self, block: BasicBlockId, value: i64) -> ValueId {
         let dest = self.alloc_value();
