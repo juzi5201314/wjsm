@@ -156,7 +156,7 @@ impl Lowerer {
                     let name = class_decl.ident.sym.to_string();
                     let _scope_id = self
                         .scopes
-                        .declare(&name, VarKind::Var, true)
+                        .declare(&name, VarKind::Let, false)
                         .map_err(|msg| self.error(class_decl.span(), msg))?;
                 }
                 swc_ast::Decl::TsEnum(ts_enum) => {
