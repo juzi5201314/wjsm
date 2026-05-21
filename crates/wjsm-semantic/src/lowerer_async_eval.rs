@@ -118,8 +118,22 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         // 1. GetSuperBase: 从 home_object 的 proto 读取基类原型
         let base_val = self.alloc_value();
-        self.current_function
-            .append_instruction(block, Instruction::GetSuperBase { dest: base_val });
+        if self.eval_scope_record {
+            let env = self.load_eval_scope_env(block);
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(base_val),
+                    builtin: Builtin::EvalSuperBase,
+                    args: vec![env],
+                },
+            );
+        } else {
+            self.current_function.append_instruction(
+                block,
+                Instruction::GetSuperBase { dest: base_val },
+            );
+        }
 
         // 2. 根据 prop 类型进行属性访问
         match &super_prop.prop {
