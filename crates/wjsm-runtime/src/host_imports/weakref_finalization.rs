@@ -60,10 +60,10 @@
                 return value::encode_undefined();
             }
             let target = read_shadow_arg(&mut caller, args_base, 0);
-            // Validate: target must be a JS object or Symbol (per spec)
-            if !value::is_js_object(target) && !value::is_symbol(target) {
+            // Validate: target must be a JS object (per spec, Type(target) must be Object)
+            if !value::is_js_object(target) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
-                    Some("TypeError: WeakRef: target must be an object or symbol".to_string());
+                    Some("TypeError: WeakRef: target must be an object".to_string());
                 return value::encode_undefined();
             }
             // Resolve target's handle from the VM object table
