@@ -1632,6 +1632,70 @@
                 *counter = 0;
             }
 
+            // ── Process weak references (WeakRef + FinalizationRegistry) ──
+            {
+                let mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits mutex");
+                let is_marked = |handle_idx: u32| -> bool {
+                    let word = (handle_idx as usize) / 64;
+                    let bit = (handle_idx as usize) % 64;
+                    word < mark_bits.len() && (mark_bits[word] & (1u64 << bit)) != 0
+                };
+
+                // Process WeakRef entries
+                {
+                    let mut wr_table = caller.data().weakref_table.lock().expect("weakref_table mutex");
+                    for entry in wr_table.iter_mut() {
+                        if entry.target_handle != 0 && !is_marked(entry.target_handle) {
+                            entry.target_handle = 0;
+                        }
+                    }
+                }
+
+                // Process FinalizationRegistry entries
+                {
+                    let mut fr_table = caller.data().finalization_registry_table.lock().expect("fr_table mutex");
+                    for entry in fr_table.iter_mut() {
+                        // Skip if the FinalizationRegistry object itself was collected
+                        if !is_marked(entry.object_handle) {
+                            continue;
+                        }
+                        let mut held_values = Vec::new();
+                        entry.registrations.retain(|reg| {
+                            if !is_marked(reg.target_handle) {
+                                held_values.push(reg.held_value);
+                                false
+                            } else {
+                                true
+                            }
+                        });
+                        if !held_values.is_empty() {
+                            let mut pending = caller.data().pending_cleanup_callbacks
+                                .lock().expect("pending_cleanup_callbacks mutex");
+                            pending.push((entry.callback, held_values));
+                        }
+                    }
+                }
+            } // mark_bits lock released
+
+            // Schedule FinalizationRegistry cleanup microtasks
+            {
+                let mut pending = caller.data().pending_cleanup_callbacks
+                    .lock().expect("pending_cleanup_callbacks mutex");
+                let microtasks_to_schedule: Vec<(i64, Vec<i64>)> = pending.drain(..).collect();
+                drop(pending);
+
+                let mut mq = caller.data().microtask_queue
+                    .lock().expect("microtask_queue mutex");
+                for (callback, held_values) in microtasks_to_schedule {
+                    for held_value in held_values {
+                        mq.push_back(Microtask::CleanupFinalizationRegistry {
+                            callback,
+                            held_value,
+                        });
+                    }
+                }
+            }
+
             new_heap_end as i32
         },
     );
