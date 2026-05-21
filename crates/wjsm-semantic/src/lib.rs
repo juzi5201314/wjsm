@@ -1437,6 +1437,7 @@ mod eval_scan;
 use ast_kinds::*;
 use builtins::*;
 use eval_scan::*;
+pub use eval_scan::eval_literal_binding_names;
 /// 判断表达式是否为 TypedArray 构造函数调用（`new Int8Array(...)` 等形式）。
 fn is_typedarray_constructor_expr(expr: &swc_ast::Expr) -> bool {
     if let swc_ast::Expr::New(new_expr) = expr {

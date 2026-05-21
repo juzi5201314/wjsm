@@ -101,6 +101,8 @@ pub(crate) fn cached_eval_wasm(
     has_scope_bridge.hash(&mut hasher);
     var_writes_to_scope.hash(&mut hasher);
     data_base.hash(&mut hasher);
+    const SCOPE_RECORD_CACHE_VERSION: u64 = 1;
+    SCOPE_RECORD_CACHE_VERSION.hash(&mut hasher);
     let key = hasher.finish();
 
     if let Some(bytes) = state
@@ -264,17 +266,22 @@ pub(crate) fn perform_eval_from_caller(
     // ── SyntaxError 检测：eval 代码中声明 var/function arguments ──
     // 检查规则（EvalDeclarationInstantiation）：
     // 如果 eval 代码声明 var arguments 且调用上下文没有 arguments 绑定 → SyntaxError
-    if let Some(env) = scope_env
-        && (code.contains("var arguments") || code.contains("function arguments"))
-    {
-        let has_arguments = resolve_handle(caller, env)
-            .and_then(|ptr| read_object_property_by_name(caller, ptr, "arguments"))
-            .is_some();
-
-        if !has_arguments {
-            let msg = "SyntaxError: declaring 'arguments' in eval code is invalid";
-            set_runtime_error(caller.data(), msg.to_string());
-            return value::encode_undefined();
+    // ── SyntaxError 检测：eval 代码中声明 var/function arguments ──
+    // 检查规则（EvalDeclarationInstantiation）：
+    // 如果调用上下文有 arguments 绑定且 eval 代码声明了某个同名绑定 → SyntaxError
+    if let Some(env) = scope_env {
+        let handle = value::decode_scope_record_handle(env);
+        let has_arguments = caller.data().scope_records
+            .get(&handle)
+            .map(|r| r.has_arguments_binding)
+            .unwrap_or(false);
+        if has_arguments {
+            let binding_names = wjsm_semantic::eval_literal_binding_names(&code);
+            if binding_names.iter().any(|n| n == "arguments") {
+                let msg = "SyntaxError: declaring 'arguments' in eval code is invalid";
+                set_runtime_error(caller.data(), msg.to_string());
+                return value::encode_undefined();
+            }
         }
     }
 

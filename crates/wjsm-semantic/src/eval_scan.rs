@@ -111,7 +111,7 @@ pub(crate) fn module_has_use_strict_directive(module: &swc_ast::Module) -> bool 
     false
 }
 
-pub(crate) fn eval_literal_binding_names(code: &str) -> Vec<String> {
+pub fn eval_literal_binding_names(code: &str) -> Vec<String> {
     let mut names = Vec::new();
     let bytes = code.as_bytes();
     let mut index = 0;
