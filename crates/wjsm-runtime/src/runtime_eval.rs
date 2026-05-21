@@ -1,5 +1,20 @@
 use super::*;
 
+/// 0=is_strict, 1=has_arguments, 2=home_object, 3=new_target
+const META_IS_STRICT: u8 = 0;
+const META_HAS_ARGUMENTS: u8 = 1;
+const META_HOME_OBJECT: u8 = 2;
+const META_NEW_TARGET: u8 = 3;
+
+/// Host-allocated scope record implementing spec-like scope behavior.
+pub(crate) struct ScopeRecord {
+    pub(crate) bindings: Vec<(String, i64, bool, bool)>,
+    pub(crate) home_object: Option<i64>,
+    pub(crate) new_target: Option<i64>,
+    pub(crate) has_arguments_binding: bool,
+    pub(crate) is_strict: bool,
+}
+
 pub(crate) fn try_compiled_eval_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     code: &str,
@@ -986,5 +1001,173 @@ pub(crate) fn eval_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) ->
         "undefined".to_string()
     } else {
         "[object Object]".to_string()
+    }
+}
+
+pub(crate) fn scope_record_create(
+    mut caller: Caller<'_, RuntimeState>,
+    capacity: i64,
+) -> i64 {
+    let data = caller.data_mut();
+    let handle = data.scope_record_next_handle;
+    data.scope_record_next_handle += 1;
+    data.scope_records.insert(handle, ScopeRecord {
+        bindings: Vec::with_capacity(capacity as usize),
+        home_object: None,
+        new_target: None,
+        has_arguments_binding: false,
+        is_strict: false,
+    });
+    value::encode_scope_record_handle(handle)
+}
+
+pub(crate) fn scope_record_add_binding(
+    mut caller: Caller<'_, RuntimeState>,
+    record: i64,
+    name: i64,
+    val: i64,
+    is_tdz: i64,
+    is_const: i64,
+) {
+    let handle = value::decode_scope_record_handle(record);
+    let name_str = read_value_string_bytes(&mut caller, name)
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default();
+    if name_str.is_empty() {
+        return;
+    }
+    let initialized = !value::decode_bool(is_tdz);
+    let constant = value::decode_bool(is_const);
+    if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
+        rec.bindings.push((name_str, val, initialized, constant));
+    }
+}
+
+pub(crate) fn eval_get_binding(
+    mut caller: Caller<'_, RuntimeState>,
+    record: i64,
+    name: i64,
+) -> i64 {
+    let handle = value::decode_scope_record_handle(record);
+    let name_str = read_value_string_bytes(&mut caller, name)
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default();
+    if name_str.is_empty() {
+        return value::encode_undefined();
+    }
+    if let Some(rec) = caller.data().scope_records.get(&handle) {
+        for (n, v, init, _) in &rec.bindings {
+            if n == &name_str {
+                if !init {
+                    let msg = format!("Cannot access '{}' before initialization", name_str);
+                    let msg_val = store_runtime_string(&caller, msg.clone());
+                    let error_obj = create_error_object(&mut caller, "ReferenceError", msg_val);
+                    {
+                        let mut errors = caller.data().error_table.lock().unwrap();
+                        let idx = errors.len() as u32;
+                        errors.push(crate::ErrorEntry {
+                            name: "ReferenceError".to_string(),
+                            message: msg,
+                            value: error_obj,
+                        });
+                        return value::encode_handle(value::TAG_EXCEPTION, idx + 1);
+                    }
+                }
+                return *v;
+            }
+        }
+    }
+    value::encode_undefined()
+}
+
+pub(crate) fn eval_set_binding(
+    mut caller: Caller<'_, RuntimeState>,
+    record: i64,
+    name: i64,
+    val: i64,
+) -> i64 {
+    let handle = value::decode_scope_record_handle(record);
+    let name_str = read_value_string_bytes(&mut caller, name)
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default();
+    if name_str.is_empty() {
+        return value::encode_undefined();
+    }
+    if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
+        for (n, v, init, is_const) in rec.bindings.iter_mut() {
+            if n == &name_str {
+                if *is_const && *init {
+                    let msg = format!("assignment to constant `{}`", name_str);
+                    let msg_val = store_runtime_string(&caller, msg.clone());
+                    let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
+                    {
+                        let mut errors = caller.data().error_table.lock().unwrap();
+                        let idx = errors.len() as u32;
+                        errors.push(crate::ErrorEntry {
+                            name: "TypeError".to_string(),
+                            message: msg,
+                            value: error_obj,
+                        });
+                        return value::encode_handle(value::TAG_EXCEPTION, idx + 1);
+                    }
+                }
+                *v = val;
+                *init = true;
+                return val;
+            }
+        }
+        return val;
+    }
+    value::encode_undefined()
+}
+
+pub(crate) fn eval_has_binding(
+    mut caller: Caller<'_, RuntimeState>,
+    record: i64,
+    name: i64,
+) -> i64 {
+    let handle = value::decode_scope_record_handle(record);
+    let name_str = read_value_string_bytes(&mut caller, name)
+        .and_then(|b| String::from_utf8(b).ok())
+        .unwrap_or_default();
+    if name_str.is_empty() {
+        return value::encode_bool(false);
+    }
+    if let Some(rec) = caller.data().scope_records.get(&handle) {
+        let found = rec.bindings.iter().any(|(n, _, _, _)| n == &name_str);
+        return value::encode_bool(found);
+    }
+    value::encode_bool(false)
+}
+
+pub(crate) fn eval_super_base(
+    caller: Caller<'_, RuntimeState>,
+    record: i64,
+) -> i64 {
+    let handle = value::decode_scope_record_handle(record);
+    if let Some(rec) = caller.data().scope_records.get(&handle) {
+        if let Some(home) = rec.home_object {
+            return home;
+        }
+    }
+    value::encode_undefined()
+}
+
+pub(crate) fn scope_record_set_meta(
+    mut caller: Caller<'_, RuntimeState>,
+    record: i64,
+    key: i64,
+    val: i64,
+) {
+    let handle = value::decode_scope_record_handle(record);
+    let tag = key as u8;
+    if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
+        match tag {
+            0 => rec.is_strict = value::decode_bool(val),
+            1 => rec.has_arguments_binding = value::decode_bool(val),
+            2 => rec.home_object = Some(val),
+            3 => rec.new_target = Some(val),
+            _ => debug_assert!(false, "unknown scope record meta key: {}", tag),
+        }
     }
 }

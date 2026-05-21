@@ -166,12 +166,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             dataview_table: Arc::clone(&dataview_table),
             typedarray_table: Arc::clone(&typedarray_table),
             non_extensible_handles: Arc::clone(&non_extensible_handles),
+            scope_records: HashMap::new(),
+            scope_record_next_handle: 0,
             new_target: Cell::new(value::encode_undefined()),
         },
     );
 
     // ── Import 0: console_log(i64) → () ─────────────────────────────────
-    let mut imports: Vec<Extern> = Vec::with_capacity(348);
+    let mut imports: Vec<Extern> = Vec::with_capacity(355);
     imports.extend(include!("host_imports/core.rs"));
     imports.extend(include!("host_imports/timers_arrays.rs"));
     imports.extend(include!("host_imports/array_object.rs"));
@@ -215,6 +217,56 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     );
     imports.push(create_mapped_arguments_fn.into());
     imports.extend(include!("host_imports/typedarray_new_methods.rs"));
+    // ── ScopeRecord eval bridge (imports 348-354) ──
+    let scope_record_create_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, capacity: i64| -> i64 {
+            scope_record_create(caller, capacity)
+        },
+    );
+    imports.push(scope_record_create_fn.into());
+    let scope_record_add_binding_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64, is_tdz: i64, is_const: i64| {
+            scope_record_add_binding(caller, record, name, val, is_tdz, is_const)
+        },
+    );
+    imports.push(scope_record_add_binding_fn.into());
+    let eval_get_binding_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+            eval_get_binding(caller, record, name)
+        },
+    );
+    imports.push(eval_get_binding_fn.into());
+    let eval_set_binding_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64| -> i64 {
+            eval_set_binding(caller, record, name, val)
+        },
+    );
+    imports.push(eval_set_binding_fn.into());
+    let eval_has_binding_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+            eval_has_binding(caller, record, name)
+        },
+    );
+    imports.push(eval_has_binding_fn.into());
+    let eval_super_base_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, record: i64| -> i64 {
+            eval_super_base(caller, record)
+        },
+    );
+    imports.push(eval_super_base_fn.into());
+    let scope_record_set_meta_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, record: i64, key: i64, val: i64| {
+            scope_record_set_meta(caller, record, key, val)
+        },
+    );
+    imports.push(scope_record_set_meta_fn.into());
     let instance = Instance::new(&mut store, &module, &imports)?;
 
     // ── Run main ──
@@ -494,6 +546,13 @@ struct RuntimeState {
     typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>>,
     /// 被 preventExtensions 标记为不可扩展对象的 handle 集合（使用完整的 NaN-boxed 值作为 key）
     non_extensible_handles: Arc<Mutex<HashSet<u64>>>,
+    /// Temporary ScopeRecord handles for active eval calls.
+    /// Keyed by handle index; entries removed when eval returns.
+    pub(crate) scope_records: HashMap<u32, crate::runtime_eval::ScopeRecord>,
+    /// Monotonic counter for scope record handle allocation.
+    /// Using a counter instead of len() ensures no collisions when records are removed.
+    pub(crate) scope_record_next_handle: u32,
+    /// new.target value meta property
     /// new.target 值元属性
     new_target: Cell<i64>,
 }
