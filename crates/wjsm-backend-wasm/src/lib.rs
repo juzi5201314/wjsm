@@ -15,7 +15,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 355] = [
+const HOST_IMPORT_NAMES: [&str; 356] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -384,6 +384,7 @@ const HOST_IMPORT_NAMES: [&str; 355] = [
     "eval_has_binding",
     "eval_super_base",
     "scope_record_set_meta",
+    "scope_record_destroy",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -392,7 +393,7 @@ const HOST_IMPORT_NAMES: [&str; 355] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        355,
+        356,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1352,6 +1353,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::EvalHasBinding => ("eval.has_binding", 2),
         Builtin::EvalSuperBase => ("eval.super_base", 1),
         Builtin::ScopeRecordSetMeta => ("scope_record.set_meta", 3),
+        Builtin::ScopeRecordDestroy => ("scope_record.destroy", 1),
     }
 }
 

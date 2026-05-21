@@ -613,11 +613,6 @@ impl Lowerer {
         // 10. Writeback: for each initialised binding, read from ScopeRecord
         for (scope_id, name, _, _) in &all_bindings {
             let binding = CapturedBinding::new(name.clone(), *scope_id);
-            if !self.binding_belongs_to_current_function(&binding)
-                || self.is_shared_binding(&binding)
-            {
-                continue;
-            }
 
             let name_const = self.module.add_constant(Constant::String(name.clone()));
             let name_val = self.alloc_value();
@@ -639,14 +634,55 @@ impl Lowerer {
                 },
             );
 
-            self.current_function.append_instruction(
-                continue_block,
-                Instruction::StoreVar {
-                    name: binding.var_ir_name(),
-                    value,
-                },
-            );
+            if self.binding_belongs_to_current_function(&binding) {
+                if self.is_shared_binding(&binding) {
+                    // Shared env: write back via SetProp on the shared env
+                    let env_val = self.shared_env_value()
+                        .expect("shared binding must have materialized env");
+                    let key_val = self.append_env_key_const(continue_block, &binding);
+                    self.current_function.append_instruction(
+                        continue_block,
+                        Instruction::SetProp {
+                            object: env_val,
+                            key: key_val,
+                            value,
+                        },
+                    );
+                } else {
+                    // Direct local var
+                    self.current_function.append_instruction(
+                        continue_block,
+                        Instruction::StoreVar {
+                            name: binding.var_ir_name(),
+                            value,
+                        },
+                    );
+                }
+            } else {
+                // Captured binding from enclosing function: SetProp on env
+                self.record_capture(binding.clone());
+                let env_val = self.load_env_object(continue_block);
+                let key_val = self.append_env_key_const(continue_block, &binding);
+                self.current_function.append_instruction(
+                    continue_block,
+                    Instruction::SetProp {
+                        object: env_val,
+                        key: key_val,
+                        value,
+                    },
+                );
+            }
         }
+
+        // 11. Destroy ScopeRecord
+        self.current_function.append_instruction(
+            continue_block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ScopeRecordDestroy,
+                args: vec![scope_record],
+            },
+        );
 
         let merge_block = self.current_function.new_block();
         self.current_function.set_terminator(

@@ -117,6 +117,7 @@ module {
       %44 = const c36
       %45 = call builtin.eval_get_binding(%26, %44)
       store var $0.x, %45
+      call builtin.scope_record_destroy(%26)
       jump bb3
     bb2:
       %41 = call builtin.exception_value(%39)

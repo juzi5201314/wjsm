@@ -299,6 +299,14 @@ impl Lowerer {
         Ok(dest)
     }
 
+    pub(crate) fn detect_param_arguments(params: &[swc_ast::Param]) -> bool {
+        params.iter().any(|p| {
+            let mut names = Vec::new();
+            Self::extract_pat_bindings(std::slice::from_ref(&p.pat), &mut names);
+            names.iter().any(|n| n == "arguments")
+        })
+    }
+
     pub(crate) fn lower_module(
         mut self,
         module: &swc_ast::Module,
