@@ -15,7 +15,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 356] = [
+const HOST_IMPORT_NAMES: [&str; 361] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -385,6 +385,12 @@ const HOST_IMPORT_NAMES: [&str; 356] = [
     "eval_super_base",
     "scope_record_set_meta",
     "scope_record_destroy",
+    // ── WeakRef / FinalizationRegistry imports ──
+    "weakref_constructor",              // index 356
+    "weakref_proto_deref",              // 357
+    "finalization_registry_constructor", // 358
+    "finalization_registry_proto_register", // 359
+    "finalization_registry_proto_unregister", // 360
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -393,7 +399,7 @@ const HOST_IMPORT_NAMES: [&str; 356] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        356,
+        361,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1354,6 +1360,12 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::EvalSuperBase => ("eval.super_base", 1),
         Builtin::ScopeRecordSetMeta => ("scope_record.set_meta", 3),
         Builtin::ScopeRecordDestroy => ("scope_record.destroy", 1),
+        // ── WeakRef / FinalizationRegistry builtins ──
+        Builtin::WeakRefConstructor => ("WeakRef", 1),
+        Builtin::WeakRefProtoDeref => ("WeakRef.prototype.deref", 1),
+        Builtin::FinalizationRegistryConstructor => ("FinalizationRegistry", 1),
+        Builtin::FinalizationRegistryProtoRegister => ("FinalizationRegistry.prototype.register", 4),
+        Builtin::FinalizationRegistryProtoUnregister => ("FinalizationRegistry.prototype.unregister", 2),
     }
 }
 
