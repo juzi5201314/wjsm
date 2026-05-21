@@ -307,6 +307,22 @@ impl Compiler {
         );
         // Type 33: (i32, i32) -> () — console varargs（args_base, args_count）
         types.ty().function(vec![ValType::I32, ValType::I32], vec![]);
+        // Type 34: (i64, i64, i64, i64, i64) -> () — scope_record_add_binding (5 i64 args, no return)
+        types.ty().function(
+            vec![
+                ValType::I64,
+                ValType::I64,
+                ValType::I64,
+                ValType::I64,
+                ValType::I64,
+            ],
+            vec![],
+        );
+        // Type 35: (i64, i64, i64) -> () — scope_record_set_meta (3 i64 args, no return)
+        types.ty().function(
+            vec![ValType::I64, ValType::I64, ValType::I64],
+            vec![],
+        );
         // Import index 78: func_call — Type 12 (uses shadow stack for args)
         imports.import("env", "func_call", EntityType::Function(12));
         // Import index 79: func_apply — Type 16 (i64 func, i64 this, i64 argsArray) -> i64
@@ -892,6 +908,21 @@ impl Compiler {
         imports.import("env", "typedarray_proto_keys", EntityType::Function(3));
         // Import index 347: typedarray_proto_values: (i64) -> i64
         imports.import("env", "typedarray_proto_values", EntityType::Function(3));
+        // ── ScopeRecord eval bridge ──
+        // Import index 348: scope_record_create: (i64) -> i64
+        imports.import("env", "scope_record_create", EntityType::Function(3));
+        // Import index 349: scope_record_add_binding: (i64, i64, i64, i64, i64) -> ()
+        imports.import("env", "scope_record_add_binding", EntityType::Function(34));
+        // Import index 350: eval_get_binding: (i64, i64) -> i64
+        imports.import("env", "eval_get_binding", EntityType::Function(2));
+        // Import index 351: eval_set_binding: (i64, i64, i64) -> i64
+        imports.import("env", "eval_set_binding", EntityType::Function(16));
+        // Import index 352: eval_has_binding: (i64, i64) -> i64
+        imports.import("env", "eval_has_binding", EntityType::Function(2));
+        // Import index 353: eval_super_base: (i64) -> i64
+        imports.import("env", "eval_super_base", EntityType::Function(3));
+        // Import index 354: scope_record_set_meta: (i64, i64, i64) -> ()
+        imports.import("env", "scope_record_set_meta", EntityType::Function(35));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
