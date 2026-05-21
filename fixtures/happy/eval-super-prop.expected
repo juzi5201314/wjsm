@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+null
+--- stderr ---
+Runtime error: SyntaxError: Parse error: Error { error: (1..6, InvalidSuper) }
