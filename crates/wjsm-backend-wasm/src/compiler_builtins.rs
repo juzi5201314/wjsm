@@ -192,6 +192,109 @@ impl Compiler {
                 }
                 Ok(())
             }
+            Builtin::ScopeRecordCreate => {
+                let capacity = args.first().context("scope_record_create expects capacity")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(capacity.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::ScopeRecordAddBinding => {
+                let rec = args.first().context("scope_record_add_binding expects record")?;
+                let name = args.get(1).context("scope_record_add_binding expects name")?;
+                let val = args.get(2).context("scope_record_add_binding expects value")?;
+                let is_tdz = args.get(3).context("scope_record_add_binding expects is_tdz")?;
+                let is_const = args.get(4).context("scope_record_add_binding expects is_const")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(name.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(is_tdz.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(is_const.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::Drop);
+                Ok(())
+            }
+            Builtin::EvalGetBinding => {
+                let rec = args.first().context("eval_get_binding expects record")?;
+                let name = args.get(1).context("eval_get_binding expects name")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(name.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::EvalSetBinding => {
+                let rec = args.first().context("eval_set_binding expects record")?;
+                let name = args.get(1).context("eval_set_binding expects name")?;
+                let val = args.get(2).context("eval_set_binding expects value")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(name.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::EvalHasBinding => {
+                let rec = args.first().context("eval_has_binding expects record")?;
+                let name = args.get(1).context("eval_has_binding expects name")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(name.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::EvalSuperBase => {
+                let rec = args.first().context("eval_super_base expects record")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::ScopeRecordSetMeta => {
+                let rec = args.first().context("scope_record_set_meta expects record")?;
+                let key = args.get(1).context("scope_record_set_meta expects key")?;
+                let val = args.get(2).context("scope_record_set_meta expects value")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rec.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied()
+                    .with_context(|| format!("no WASM func index for {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                self.emit(WasmInstruction::Drop);
+                Ok(())
+            }
             Builtin::IsException => {
                 let value = args.first().context("is_exception expects value arg")?;
                 let value_local = self.local_idx(value.0);

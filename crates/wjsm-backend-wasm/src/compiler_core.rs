@@ -1265,6 +1265,14 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::NewTarget, 322);
         builtin_func_indices.insert(Builtin::CreateUnmappedArgumentsObject, 324);
         builtin_func_indices.insert(Builtin::CreateMappedArgumentsObject, 325);
+        // ── ScopeRecord eval bridge ──
+        builtin_func_indices.insert(Builtin::ScopeRecordCreate, 348);
+        builtin_func_indices.insert(Builtin::ScopeRecordAddBinding, 349);
+        builtin_func_indices.insert(Builtin::EvalGetBinding, 350);
+        builtin_func_indices.insert(Builtin::EvalSetBinding, 351);
+        builtin_func_indices.insert(Builtin::EvalHasBinding, 352);
+        builtin_func_indices.insert(Builtin::EvalSuperBase, 353);
+        builtin_func_indices.insert(Builtin::ScopeRecordSetMeta, 354);
         builtin_func_indices.insert(Builtin::PrivateGet, 316);
         builtin_func_indices.insert(Builtin::PrivateSet, 317);
         builtin_func_indices.insert(Builtin::PrivateHas, 318);
