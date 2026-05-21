@@ -117,6 +117,9 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     "DataView",
     "JSON",
     "eval",
+    // Weak references
+    "WeakRef",
+    "FinalizationRegistry",
 ];
 
 /// 需要忽略的 flags（当前 wjsm 不支持）。
