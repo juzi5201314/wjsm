@@ -1438,6 +1438,8 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::SetConstructor => Some(alloc_host_object_from_caller(caller, 0)),
         NativeCallable::WeakMapConstructor => Some(alloc_host_object_from_caller(caller, 0)),
         NativeCallable::WeakSetConstructor => Some(alloc_host_object_from_caller(caller, 0)),
+        NativeCallable::WeakRefConstructor => Some(alloc_host_object_from_caller(caller, 0)),
+        NativeCallable::FinalizationRegistryConstructor => Some(alloc_host_object_from_caller(caller, 0)),
         NativeCallable::DateConstructorGlobal => Some(alloc_host_object_from_caller(caller, 4)),
         NativeCallable::PromiseConstructor => Some(alloc_host_object_from_caller(caller, 0)),
         NativeCallable::ArrayBufferConstructorGlobal => {
@@ -1453,6 +1455,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             }
             Some(value::encode_undefined())
         }
+        NativeCallable::WeakRefDerefMethod => Some(value::encode_undefined()),
+        NativeCallable::FinalizationRegistryRegisterMethod => Some(value::encode_undefined()),
+        NativeCallable::FinalizationRegistryUnregisterMethod => Some(value::encode_undefined()),
         NativeCallable::StubGlobal(_) => Some(value::encode_undefined()),
     }
 }

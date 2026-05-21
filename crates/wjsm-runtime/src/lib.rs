@@ -738,6 +738,8 @@ enum NativeCallable {
     SetConstructor,
     WeakMapConstructor,
     WeakSetConstructor,
+    WeakRefConstructor,
+    FinalizationRegistryConstructor,
     DateConstructorGlobal,
     PromiseConstructor,
     ArrayBufferConstructorGlobal,

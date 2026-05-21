@@ -28,6 +28,8 @@
                 "Set" => native_callables.push(NativeCallable::SetConstructor),
                 "WeakMap" => native_callables.push(NativeCallable::WeakMapConstructor),
                 "WeakSet" => native_callables.push(NativeCallable::WeakSetConstructor),
+                "WeakRef" => native_callables.push(NativeCallable::WeakRefConstructor),
+                "FinalizationRegistry" => native_callables.push(NativeCallable::FinalizationRegistryConstructor),
                 "Date" => native_callables.push(NativeCallable::DateConstructorGlobal),
                 "Promise" => native_callables.push(NativeCallable::PromiseConstructor),
                 "ArrayBuffer" => native_callables.push(NativeCallable::ArrayBufferConstructorGlobal),
