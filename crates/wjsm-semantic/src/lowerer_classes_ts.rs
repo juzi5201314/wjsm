@@ -638,6 +638,11 @@ impl Lowerer {
             },
         );
 
+        // Mark class name as initialised to exit TDZ before lookup.
+        self.scopes
+            .mark_initialised(&class_name)
+            .map_err(|msg| self.error(class_decl.span(), msg))?;
+
         // Register class name in module scope with constructor as value.
         let (scope_id, _) = self
             .scopes
@@ -654,7 +659,6 @@ impl Lowerer {
 
         Ok(StmtFlow::Open(outer_block))
     }
-
     pub(crate) fn lower_class_expr(
         &mut self,
         class_expr: &swc_ast::ClassExpr,

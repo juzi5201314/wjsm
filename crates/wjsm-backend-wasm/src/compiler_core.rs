@@ -307,7 +307,7 @@ impl Compiler {
         );
         // Type 33: (i32, i32) -> () — console varargs（args_base, args_count）
         types.ty().function(vec![ValType::I32, ValType::I32], vec![]);
-        // Type 34: (i64, i64, i64, i64, i64) -> () — scope_record_add_binding (5 i64 args, no return)
+        // Type 34: (i64, i64, i64, i64, i64) -> (i64) — scope_record_add_binding (5 i64 args)
         types.ty().function(
             vec![
                 ValType::I64,
@@ -316,12 +316,7 @@ impl Compiler {
                 ValType::I64,
                 ValType::I64,
             ],
-            vec![],
-        );
-        // Type 35: (i64, i64, i64) -> () — scope_record_set_meta (3 i64 args, no return)
-        types.ty().function(
-            vec![ValType::I64, ValType::I64, ValType::I64],
-            vec![],
+            vec![ValType::I64],
         );
         // Import index 78: func_call — Type 12 (uses shadow stack for args)
         imports.import("env", "func_call", EntityType::Function(12));
@@ -921,8 +916,8 @@ impl Compiler {
         imports.import("env", "eval_has_binding", EntityType::Function(2));
         // Import index 353: eval_super_base: (i64) -> i64
         imports.import("env", "eval_super_base", EntityType::Function(3));
-        // Import index 354: scope_record_set_meta: (i64, i64, i64) -> ()
-        imports.import("env", "scope_record_set_meta", EntityType::Function(35));
+        // Import index 354: scope_record_set_meta: (i64, i64, i64) -> i64
+        imports.import("env", "scope_record_set_meta", EntityType::Function(16));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
