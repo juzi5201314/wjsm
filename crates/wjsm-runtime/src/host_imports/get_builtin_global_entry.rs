@@ -35,6 +35,7 @@
                 "ArrayBuffer" => native_callables.push(NativeCallable::ArrayBufferConstructorGlobal),
                 "DataView" => native_callables.push(NativeCallable::DataViewConstructorGlobal),
                 "Proxy" => native_callables.push(NativeCallable::ProxyConstructor),
+                "gc" => native_callables.push(NativeCallable::GcCollect),
                 _ => return value::encode_undefined(),
             }
             value::encode_native_callable_idx(idx)

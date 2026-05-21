@@ -749,6 +749,8 @@ enum NativeCallable {
     ProxyRevoker {
         proxy_handle: u32,
     },
+    /// GcCollect: trigger mark-sweep GC collection
+    GcCollect,
     StubGlobal(()),
 }
 
