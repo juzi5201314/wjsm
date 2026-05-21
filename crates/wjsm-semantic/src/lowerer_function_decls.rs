@@ -40,6 +40,14 @@ impl Lowerer {
         // Emit parameter initialization (default values + destructuring)
         let body_entry = self.emit_param_inits(&fn_decl.function.params, &param_ir_names, entry)?;
 
+        // Detect if calling context has explicit arguments binding
+        let has_param_arguments = fn_decl.function.params.iter().any(|p| {
+            let mut names = Vec::new();
+            Self::extract_pat_bindings(std::slice::from_ref(&p.pat), &mut names);
+            names.iter().any(|n| n == "arguments")
+        });
+        let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = has_param_arguments || has_explicit_arguments;
         let body_entry = self.emit_arguments_init(body_entry)?;
 
         // Lower the function body.
@@ -363,6 +371,14 @@ impl Lowerer {
         let after_inits =
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
+        // Detect if calling context has explicit arguments binding
+        let has_param_arguments = fn_decl.function.params.iter().any(|p| {
+            let mut names = Vec::new();
+            Self::extract_pat_bindings(std::slice::from_ref(&p.pat), &mut names);
+            names.iter().any(|n| n == "arguments")
+        });
+        let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = has_param_arguments || has_explicit_arguments;
         let after_inits = self.emit_arguments_init(after_inits)?;
 
         let dispatch_block = self.current_function.new_block();
@@ -504,6 +520,14 @@ impl Lowerer {
             wrapper_entry,
         )?;
 
+        // Detect if calling context has explicit arguments binding
+        let has_param_arguments = fn_decl.function.params.iter().any(|p| {
+            let mut names = Vec::new();
+            Self::extract_pat_bindings(std::slice::from_ref(&p.pat), &mut names);
+            names.iter().any(|n| n == "arguments")
+        });
+        let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = has_param_arguments || has_explicit_arguments;
         let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
 
         let func_ref_const = self
@@ -944,6 +968,14 @@ impl Lowerer {
         let after_inits =
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
+        // Detect if calling context has explicit arguments binding
+        let has_param_arguments = fn_decl.function.params.iter().any(|p| {
+            let mut names = Vec::new();
+            Self::extract_pat_bindings(std::slice::from_ref(&p.pat), &mut names);
+            names.iter().any(|n| n == "arguments")
+        });
+        let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = has_param_arguments || has_explicit_arguments;
         let after_inits = self.emit_arguments_init(after_inits)?;
 
         let dispatch_block = self.current_function.new_block();
@@ -1100,6 +1132,14 @@ impl Lowerer {
             wrapper_entry,
         )?;
 
+        // Detect if calling context has explicit arguments binding
+        let has_param_arguments = fn_decl.function.params.iter().any(|p| {
+            let mut names = Vec::new();
+            Self::extract_pat_bindings(std::slice::from_ref(&p.pat), &mut names);
+            names.iter().any(|n| n == "arguments")
+        });
+        let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = has_param_arguments || has_explicit_arguments;
         let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
 
         let promise_val = self.alloc_value();
