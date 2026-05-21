@@ -298,6 +298,13 @@ pub enum Builtin {
     WeakSetProtoAdd,
     WeakSetProtoHas,
     WeakSetProtoDelete,
+    // ── WeakRef built-in ──────────────────────────────────────────────
+    WeakRefConstructor,
+    WeakRefProtoDeref,
+    // ── FinalizationRegistry built-in ─────────────────────────────────
+    FinalizationRegistryConstructor,
+    FinalizationRegistryProtoRegister,
+    FinalizationRegistryProtoUnregister,
     // ── ArrayBuffer built-in ──────────────────────────────────────────
     ArrayBufferConstructor,
     ArrayBufferProtoByteLength,
@@ -665,6 +672,11 @@ impl fmt::Display for Builtin {
             Self::WeakSetProtoAdd => "WeakSet.prototype.add",
             Self::WeakSetProtoHas => "WeakSet.prototype.has",
             Self::WeakSetProtoDelete => "WeakSet.prototype.delete",
+            Self::WeakRefConstructor => "WeakRef",
+            Self::WeakRefProtoDeref => "WeakRef.prototype.deref",
+            Self::FinalizationRegistryConstructor => "FinalizationRegistry",
+            Self::FinalizationRegistryProtoRegister => "FinalizationRegistry.prototype.register",
+            Self::FinalizationRegistryProtoUnregister => "FinalizationRegistry.prototype.unregister",
             Self::ArrayBufferConstructor => "ArrayBuffer",
             Self::ArrayBufferProtoByteLength => "ArrayBuffer.prototype.byteLength",
             Self::ArrayBufferProtoSlice => "ArrayBuffer.prototype.slice",
