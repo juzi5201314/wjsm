@@ -36,6 +36,22 @@ pub fn decode_proxy_handle(val: i64) -> u32 {
     (val as u64 & 0xFFFF_FFFF) as u32
 }
 
+// ── ScopeRecord value ───────────────────────────────────────────────────
+pub const TAG_SCOPE_RECORD: u64 = 0x11;
+
+pub fn encode_scope_record_handle(handle: u32) -> i64 {
+    encode_handle(TAG_SCOPE_RECORD, handle)
+}
+
+pub fn is_scope_record(val: i64) -> bool {
+    let uval = val as u64;
+    (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_SCOPE_RECORD
+}
+
+pub fn decode_scope_record_handle(val: i64) -> u32 {
+    (val as u64 & 0xFFFF_FFFF) as u32
+}
+
 pub const TAG_ARRAY: u64 = 0xB;
 pub const TAG_BOUND: u64 = 0xC;
 pub const TAG_NATIVE_CALLABLE: u64 = 0x0;

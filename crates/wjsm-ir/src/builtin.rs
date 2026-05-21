@@ -376,6 +376,21 @@ pub enum Builtin {
     // ── Arguments Exotic Object ──
     CreateUnmappedArgumentsObject,
     CreateMappedArgumentsObject,
+    // ── ScopeRecord eval bridge ───────────────────────────────────────
+    /// dest: i64 — scope record handle
+    ScopeRecordCreate,
+    /// args[0]: record, args[1]: name (string), args[2]: value (i64), args[3]: is_tdz (bool), args[4]: is_const (bool)
+    ScopeRecordAddBinding,
+    /// dest: i64 — value (or TAG_EXCEPTION if TDZ)
+    EvalGetBinding,
+    /// dest: i64 — written value
+    EvalSetBinding,
+    /// dest: i64 — bool (0 or 1)
+    EvalHasBinding,
+    /// dest: i64 — prototype | undefined | TAG_EXCEPTION
+    EvalSuperBase,
+    /// args[0]: record, args[1]: key (i64 integer tag), args[2]: value (i64)
+    ScopeRecordSetMeta,
 }
 
 impl fmt::Display for Builtin {
@@ -715,6 +730,13 @@ impl fmt::Display for Builtin {
             Self::NewTarget => "new.target",
             Self::CreateUnmappedArgumentsObject => "create_unmapped_arguments_object",
             Self::CreateMappedArgumentsObject => "create_mapped_arguments_object",
+            Self::ScopeRecordCreate => "scope_record_create",
+            Self::ScopeRecordAddBinding => "scope_record_add_binding",
+            Self::EvalGetBinding => "eval_get_binding",
+            Self::EvalSetBinding => "eval_set_binding",
+            Self::EvalHasBinding => "eval_has_binding",
+            Self::EvalSuperBase => "eval_super_base",
+            Self::ScopeRecordSetMeta => "scope_record_set_meta",
         })
     }
 }
