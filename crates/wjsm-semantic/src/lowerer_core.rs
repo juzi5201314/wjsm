@@ -67,6 +67,8 @@ impl Lowerer {
             eval_mode: false,
             eval_has_scope_bridge: false,
             eval_var_writes_to_scope: false,
+            eval_scope_record: false,
+            eval_caller_has_arguments: false,
             active_using_vars: Vec::new(),
             typedarray_bindings: std::collections::HashSet::new(),
             eval_continue_block: None,

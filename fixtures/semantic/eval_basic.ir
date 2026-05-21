@@ -22,10 +22,19 @@ module {
     c19 = number(inf)
     c20 = undefined
     c21 = string("1 + 2")
-    c22 = string("Symbol")
-    c23 = string("x")
-    c24 = string("Symbol")
-    c25 = string("x")
+    c22 = number(2)
+    c23 = string("Symbol")
+    c24 = number(0)
+    c25 = number(0)
+    c26 = string("x")
+    c27 = number(0)
+    c28 = number(0)
+    c29 = number(0)
+    c30 = number(0)
+    c31 = number(1)
+    c32 = number(0)
+    c33 = string("Symbol")
+    c34 = string("x")
 
   fn @main [has_eval] [entry=bb0]:
     bb0:
@@ -74,36 +83,48 @@ module {
       %21 = const c20
       store var $this, %21
       %22 = const c21
-      %23 = new_object(capacity=2)
-      %24 = const c22
-      %25 = load var $0.Symbol
-      set_prop %23, %24, %25
-      %26 = const c23
-      %27 = load var $0.x
-      set_prop %23, %26, %27
-      %28 = call builtin.eval(%22, %23)
-      %29 = is_exception %28
-      branch %29, bb2, bb1
+      %23 = const c22
+      %24 = call builtin.scope_record_create(%23)
+      store var $eval_env, %24
+      %25 = const c23
+      %26 = load var $0.Symbol
+      %27 = const c24
+      %28 = const c25
+      call builtin.scope_record_add_binding(%24, %25, %26, %27, %28)
+      %29 = const c26
+      %30 = load var $0.x
+      %31 = const c27
+      %32 = const c28
+      call builtin.scope_record_add_binding(%24, %29, %30, %31, %32)
+      %33 = const c29
+      %34 = const c30
+      call builtin.scope_record_set_meta(%24, %33, %34)
+      %35 = const c31
+      %36 = const c32
+      call builtin.scope_record_set_meta(%24, %35, %36)
+      %37 = call builtin.eval(%22, %24)
+      %38 = is_exception %37
+      branch %38, bb2, bb1
     bb1:
-      %31 = const c24
-      %32 = get_prop %23, %31
-      store var $0.Symbol, %32
-      %33 = const c25
-      %34 = get_prop %23, %33
-      store var $0.x, %34
+      %40 = const c33
+      %41 = call builtin.eval_get_binding(%24, %40)
+      store var $0.Symbol, %41
+      %42 = const c34
+      %43 = call builtin.eval_get_binding(%24, %42)
+      store var $0.x, %43
       jump bb3
     bb2:
-      %30 = call builtin.exception_value(%28)
-      throw %30
+      %39 = call builtin.exception_value(%37)
+      throw %39
     bb3:
-      store var $0.x, %28
-      %35 = load var $0.x
-      %36 = call builtin.console.log(%35)
-      %37 = is_exception %36
-      branch %37, bb5, bb4
+      store var $0.x, %37
+      %44 = load var $0.x
+      %45 = call builtin.console.log(%44)
+      %46 = is_exception %45
+      branch %46, bb5, bb4
     bb4:
       return
     bb5:
-      %38 = call builtin.exception_value(%36)
-      throw %38
+      %47 = call builtin.exception_value(%45)
+      throw %47
 }

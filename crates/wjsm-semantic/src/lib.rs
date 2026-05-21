@@ -211,6 +211,27 @@ impl ScopeTree {
         }
         result
     }
+    /// Return all lexically visible bindings, including uninitialized (TDZ) ones.
+    /// Returns (scope_id, name, kind, is_initialised).
+    fn visible_bindings_all(&self) -> Vec<(usize, String, VarKind, bool)> {
+        let mut result = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut cursor = Some(self.current);
+        while let Some(scope_id) = cursor {
+            let scope = &self.arenas[scope_id];
+            let mut names: Vec<_> = scope.variables.keys().cloned().collect();
+            names.sort();
+            for name in names {
+                if seen.insert(name.clone())
+                    && let Some(info) = scope.variables.get(&name)
+                {
+                    result.push((scope.id, name.clone(), info.kind, info.initialised));
+                }
+            }
+            cursor = scope.parent;
+        }
+        result
+    }
 
     /// Resolve a variable's scope id without checking TDZ.
     fn resolve_scope_id(&self, name: &str) -> Result<usize, String> {
@@ -602,6 +623,7 @@ pub fn lower_eval_module_with_scope(
     lowerer.eval_mode = true;
     lowerer.eval_has_scope_bridge = has_scope_bridge;
     lowerer.eval_var_writes_to_scope = var_writes_to_scope;
+    lowerer.eval_scope_record = true;
     lowerer.lower_module(&module)
 }
 
@@ -1268,6 +1290,8 @@ struct Lowerer {
     eval_mode: bool,
     eval_has_scope_bridge: bool,
     eval_var_writes_to_scope: bool,
+    pub(crate) eval_scope_record: bool,
+    pub(crate) eval_caller_has_arguments: bool,
     eval_completion: Option<ValueId>,
     /// eval 调用在表达式上下文时的异常检查分叉后的 continue block。
     /// 由 lower_direct_eval_call 设置，由 resolve_store_block 消费。

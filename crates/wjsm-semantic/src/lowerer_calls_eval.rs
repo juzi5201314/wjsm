@@ -450,9 +450,10 @@ impl Lowerer {
         call: &swc_ast::CallExpr,
         block: BasicBlockId,
     ) -> Result<(ValueId, BasicBlockId), LoweringError> {
+        let mut eval_block = block;
         self.current_function.mark_has_eval();
 
-        let mut eval_block = block;
+        // 1. Lower the code argument
         let code_val = if let Some(first_arg) = call.args.first() {
             self.lower_expr_then_continue(&first_arg.expr, &mut eval_block)?
         } else {
@@ -468,61 +469,44 @@ impl Lowerer {
             undef_val
         };
 
-        let bindings: Vec<_> = self
+        // 2. Get all lexically visible bindings (including TDZ)
+        let all_bindings: Vec<_> = self
             .scopes
-            .visible_bindings()
+            .visible_bindings_all()
             .into_iter()
-            .filter(|(_, name, _)| !matches!(name.as_str(), "undefined" | "NaN" | "Infinity"))
+            .filter(|(_, name, _, _)| !matches!(name.as_str(), "undefined" | "NaN" | "Infinity"))
             .collect();
 
-        let env_val = self.alloc_value();
+        // 3. Create ScopeRecord
+        let capacity = self.const_val_i64(eval_block, all_bindings.len() as i64);
+        let scope_record = self.alloc_value();
         self.current_function.append_instruction(
             eval_block,
-            Instruction::NewObject {
-                dest: env_val,
-                capacity: bindings.len() as u32 + u32::from(self.strict_mode),
+            Instruction::CallBuiltin {
+                dest: Some(scope_record),
+                builtin: Builtin::ScopeRecordCreate,
+                args: vec![capacity],
             },
         );
 
-        if self.strict_mode {
-            let key_const = self
-                .module
-                .add_constant(Constant::String("__wjsm_eval_strict".to_string()));
-            let key_val = self.alloc_value();
-            self.current_function.append_instruction(
-                eval_block,
-                Instruction::Const {
-                    dest: key_val,
-                    constant: key_const,
-                },
-            );
-            let true_const = self.module.add_constant(Constant::Bool(true));
-            let true_val = self.alloc_value();
-            self.current_function.append_instruction(
-                eval_block,
-                Instruction::Const {
-                    dest: true_val,
-                    constant: true_const,
-                },
-            );
-            self.current_function.append_instruction(
-                eval_block,
-                Instruction::SetProp {
-                    object: env_val,
-                    key: key_val,
-                    value: true_val,
-                },
-            );
-        }
+        // Store scope_record into $eval_env so the eval module can find it
+        self.current_function.append_instruction(
+            eval_block,
+            Instruction::StoreVar {
+                name: EVAL_SCOPE_ENV_PARAM.to_string(),
+                value: scope_record,
+            },
+        );
 
-        for (scope_id, name, _) in &bindings {
-            let key_const = self.module.add_constant(Constant::String(name.clone()));
-            let key_val = self.alloc_value();
+        // 4. Add each binding to the ScopeRecord
+        for (scope_id, name, kind, is_initialised) in &all_bindings {
+            let name_const = self.module.add_constant(Constant::String(name.clone()));
+            let name_val = self.alloc_value();
             self.current_function.append_instruction(
                 eval_block,
                 Instruction::Const {
-                    dest: key_val,
-                    constant: key_const,
+                    dest: name_val,
+                    constant: name_const,
                 },
             );
 
@@ -543,26 +527,58 @@ impl Lowerer {
                 value
             };
 
+            let is_tdz = self.const_val_i64(eval_block, if *is_initialised { 0 } else { 1 });
+            let is_const = self.const_val_i64(
+                eval_block,
+                if matches!(kind, VarKind::Const) { 1 } else { 0 },
+            );
+
             self.current_function.append_instruction(
                 eval_block,
-                Instruction::SetProp {
-                    object: env_val,
-                    key: key_val,
-                    value,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ScopeRecordAddBinding,
+                    args: vec![scope_record, name_val, value, is_tdz, is_const],
                 },
             );
         }
+
+        // 5. Set meta: strict mode (key=0)
+        let strict_key = self.const_val_i64(eval_block, 0);
+        let strict_val = self.const_val_i64(eval_block, if self.strict_mode { 1 } else { 0 });
+        self.current_function.append_instruction(
+            eval_block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ScopeRecordSetMeta,
+                args: vec![scope_record, strict_key, strict_val],
+            },
+        );
+
+        // 6. Set meta: has_arguments (key=1)
+        let args_key = self.const_val_i64(eval_block, 1);
+        let args_val = self.const_val_i64(eval_block, if self.eval_caller_has_arguments { 1 } else { 0 });
+        self.current_function.append_instruction(
+            eval_block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ScopeRecordSetMeta,
+                args: vec![scope_record, args_key, args_val],
+            },
+        );
+
+        // 7. Call Eval(code, scope_record)
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             eval_block,
             Instruction::CallBuiltin {
                 dest: Some(dest),
                 builtin: Builtin::Eval,
-                args: vec![code_val, env_val],
+                args: vec![code_val, scope_record],
             },
         );
 
-        // 异常检查：eval 内部 throw 时 TAG_EXCEPTION 不应作为正常值传播
+        // 8. Exception check
         let is_exc = self.alloc_value();
         self.current_function.append_instruction(
             eval_block,
@@ -582,7 +598,7 @@ impl Lowerer {
             },
         );
 
-        // 异常路径：解封装异常值并传播（可能被 try/catch 捕获，或 throw）
+        // 9. Exception path
         let thrown_val = self.alloc_value();
         self.current_function.append_instruction(
             exc_block,
@@ -594,8 +610,8 @@ impl Lowerer {
         );
         self.emit_throw_value(exc_block, thrown_val)?;
 
-        // 正常路径：将 eval 环境修改的变量写回外层作用域
-        for (scope_id, name, _) in &bindings {
+        // 10. Writeback: for each initialised binding, read from ScopeRecord
+        for (scope_id, name, _, _) in &all_bindings {
             let binding = CapturedBinding::new(name.clone(), *scope_id);
             if !self.binding_belongs_to_current_function(&binding)
                 || self.is_shared_binding(&binding)
@@ -603,25 +619,26 @@ impl Lowerer {
                 continue;
             }
 
-            let key_const = self.module.add_constant(Constant::String(name.clone()));
-            let key_val = self.alloc_value();
+            let name_const = self.module.add_constant(Constant::String(name.clone()));
+            let name_val = self.alloc_value();
             self.current_function.append_instruction(
                 continue_block,
                 Instruction::Const {
-                    dest: key_val,
-                    constant: key_const,
+                    dest: name_val,
+                    constant: name_const,
                 },
             );
 
             let value = self.alloc_value();
             self.current_function.append_instruction(
                 continue_block,
-                Instruction::GetProp {
-                    dest: value,
-                    object: env_val,
-                    key: key_val,
+                Instruction::CallBuiltin {
+                    dest: Some(value),
+                    builtin: Builtin::EvalGetBinding,
+                    args: vec![scope_record, name_val],
                 },
             );
+
             self.current_function.append_instruction(
                 continue_block,
                 Instruction::StoreVar {
@@ -705,5 +722,25 @@ impl Lowerer {
                 value,
             },
         );
+    }
+    fn const_val_i64(&mut self, block: BasicBlockId, value: i64) -> ValueId {
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest,
+                constant: self.module.add_constant(Constant::Number(value as f64)),
+            },
+        );
+        dest
+    }
+
+    fn const_val(&mut self, block: BasicBlockId, constant: ConstantId) -> ValueId {
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const { dest, constant },
+        );
+        dest
     }
 }
