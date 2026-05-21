@@ -15,7 +15,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 348] = [
+const HOST_IMPORT_NAMES: [&str; 355] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -376,6 +376,14 @@ const HOST_IMPORT_NAMES: [&str; 348] = [
     "typedarray_proto_entries",
     "typedarray_proto_keys",
     "typedarray_proto_values",
+    // ── ScopeRecord eval bridge ──
+    "scope_record_create",
+    "scope_record_add_binding",
+    "eval_get_binding",
+    "eval_set_binding",
+    "eval_has_binding",
+    "eval_super_base",
+    "scope_record_set_meta",
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -384,7 +392,7 @@ const HOST_IMPORT_NAMES: [&str; 348] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        348,
+        355,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1336,6 +1344,14 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::NewTarget => ("new_target", 1),
         Builtin::CreateUnmappedArgumentsObject => ("create_unmapped_arguments_object", 2),
         Builtin::CreateMappedArgumentsObject => ("create_mapped_arguments_object", 3),
+        // ── ScopeRecord eval bridge ──
+        Builtin::ScopeRecordCreate => ("scope_record.create", 1),
+        Builtin::ScopeRecordAddBinding => ("scope_record.add_binding", 5),
+        Builtin::EvalGetBinding => ("eval.get_binding", 2),
+        Builtin::EvalSetBinding => ("eval.set_binding", 3),
+        Builtin::EvalHasBinding => ("eval.has_binding", 2),
+        Builtin::EvalSuperBase => ("eval.super_base", 1),
+        Builtin::ScopeRecordSetMeta => ("scope_record.set_meta", 3),
     }
 }
 
