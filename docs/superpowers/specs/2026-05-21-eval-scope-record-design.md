@@ -51,7 +51,7 @@ pub enum Builtin {
     ScopeRecordCreate,
 
     /// 向作用域记录添加绑定
-    /// args[0]: record, args[1]: name (string), args[2]: value (i64), args[3]: is_tdz (bool)
+    /// args[0]: record, args[1]: name (string), args[2]: value (i64), args[3]: is_tdz (bool), args[4]: is_const (bool)
     ScopeRecordAddBinding,
 
     /// 按名称从作用域记录获取绑定值；若 TDZ 则抛出 ReferenceError
@@ -95,7 +95,7 @@ EvalGetBinding       → %dest = call builtin.eval_get_binding(%rec, key)
 EvalSetBinding       → %dest = call builtin.eval_set_binding(%rec, key, val)
 EvalHasBinding       → %dest = call builtin.eval_has_binding(%rec, key)
 EvalSuperBase        → %dest = call builtin.eval_super_base(%rec)
-ScopeRecordSetMeta   → call builtin.scope_record_set_meta(%rec, "key", val)
+ScopeRecordSetMeta   → call builtin.scope_record_set_meta(%rec, key_i64, val)
 ```
 
 ---
@@ -127,14 +127,13 @@ swc_ast::Decl::Class(class_decl) => {
 
 `lower_class_decl`（实际的 lowering 过程）通过 `mark_initialised` 处理初始化。
 
-### 2.2 新的 `visible_bindings_all()` (`scope.rs`)
-
+### 2.2 新的 `visible_bindings_all()` (`lib.rs` — ScopeTree 方法)
 当前，`visible_bindings()` 仅返回已初始化的绑定。需要第二个方法返回**所有**绑定，包括处于 TDZ 中的绑定：
 
 ```rust
 /// 返回所有词法可见绑定，包括未初始化（TDZ）的 let/const/class。
-/// 返回 (scope_id, name, is_initialised) 三元组。
-pub fn visible_bindings_all(&self) -> Vec<(usize, String, bool)>;
+/// 返回 (scope_id, name, kind, is_initialised) 四元组。
+pub fn visible_bindings_all(&self) -> Vec<(usize, String, VarKind, bool)>;
 ```
 
 ### 2.3 新的 Lowerer 字段 (`lib.rs`)
@@ -145,8 +144,7 @@ pub(crate) struct Lowerer {
     pub(crate) eval_scope_record: bool,
     /// 调用上下文是否有显式的 arguments 绑定（参数、var、let、function 声明）
     pub(crate) eval_caller_has_arguments: bool,
-    /// 当前函数是否为方法（有 [[HomeObject]]）— 用于 super 检查
-    pub(crate) is_method: bool,
+    // 注意：is_method 字段不需要 — 通过 self.current_function.home_object.is_some() 检测
 }
 ```
 
@@ -176,42 +174,37 @@ pub(crate) fn lower_direct_eval_call(
     );
 
     // 3. 添加所有绑定（包括未初始化的 TDZ 绑定）
-    for (scope_id, name, is_initialised) in &all_bindings {
+    for (scope_id, name, kind, is_initialised) in &all_bindings {
         let binding = CapturedBinding::new(name.clone(), *scope_id);
         let value = self.load_binding_for_eval(eval_block, &binding, *is_initialised)?;
         let is_tdz = !*is_initialised;
+        let is_const = matches!(kind, VarKind::Const);
         let key_const = self.module.add_constant(Constant::String(name.clone()));
         let key_val = self.const_val(eval_block, key_const);
-        let tdz_val = self.const_val(eval_block, 
+        let tdz_val = self.const_val(eval_block,
             self.module.add_constant(Constant::Bool(is_tdz)));
+        let const_val = self.const_val(eval_block,
+            self.module.add_constant(Constant::Bool(is_const)));
 
         self.current_function.append_instruction(
             eval_block,
             Instruction::CallBuiltin {
                 dest: None,
                 builtin: Builtin::ScopeRecordAddBinding,
-                args: vec![env_val, key_val, value, tdz_val],
+                args: vec![env_val, key_val, value, tdz_val, const_val],
             },
         );
     }
 
-    // 4. 设置元数据（通过 ScopeRecordSetMeta + 预定义保留键名）
-    // 保留键：`__wjsm_is_strict`、`__wjsm_has_arguments`、
-    //          `__wjsm_home_object`、`__wjsm_new_target`
-    for (key_str, val_const) in [
-        ("__wjsm_is_strict", Constant::Bool(self.strict_mode)),
-        ("__wjsm_has_arguments", Constant::Bool(self.eval_caller_has_arguments)),
+    // 4. 设置元数据（通过 ScopeRecordSetMeta + 整数键，避免运行时字符串分配）
+    // 键常量：0=is_strict, 1=has_arguments, 2=home_object, 3=new_target
+    for (key, val_const) in [
+        (0i64, Constant::Bool(self.strict_mode)),
+        (1i64, Constant::Bool(self.eval_caller_has_arguments)),
     ] {
-        let key_cid = self.module.add_constant(Constant::String(key_str.to_string()));
-        let key_v = self.alloc_value();
-        self.current_function.append_instruction(eval_block, Instruction::Const {
-            dest: key_v, constant: key_cid,
-        });
+        let key_v = self.const_val_i64(eval_block, key);
         let val_cid = self.module.add_constant(val_const);
-        let val_v = self.alloc_value();
-        self.current_function.append_instruction(eval_block, Instruction::Const {
-            dest: val_v, constant: val_cid,
-        });
+        let val_v = self.const_val(eval_block, val_cid);
         self.current_function.append_instruction(eval_block,
             Instruction::CallBuiltin {
                 dest: None,
@@ -219,17 +212,13 @@ pub(crate) fn lower_direct_eval_call(
                 args: vec![env_val, key_v, val_v],
             });
     }
-    if self.is_method {
+    if self.current_function.home_object.is_some() {
         let home = self.alloc_value();
         self.current_function.append_instruction(
             eval_block,
             Instruction::GetSuperBase { dest: home },
         );
-        let hk_cid = self.module.add_constant(Constant::String("__wjsm_home_object".to_string()));
-        let hk_v = self.alloc_value();
-        self.current_function.append_instruction(eval_block, Instruction::Const {
-            dest: hk_v, constant: hk_cid,
-        });
+        let hk_v = self.const_val_i64(eval_block, 2);
         self.current_function.append_instruction(eval_block,
             Instruction::CallBuiltin {
                 dest: None,
@@ -238,6 +227,10 @@ pub(crate) fn lower_direct_eval_call(
             });
     }
     if !self.is_arrow_fn_stack.last().unwrap_or(&false) {
+        // 注意：async 函数和生成器在此处行为不同。
+        // - async 函数：new.target 为 undefined（规范 §15.1.2）
+        // - 非箭头普通函数：new.target 从 [[Construct]] 传播
+        // 内部 NewTarget 内建指令会正确处理两者。
         let nt_val = self.alloc_value();
         self.current_function.append_instruction(
             eval_block,
@@ -247,11 +240,7 @@ pub(crate) fn lower_direct_eval_call(
                 args: vec![],
             },
         );
-        let nk_cid = self.module.add_constant(Constant::String("__wjsm_new_target".to_string()));
-        let nk_v = self.alloc_value();
-        self.current_function.append_instruction(eval_block, Instruction::Const {
-            dest: nk_v, constant: nk_cid,
-        });
+        let nk_v = self.const_val_i64(eval_block, 3);
         self.current_function.append_instruction(eval_block,
             Instruction::CallBuiltin {
                 dest: None,
@@ -295,17 +284,17 @@ pub(crate) fn lower_direct_eval_call(
 
 ```rust
 fn check_caller_arguments_context(&mut self, params: &[Param]) {
-    // 1) 是否有参数名为 "arguments"？
+    // 1) 是否有参数名为 "arguments"（包括解构：function({ arguments }) {}）？
     let has_param_arguments = params.iter().any(|p| {
-        if let Pat::Ident(binding) = &p.pat {
-            binding.id.sym.as_ref() == "arguments"
-        } else { false }
+        let mut names = Vec::new();
+        Self::extract_pat_bindings(std::slice::from_ref(&p.pat), &mut names);
+        names.iter().any(|n| n == "arguments")
     });
 
     // 2) 函数体中是否有显式的 arguments 绑定？
-    //    在 lowering 过程中由 emit_arguments_init 处理 ——
-    //    若 declare("arguments") 返回 Err，则 arguments 已被显式声明。
-    //    此处通过 scope lookup 检查是否已存在 arguments 绑定。
+    //    注意：在 emit_arguments_init 之前调用此检查。若 "arguments"
+    //    已存在于作用域树中，则它是显式声明的（var/let/function arguments）
+    //    而非隐式参数对象。
     let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
 
     self.eval_caller_has_arguments = has_param_arguments || has_explicit_arguments;
@@ -322,7 +311,7 @@ fn check_caller_arguments_context(&mut self, params: &[Param]) {
 | 索引 | 名称 | 签名 |
 |---|---|---|
 | 348 | `scope_record_create` | `(i64) → i64` |
-| 349 | `scope_record_add_binding` | `(i64, i64, i64, i64) → void` |
+| 349 | `scope_record_add_binding` | `(i64, i64, i64, i64, i64) → void` |
 | 350 | `eval_get_binding` | `(i64, i64) → i64` |
 | 351 | `eval_set_binding` | `(i64, i64, i64) → i64` |
 | 352 | `eval_has_binding` | `(i64, i64) → i64` |
@@ -367,19 +356,19 @@ struct ScopeRecord {
 }
 ```
 
-分配在宿主堆上，以 `TAG_SCOPE_RECORD` 作为 NaN-boxed 句柄暴露。宿主函数 `scope_record_free(handle)` 在 GC 时释放记录（或立即释放，若适用）。
-
+分配在宿主堆上，以 `TAG_SCOPE_RECORD` 作为 NaN-boxed 句柄暴露。
+**生命周期**：ScopeRecord 在 `perform_eval_from_caller` 入口处分配，存储在调用者的临时表中。
+当 eval 调用返回（正常或异常）时，记录会立即释放。无需 GC 参与——该记录的生命周期完全包含在单次 eval 调用内。
 ### 4.2 宿主函数实现
 
 **`scope_record_create(caller, capacity) → i64`：**
 1. 分配带有给定初容量的 `ScopeRecord`
 2. 返回 NaN-boxed 句柄
 
-**`scope_record_add_binding(caller, record, name: i64, value: i64, is_tdz: i64) → void`：**
-1. 解码 record 句柄，解码 name 字符串，解码 is_tdz 布尔值
+**`scope_record_add_binding(caller, record, name: i64, value: i64, is_tdz: i64, is_const: i64) → void`：**
+1. 解码 record 句柄，解码 name 字符串，解码 is_tdz 和 is_const 布尔值
 2. 若 `is_tdz` 为 true：`bindings.push((name, value, false, is_const))` — 未初始化
 3. 若 `is_tdz` 为 false：`bindings.push((name, value, true, is_const))` — 已初始化
-4. 若 binding 来自 `var` 声明 → `is_const = false`
 
 **`eval_get_binding(caller, record, name: i64) → i64`：**
 1. 解码记录，解码 name 字符串
@@ -397,7 +386,8 @@ struct ScopeRecord {
 3. 若找到，`is_const` 且 `initialized`：
    - 返回 `TypeError: assignment to constant '<name>'`
 4. 若找到：更新 value，设置 `initialized = true`，返回 value
-5. 若未找到且为非严格模式：添加新 binding，返回 value
+5. 若未找到且为非严格模式：写入全局对象（`$0.$global`），不在作用域记录中创建幽灵绑定。
+   这确保了赋值在 eval 调用完成后仍然存在，并匹配规范行为。
 6. 若未找到且为严格模式：返回 `ReferenceError`（赋值给未声明变量）
 
 **`eval_has_binding(caller, record, name: i64) → i64`：**
@@ -411,13 +401,13 @@ struct ScopeRecord {
 3. 若 `None`：返回 `TAG_EXCEPTION`（TypeError: super 在此上下文中不可用）
 
  **`scope_record_set_meta(caller, record, key: i64, value: i64) → void`：**
- 1. 解码 record 句柄，解码 key 字符串
- 2. 根据预定义保留键名设置字段：
-    - `"__wjsm_is_strict"` → `record.is_strict = bool(value)`
-    - `"__wjsm_has_arguments"` → `record.has_arguments_binding = bool(value)`
-    - `"__wjsm_home_object"` → `record.home_object = Some(value)`
-    - `"__wjsm_new_target"` → `record.new_target = Some(value)`
- 3. 其他键被忽略（静默无操作）
+ 1. 解码 record 句柄，将 key 转换为 u8 整数标签
+ 2. 根据整数键设置字段（无字符串分配或比较）：
+    - 0（is_strict）→ `record.is_strict = bool(value)`
+    - 1（has_arguments）→ `record.has_arguments_binding = bool(value)`
+    - 2（home_object）→ `record.home_object = Some(value)`
+    - 3（new_target）→ `record.new_target = Some(value)`
+ 3. 未知键：`debug_assert!(false, "unknown scope record meta key")`
 
 ### 4.3 Arguments 冲突检测
 
@@ -428,8 +418,11 @@ struct ScopeRecord {
 let has_arguments = scope_record.has_arguments_binding;
 
 if has_arguments {
-    // 遍历解析后的 eval AST，检测 var/function arguments 声明
-    if eval_module_declares_arguments(&module) {
+    // 复用现有的 eval_literal_binding_names 字节扫描器，
+    // 它已经捕获嵌套在块/循环/函数中的所有 var/function 声明。
+    // 将其可见性从 pub(crate) 提升为 pub。
+    let binding_names = wjsm_semantic::eval_literal_binding_names(&code);
+    if binding_names.iter().any(|n| n == "arguments") {
         let msg = "SyntaxError: declaring 'arguments' in eval code is invalid";
         set_runtime_error(caller.data(), msg.to_string());
         return value::encode_undefined();
@@ -437,9 +430,7 @@ if has_arguments {
 }
 ```
 
-`eval_module_declares_arguments()` 遍历 AST body，在每个 `ModuleItem::Stmt(Stmt::Decl(Decl::Var(..)))`、
-`ModuleItem::Stmt(Stmt::Decl(Decl::Fn(..)))` 中查找 `arguments`，检查声明名称。
-
+此方法比仅检查顶层声明的 AST 遍历更优——`eval_literal_binding_names` 通过源字节进行完整扫描，捕获 `if (true) { var arguments; }` 等嵌套声明。它与现有的预声明扫描共享逻辑，避免维护两个重复的声明提取器。
 ### 4.4 错误格式化 (`format_eval_error`)
 
 为新的错误模式添加特定于 eval 的错误消息映射：
@@ -454,7 +445,8 @@ if has_arguments {
 ### 4.5 与现有 eval 缓存的集成
 
 compiled eval 缓存键哈希目前包括 `(code, has_scope_bridge, var_writes_to_scope, data_base)`。
-这保持不变——代码是哈希的一部分，而 `has_scope_bridge` 区分了有桥和无桥的 eval。
+**新增 `SCOPE_RECORD_CACHE_VERSION: u64 = 1`** 版本标签，在哈希前追加到所有组件。
+此标签可确保从 flat-object 时代遗留的陈旧缓存条目在切换到 ScopeRecord 架构后被驱逐。
 相同的代码字符串结合不同的调用上下文作用域记录不会导致不同的编译输出；
 eval 编译是独立于调用者作用域的。正确性依赖于作用域记录在运行时正确反映调用者的绑定。
 
@@ -539,12 +531,12 @@ Flat-object 路由保留用于：
 | `crates/wjsm-semantic/src/lowerer_assignments.rs` | 更新 eval 作用域桥为使用 EvalGet/EvalSet |
 | `crates/wjsm-semantic/src/lowerer_async_eval.rs` | 为 eval 添加 `lower_super_prop` 路径；添加 `new.target` eval 路径 |
 | `crates/wjsm-semantic/src/lowerer_predeclare.rs` | 修复类预声明 TDZ（Let + declared=false） |
-| `crates/wjsm-semantic/src/scope.rs` | 添加 `visible_bindings_all()` |
-| `crates/wjsm-semantic/src/lib.rs` | 添加 `eval_scope_record`、`eval_caller_has_arguments`、`is_method` 字段；初始化 |
-| `crates/wjsm-semantic/src/lowerer_core.rs` | 设置 `is_method` 和 `eval_caller_has_arguments` |
+| `crates/wjsm-semantic/src/lib.rs` | ScopeTree 的 `visible_bindings_all()` 方法；添加 `eval_scope_record`、`eval_caller_has_arguments` 字段 |
+| `crates/wjsm-semantic/src/lowerer_core.rs` | 设置 `eval_caller_has_arguments`（arguments 上下文检测） |
+| `crates/wjsm-semantic/src/eval_scan.rs` | 将 `eval_literal_binding_names` 从 `pub(crate)` 提升为 `pub` |
 | `crates/wjsm-backend-wasm/src/compiler_core.rs` | 向 `HOST_IMPORT_NAMES` 添加 7 个导入；`builtin_func_indices` 映射 |
 | `crates/wjsm-backend-wasm/src/compiler_builtins.rs` | 为新内建指令添加 codegen |
-| `crates/wjsm-runtime/src/runtime_eval.rs` | `ScopeRecord` 结构体；7 个宿主函数实现；arguments AST 遍历；更新 `format_eval_error` |
+| `crates/wjsm-runtime/src/runtime_eval.rs` | `ScopeRecord` 结构体；7 个宿主函数实现；复用 `eval_literal_binding_names` 进行 arguments 检测；更新 `format_eval_error` |
 | `crates/wjsm-runtime/src/lib.rs` | 注册 7 个宿主函数；`TAG_SCOPE_RECORD` 在类型判断中的处理 |
 | `fixtures/happy/` | 6-8 个新 E2E 夹具 |
 | `fixtures/semantic/` | 3-4 个新 IR 快照 |
