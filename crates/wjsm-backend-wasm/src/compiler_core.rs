@@ -1360,6 +1360,8 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::PrivateGet, 316);
         builtin_func_indices.insert(Builtin::PrivateSet, 317);
         builtin_func_indices.insert(Builtin::PrivateHas, 318);
+        builtin_func_indices.insert(Builtin::ObjectGroupBy, 319);
+        builtin_func_indices.insert(Builtin::MapGroupBy, 320);
         // ── WeakRef builtins ──
         builtin_func_indices.insert(Builtin::WeakRefConstructor, 356);
         builtin_func_indices.insert(Builtin::WeakRefProtoDeref, 357);

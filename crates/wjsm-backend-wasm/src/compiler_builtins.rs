@@ -1120,7 +1120,8 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Builtin::ObjectSetPrototypeOf | Builtin::ObjectIs => {
+            Builtin::ObjectSetPrototypeOf | Builtin::ObjectIs
+            | Builtin::ObjectGroupBy | Builtin::MapGroupBy => {
                 let a = args.first().context("Object method expects 2 args")?;
                 let b = args.get(1).context("Object method expects 2 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
