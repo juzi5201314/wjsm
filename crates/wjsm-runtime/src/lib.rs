@@ -113,6 +113,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let continuation_table: Arc<Mutex<Vec<ContinuationEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>> =
         Arc::new(Mutex::new(Vec::new()));
+    let async_from_sync_iterators: Arc<Mutex<Vec<AsyncFromSyncIteratorEntry>>> =
+        Arc::new(Mutex::new(Vec::new()));
     let combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>> = Arc::new(Mutex::new(Vec::new()));
     let module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -158,6 +160,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             microtask_queue: Arc::clone(&microtask_queue),
             continuation_table: Arc::clone(&continuation_table),
             async_generator_table: Arc::clone(&async_generator_table),
+            async_from_sync_iterators: Arc::clone(&async_from_sync_iterators),
+            async_iterator_prototype: value::encode_undefined(), // set after store creation
+            async_gen_prototype: value::encode_undefined(),      // set after store creation
             combinator_contexts: Arc::clone(&combinator_contexts),
             module_namespace_cache: Arc::clone(&module_namespace_cache),
             error_table: Arc::clone(&error_table),
@@ -292,6 +297,109 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── SharedArrayBuffer + Atomics imports (indices 361-377) ──
     imports.extend(include!("host_imports/atomics.rs"));
     let instance = Instance::new(&mut store, &module, &imports)?;
+    // ── Create %AsyncIteratorPrototype% and AsyncGenerator.prototype ──
+    let memory = instance
+        .get_export(&mut store, "memory")
+        .and_then(|e| e.into_memory())
+        .expect("memory export");
+    let heap_ptr_global = instance
+        .get_export(&mut store, "__heap_ptr")
+        .and_then(|e| e.into_global())
+        .expect("__heap_ptr export");
+    let obj_table_ptr_global = instance
+        .get_export(&mut store, "__obj_table_ptr")
+        .and_then(|e| e.into_global())
+        .expect("__obj_table_ptr export");
+    let obj_table_count_global = instance
+        .get_export(&mut store, "__obj_table_count")
+        .and_then(|e| e.into_global())
+        .expect("__obj_table_count export");
+
+    // 创建 %AsyncIteratorPrototype%
+    let async_iterator_proto = alloc_host_object_from_store(
+        &mut store,
+        &memory,
+        &heap_ptr_global,
+        &obj_table_ptr_global,
+        &obj_table_count_global,
+        2,
+    );
+
+    // 创建 AsyncIteratorProtoSymbolAsyncIterator native callable
+    let async_iterator_symbol_async_iterator = {
+        let mut table = store
+            .data()
+            .native_callables
+            .lock()
+            .expect("native callable table mutex");
+        let handle = table.len() as u32;
+        table.push(NativeCallable::AsyncIteratorProtoSymbolAsyncIterator);
+        value::encode_native_callable_idx(handle)
+    };
+
+    // 设置 %AsyncIteratorPrototype%[Symbol.asyncIterator]
+    let _ = define_host_data_property_from_store(
+        &mut store,
+        &memory,
+        &heap_ptr_global,
+        &obj_table_ptr_global,
+        async_iterator_proto,
+        "Symbol.asyncIterator",
+        async_iterator_symbol_async_iterator,
+    );
+
+    // 设置 %AsyncIteratorPrototype%[Symbol.toStringTag] = "AsyncIterator"
+    let async_iterator_tag =
+        store_runtime_string_in_state(store.data(), "AsyncIterator".to_string());
+    let _ = define_host_data_property_from_store(
+        &mut store,
+        &memory,
+        &heap_ptr_global,
+        &obj_table_ptr_global,
+        async_iterator_proto,
+        "Symbol.toStringTag",
+        async_iterator_tag,
+    );
+
+    // 创建 AsyncGenerator.prototype
+    let async_gen_proto = alloc_host_object_from_store(
+        &mut store,
+        &memory,
+        &heap_ptr_global,
+        &obj_table_ptr_global,
+        &obj_table_count_global,
+        2,
+    );
+
+    // 设置 AsyncGenerator.prototype.[[Prototype]] = %AsyncIteratorPrototype%
+    let async_gen_handle = value::decode_object_handle(async_gen_proto);
+    let async_iterator_handle = value::decode_object_handle(async_iterator_proto);
+    let obj_ptr = resolve_handle_idx_from_store(
+        &mut store,
+        &memory,
+        &obj_table_ptr_global,
+        async_gen_handle as usize,
+    )
+    .expect("async_gen_proto object ptr");
+    let data = memory.data_mut(&mut store);
+    data[obj_ptr..obj_ptr + 4].copy_from_slice(&async_iterator_handle.to_le_bytes());
+
+    // 设置 AsyncGenerator.prototype[Symbol.toStringTag] = "AsyncGenerator"
+    let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
+    let _ = define_host_data_property_from_store(
+        &mut store,
+        &memory,
+        &heap_ptr_global,
+        &obj_table_ptr_global,
+        async_gen_proto,
+        "Symbol.toStringTag",
+        async_gen_tag,
+    );
+
+    // 设置 RuntimeState 中的原型字段
+    store.data_mut().async_iterator_prototype = async_iterator_proto;
+    store.data_mut().async_gen_prototype = async_gen_proto;
+
 
     // ── Run main ──
     let main = instance.get_typed_func::<(), i64>(&mut store, "main")?;
@@ -546,6 +654,12 @@ struct RuntimeState {
     continuation_table: Arc<Mutex<Vec<ContinuationEntry>>>,
     /// AsyncGenerator 侧表：存储异步生成器状态
     async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>>,
+    /// async-from-sync iterator 侧表
+    async_from_sync_iterators: Arc<Mutex<Vec<AsyncFromSyncIteratorEntry>>>,
+    /// %AsyncIteratorPrototype% 对象
+    async_iterator_prototype: i64,
+    /// AsyncGenerator.prototype 对象
+    async_gen_prototype: i64,
     /// Promise combinator 侧表：pending 元素的 reaction 通过索引回写共享结果。
     combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>>,
     /// 模块命名空间对象缓存：module_id → namespace object (i64 NaN-boxed)
@@ -736,6 +850,20 @@ enum NativeCallable {
     },
     AsyncGeneratorIdentity {
         generator: i64,
+    },
+    /// %AsyncIteratorPrototype%[Symbol.asyncIterator]() → return this
+    AsyncIteratorProtoSymbolAsyncIterator,
+    /// AsyncFromSyncIterator.prototype.next()
+    AsyncFromSyncNext {
+        handle: u32,
+    },
+    /// AsyncFromSyncIterator.prototype.return()
+    AsyncFromSyncReturn {
+        handle: u32,
+    },
+    /// AsyncFromSyncIterator.prototype.throw()
+    AsyncFromSyncThrow {
+        handle: u32,
     },
     MapSetMethod {
         kind: MapSetMethodKind,
@@ -1124,6 +1252,14 @@ enum AsyncGeneratorCompletionType {
     Next,
     Return,
     Throw,
+}
+/// async-from-sync iterator 内部状态
+#[derive(Clone, Debug)]
+struct AsyncFromSyncIteratorEntry {
+    /// 同步迭代器句柄 (TAG_ITERATOR handle)
+    sync_iterator: i64,
+    /// 同步迭代器是否已完成
+    sync_done: bool,
 }
 
 #[cfg(test)]

@@ -697,7 +697,7 @@ impl Lowerer {
             block,
             Instruction::CallBuiltin {
                 dest: Some(iter_handle),
-                builtin: Builtin::IteratorFrom,
+                builtin: Builtin::AsyncIteratorFrom,
                 args: vec![iterable],
             },
         );
@@ -742,26 +742,8 @@ impl Lowerer {
             },
         );
 
-        let next_result = self.alloc_value();
-        {
-            let undef_const = self.module.add_constant(Constant::Undefined);
-            let undef_val = self.alloc_value();
-            self.current_function.append_instruction(
-                header,
-                Instruction::Const {
-                    dest: undef_val,
-                    constant: undef_const,
-                },
-            );
-            self.current_function.append_instruction(
-                header,
-                Instruction::CallBuiltin {
-                    dest: Some(next_result),
-                    builtin: Builtin::PromiseResolveStatic,
-                    args: vec![undef_val, next_call_result],
-                },
-            );
-        }
+        // async_iterator.next() already returns a Promise, no need for Promise.resolve()
+        let next_result = next_call_result;
 
         let next_state = self.async_state_counter;
         self.async_state_counter += 1;

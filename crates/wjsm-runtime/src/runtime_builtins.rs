@@ -1502,6 +1502,11 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             Some(value::encode_f64(start.elapsed().as_millis() as f64))
         }
         NativeCallable::AtomicsGlobal => Some(alloc_host_object_from_caller(caller, 4)),
+        // ── Async iterator methods (stub: return undefined) ──
+        NativeCallable::AsyncIteratorProtoSymbolAsyncIterator => Some(this_val),
+        NativeCallable::AsyncFromSyncNext { .. } => Some(value::encode_undefined()),
+        NativeCallable::AsyncFromSyncReturn { .. } => Some(value::encode_undefined()),
+        NativeCallable::AsyncFromSyncThrow { .. } => Some(value::encode_undefined()),
     }
 }
 pub(crate) fn weakref_deref_impl(
