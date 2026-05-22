@@ -723,6 +723,12 @@ impl Compiler {
             // ── ArrayBuffer single-arg builtins ──
             | Builtin::ArrayBufferConstructor
             | Builtin::ArrayBufferProtoByteLength
+            // ── SharedArrayBuffer builtins ──
+            | Builtin::SharedArrayBufferConstructor
+            | Builtin::SharedArrayBufferProtoByteLength
+            | Builtin::SharedArrayBufferSpecies
+            // ── Atomics single-arg builtins ──
+            | Builtin::AtomicsIsLockFree
             // ── TypedArray prototype single-arg builtins ──
             | Builtin::TypedArrayProtoLength
             | Builtin::TypedArrayProtoByteLength
@@ -761,6 +767,22 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── Atomics 4-arg builtins: (i64, i64, i64, i64) -> i64 ──
+            Builtin::AtomicsCompareExchange | Builtin::AtomicsWait => {
+                for arg in args {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
             // ── Map/Set multi-arg builtins ──
             Builtin::MapProtoSet
             | Builtin::MapProtoGet
@@ -778,6 +800,19 @@ impl Compiler {
             | Builtin::WeakSetProtoDelete
             // ── ArrayBuffer multi-arg builtins ──
             | Builtin::ArrayBufferProtoSlice
+            // ── SharedArrayBuffer multi-arg builtins ──
+            | Builtin::SharedArrayBufferProtoSlice
+            // ── Atomics multi-arg builtins ──
+            | Builtin::AtomicsLoad
+            | Builtin::AtomicsStore
+            | Builtin::AtomicsAdd
+            | Builtin::AtomicsSub
+            | Builtin::AtomicsAnd
+            | Builtin::AtomicsOr
+            | Builtin::AtomicsXor
+            | Builtin::AtomicsExchange
+            | Builtin::AtomicsNotify
+            | Builtin::AtomicsWaitAsync
             // ── DataView constructor ──
             | Builtin::DataViewConstructor
             // ── DataView get methods ──

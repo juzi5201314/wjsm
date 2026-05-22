@@ -188,10 +188,16 @@
    需要新的 GC 集成（弱引用追踪） + runtime 数据结构。
    价值：内存管理、缓存场景、test262 覆盖
 
-5. **SharedArrayBuffer + Atomics**
-   完全未实现。依赖 TypedArray 完善后开展。
-   `SharedArrayBuffer` 需要 wasm 共享内存支持；Atomics 需要 wait/notify 原语。
-   价值：多线程（Worker）场景的前置条件
+5. **SharedArrayBuffer + Atomics** (🟡 进行中)
+   IR Builtin 变体注册完成，WASM 后端导入签名 + 编译支持完成。
+   Runtime 数据结构：SharedArrayBufferEntry、SharedRuntimeState、AgentState、Waiter。
+   SAB 构造器：alloc_shared_arraybuffer + host function（创建+byteLength+slice）。
+   Atomics 操作：load/store/add/sub/and/or/xor/exchange/compareExchange/isLockFree。
+   wait/notify/waitAsync：简版实现（非 agent 模式下返回timed-out）。
+   TypedArray is_shared dispatch：ta_resolve 返回 is_shared，sab_read/sab_write 分支。
+   `$262.agent` 对象：start/broadcast/receiveBroadcast/getReport/sleep/monotonicNow。
+   test262 features: "SharedArrayBuffer", "Atomics", "Atomics.waitAsync" 已注册。
+   🟡 状态：运行时需要 shared_state 创建 SAB（非 agent 模式使用会报错）。
 
 ### P2 — 低优先级（边界情况）
 

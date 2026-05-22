@@ -15,7 +15,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 361] = [
+const HOST_IMPORT_NAMES: [&str; 378] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -391,6 +391,25 @@ const HOST_IMPORT_NAMES: [&str; 361] = [
     "finalization_registry_constructor", // 358
     "finalization_registry_proto_register", // 359
     "finalization_registry_proto_unregister", // 360
+    // ── SharedArrayBuffer imports ──
+    "sharedarraybuffer_constructor",           // 361
+    "sharedarraybuffer_proto_byte_length",      // 362
+    "sharedarraybuffer_proto_slice",            // 363
+    "sharedarraybuffer_proto_species",          // 364
+    // ── Atomics imports ──
+    "atomics_load",                             // 365
+    "atomics_store",                            // 366
+    "atomics_add",                              // 367
+    "atomics_sub",                              // 368
+    "atomics_and",                              // 369
+    "atomics_or",                               // 370
+    "atomics_xor",                              // 371
+    "atomics_exchange",                         // 372
+    "atomics_compare_exchange",                 // 373
+    "atomics_is_lock_free",                     // 374
+    "atomics_wait",                             // 375
+    "atomics_notify",                           // 376
+    "atomics_wait_async",                       // 377
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -399,7 +418,7 @@ const HOST_IMPORT_NAMES: [&str; 361] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        361,
+        378,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1282,6 +1301,25 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ArrayBufferConstructor => ("ArrayBuffer", 1),
         Builtin::ArrayBufferProtoByteLength => ("ArrayBuffer.prototype.byteLength", 1),
         Builtin::ArrayBufferProtoSlice => ("ArrayBuffer.prototype.slice", 3),
+        // ── SharedArrayBuffer builtins ──
+        Builtin::SharedArrayBufferConstructor => ("sharedarraybuffer_constructor", 1),
+        Builtin::SharedArrayBufferProtoByteLength => ("sharedarraybuffer_proto_byte_length", 1),
+        Builtin::SharedArrayBufferProtoSlice => ("sharedarraybuffer_proto_slice", 3),
+        Builtin::SharedArrayBufferSpecies => ("sharedarraybuffer_species", 1),
+        // ── Atomics builtins ──
+        Builtin::AtomicsLoad => ("atomics_load", 2),
+        Builtin::AtomicsStore => ("atomics_store", 3),
+        Builtin::AtomicsAdd => ("atomics_add", 3),
+        Builtin::AtomicsSub => ("atomics_sub", 3),
+        Builtin::AtomicsAnd => ("atomics_and", 3),
+        Builtin::AtomicsOr => ("atomics_or", 3),
+        Builtin::AtomicsXor => ("atomics_xor", 3),
+        Builtin::AtomicsExchange => ("atomics_exchange", 3),
+        Builtin::AtomicsCompareExchange => ("atomics_compare_exchange", 4),
+        Builtin::AtomicsIsLockFree => ("atomics_is_lock_free", 1),
+        Builtin::AtomicsWait => ("atomics_wait", 4),
+        Builtin::AtomicsNotify => ("atomics_notify", 3),
+        Builtin::AtomicsWaitAsync => ("atomics_wait_async", 3),
         // ── DataView builtins ──
         Builtin::DataViewConstructor => ("DataView", 3),
         Builtin::DataViewProtoGetFloat64 => ("DataView.prototype.getFloat64", 2),

@@ -1,10 +1,10 @@
 {
     // ── TypedArray 辅助函数 ─────────────────────────────────────────
-    /// 解析 TypedArray 的 this_val，返回 (buffer_handle, byte_offset, length, element_size, element_kind)
+    /// 解析 TypedArray 的 this_val，返回 (buffer_handle, byte_offset, length, element_size, element_kind, is_shared)
     fn ta_resolve(
         caller: &mut Caller<'_, RuntimeState>,
         this_val: i64,
-    ) -> Option<(usize, usize, u32, u8, u8)> {
+    ) -> Option<(usize, usize, u32, u8, u8, bool)> {
         if !value::is_object(this_val) {
             return None;
         }
@@ -13,7 +13,7 @@
         let handle = value::decode_f64(h) as usize;
         let table = caller.data().typedarray_table.lock().ok()?;
         let entry = table.get(handle)?;
-        Some((entry.buffer_handle as usize, entry.byte_offset as usize, entry.length, entry.element_size, entry.element_kind))
+        Some((entry.buffer_handle as usize, entry.byte_offset as usize, entry.length, entry.element_size, entry.element_kind, entry.is_shared))
     }
 
     /// 读取 TypedArray 第 index 个元素，返回 NaN-boxed f64 值。
@@ -109,6 +109,79 @@
         }
         Some(())
     }
+    /// 从 SharedArrayBuffer 读取 TypedArray 第 index 个元素
+    fn sab_read(
+        caller: &mut Caller<'_, RuntimeState>,
+        buf_handle: usize,
+        byte_offset: usize,
+        elem_size: u8,
+        element_kind: u8,
+        index: u32,
+    ) -> Option<i64> {
+        let shared = caller.data().shared_state.as_ref()?;
+        let sab_table = shared.sab_table.lock().ok()?;
+        let entry = sab_table.get(buf_handle)?;
+        let data = entry.data.read().ok()?;
+        let off = byte_offset + (index as usize) * (elem_size as usize);
+        if off + (elem_size as usize) > data.len() {
+            return None;
+        }
+        let val = match (elem_size, element_kind) {
+            (1, 0) => data[off] as i8 as f64,
+            (1, 1) | (1, 2) => data[off] as f64,
+            (2, 0) => i16::from_le_bytes([data[off], data[off + 1]]) as f64,
+            (2, 1) => u16::from_le_bytes([data[off], data[off + 1]]) as f64,
+            (4, 0) => i32::from_le_bytes([
+                data[off], data[off + 1], data[off + 2], data[off + 3],
+            ]) as f64,
+            (4, 1) => u32::from_le_bytes([
+                data[off], data[off + 1], data[off + 2], data[off + 3],
+            ]) as f64,
+            (4, 3) => f32::from_le_bytes([
+                data[off], data[off + 1], data[off + 2], data[off + 3],
+            ]) as f64,
+            (8, 3) => f64::from_le_bytes([
+                data[off], data[off + 1], data[off + 2], data[off + 3],
+                data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+            ]),
+            _ => return None,
+        };
+        Some(value::encode_f64(val))
+    }
+
+    /// 写入 SharedArrayBuffer TypedArray 第 index 个元素
+    fn sab_write(
+        caller: &mut Caller<'_, RuntimeState>,
+        buf_handle: usize,
+        byte_offset: usize,
+        elem_size: u8,
+        element_kind: u8,
+        index: u32,
+        val: i64,
+    ) -> Option<()> {
+        let f_raw = value::decode_f64(val);
+        let shared = caller.data().shared_state.as_ref()?;
+        let sab_table = shared.sab_table.lock().ok()?;
+        let entry = sab_table.get(buf_handle)?;
+        let mut data = entry.data.write().ok()?;
+        let off = byte_offset + (index as usize) * (elem_size as usize);
+        if off + (elem_size as usize) > data.len() {
+            return None;
+        }
+        match (elem_size, element_kind) {
+            (1, 0) => { data[off] = f_raw as i8 as u8; }
+            (1, 1) => { data[off] = f_raw as u8; }
+            (1, 2) => { data[off] = f_raw.round().clamp(0.0, 255.0) as u8; }
+            (2, 0) => { data[off..off + 2].copy_from_slice(&(f_raw as i16).to_le_bytes()); }
+            (2, 1) => { data[off..off + 2].copy_from_slice(&(f_raw as u16).to_le_bytes()); }
+            (4, 0) => { data[off..off + 4].copy_from_slice(&(f_raw as i32).to_le_bytes()); }
+            (4, 1) => { data[off..off + 4].copy_from_slice(&(f_raw as u32).to_le_bytes()); }
+            (4, 3) => { data[off..off + 4].copy_from_slice(&(f_raw as f32).to_le_bytes()); }
+            (8, 3) => { data[off..off + 8].copy_from_slice(&f_raw.to_le_bytes()); }
+            _ => return None,
+        }
+        Some(())
+    }
 
     // ── typedarray_proto_fill (Type 17, 4-arg: this, value, start, end) ──
     let typedarray_proto_fill_fn = Func::wrap(
@@ -119,9 +192,9 @@
          start_raw: i64,
          end_raw: i64|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return this_val,
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return this_val,
             };
             let start = if value::is_undefined(start_raw) {
                 0u32
@@ -144,7 +217,7 @@
                 }
             };
             for i in start..end {
-                ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i, value);
+                if is_shared { sab_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i, value) } else { ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i, value) };
             }
             this_val
         },
@@ -154,17 +227,17 @@
     let typedarray_proto_reverse_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return this_val,
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return this_val,
             };
             for i in 0..length / 2 {
-                let a = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let a = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
-                let b = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, length - 1 - i)
+                let b = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, length - 1 - i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, length - 1 - i) }
                     .unwrap_or(value::encode_undefined());
-                ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i, b);
-                ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, length - 1 - i, a);
+                if is_shared { sab_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i, b) } else { ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i, b) };
+                if is_shared { sab_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, length - 1 - i, a) } else { ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, length - 1 - i, a) };
             }
             this_val
         },
@@ -174,9 +247,9 @@
     let typedarray_proto_index_of_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, search_element: i64, from_index: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_f64(-1.0),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_f64(-1.0),
             };
             let from_idx = if value::is_undefined(from_index) {
                 0i32
@@ -189,7 +262,7 @@
                 }
             };
             for i in from_idx as u32..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 if same_value_zero(elem, search_element) {
                     return value::encode_f64(i as f64);
@@ -203,9 +276,9 @@
     let typedarray_proto_last_index_of_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, search_element: i64, from_index: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_f64(-1.0),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_f64(-1.0),
             };
             let from_idx = if value::is_undefined(from_index) {
                 (length as i32) - 1
@@ -219,7 +292,7 @@
             };
             let end = if from_idx < 0 { 0 } else { from_idx as u32 + 1 };
             for i in (0..end).rev() {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 if same_value_zero(elem, search_element) {
                     return value::encode_f64(i as f64);
@@ -233,9 +306,9 @@
     let typedarray_proto_includes_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, search_element: i64, from_index: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_bool(false),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_bool(false),
             };
             let from_idx = if value::is_undefined(from_index) {
                 0i32
@@ -248,7 +321,7 @@
                 }
             };
             for i in from_idx as u32..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 if same_value_zero(elem, search_element) {
                     return value::encode_bool(true);
@@ -262,9 +335,9 @@
     let typedarray_proto_join_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, separator: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return store_runtime_string(&caller, String::new()),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return store_runtime_string(&caller, String::new()),
             };
             let sep = if value::is_undefined(separator) || value::is_null(separator) {
                 ",".to_string()
@@ -273,7 +346,7 @@
             };
             let mut parts = Vec::new();
             for i in 0..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 parts.push(render_value(&mut caller, elem).unwrap_or_else(|_| "".to_string()));
             }
@@ -285,13 +358,13 @@
     let typedarray_proto_to_string_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return store_runtime_string(&caller, String::new()),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return store_runtime_string(&caller, String::new()),
             };
             let mut parts = Vec::new();
             for i in 0..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 parts.push(render_value(&mut caller, elem).unwrap_or_else(|_| "".to_string()));
             }
@@ -304,9 +377,9 @@
     let typedarray_proto_copy_within_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, target_val: i64, start_val: i64, end_val: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return this_val,
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return this_val,
             };
             let target = {
                 let f = value::decode_f64(target_val);
@@ -333,15 +406,15 @@
             }
             if target < start {
                 for i in 0..count {
-                    let elem =                        ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, start + i)
+                    let elem =                        if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, start + i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, start + i) }
                         .unwrap_or(value::encode_undefined());
-                    ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, target + i, elem);
+                    if is_shared { sab_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, target + i, elem) } else { ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, target + i, elem) };
                 }
             } else {
                 for i in (0..count).rev() {
-                    let elem =                        ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, start + i)
+                    let elem =                        if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, start + i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, start + i) }
                         .unwrap_or(value::encode_undefined());
-                    ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, target + i, elem);
+                    if is_shared { sab_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, target + i, elem) } else { ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, target + i, elem) };
                 }
             }
             this_val
@@ -352,9 +425,9 @@
     let typedarray_proto_at_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_undefined(),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_undefined(),
             };
             let idx = {
                 let f = value::decode_f64(index);
@@ -370,7 +443,7 @@
             if idx < 0 || idx >= length as i32 {
                 return value::encode_undefined();
             }
-            ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, idx as u32)
+            if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, idx as u32) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, idx as u32) }
                 .unwrap_or(value::encode_undefined())
         },
     );
@@ -384,9 +457,9 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_undefined(),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_undefined(),
             };
             let cb = read_shadow_arg(&mut caller, args_base, 0);
             if !value::is_callable(cb) {
@@ -398,7 +471,7 @@
                 value::encode_undefined()
             };
             for i in 0..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
                 if call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]).is_err() {
@@ -418,9 +491,9 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_undefined(),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_undefined(),
             };
             let cb = read_shadow_arg(&mut caller, args_base, 0);
             if !value::is_callable(cb) {
@@ -437,7 +510,7 @@
                 return value::encode_undefined();
             };
             for i in 0..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
                 let mapped = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
@@ -460,9 +533,9 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_undefined(),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_undefined(),
             };
             let cb = read_shadow_arg(&mut caller, args_base, 0);
             if !value::is_callable(cb) {
@@ -475,7 +548,7 @@
             };
             let mut results = Vec::new();
             for i in 0..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
                 let keep = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
@@ -507,9 +580,9 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_undefined(),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_undefined(),
             };
             let cb = read_shadow_arg(&mut caller, args_base, 0);
             if !value::is_callable(cb) {
@@ -527,12 +600,12 @@
             let mut acc = if has_init {
                 init
             } else {
-                ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, 0)
+                if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, 0) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, 0) }
                     .unwrap_or(value::encode_undefined())
             };
             let start = if has_init { 0 } else { 1 };
             for i in start..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
                 acc = match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[acc, elem, idx_val, this_val]) {
@@ -553,9 +626,9 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_undefined(),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_undefined(),
             };
             let cb = read_shadow_arg(&mut caller, args_base, 0);
             if !value::is_callable(cb) {
@@ -573,12 +646,12 @@
             let mut acc = if has_init {
                 init
             } else {
-                ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, length - 1)
+                if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, length - 1) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, length - 1) }
                     .unwrap_or(value::encode_undefined())
             };
             let end = if has_init { length as i32 - 1 } else { length as i32 - 2 };
             for i in (0..=end as u32).rev() {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
                 acc = match call_wasm_callback(&mut caller, cb, value::encode_undefined(), &[acc, elem, idx_val, this_val]) {
@@ -599,9 +672,9 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_undefined(),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_undefined(),
             };
             let cb = read_shadow_arg(&mut caller, args_base, 0);
             if !value::is_callable(cb) {
@@ -613,7 +686,7 @@
                 value::encode_undefined()
             };
             for i in 0..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
                 let found = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
@@ -637,9 +710,9 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_f64(-1.0),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_f64(-1.0),
             };
             let cb = read_shadow_arg(&mut caller, args_base, 0);
             if !value::is_callable(cb) {
@@ -651,7 +724,7 @@
                 value::encode_undefined()
             };
             for i in 0..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
                 let found = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
@@ -675,9 +748,9 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_bool(false),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_bool(false),
             };
             let cb = read_shadow_arg(&mut caller, args_base, 0);
             if !value::is_callable(cb) {
@@ -689,7 +762,7 @@
                 value::encode_undefined()
             };
             for i in 0..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
                 let ok = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
@@ -713,9 +786,9 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_bool(true),
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_bool(true),
             };
             let cb = read_shadow_arg(&mut caller, args_base, 0);
             if !value::is_callable(cb) {
@@ -727,7 +800,7 @@
                 value::encode_undefined()
             };
             for i in 0..length {
-                let elem = ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i)
+                let elem = if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }
                     .unwrap_or(value::encode_undefined());
                 let idx_val = value::encode_f64(i as f64);
                 let ok = match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]) {
@@ -751,16 +824,16 @@
          args_base: i32,
          args_count: i32|
          -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return this_val,
+            let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return this_val,
             };
             if length <= 1 {
                 return this_val;
             }
             // 将所有元素读到 Vec
             let mut elems: Vec<i64> = (0..length)
-                .map(|i| ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i).unwrap_or(value::encode_undefined()))
+                .map(|i| if is_shared { sab_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) } else { ta_read(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i) }.unwrap_or(value::encode_undefined()))
                 .collect();
             if args_count > 0 && value::is_callable(read_shadow_arg(&mut caller, args_base, 0)) {
                 let cmp = read_shadow_arg(&mut caller, args_base, 0);
@@ -781,7 +854,7 @@
             }
             // 写回
             for (i, &elem) in elems.iter().enumerate() {
-                ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i as u32, elem);
+                if is_shared { sab_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i as u32, elem) } else { ta_write(&mut caller, buf_handle, byte_offset, elem_size, element_kind, i as u32, elem) };
             }
             this_val
         },
@@ -791,9 +864,9 @@
     let typedarray_proto_entries_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, _element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_undefined(),
+            let (buf_handle, byte_offset, length, elem_size, _element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_undefined(),
             };
             let handle;
             {
@@ -816,9 +889,9 @@
     let typedarray_proto_keys_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, _element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_undefined(),
+            let (buf_handle, byte_offset, length, elem_size, _element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_undefined(),
             };
             let handle;
             {
@@ -841,9 +914,9 @@
     let typedarray_proto_values_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let (buf_handle, byte_offset, length, elem_size, _element_kind) = match ta_resolve(&mut caller, this_val) {
-                Some(v) => v,
-                None => return value::encode_undefined(),
+            let (buf_handle, byte_offset, length, elem_size, _element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
+            Some(v) => v,
+            None => return value::encode_undefined(),
             };
             let handle;
             {

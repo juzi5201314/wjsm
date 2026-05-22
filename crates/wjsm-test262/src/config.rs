@@ -120,6 +120,10 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     // Weak references
     "WeakRef",
     "FinalizationRegistry",
+    // ── SharedArrayBuffer + Atomics ──
+    "SharedArrayBuffer",
+    "Atomics",
+    "Atomics.waitAsync",
 ];
 
 /// 需要忽略的 flags（当前 wjsm 不支持）。

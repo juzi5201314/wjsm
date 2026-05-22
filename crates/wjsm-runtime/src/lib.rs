@@ -7,7 +7,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 use swc_core::ecma::ast as swc_ast;
 use wasmtime::*;
@@ -171,6 +172,13 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             arraybuffer_table: Arc::clone(&arraybuffer_table),
             dataview_table: Arc::clone(&dataview_table),
             typedarray_table: Arc::clone(&typedarray_table),
+            shared_state: Some(Arc::new(SharedRuntimeState {
+                sab_table: Arc::new(Mutex::new(Vec::new())),
+                agent_state: Arc::new(AgentState {
+                    reports: Arc::new(Mutex::new(Vec::new())),
+                    waiters: Arc::new(Mutex::new(HashMap::new())),
+                }),
+            })),
             non_extensible_handles: Arc::clone(&non_extensible_handles),
             scope_records: HashMap::new(),
             scope_record_next_handle: 0,
@@ -179,7 +187,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     );
 
     // ── Import 0: console_log(i64) → () ─────────────────────────────────
-    let mut imports: Vec<Extern> = Vec::with_capacity(355);
+    let mut imports: Vec<Extern> = Vec::with_capacity(378);
     imports.extend(include!("host_imports/core.rs"));
     imports.extend(include!("host_imports/timers_arrays.rs"));
     imports.extend(include!("host_imports/array_object.rs"));
@@ -281,6 +289,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     imports.push(scope_record_destroy_fn.into());
+    // ── SharedArrayBuffer + Atomics imports (indices 361-377) ──
+    imports.extend(include!("host_imports/atomics.rs"));
     let instance = Instance::new(&mut store, &module, &imports)?;
 
     // ── Run main ──
@@ -564,6 +574,9 @@ struct RuntimeState {
     dataview_table: Arc<Mutex<Vec<DataViewEntry>>>,
     /// TypedArray 侧表：存储 TypedArray 的 buffer 引用、偏移量和长度
     typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>>,
+    /// Optional shared state for cross-agent coordination.
+    /// None in normal (non-agent) execution.
+    shared_state: Option<Arc<SharedRuntimeState>>,
     /// 被 preventExtensions 标记为不可扩展对象的 handle 集合（使用完整的 NaN-boxed 值作为 key）
     non_extensible_handles: Arc<Mutex<HashSet<u64>>>,
     /// Temporary ScopeRecord handles for active eval calls.
@@ -642,6 +655,27 @@ struct ArrayBufferEntry {
 }
 
 #[derive(Clone, Debug)]
+struct SharedArrayBufferEntry {
+    data: Arc<RwLock<Vec<u8>>>,
+    byte_length: u64,
+}
+
+struct SharedRuntimeState {
+    sab_table: Arc<Mutex<Vec<SharedArrayBufferEntry>>>,
+    agent_state: Arc<AgentState>,
+}
+
+struct AgentState {
+    reports: Arc<Mutex<Vec<String>>>,
+    waiters: Arc<Mutex<HashMap<(u32, u32), Vec<Waiter>>>>,
+}
+
+struct Waiter {
+    condvar: Arc<Condvar>,
+    notified: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Debug)]
 struct DataViewEntry {
     buffer_handle: u32,
     byte_offset: u32,
@@ -657,6 +691,7 @@ struct TypedArrayEntry {
     element_size: u8,
     /// 0=Int, 1=Uint, 2=Clamped, 3=Float
     element_kind: u8,
+    is_shared: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -752,6 +787,17 @@ enum NativeCallable {
     /// GcCollect: trigger mark-sweep GC collection
     GcCollect,
     StubGlobal(()),
+    // ── SharedArrayBuffer builtins ──
+    SharedArrayBufferConstructor,
+    // ── Atomics builtins ──
+    AtomicsGlobal,
+    // ── Agent harness ──
+    AgentStart,
+    AgentBroadcast,
+    AgentReceiveBroadcast,
+    AgentGetReport,
+    AgentSleep,
+    AgentMonotonicNow,
 }
 
 #[derive(Clone, Copy)]

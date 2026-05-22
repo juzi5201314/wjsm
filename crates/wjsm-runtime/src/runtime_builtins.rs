@@ -1463,6 +1463,40 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             trigger_gc(caller);
             Some(value::encode_undefined())
         }
+        NativeCallable::SharedArrayBufferConstructor => Some(value::encode_undefined()),
+        // ── Agent harness ──
+        NativeCallable::AgentStart => {
+            // Simplified: no-op for now (would parse script and spawn thread)
+            Some(value::encode_undefined())
+        }
+        NativeCallable::AgentBroadcast => {
+            Some(value::encode_undefined())
+        }
+        NativeCallable::AgentReceiveBroadcast => {
+            Some(value::encode_undefined())
+        }
+        NativeCallable::AgentGetReport => {
+            let shared = match caller.data().shared_state.clone() {
+                Some(s) => s,
+                None => return Some(value::encode_undefined()),
+            };
+            let report = shared.agent_state.reports.lock().unwrap().pop();
+            match report {
+                Some(r) => Some(store_runtime_string(caller, r)),
+                None => Some(value::encode_null()),
+            }
+        }
+        NativeCallable::AgentSleep => {
+            let ms = args.first().copied().map(value::decode_f64).unwrap_or(0.0) as u64;
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            Some(value::encode_undefined())
+        }
+        NativeCallable::AgentMonotonicNow => {
+            static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+            let start = START.get_or_init(std::time::Instant::now);
+            Some(value::encode_f64(start.elapsed().as_millis() as f64))
+        }
+        NativeCallable::AtomicsGlobal => Some(alloc_host_object_from_caller(caller, 4)),
     }
 }
 /// Trigger a mark-sweep GC cycle.
