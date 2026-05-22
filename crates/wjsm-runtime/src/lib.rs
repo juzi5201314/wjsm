@@ -296,6 +296,122 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     imports.push(scope_record_destroy_fn.into());
     // ── SharedArrayBuffer + Atomics imports (indices 361-377) ──
     imports.extend(include!("host_imports/atomics.rs"));
+    // ── Import 378: async_iterator_from(i64) -> i64 ────────────────────────
+    let async_iterator_from_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, iterable: i64| -> i64 {
+            let Some(ptr) = resolve_handle(&mut caller, iterable) else {
+                return value::encode_undefined();
+            };
+
+            // 尝试 @@asyncIterator
+            if let Some(method) =
+                read_object_property_by_name(&mut caller, ptr, "Symbol.asyncIterator")
+            {
+                if value::is_callable(method) {
+                    if let Ok(iterator) =
+                        call_wasm_callback(&mut caller, method, iterable, &[])
+                    {
+                        if value::is_object(iterator) {
+                            if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
+                                let next =
+                                    read_object_property_by_name(&mut caller, iter_ptr, "next")
+                                        .filter(|n| value::is_callable(*n));
+                                if let Some(next_fn) = next {
+                                    let return_method =
+                                        read_object_property_by_name(
+                                            &mut caller,
+                                            iter_ptr,
+                                            "return",
+                                        )
+                                        .filter(|c| value::is_callable(*c));
+                                    let mut iters = caller
+                                        .data()
+                                        .iterators
+                                        .lock()
+                                        .expect("iterators mutex");
+                                    let handle = iters.len() as u32;
+                                    iters.push(IteratorState::ObjectIter {
+                                        next: next_fn,
+                                        return_method,
+                                        current_value: value::encode_undefined(),
+                                        has_current: false,
+                                        done: false,
+                                    });
+                                    return value::encode_handle(
+                                        value::TAG_ITERATOR,
+                                        handle,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                } else if !value::is_undefined(method) && !value::is_null(method) {
+                    // C4: @@asyncIterator 存在但不可调用 → TypeError（ES §7.3.10）
+                    return create_error_object(
+                        &mut caller,
+                        "TypeError",
+                        value::encode_undefined(),
+                    );
+                }
+            }
+
+            // 回退到 @@iterator
+            if let Some(method) =
+                read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
+            {
+                if value::is_callable(method) {
+                    if let Ok(sync_iter) =
+                        call_wasm_callback(&mut caller, method, iterable, &[])
+                    {
+                        if value::is_object(sync_iter) {
+                            if let Some(sync_ptr) = resolve_handle(&mut caller, sync_iter) {
+                                let next_fn =
+                                    read_object_property_by_name(&mut caller, sync_ptr, "next")
+                                        .filter(|n| value::is_callable(*n));
+                                if let Some(next_fn) = next_fn {
+                                    let return_method =
+                                        read_object_property_by_name(
+                                            &mut caller,
+                                            sync_ptr,
+                                            "return",
+                                        )
+                                        .filter(|c| value::is_callable(*c));
+                                    let sync_iter_handle = {
+                                        let mut iters = caller
+                                            .data()
+                                            .iterators
+                                            .lock()
+                                            .expect("iterators mutex");
+                                        let sync_handle = iters.len() as u32;
+                                        iters.push(IteratorState::ObjectIter {
+                                            next: next_fn,
+                                            return_method,
+                                            current_value: value::encode_undefined(),
+                                            has_current: false,
+                                            done: false,
+                                        });
+                                        value::encode_handle(
+                                            value::TAG_ITERATOR,
+                                            sync_handle,
+                                        )
+                                    };
+                                    return create_async_from_sync_iterator(
+                                        &mut caller,
+                                        sync_iter_handle,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 没有 @@asyncIterator 也没有 @@iterator，创建 TypeError
+            create_error_object(&mut caller, "TypeError", value::encode_undefined())
+        },
+    );
+    imports.push(async_iterator_from_fn.into());
     let instance = Instance::new(&mut store, &module, &imports)?;
     // ── Create %AsyncIteratorPrototype% and AsyncGenerator.prototype ──
     let memory = instance
