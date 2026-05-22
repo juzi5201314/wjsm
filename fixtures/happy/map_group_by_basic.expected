@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+PASS keys
+PASS even
+PASS odd
+PASS even[0]
+PASS even[1]
+PASS odd[0]
+PASS odd[1]
+PASS odd[2]
+--- stderr ---
