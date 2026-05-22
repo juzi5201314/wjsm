@@ -764,6 +764,42 @@ impl Compiler {
         );
         // Import index 279: arraybuffer_proto_slice: (i64, i64, i64) -> i64
         imports.import("env", "arraybuffer_proto_slice", EntityType::Function(16));
+        // ── SharedArrayBuffer imports ──
+        // Import index 361: sharedarraybuffer_constructor: (i64) -> i64
+        imports.import("env", "sharedarraybuffer_constructor", EntityType::Function(3));
+        // Import index 362: sharedarraybuffer_proto_byte_length: (i64) -> i64
+        imports.import("env", "sharedarraybuffer_proto_byte_length", EntityType::Function(3));
+        // Import index 363: sharedarraybuffer_proto_slice: (i64, i64, i64) -> i64
+        imports.import("env", "sharedarraybuffer_proto_slice", EntityType::Function(16));
+        // Import index 364: sharedarraybuffer_proto_species: (i64) -> i64
+        imports.import("env", "sharedarraybuffer_proto_species", EntityType::Function(3));
+        // ── Atomics imports ──
+        // Import index 365: atomics_load: (i64, i64) -> i64
+        imports.import("env", "atomics_load", EntityType::Function(2));
+        // Import index 366: atomics_store: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_store", EntityType::Function(16));
+        // Import index 367: atomics_add: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_add", EntityType::Function(16));
+        // Import index 368: atomics_sub: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_sub", EntityType::Function(16));
+        // Import index 369: atomics_and: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_and", EntityType::Function(16));
+        // Import index 370: atomics_or: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_or", EntityType::Function(16));
+        // Import index 371: atomics_xor: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_xor", EntityType::Function(16));
+        // Import index 372: atomics_exchange: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_exchange", EntityType::Function(16));
+        // Import index 373: atomics_compare_exchange: (i64, i64, i64, i64) -> i64
+        imports.import("env", "atomics_compare_exchange", EntityType::Function(17));
+        // Import index 374: atomics_is_lock_free: (i64) -> i64
+        imports.import("env", "atomics_is_lock_free", EntityType::Function(3));
+        // Import index 375: atomics_wait: (i64, i64, i64, i64) -> i64
+        imports.import("env", "atomics_wait", EntityType::Function(17));
+        // Import index 376: atomics_notify: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_notify", EntityType::Function(16));
+        // Import index 377: atomics_wait_async: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_wait_async", EntityType::Function(16));
         // ── DataView imports ──
         // Import index 280: dataview_constructor: (i64, i64, i64) -> i64
         imports.import("env", "dataview_constructor", EntityType::Function(16));
@@ -1228,6 +1264,25 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::ArrayBufferConstructor, 277);
         builtin_func_indices.insert(Builtin::ArrayBufferProtoByteLength, 278);
         builtin_func_indices.insert(Builtin::ArrayBufferProtoSlice, 279);
+        // ── SharedArrayBuffer builtins ──
+        builtin_func_indices.insert(Builtin::SharedArrayBufferConstructor, 361);
+        builtin_func_indices.insert(Builtin::SharedArrayBufferProtoByteLength, 362);
+        builtin_func_indices.insert(Builtin::SharedArrayBufferProtoSlice, 363);
+        builtin_func_indices.insert(Builtin::SharedArrayBufferSpecies, 364);
+        // ── Atomics builtins ──
+        builtin_func_indices.insert(Builtin::AtomicsLoad, 365);
+        builtin_func_indices.insert(Builtin::AtomicsStore, 366);
+        builtin_func_indices.insert(Builtin::AtomicsAdd, 367);
+        builtin_func_indices.insert(Builtin::AtomicsSub, 368);
+        builtin_func_indices.insert(Builtin::AtomicsAnd, 369);
+        builtin_func_indices.insert(Builtin::AtomicsOr, 370);
+        builtin_func_indices.insert(Builtin::AtomicsXor, 371);
+        builtin_func_indices.insert(Builtin::AtomicsExchange, 372);
+        builtin_func_indices.insert(Builtin::AtomicsCompareExchange, 373);
+        builtin_func_indices.insert(Builtin::AtomicsIsLockFree, 374);
+        builtin_func_indices.insert(Builtin::AtomicsWait, 375);
+        builtin_func_indices.insert(Builtin::AtomicsNotify, 376);
+        builtin_func_indices.insert(Builtin::AtomicsWaitAsync, 377);
         // ── DataView builtins ──
         builtin_func_indices.insert(Builtin::DataViewConstructor, 280);
         builtin_func_indices.insert(Builtin::DataViewProtoGetFloat64, 281);

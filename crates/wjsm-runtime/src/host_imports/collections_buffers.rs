@@ -636,6 +636,7 @@
         },
     );
 
+
     let arraybuffer_constructor_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, byte_length: i64| -> i64 {
@@ -871,7 +872,7 @@
                     {
                         let mut table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
                         handle = table.len() as u32;
-                        table.push(TypedArrayEntry { buffer_handle: buf_handle, byte_offset: offset, length: len, element_size: $size, element_kind: $kind });
+                        table.push(TypedArrayEntry { buffer_handle: buf_handle, byte_offset: offset, length: len, element_size: $size, element_kind: $kind, is_shared: false });
                     }
                     let obj = alloc_host_object_from_caller(&mut caller, 4);
                     let handle_val = value::encode_f64(handle as f64);
@@ -968,6 +969,7 @@
             let target_length = target_entry.length;
             let target_elem_size = target_entry.element_size;
             let target_elem_kind = target_entry.element_kind;
+            let target_is_shared = target_entry.is_shared;
             drop(ta_table);
 
             let offset = if value::is_undefined(offset_val) {
@@ -1001,44 +1003,86 @@
                 let src_length = src_entry.length;
             let src_elem_size = src_entry.element_size;
             let src_elem_kind = src_entry.element_kind;
+            let src_is_shared = src_entry.is_shared;
             drop(src_ta_table);
                 if offset + src_length > target_length {
                     return value::encode_undefined();
                 }
-
-                let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
-                let Some(src_buf) = ab_table.get(src_buf_handle as usize) else {
-                    return value::encode_undefined();
-                };
-                let mut vals = Vec::with_capacity(src_length as usize);
-                for i in 0..src_length {
-                    let off = src_byte_offset as usize + (i as usize) * (src_elem_size as usize);
-                    if off + (src_elem_size as usize) > src_buf.data.len() {
+                let vals = if src_is_shared {
+                    let shared = caller.data().shared_state.clone()
+                        .expect("SharedArrayBuffer requires shared_state");
+                    let sab_table = shared.sab_table.lock().expect("sab_table mutex");
+                    let Some(src_buf) = sab_table.get(src_buf_handle as usize) else {
                         return value::encode_undefined();
-                    }
-                    let v = match (src_elem_size, src_elem_kind) {
-                        (1, 0) => src_buf.data[off] as i8 as f64,
-                        (1, 1) | (1, 2) => src_buf.data[off] as f64,
-                        (2, 0) => i16::from_le_bytes([src_buf.data[off], src_buf.data[off + 1]]) as f64,
-                        (2, 1) => u16::from_le_bytes([src_buf.data[off], src_buf.data[off + 1]]) as f64,
-                        (4, 0) => i32::from_le_bytes([
-                            src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
-                        ]) as f64,
-                        (4, 1) => u32::from_le_bytes([
-                            src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
-                        ]) as f64,
-                        (4, 3) => f32::from_le_bytes([
-                            src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
-                        ]) as f64,
-                        (8, 3) => f64::from_le_bytes([
-                            src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
-                            src_buf.data[off + 4], src_buf.data[off + 5], src_buf.data[off + 6], src_buf.data[off + 7],
-                        ]),
-                        _ => return value::encode_undefined(),
                     };
-                    vals.push(v);
-                }
-                drop(ab_table);
+                    let guard = src_buf.data.read().expect("sab read lock");
+                    let mut vals = Vec::with_capacity(src_length as usize);
+                    for i in 0..src_length {
+                        let off = src_byte_offset as usize + (i as usize) * (src_elem_size as usize);
+                        if off + (src_elem_size as usize) > guard.len() {
+                            return value::encode_undefined();
+                        }
+                        let v = match (src_elem_size, src_elem_kind) {
+                            (1, 0) => guard[off] as i8 as f64,
+                            (1, 1) | (1, 2) => guard[off] as f64,
+                            (2, 0) => i16::from_le_bytes([guard[off], guard[off + 1]]) as f64,
+                            (2, 1) => u16::from_le_bytes([guard[off], guard[off + 1]]) as f64,
+                            (4, 0) => i32::from_le_bytes([
+                                guard[off], guard[off + 1], guard[off + 2], guard[off + 3],
+                            ]) as f64,
+                            (4, 1) => u32::from_le_bytes([
+                                guard[off], guard[off + 1], guard[off + 2], guard[off + 3],
+                            ]) as f64,
+                            (4, 3) => f32::from_le_bytes([
+                                guard[off], guard[off + 1], guard[off + 2], guard[off + 3],
+                            ]) as f64,
+                            (8, 3) => f64::from_le_bytes([
+                                guard[off], guard[off + 1], guard[off + 2], guard[off + 3],
+                                guard[off + 4], guard[off + 5], guard[off + 6], guard[off + 7],
+                            ]),
+                            _ => return value::encode_undefined(),
+                        };
+                        vals.push(v);
+                    }
+                    drop(guard);
+                    drop(sab_table);
+                    vals
+                } else {
+                    let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                    let Some(src_buf) = ab_table.get(src_buf_handle as usize) else {
+                        return value::encode_undefined();
+                    };
+                    let mut vals = Vec::with_capacity(src_length as usize);
+                    for i in 0..src_length {
+                        let off = src_byte_offset as usize + (i as usize) * (src_elem_size as usize);
+                        if off + (src_elem_size as usize) > src_buf.data.len() {
+                            return value::encode_undefined();
+                        }
+                        let v = match (src_elem_size, src_elem_kind) {
+                            (1, 0) => src_buf.data[off] as i8 as f64,
+                            (1, 1) | (1, 2) => src_buf.data[off] as f64,
+                            (2, 0) => i16::from_le_bytes([src_buf.data[off], src_buf.data[off + 1]]) as f64,
+                            (2, 1) => u16::from_le_bytes([src_buf.data[off], src_buf.data[off + 1]]) as f64,
+                            (4, 0) => i32::from_le_bytes([
+                                src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
+                            ]) as f64,
+                            (4, 1) => u32::from_le_bytes([
+                                src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
+                            ]) as f64,
+                            (4, 3) => f32::from_le_bytes([
+                                src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
+                            ]) as f64,
+                            (8, 3) => f64::from_le_bytes([
+                                src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
+                                src_buf.data[off + 4], src_buf.data[off + 5], src_buf.data[off + 6], src_buf.data[off + 7],
+                            ]),
+                            _ => return value::encode_undefined(),
+                        };
+                        vals.push(v);
+                    }
+                    drop(ab_table);
+                    vals
+                };
                 vals
             } else if value::is_array(source) {
                 let Some(arr_ptr) = resolve_handle(&mut caller, source) else {
@@ -1057,27 +1101,55 @@
             } else {
                 return value::encode_undefined();
             };
-
             // Write collected values to target buffer
-            let mut target_ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
-            let Some(target_buf) = target_ab_table.get_mut(target_buf_handle as usize) else {
-                return value::encode_undefined();
-            };
-            for (i, val) in values.iter().enumerate() {
-                let off = target_byte_offset as usize + ((offset as usize) + i) * (target_elem_size as usize);
-                if off + (target_elem_size as usize) > target_buf.data.len() {
+            if target_is_shared {
+                let shared = caller.data().shared_state.clone()
+                    .expect("SharedArrayBuffer requires shared_state");
+                let sab_table = shared.sab_table.lock().expect("sab_table mutex");
+                let Some(target_buf) = sab_table.get(target_buf_handle as usize) else {
                     return value::encode_undefined();
+                };
+                let mut guard = target_buf.data.write().expect("sab write lock");
+                for (i, val) in values.iter().enumerate() {
+                    let off = target_byte_offset as usize + ((offset as usize) + i) * (target_elem_size as usize);
+                    if off + (target_elem_size as usize) > guard.len() {
+                        return value::encode_undefined();
+                    }
+                    match (target_elem_size, target_elem_kind) {
+                        (1, 0) => { guard[off] = *val as i8 as u8; }
+                        (1, 1) | (1, 2) => { guard[off] = *val as u8; }
+                        (2, 0) => { guard[off..off + 2].copy_from_slice(&(*val as i16).to_le_bytes()); }
+                        (2, 1) => { guard[off..off + 2].copy_from_slice(&(*val as u16).to_le_bytes()); }
+                        (4, 0) => { guard[off..off + 4].copy_from_slice(&(*val as i32).to_le_bytes()); }
+                        (4, 1) => { guard[off..off + 4].copy_from_slice(&(*val as u32).to_le_bytes()); }
+                        (4, 3) => { guard[off..off + 4].copy_from_slice(&(*val as f32).to_le_bytes()); }
+                        (8, 3) => { guard[off..off + 8].copy_from_slice(&val.to_le_bytes()); }
+                        _ => return value::encode_undefined(),
+                    }
                 }
-                match (target_elem_size, target_elem_kind) {
-                    (1, 0) => { target_buf.data[off] = *val as i8 as u8; }
-                    (1, 1) | (1, 2) => { target_buf.data[off] = *val as u8; }
-                    (2, 0) => { target_buf.data[off..off + 2].copy_from_slice(&(*val as i16).to_le_bytes()); }
-                    (2, 1) => { target_buf.data[off..off + 2].copy_from_slice(&(*val as u16).to_le_bytes()); }
-                    (4, 0) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as i32).to_le_bytes()); }
-                    (4, 1) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as u32).to_le_bytes()); }
-                    (4, 3) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as f32).to_le_bytes()); }
-                    (8, 3) => { target_buf.data[off..off + 8].copy_from_slice(&val.to_le_bytes()); }
-                    _ => return value::encode_undefined(),
+                drop(guard);
+                drop(sab_table);
+            } else {
+                let mut target_ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                let Some(target_buf) = target_ab_table.get_mut(target_buf_handle as usize) else {
+                    return value::encode_undefined();
+                };
+                for (i, val) in values.iter().enumerate() {
+                    let off = target_byte_offset as usize + ((offset as usize) + i) * (target_elem_size as usize);
+                    if off + (target_elem_size as usize) > target_buf.data.len() {
+                        return value::encode_undefined();
+                    }
+                    match (target_elem_size, target_elem_kind) {
+                        (1, 0) => { target_buf.data[off] = *val as i8 as u8; }
+                        (1, 1) | (1, 2) => { target_buf.data[off] = *val as u8; }
+                        (2, 0) => { target_buf.data[off..off + 2].copy_from_slice(&(*val as i16).to_le_bytes()); }
+                        (2, 1) => { target_buf.data[off..off + 2].copy_from_slice(&(*val as u16).to_le_bytes()); }
+                        (4, 0) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as i32).to_le_bytes()); }
+                        (4, 1) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as u32).to_le_bytes()); }
+                        (4, 3) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as f32).to_le_bytes()); }
+                        (8, 3) => { target_buf.data[off..off + 8].copy_from_slice(&val.to_le_bytes()); }
+                        _ => return value::encode_undefined(),
+                    }
                 }
             }
             value::encode_undefined()
@@ -1107,6 +1179,7 @@
             let length = entry.length;
             let elem_size = entry.element_size;
             let element_kind = entry.element_kind;
+            let is_shared = entry.is_shared;
             drop(ta_table);
 
             // Clamp begin
@@ -1150,6 +1223,7 @@
                         length: 0,
                         element_size: elem_size,
                         element_kind,
+                        is_shared: false,
                     });
                 }
                 let obj = alloc_host_object_from_caller(&mut caller, 4);
@@ -1163,8 +1237,23 @@
             // Create new ArrayBuffer with sliced bytes
             let src_byte_start = byte_offset as usize + (begin as usize) * (elem_size as usize);
             let slice_byte_len = slice_len as usize * elem_size as usize;
-            let new_buf_handle;
-            {
+            let sliced_data: Vec<u8> = if is_shared {
+                let shared = caller.data().shared_state.clone()
+                    .expect("SharedArrayBuffer requires shared_state");
+                let sab_table = shared.sab_table.lock().expect("sab_table mutex");
+                let Some(buf_entry) = sab_table.get(buf_handle as usize) else {
+                    return value::encode_undefined();
+                };
+                let guard = buf_entry.data.read().expect("sab read lock");
+                let end_off = src_byte_start + slice_byte_len;
+                if end_off > guard.len() {
+                    return value::encode_undefined();
+                }
+                let data = guard[src_byte_start..end_off].to_vec();
+                drop(guard);
+                drop(sab_table);
+                data
+            } else {
                 let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
                 let Some(buf_entry) = ab_table.get(buf_handle as usize) else {
                     return value::encode_undefined();
@@ -1173,8 +1262,12 @@
                 if end_off > buf_entry.data.len() {
                     return value::encode_undefined();
                 }
-                let sliced_data = buf_entry.data[src_byte_start..end_off].to_vec();
+                let data = buf_entry.data[src_byte_start..end_off].to_vec();
                 drop(ab_table);
+                data
+            };
+            let new_buf_handle;
+            {
                 let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
                 new_buf_handle = ab_table.len() as u32;
                 ab_table.push(ArrayBufferEntry { data: sliced_data });
@@ -1191,6 +1284,7 @@
                     length: slice_len,
                     element_size: elem_size,
                     element_kind,
+                    is_shared: false,
                 });
             }
 
@@ -1226,6 +1320,7 @@
             let length = entry.length;
             let elem_size = entry.element_size;
             let element_kind = entry.element_kind;
+            let sub_is_shared = entry.is_shared;
             drop(ta_table);
 
             // Clamp begin
@@ -1264,6 +1359,7 @@
                     length: sub_len,
                     element_size: elem_size,
                     element_kind,
+                    is_shared: sub_is_shared,
                 });
             }
 
@@ -1276,140 +1372,6 @@
         },
     );
 
-    let _get_builtin_global_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, name_val: i64| -> i64 {
-            let name = read_runtime_string(&mut caller, name_val);
-            let mut native_callables = caller.data().native_callables.lock().unwrap();
-            let idx = native_callables.len() as u32;
-            match name.as_str() {
-                "Array" => {
-                    native_callables.push(NativeCallable::ArrayConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Object" => {
-                    native_callables.push(NativeCallable::ObjectConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Function" => {
-                    native_callables.push(NativeCallable::FunctionConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "String" => {
-                    native_callables.push(NativeCallable::StringConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Boolean" => {
-                    native_callables.push(NativeCallable::BooleanConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Number" => {
-                    native_callables.push(NativeCallable::NumberConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Symbol" => {
-                    native_callables.push(NativeCallable::SymbolConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "BigInt" => {
-                    native_callables.push(NativeCallable::BigIntConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "RegExp" => {
-                    native_callables.push(NativeCallable::RegExpConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Error" => {
-                    native_callables.push(NativeCallable::ErrorConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "TypeError" => {
-                    native_callables.push(NativeCallable::TypeErrorConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "RangeError" => {
-                    native_callables.push(NativeCallable::RangeErrorConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "SyntaxError" => {
-                    native_callables.push(NativeCallable::SyntaxErrorConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "ReferenceError" => {
-                    native_callables.push(NativeCallable::ReferenceErrorConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "URIError" => {
-                    native_callables.push(NativeCallable::URIErrorConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "EvalError" => {
-                    native_callables.push(NativeCallable::EvalErrorConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "AggregateError" => {
-                    native_callables.push(NativeCallable::AggregateErrorConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Map" => {
-                    native_callables.push(NativeCallable::MapConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Set" => {
-                    native_callables.push(NativeCallable::SetConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "WeakMap" => {
-                    native_callables.push(NativeCallable::WeakMapConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "WeakSet" => {
-                    native_callables.push(NativeCallable::WeakSetConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Date" => {
-                    native_callables.push(NativeCallable::DateConstructorGlobal);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Promise" => {
-                    native_callables.push(NativeCallable::PromiseConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "ArrayBuffer" => {
-                    native_callables.push(NativeCallable::ArrayBufferConstructorGlobal);
-                    value::encode_native_callable_idx(idx)
-                }
-                "DataView" => {
-                    native_callables.push(NativeCallable::DataViewConstructorGlobal);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Int8Array" | "Uint8Array" | "Uint8ClampedArray" | "Int16Array" | "Uint16Array"
-                | "Int32Array" | "Uint32Array" | "Float32Array" | "Float64Array"
-                | "Float16Array" | "BigInt64Array" | "BigUint64Array" => {
-                    native_callables.push(NativeCallable::TypedArrayConstructor(()));
-                    value::encode_native_callable_idx(idx)
-                }
-                "Proxy" => {
-                    native_callables.push(NativeCallable::ProxyConstructor);
-                    value::encode_native_callable_idx(idx)
-                }
-                "Math" | "JSON" | "Reflect" | "globalThis" | "Atomics"
-                | "SharedArrayBuffer" | "FinalizationRegistry" | "WeakRef"
-                | "parseInt" | "parseFloat" | "isNaN" | "isFinite"
-                | "decodeURI" | "decodeURIComponent" | "encodeURI" | "encodeURIComponent"
-                | "Temporal" | "Intl" | "Iterator" | "AsyncIterator"
-                | "$262" | "eval" | "SuppressedError" => {
-                    native_callables.push(NativeCallable::StubGlobal(()));
-                    value::encode_native_callable_idx(idx)
-                }
-                "gc" => {
-                    native_callables.push(NativeCallable::GcCollect);
-                    value::encode_native_callable_idx(idx)
-                }
-                _ => value::encode_undefined(),
-            }
-        },
-    );
 
     let create_global_object_fn = Func::wrap(
         &mut store,
@@ -1442,6 +1404,8 @@
                 ("Date", NativeCallable::DateConstructorGlobal),
                 ("Promise", NativeCallable::PromiseConstructor),
                 ("ArrayBuffer", NativeCallable::ArrayBufferConstructorGlobal),
+                ("SharedArrayBuffer", NativeCallable::SharedArrayBufferConstructor),
+                ("Atomics", NativeCallable::AtomicsGlobal),
                 ("DataView", NativeCallable::DataViewConstructorGlobal),
                 ("Proxy", NativeCallable::ProxyConstructor),
                 ("gc", NativeCallable::GcCollect),
@@ -1457,7 +1421,27 @@
             }
             
             let _ = define_host_data_property_from_caller(&mut caller, obj, "globalThis", obj);
-            
+
+            // Create $262.agent for test262 multi-agent testing
+            let sub_agent_obj = alloc_host_object_from_caller(&mut caller, 6);
+            let agent_methods: &[(&str, NativeCallable)] = &[
+                ("start", NativeCallable::AgentStart),
+                ("broadcast", NativeCallable::AgentBroadcast),
+                ("receiveBroadcast", NativeCallable::AgentReceiveBroadcast),
+                ("getReport", NativeCallable::AgentGetReport),
+                ("sleep", NativeCallable::AgentSleep),
+                ("monotonicNow", NativeCallable::AgentMonotonicNow),
+            ];
+            for (name, callable) in agent_methods {
+                let mut nc = caller.data().native_callables.lock().unwrap();
+                let idx = nc.len() as u32;
+                nc.push(callable.clone());
+                let val = value::encode_native_callable_idx(idx);
+                drop(nc);
+                let _ = define_host_data_property_from_caller(&mut caller, sub_agent_obj, name, val);
+            }
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "$262", sub_agent_obj);
+
             obj
         },
     );

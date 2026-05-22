@@ -33,6 +33,8 @@
                 "Date" => native_callables.push(NativeCallable::DateConstructorGlobal),
                 "Promise" => native_callables.push(NativeCallable::PromiseConstructor),
                 "ArrayBuffer" => native_callables.push(NativeCallable::ArrayBufferConstructorGlobal),
+                "SharedArrayBuffer" => native_callables.push(NativeCallable::SharedArrayBufferConstructor),
+                "Atomics" => native_callables.push(NativeCallable::AtomicsGlobal),
                 "DataView" => native_callables.push(NativeCallable::DataViewConstructorGlobal),
                 "Proxy" => native_callables.push(NativeCallable::ProxyConstructor),
                 "gc" => native_callables.push(NativeCallable::GcCollect),
