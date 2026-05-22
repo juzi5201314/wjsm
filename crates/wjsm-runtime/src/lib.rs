@@ -289,12 +289,25 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     imports.push(scope_record_destroy_fn.into());
-    // ── SharedArrayBuffer + Atomics imports (indices 361-377) ──
-    imports.extend(include!("host_imports/atomics.rs"));
-    // ── Array grouping imports (indices 378-379) ──
+    // ── SharedArrayBuffer + Atomics imports (indices 361-372, 375-379) ──
+    let atomics_imports: Vec<Extern> = include!("host_imports/atomics.rs");
+    let (atomics_part1, atomics_part2) = atomics_imports.split_at(12);
+    imports.extend(atomics_part1.iter().cloned()); // 361-372
+    // ── Array grouping imports (indices 373-374) ──
     let object_group_by_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
+            // Check items is not null/undefined
+            if value::is_null(items) || value::is_undefined(items) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: Cannot group null or undefined".to_string());
+                return value::encode_undefined();
+            }
+
             // Check callback is callable
             if !value::is_callable(callbackfn) {
                 *caller
@@ -332,7 +345,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         };
 
                         // ToPropertyKey: convert key to string for object property
-                        let key_str = eval_to_string(&mut caller, key);
+                        let key_str = to_property_key(&mut caller, key);
+                        // If to_property_key failed (Symbol key), check runtime_error
+                        if caller.data().runtime_error.lock().expect("mutex").is_some() {
+                            return value::encode_undefined();
+                        }
 
                         // Find or create group array
                         if let Some(arr_val) =
@@ -372,6 +389,17 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let map_group_by_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
+            // Check items is not null/undefined
+            if value::is_null(items) || value::is_undefined(items) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: Cannot group null or undefined".to_string());
+                return value::encode_undefined();
+            }
+
             // Check callback is callable
             if !value::is_callable(callbackfn) {
                 *caller
@@ -466,6 +494,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     imports.push(map_group_by_fn.into());
+    imports.extend(atomics_part2.iter().cloned()); // 375-379
     let instance = Instance::new(&mut store, &module, &imports)?;
 
     // ── Run main ──

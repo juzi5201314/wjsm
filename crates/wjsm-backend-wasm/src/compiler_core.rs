@@ -12,6 +12,7 @@ impl Compiler {
     }
 
     pub(crate) fn new_with_data_base(mode: CompileMode, data_base: u32) -> Self {
+        let num_imports = if mode == CompileMode::Eval { 389u32 } else { 375u32 };
         let mut types = TypeSection::new();
         // Type 0: (i64) -> ()  — console_log
         types.ty().function(vec![ValType::I64], vec![]);
@@ -1416,7 +1417,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: HOST_IMPORT_NAMES.len() as u32,
+            _next_import_func: num_imports,
             builtin_func_indices,
             function_table: Vec::new(),
             function_table_reverse: HashMap::new(),

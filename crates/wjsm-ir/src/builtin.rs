@@ -100,8 +100,8 @@ pub enum Builtin {
     ObjectSetPrototypeOf,
     ObjectGetOwnPropertyNames,
     ObjectIs,
-    // ── Array grouping ──
     ObjectGroupBy,
+    // ── Map.groupBy ──
     MapGroupBy,
     // ── BigInt operations ──────────────────────────────────────────────
     BigIntFromLiteral,

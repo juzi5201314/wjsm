@@ -1120,10 +1120,10 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Builtin::ObjectSetPrototypeOf | Builtin::ObjectIs
-            | Builtin::ObjectGroupBy | Builtin::MapGroupBy => {
-                let a = args.first().context("Object method expects 2 args")?;
-                let b = args.get(1).context("Object method expects 2 args")?;
+            Builtin::ObjectSetPrototypeOf | Builtin::ObjectIs | Builtin::ObjectGroupBy | Builtin::MapGroupBy => {
+                let name = builtin.to_string();
+                let a = args.first().context(format!("{name} expects 2 args"))?;
+                let b = args.get(1).context(format!("{name} expects 2 args"))?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(a.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(b.0)));
                 let func_idx = self
