@@ -1044,10 +1044,10 @@ impl Lowerer {
         &mut self,
         new_expr: &swc_ast::NewExpr,
         block: BasicBlockId,
-    ) -> Result<ValueId, LoweringError> {
+    ) -> Result<(ValueId, BasicBlockId), LoweringError> {
         if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
             if ident.sym == "Promise" && self.scopes.lookup(&ident.sym).is_err() {
-                return self.lower_new_promise(new_expr, block);
+                return Ok((self.lower_new_promise(new_expr, block)?, block));
             }
             if ident.sym == "Proxy" && self.scopes.lookup(&ident.sym).is_err() {
                 // new Proxy(target, handler) → CallBuiltin(ProxyCreate, [target, handler])
@@ -1067,7 +1067,72 @@ impl Lowerer {
                         args: arg_vals,
                     },
                 );
-                return Ok(dest);
+                return Ok((dest, block));
+            }
+            // WeakRef / FinalizationRegistry constructors (can throw — need exception checking)
+            if self.scopes.lookup(&ident.sym).is_err()
+                && let Some(builtin) = builtin_from_global_ident(&ident.sym)
+                && matches!(
+                    builtin,
+                    Builtin::WeakRefConstructor | Builtin::FinalizationRegistryConstructor
+                )
+            {
+                let mut arg_vals = Vec::new();
+                if let Some(args) = &new_expr.args {
+                    for arg in args {
+                        let arg_val = self.lower_expr(&arg.expr, block)?;
+                        arg_vals.push(arg_val);
+                    }
+                }
+                if arg_vals.is_empty() {
+                    arg_vals.push({
+                        let c = self.module.add_constant(Constant::Undefined);
+                        let dest = self.alloc_value();
+                        self.current_function
+                            .append_instruction(block, Instruction::Const { dest, constant: c });
+                        dest
+                    });
+                }
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin,
+                        args: arg_vals,
+                    },
+                );
+                // Exception check
+                let is_exc = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::IsException {
+                        dest: is_exc,
+                        value: dest,
+                    },
+                );
+                let continue_block = self.current_function.new_block();
+                let exc_block = self.current_function.new_block();
+                self.current_function.set_terminator(
+                    block,
+                    Terminator::Branch {
+                        condition: is_exc,
+                        true_block: exc_block,
+                        false_block: continue_block,
+                    },
+                );
+                // Exception path: unwrap and throw
+                let thrown_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    exc_block,
+                    Instruction::CallBuiltin {
+                        dest: Some(thrown_val),
+                        builtin: Builtin::ExceptionValue,
+                        args: vec![dest],
+                    },
+                );
+                self.emit_throw_value(exc_block, thrown_val)?;
+                return Ok((dest, continue_block));
             }
             // Error constructors: new Error(msg), new TypeError(msg), etc.
             if self.scopes.lookup(&ident.sym).is_err()
@@ -1124,7 +1189,7 @@ impl Lowerer {
                         args: arg_vals,
                     },
                 );
-                return Ok(dest);
+                return Ok((dest, block));
             }
         }
 
@@ -1185,7 +1250,7 @@ impl Lowerer {
             },
         );
 
-        Ok(obj_val)
+        Ok((obj_val, call_block))
     }
 
     pub(crate) fn lower_new_promise(

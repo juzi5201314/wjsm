@@ -281,6 +281,11 @@ pub fn is_exception(val: i64) -> bool {
     let uval = val as u64;
     (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_EXCEPTION
 }
+/// Encode a value as TAG_EXCEPTION.
+pub fn encode_exception(handle: u32) -> i64 {
+    encode_handle(TAG_EXCEPTION, handle)
+}
+
 
 pub fn is_iterator(val: i64) -> bool {
     let uval = val as u64;

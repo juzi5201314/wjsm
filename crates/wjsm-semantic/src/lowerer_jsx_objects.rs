@@ -393,7 +393,11 @@ impl Lowerer {
             swc_ast::Expr::Array(arr) => self.lower_array_expr(arr, block),
             swc_ast::Expr::Member(member) => self.lower_member_expr(member, block),
             swc_ast::Expr::This(_) => self.lower_this(block),
-            swc_ast::Expr::New(new_expr) => self.lower_new_expr(new_expr, block),
+            swc_ast::Expr::New(new_expr) => {
+                let (val, new_block) = self.lower_new_expr(new_expr, block)?;
+                self.new_expr_continue_block = Some(new_block);
+                Ok(val)
+            }
             swc_ast::Expr::Class(class_expr) => self.lower_class_expr(class_expr, block),
             swc_ast::Expr::Update(update) => self.lower_update(update, block),
             swc_ast::Expr::Tpl(tpl) => self.lower_tpl(tpl, block),
