@@ -362,9 +362,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 }
             }
 
-            // TODO: General iterable support (non-array iterables)
-            // For now, return empty result for non-array inputs
-            result
+            // 非数组可迭代对象：通过通用迭代器协议遍历
+            // TODO: 对于自定义迭代器，需调用 iterator_from/iterator_next/iterator_value
+            // 当前对非数组 items 返回 TypeError
+            *caller
+                .data()
+                .runtime_error
+                .lock()
+                .expect("runtime error mutex") =
+                Some("TypeError: items is not iterable".to_string());
+            return value::encode_undefined();
         },
     );
     imports.push(object_group_by_fn.into());
@@ -462,7 +469,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 }
             }
 
-            map_result
+            // 非数组可迭代对象：通过通用迭代器协议遍历
+            // TODO: 对于自定义迭代器，需调用 iterator_from/iterator_next/iterator_value
+            // 当前对非数组 items 返回 TypeError
+            *caller
+                .data()
+                .runtime_error
+                .lock()
+                .expect("runtime error mutex") =
+                Some("TypeError: items is not iterable".to_string());
+            return value::encode_undefined();
         },
     );
     imports.push(map_group_by_fn.into());
