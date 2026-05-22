@@ -211,6 +211,21 @@
                 let input_val = store_runtime_string(&caller, s.clone());
                 let _ = define_host_data_property_from_caller(&mut caller, arr_ptr as i64, "index", index_val);
                 let _ = define_host_data_property_from_caller(&mut caller, arr_ptr as i64, "input", input_val);
+                // 设置 .groups
+                let named: Vec<(&str, Option<std::ops::Range<usize>>)> = m.named_groups().collect();
+                if !named.is_empty() {
+                    let groups_obj = alloc_host_object_from_caller(&mut caller, named.len() as u32);
+                    for (name, range) in named {
+                        let val = match range {
+                            Some(r) => store_runtime_string(&caller, s[r].to_string()),
+                            None => value::encode_undefined(),
+                        };
+                        let _ = define_host_data_property_from_caller(&mut caller, groups_obj, name, val);
+                    }
+                    let _ = define_host_data_property_from_caller(&mut caller, arr_ptr as i64, "groups", groups_obj);
+                } else {
+                    let _ = define_host_data_property_from_caller(&mut caller, arr_ptr as i64, "groups", value::encode_undefined());
+                }
                 results.push(arr);
                 if results.len() > 10000 {
                     break;
