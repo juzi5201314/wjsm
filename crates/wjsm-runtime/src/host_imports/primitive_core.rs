@@ -421,8 +421,40 @@
             })
             .into_owned();
 
+            // 标志校验
+            const VALID_FLAGS: &[char] = &['d', 'g', 'i', 'm', 's', 'u', 'v', 'y'];
+            let mut seen = [false; 128u8 as usize];
+            for c in flags.chars() {
+                if !VALID_FLAGS.contains(&c) {
+                    *caller.data().runtime_error.lock().unwrap() =
+                        Some(format!(
+                            "SyntaxError: Invalid regular expression flag: '{}'",
+                            c
+                        ));
+                    return value::encode_undefined();
+                }
+                let idx = c as usize;
+                if idx < seen.len() {
+                    if seen[idx] {
+                        *caller.data().runtime_error.lock().unwrap() =
+                            Some(format!(
+                                "SyntaxError: Duplicate regular expression flag: '{}'",
+                                c
+                            ));
+                        return value::encode_undefined();
+                    }
+                    seen[idx] = true;
+                }
+            }
+
+            // 仅将引擎相关标志传给 regress
+            let engine_flags: String = flags
+                .chars()
+                .filter(|c| matches!(c, 'i' | 'm' | 's' | 'u' | 'v'))
+                .collect();
+
             // 编译正则表达式
-            match regress::Regex::with_flags(&pattern, flags.as_str()) {
+            match regress::Regex::with_flags(&pattern, engine_flags.as_str()) {
                 Ok(compiled) => {
                     let mut table = caller.data_mut().regex_table.lock().unwrap();
                     let handle = table.len() as u32;
@@ -435,7 +467,6 @@
                     value::encode_regexp_handle(handle)
                 }
                 Err(e) => {
-                    // 编译失败，抛出 SyntaxError
                     *caller
                         .data()
                         .runtime_error
