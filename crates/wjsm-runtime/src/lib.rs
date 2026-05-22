@@ -196,8 +196,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     imports.extend(include!("host_imports/string_methods.rs"));
     imports.extend(include!("host_imports/math_number_error.rs"));
     imports.extend(include!("host_imports/collections_buffers.rs"));
-    imports.extend(include!("host_imports/weakref_finalization.rs"));
+    // ── Proxy traps (imports 318-320) ──
     imports.extend(include!("host_imports/proxy_traps.rs"));
+    // Import 321: get_builtin_global
     imports.push(include!("host_imports/get_builtin_global_entry.rs"));
     // Import 322: new_target
     let new_target_fn = Func::wrap(
@@ -231,6 +232,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     imports.push(create_mapped_arguments_fn.into());
+    // ── TypedArray extra methods (imports 326-347) ──
     imports.extend(include!("host_imports/typedarray_new_methods.rs"));
     // ── ScopeRecord eval bridge (imports 348-355) ──
     let scope_record_create_fn = Func::wrap(
@@ -289,7 +291,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     imports.push(scope_record_destroy_fn.into());
-    // ── SharedArrayBuffer + Atomics imports (indices 361-377) ──
+    // ── WeakRef / FinalizationRegistry (imports 356-360) ──
+    imports.extend(include!("host_imports/weakref_finalization.rs"));
+    // ── SharedArrayBuffer + Atomics (imports 361-377) ──
     imports.extend(include!("host_imports/atomics.rs"));
     let instance = Instance::new(&mut store, &module, &imports)?;
 

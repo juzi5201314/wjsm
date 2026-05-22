@@ -32,9 +32,9 @@ after preventExtensions isExtensible: false
 ownKeys trap
 ownKeys: null
 === apply & construct Traps ===
-apply trap: null
-apply call: 22
-construct trap: null
+deleteProperty trap: 6
+apply call: true
+getOwnPropertyDescriptor trap: undefined
 constructed name: undefined
 constructed flag: undefined
 instanceof proxyPerson: false
