@@ -715,6 +715,20 @@
                                     write_array_elem(&mut caller, arr_ptr, i as u32, elem);
                                 }
                                 write_array_length(&mut caller, arr_ptr, group_count as u32);
+
+                                // .index 和 .input
+                                let index_val = value::encode_f64(m.start() as f64);
+                                let _ = define_host_data_property_from_caller(
+                                    &mut caller, arr_ptr as i64, "index", index_val,
+                                );
+                                let input_val = store_runtime_string(&caller, s.clone());
+                                let _ = define_host_data_property_from_caller(
+                                    &mut caller, arr_ptr as i64, "input", input_val,
+                                );
+                                // .groups（隐式创建的 RegExp 无命名组，传 undefined）
+                                let _ = define_host_data_property_from_caller(
+                                    &mut caller, arr_ptr as i64, "groups", value::encode_undefined(),
+                                );
                                 return arr;
                             }
                             None => return value::encode_null(),
@@ -791,6 +805,41 @@
                             write_array_elem(&mut caller, arr_ptr, i as u32, elem);
                         }
                         write_array_length(&mut caller, arr_ptr, group_count as u32);
+
+                        // 设置 .index
+                        let index_val = value::encode_f64(m.start() as f64);
+                        let _ = define_host_data_property_from_caller(
+                            &mut caller, arr_ptr as i64, "index", index_val,
+                        );
+                        // 设置 .input
+                        let input_val = store_runtime_string(&caller, s.clone());
+                        let _ = define_host_data_property_from_caller(
+                            &mut caller, arr_ptr as i64, "input", input_val,
+                        );
+                        // 设置 .groups
+                        let named: Vec<(&str, Option<std::ops::Range<usize>>)> =
+                            m.named_groups().collect();
+                        if !named.is_empty() {
+                            let groups_obj =
+                                alloc_host_object_from_caller(&mut caller, named.len() as u32);
+                            for (name, range) in named {
+                                let val = match range {
+                                    Some(r) => store_runtime_string(&caller, s[r].to_string()),
+                                    None => value::encode_undefined(),
+                                };
+                                let _ = define_host_data_property_from_caller(
+                                    &mut caller, groups_obj, name, val,
+                                );
+                            }
+                            let _ = define_host_data_property_from_caller(
+                                &mut caller, arr_ptr as i64, "groups", groups_obj,
+                            );
+                        } else {
+                            let _ = define_host_data_property_from_caller(
+                                &mut caller, arr_ptr as i64, "groups", value::encode_undefined(),
+                            );
+                        }
+
                         arr
                     }
                     None => value::encode_null(),
