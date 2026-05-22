@@ -545,6 +545,98 @@
             value::encode_bool(found)
         },
     );
+/// 从 regress::Match 构建 RegExp 执行结果数组
+// 返回的数组包含 .index, .input, .groups 属性；
+// 若 flags 包含 'd' 则额外设置 .indices 及 indices.groups。
+// named_groups() 只 collect 一次，供 .groups 和 .indices.groups 复用。
+fn build_match_result(
+    caller: &mut Caller<'_, RuntimeState>,
+    m: &regress::Match,
+    s: &str,
+    group_count: u32,
+    flags: &str,
+) -> i64 {
+    let arr = alloc_array(caller, group_count);
+    let Some(arr_ptr) = resolve_array_ptr(caller, arr) else {
+        return value::encode_null();
+    };
+    for i in 0..group_count {
+        let elem = if let Some(range) = m.group(i as usize) {
+            let group_str = &s[range];
+            store_runtime_string(caller, group_str.to_string())
+        } else {
+            value::encode_undefined()
+        };
+        write_array_elem(caller, arr_ptr, i as u32, elem);
+    }
+    write_array_length(caller, arr_ptr, group_count);
+    // .index — 使用 m.start() 保持一致
+    let index_val = value::encode_f64(m.start() as f64);
+    let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "index", index_val);
+    // .input
+    let input_val = store_runtime_string(caller, s.to_string());
+    let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "input", input_val);
+    // .groups（collect 一次，供 .groups 和 .indices.groups 复用）
+    let named: Vec<(&str, Option<std::ops::Range<usize>>)> = m.named_groups().collect();
+    if !named.is_empty() {
+        let groups_obj = alloc_host_null_proto_object_from_caller(caller, named.len() as u32);
+        for (name, range) in &named {
+            let val = match range {
+                Some(r) => store_runtime_string(caller, s[r.clone()].to_string()),
+                None => value::encode_undefined(),
+            };
+            let _ = define_host_data_property_from_caller(caller, groups_obj, name, val);
+        }
+        let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "groups", groups_obj);
+    } else {
+        let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "groups", value::encode_undefined());
+    }
+    // .indices（仅 d 标志）
+    if flags.contains('d') {
+        let indices_arr = alloc_array(caller, group_count);
+        let Some(indices_ptr) = resolve_array_ptr(caller, indices_arr) else {
+            return value::encode_null();
+        };
+        for i in 0..group_count {
+            let elem = match m.group(i as usize) {
+                Some(range) => {
+                    let pair = alloc_array(caller, 2);
+                    let pair_ptr = resolve_array_ptr(caller, pair).unwrap_or(0);
+                    write_array_elem(caller, pair_ptr, 0, value::encode_f64(range.start as f64));
+                    write_array_elem(caller, pair_ptr, 1, value::encode_f64(range.end as f64));
+                    write_array_length(caller, pair_ptr, 2);
+                    pair
+                }
+                None => value::encode_undefined(),
+            };
+            write_array_elem(caller, indices_ptr, i as u32, elem);
+        }
+        write_array_length(caller, indices_ptr, group_count);
+        if !named.is_empty() {
+            let ig = alloc_host_null_proto_object_from_caller(caller, named.len() as u32);
+            for (name, range) in &named {
+                let val = match range {
+                    Some(r) => {
+                        let pair = alloc_array(caller, 2);
+                        let pair_ptr = resolve_array_ptr(caller, pair).unwrap_or(0);
+                        write_array_elem(caller, pair_ptr, 0, value::encode_f64(r.start as f64));
+                        write_array_elem(caller, pair_ptr, 1, value::encode_f64(r.end as f64));
+                        write_array_length(caller, pair_ptr, 2);
+                        pair
+                    }
+                    None => value::encode_undefined(),
+                };
+                let _ = define_host_data_property_from_caller(caller, ig, name, val);
+            }
+            let _ = define_host_data_property_from_caller(caller, indices_ptr as i64, "groups", ig);
+        } else {
+            let _ = define_host_data_property_from_caller(caller, indices_ptr as i64, "groups", value::encode_undefined());
+        }
+        let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "indices", indices_arr);
+    }
+    arr
+}
+
 
     // ── Import 111: regex_exec(i64, i64) → i64 ───────────────────────────────────
     let regex_exec_fn = Func::wrap(
@@ -599,119 +691,7 @@
                             e.last_index = m.end() as i64;
                         }
                     }
-
-                    // 构建结果数组 [full_match, group1, group2, ...]
-                    let group_count = m.captures.len() + 1;
-                    let arr = alloc_array(&mut caller, group_count as u32);
-                    let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                        return value::encode_null();
-                    };
-
-                    for i in 0..group_count {
-                        let elem = if let Some(range) = m.group(i) {
-                            let group_str = &s[range];
-                            store_runtime_string(&caller, group_str.to_string())
-                        } else {
-                            value::encode_undefined()
-                        };
-                        write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                    }
-                    write_array_length(&mut caller, arr_ptr, group_count as u32);
-
-                    // 设置 .index 属性
-                    let index_val = value::encode_f64(m.start() as f64);
-                    let _ = define_host_data_property_from_caller(
-                        &mut caller, arr_ptr as i64, "index", index_val,
-                    );
-
-                    // 设置 .input 属性
-                    let input_val = store_runtime_string(&caller, s.clone());
-                    let _ = define_host_data_property_from_caller(
-                        &mut caller, arr_ptr as i64, "input", input_val,
-                    );
-
-                    // 设置 .groups 属性
-                    let named: Vec<(&str, Option<std::ops::Range<usize>>)> =
-                        m.named_groups().collect();
-                    if !named.is_empty() {
-                        let groups_obj =
-                            alloc_host_object_from_caller(&mut caller, named.len() as u32);
-                        for (name, range) in named {
-                            let val = match range {
-                                Some(r) => {
-                                    store_runtime_string(&caller, s[r].to_string())
-                                }
-                                None => value::encode_undefined(),
-                            };
-                            let _ = define_host_data_property_from_caller(
-                                &mut caller, groups_obj, name, val,
-                            );
-                        }
-                        let _ = define_host_data_property_from_caller(
-                            &mut caller, arr_ptr as i64, "groups", groups_obj,
-                        );
-                    } else {
-                        let _ = define_host_data_property_from_caller(
-                            &mut caller, arr_ptr as i64, "groups", value::encode_undefined(),
-                        );
-                    }
-                    // 设置 .indices（仅 d 标志）
-                    if entry.flags.contains('d') {
-                        let indices_arr = alloc_array(&mut caller, group_count as u32);
-                        let indices_ptr = resolve_array_ptr(&mut caller, indices_arr).unwrap_or(0);
-                        for i in 0..group_count {
-                            let elem = match m.group(i) {
-                                Some(range) => {
-                                    let pair = alloc_array(&mut caller, 2);
-                                    let pair_ptr = resolve_array_ptr(&mut caller, pair).unwrap_or(0);
-                                    write_array_elem(&mut caller, pair_ptr, 0, value::encode_f64(range.start as f64));
-                                    write_array_elem(&mut caller, pair_ptr, 1, value::encode_f64(range.end as f64));
-                                    write_array_length(&mut caller, pair_ptr, 2);
-                                    pair
-                                }
-                                None => value::encode_undefined(),
-                            };
-                            write_array_elem(&mut caller, indices_ptr, i as u32, elem);
-                        }
-                        write_array_length(&mut caller, indices_ptr, group_count as u32);
-                        // indices.groups
-                        let named: Vec<(&str, Option<std::ops::Range<usize>>)> =
-                            m.named_groups().collect();
-                        if !named.is_empty() {
-                            let ig = alloc_host_object_from_caller(&mut caller, named.len() as u32);
-                            for (name, range) in named {
-                                let val = match range {
-                                    Some(r) => {
-                                        let pair = alloc_array(&mut caller, 2);
-                                        let pair_ptr = resolve_array_ptr(&mut caller, pair).unwrap_or(0);
-                                        write_array_elem(&mut caller, pair_ptr, 0, value::encode_f64(r.start as f64));
-                                        write_array_elem(&mut caller, pair_ptr, 1, value::encode_f64(r.end as f64));
-                                        write_array_length(&mut caller, pair_ptr, 2);
-                                        pair
-                                    }
-                                    None => value::encode_undefined(),
-                                };
-                                let _ = define_host_data_property_from_caller(
-                                    &mut caller, ig, name, val,
-                                );
-                            }
-                            let _ = define_host_data_property_from_caller(
-                                &mut caller, indices_ptr as i64, "groups", ig,
-                            );
-                        } else {
-                            let _ = define_host_data_property_from_caller(
-                                &mut caller,
-                                indices_ptr as i64,
-                                "groups",
-                                value::encode_undefined(),
-                            );
-                        }
-                        let _ = define_host_data_property_from_caller(
-                            &mut caller, arr_ptr as i64, "indices", indices_arr,
-                        );
-                    }
-
-                    arr
+                    build_match_result(&mut caller, &m, &s, (m.captures.len() + 1) as u32, &entry.flags)
                 }
                 None => {
                     // 无匹配时重置 lastIndex
@@ -755,36 +735,7 @@
                         // 非全局匹配：返回第一个匹配结果
                         match entry.compiled.find(&s) {
                             Some(m) => {
-                                let group_count = m.captures.len() + 1;
-                                let arr = alloc_array(&mut caller, group_count as u32);
-                                let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                                    return value::encode_null();
-                                };
-                                for i in 0..group_count {
-                                    let elem = if let Some(range) = m.group(i) {
-                                        let group_str = &s[range];
-                                        store_runtime_string(&caller, group_str.to_string())
-                                    } else {
-                                        value::encode_undefined()
-                                    };
-                                    write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                                }
-                                write_array_length(&mut caller, arr_ptr, group_count as u32);
-
-                                // .index 和 .input
-                                let index_val = value::encode_f64(m.start() as f64);
-                                let _ = define_host_data_property_from_caller(
-                                    &mut caller, arr_ptr as i64, "index", index_val,
-                                );
-                                let input_val = store_runtime_string(&caller, s.clone());
-                                let _ = define_host_data_property_from_caller(
-                                    &mut caller, arr_ptr as i64, "input", input_val,
-                                );
-                                // .groups（隐式创建的 RegExp 无命名组，传 undefined）
-                                let _ = define_host_data_property_from_caller(
-                                    &mut caller, arr_ptr as i64, "groups", value::encode_undefined(),
-                                );
-                                return arr;
+                                return build_match_result(&mut caller, &m, &s, (m.captures.len() + 1) as u32, "");
                             }
                             None => return value::encode_null(),
                         }
@@ -844,113 +795,7 @@
                 // 非全局：返回 exec 结果（数组或 null）
                 match entry.compiled.find(&s) {
                     Some(m) => {
-                        // 构建结果数组 [full_match, group1, group2, ...]
-                        let group_count = m.captures.len() + 1; // +1 for group 0 (full match)
-                        let arr = alloc_array(&mut caller, group_count as u32);
-                        let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                            return value::encode_null();
-                        };
-                        for i in 0..group_count {
-                            let elem = if let Some(range) = m.group(i) {
-                                let group_str = &s[range];
-                                store_runtime_string(&caller, group_str.to_string())
-                            } else {
-                                value::encode_undefined()
-                            };
-                            write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                        }
-                        write_array_length(&mut caller, arr_ptr, group_count as u32);
-
-                        // 设置 .index
-                        let index_val = value::encode_f64(m.start() as f64);
-                        let _ = define_host_data_property_from_caller(
-                            &mut caller, arr_ptr as i64, "index", index_val,
-                        );
-                        // 设置 .input
-                        let input_val = store_runtime_string(&caller, s.clone());
-                        let _ = define_host_data_property_from_caller(
-                            &mut caller, arr_ptr as i64, "input", input_val,
-                        );
-                        // 设置 .groups
-                        let named: Vec<(&str, Option<std::ops::Range<usize>>)> =
-                            m.named_groups().collect();
-                        if !named.is_empty() {
-                            let groups_obj =
-                                alloc_host_object_from_caller(&mut caller, named.len() as u32);
-                            for (name, range) in named {
-                                let val = match range {
-                                    Some(r) => store_runtime_string(&caller, s[r].to_string()),
-                                    None => value::encode_undefined(),
-                                };
-                                let _ = define_host_data_property_from_caller(
-                                    &mut caller, groups_obj, name, val,
-                                );
-                            }
-                            let _ = define_host_data_property_from_caller(
-                                &mut caller, arr_ptr as i64, "groups", groups_obj,
-                            );
-                        } else {
-                            let _ = define_host_data_property_from_caller(
-                                &mut caller, arr_ptr as i64, "groups", value::encode_undefined(),
-                            );
-                        }
-                    // 设置 .indices（仅 d 标志）
-                    if entry.flags.contains('d') {
-                        let indices_arr = alloc_array(&mut caller, group_count as u32);
-                        let indices_ptr = resolve_array_ptr(&mut caller, indices_arr).unwrap_or(0);
-                        for i in 0..group_count {
-                            let elem = match m.group(i) {
-                                Some(range) => {
-                                    let pair = alloc_array(&mut caller, 2);
-                                    let pair_ptr = resolve_array_ptr(&mut caller, pair).unwrap_or(0);
-                                    write_array_elem(&mut caller, pair_ptr, 0, value::encode_f64(range.start as f64));
-                                    write_array_elem(&mut caller, pair_ptr, 1, value::encode_f64(range.end as f64));
-                                    write_array_length(&mut caller, pair_ptr, 2);
-                                    pair
-                                }
-                                None => value::encode_undefined(),
-                            };
-                            write_array_elem(&mut caller, indices_ptr, i as u32, elem);
-                        }
-                        write_array_length(&mut caller, indices_ptr, group_count as u32);
-                        // indices.groups
-                        let named: Vec<(&str, Option<std::ops::Range<usize>>)> =
-                            m.named_groups().collect();
-                        if !named.is_empty() {
-                            let ig = alloc_host_object_from_caller(&mut caller, named.len() as u32);
-                            for (name, range) in named {
-                                let val = match range {
-                                    Some(r) => {
-                                        let pair = alloc_array(&mut caller, 2);
-                                        let pair_ptr = resolve_array_ptr(&mut caller, pair).unwrap_or(0);
-                                        write_array_elem(&mut caller, pair_ptr, 0, value::encode_f64(r.start as f64));
-                                        write_array_elem(&mut caller, pair_ptr, 1, value::encode_f64(r.end as f64));
-                                        write_array_length(&mut caller, pair_ptr, 2);
-                                        pair
-                                    }
-                                    None => value::encode_undefined(),
-                                };
-                                let _ = define_host_data_property_from_caller(
-                                    &mut caller, ig, name, val,
-                                );
-                            }
-                            let _ = define_host_data_property_from_caller(
-                                &mut caller, indices_ptr as i64, "groups", ig,
-                            );
-                        } else {
-                            let _ = define_host_data_property_from_caller(
-                                &mut caller,
-                                indices_ptr as i64,
-                                "groups",
-                                value::encode_undefined(),
-                            );
-                        }
-                        let _ = define_host_data_property_from_caller(
-                            &mut caller, arr_ptr as i64, "indices", indices_arr,
-                        );
-                    }
-
-                        arr
+                        build_match_result(&mut caller, &m, &s, (m.captures.len() + 1) as u32, &entry.flags)
                     }
                     None => value::encode_null(),
                 }
@@ -1073,7 +918,7 @@
                     if named.is_empty() {
                         return value::encode_undefined();
                     }
-                    let obj = alloc_host_object_from_caller(caller, named.len() as u32);
+                    let obj = alloc_host_null_proto_object_from_caller(caller, named.len() as u32);
                     for (name, range) in named {
                         let val = match range {
                             Some(r) => store_runtime_string(caller, s[r].to_string()),

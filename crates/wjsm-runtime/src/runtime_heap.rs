@@ -48,6 +48,56 @@ pub(crate) fn alloc_host_object_from_caller(
     }
     value::encode_object_handle(obj_table_count)
 }
+pub(crate) fn alloc_host_null_proto_object_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    capacity: u32,
+) -> i64 {
+    let heap_ptr = caller
+        .get_export("__heap_ptr")
+        .and_then(|e| e.into_global())
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    let obj_table_count = caller
+        .get_export("__obj_table_count")
+        .and_then(|e| e.into_global())
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    let obj_table_ptr = caller
+        .get_export("__obj_table_ptr")
+        .and_then(|e| e.into_global())
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    let size = 16 + capacity * 32;
+    let new_heap_ptr = heap_ptr.saturating_add(size);
+    {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return value::encode_undefined();
+        };
+        let data = memory.data_mut(&mut *caller);
+        let ptr = heap_ptr as usize;
+        if new_heap_ptr as usize > data.len() {
+            return value::encode_undefined();
+        }
+        // proto slot: null prototype sentinel (0xFFFFFFFF)
+        data[ptr..ptr + 4].copy_from_slice(&(-1i32 as u32).to_le_bytes());
+        data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
+        data[ptr + 5..ptr + 8].fill(0);
+        data[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes());
+        data[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
+        let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
+        if slot_addr + 4 <= data.len() {
+            data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
+        }
+    }
+    if let Some(Extern::Global(global)) = caller.get_export("__heap_ptr") {
+        let _ = global.set(&mut *caller, Val::I32(new_heap_ptr as i32));
+    }
+    if let Some(Extern::Global(global)) = caller.get_export("__obj_table_count") {
+        let _ = global.set(&mut *caller, Val::I32((obj_table_count + 1) as i32));
+    }
+    value::encode_object_handle(obj_table_count)
+}
+
 
 pub(crate) fn create_error_object(
     caller: &mut Caller<'_, RuntimeState>,

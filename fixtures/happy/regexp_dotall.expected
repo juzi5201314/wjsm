@@ -1,8 +1,5 @@
-exit_code: 2
+exit_code: 0
 --- stdout ---
+true
+false
 --- stderr ---
-Runtime error: WASM validation failed: failed to parse WebAssembly module
-
-Caused by:
-    unknown function 384: func index out of bounds (at offset 0x4244)
-
