@@ -906,6 +906,24 @@
                 result
             }
 
+            /// 从 Match 构建命名捕获组对象
+            let build_groups_obj =
+                |caller: &mut Caller<'_, RuntimeState>, m: &regress::Match| -> i64 {
+                    let named: Vec<(&str, Option<std::ops::Range<usize>>)> =
+                        m.named_groups().collect();
+                    if named.is_empty() {
+                        return value::encode_undefined();
+                    }
+                    let obj = alloc_host_object_from_caller(caller, named.len() as u32);
+                    for (name, range) in named {
+                        let val = match range {
+                            Some(r) => store_runtime_string(caller, s[r].to_string()),
+                            None => value::encode_undefined(),
+                        };
+                        let _ = define_host_data_property_from_caller(caller, obj, name, val);
+                    }
+                    obj
+                };
             /// 调用替换函数并返回替换字符串
             fn call_replace_func(
                 caller: &mut Caller<'_, RuntimeState>,
@@ -914,10 +932,11 @@
                 match_start: usize,
                 match_end: usize,
                 captures: &[Option<std::ops::Range<usize>>],
+                named_groups_obj: i64,
             ) -> String {
-                // 参数数量：matched + captures + offset + string
+                // 参数数量：matched + captures + offset + string + groups
                 let capture_count = captures.len().saturating_sub(1); // 不包括 group 0（完整匹配）
-                let args_count = 1 + capture_count + 1 + 1; // matched + captures + offset + string
+                let args_count = 1 + capture_count + 1 + 1 + 1; // matched + captures + offset + string + groups
 
                 // 获取 shadow_sp 和 memory
                 let shadow_sp_global = caller
@@ -982,6 +1001,16 @@
                         &string_val.to_le_bytes(),
                     )
                     .unwrap();
+                arg_idx += 1;
+
+                // 5. named groups object
+                memory
+                    .write(
+                        &mut *caller,
+                        (shadow_sp + arg_idx * 8) as usize,
+                        &named_groups_obj.to_le_bytes(),
+                    )
+                    .unwrap();
 
                 // 调用函数
                 let result = resolve_and_call(
@@ -1018,6 +1047,7 @@
                             (0..m.captures.len() + 1).map(|i| m.group(i)).collect();
                         // 根据是否为函数选择替换方式
                         let replaced = if is_func_replace {
+                            let groups_obj = build_groups_obj(&mut caller, &m);
                             call_replace_func(
                                 &mut caller,
                                 replace,
@@ -1025,6 +1055,7 @@
                                 m.start(),
                                 m.end(),
                                 &captures,
+                                groups_obj,
                             )
                         } else {
                             let replace_str = get_string_value(&mut caller, replace);
@@ -1042,6 +1073,7 @@
                             let captures: Vec<Option<std::ops::Range<usize>>> =
                                 (0..m.captures.len() + 1).map(|i| m.group(i)).collect();
                             let replaced = if is_func_replace {
+                                let groups_obj = build_groups_obj(&mut caller, &m);
                                 call_replace_func(
                                     &mut caller,
                                     replace,
@@ -1049,6 +1081,7 @@
                                     m.start(),
                                     m.end(),
                                     &captures,
+                                    groups_obj,
                                 )
                             } else {
                                 let replace_str = get_string_value(&mut caller, replace);
@@ -1078,6 +1111,7 @@
                             pos,
                             pos + search_str.len(),
                             &captures,
+                            value::encode_undefined(),
                         )
                     } else {
                         get_string_value(&mut caller, replace)
