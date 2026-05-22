@@ -139,6 +139,11 @@ pub(crate) fn builtin_from_static_member(object: &str, property: &str) -> Option
             "setPrototypeOf" => Some(Builtin::ObjectSetPrototypeOf),
             "getOwnPropertyNames" => Some(Builtin::ObjectGetOwnPropertyNames),
             "is" => Some(Builtin::ObjectIs),
+            "groupBy" => Some(Builtin::ObjectGroupBy),
+            _ => None,
+        },
+        "Map" => match property {
+            "groupBy" => Some(Builtin::MapGroupBy),
             _ => None,
         },
         "JSON" => match property {
