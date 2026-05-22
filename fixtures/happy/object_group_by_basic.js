@@ -1,0 +1,10 @@
+const result = Object.groupBy([1, 2, 3, 4, 5], x => x % 2 === 0 ? "even" : "odd");
+const keys = Object.keys(result);
+console.log(keys.length === 2 ? "PASS" : "FAIL: keys=" + keys.length);
+console.log(result.even.length === 2 ? "PASS even" : "FAIL even: " + result.even.length);
+console.log(result.odd.length === 3 ? "PASS odd" : "FAIL odd: " + result.odd.length);
+console.log(result.even[0] === 2 ? "PASS even[0]" : "FAIL");
+console.log(result.even[1] === 4 ? "PASS even[1]" : "FAIL");
+console.log(result.odd[0] === 1 ? "PASS odd[0]" : "FAIL");
+console.log(result.odd[1] === 3 ? "PASS odd[1]" : "FAIL");
+console.log(result.odd[2] === 5 ? "PASS odd[2]" : "FAIL");

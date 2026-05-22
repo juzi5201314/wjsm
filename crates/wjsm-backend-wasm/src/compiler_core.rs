@@ -800,11 +800,6 @@ impl Compiler {
         imports.import("env", "atomics_notify", EntityType::Function(16));
         // Import index 377: atomics_wait_async: (i64, i64, i64) -> i64
         imports.import("env", "atomics_wait_async", EntityType::Function(16));
-        // ── Array grouping imports ──
-        // Import index 378: object_group_by: (i64, i64) -> i64
-        imports.import("env", "object_group_by", EntityType::Function(2));
-        // Import index 379: map_group_by: (i64, i64) -> i64
-        imports.import("env", "map_group_by", EntityType::Function(2));
         // ── DataView imports ──
         // Import index 280: dataview_constructor: (i64, i64, i64) -> i64
         imports.import("env", "dataview_constructor", EntityType::Function(16));
@@ -987,6 +982,11 @@ impl Compiler {
             import_eval_global(&mut imports, "__eval_var_map_ptr", ValType::I32, false);
             import_eval_global(&mut imports, "__eval_var_map_count", ValType::I32, false);
         }
+        // ── Array grouping imports (indices 373-374) ──
+        // Import index 373: object_group_by: (i64, i64) -> i64
+        imports.import("env", "object_group_by", EntityType::Function(2));
+        // Import index 374: map_group_by: (i64, i64) -> i64
+        imports.import("env", "map_group_by", EntityType::Function(2));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -1365,10 +1365,10 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::PrivateGet, 316);
         builtin_func_indices.insert(Builtin::PrivateSet, 317);
         builtin_func_indices.insert(Builtin::PrivateHas, 318);
-        builtin_func_indices.insert(Builtin::ObjectGroupBy, 378);
-        builtin_func_indices.insert(Builtin::MapGroupBy, 379);
         // ── WeakRef builtins ──
         builtin_func_indices.insert(Builtin::WeakRefConstructor, 356);
+        builtin_func_indices.insert(Builtin::ObjectGroupBy, 373);
+        builtin_func_indices.insert(Builtin::MapGroupBy, 374);
         builtin_func_indices.insert(Builtin::WeakRefProtoDeref, 357);
         // ── FinalizationRegistry builtins ──
         builtin_func_indices.insert(Builtin::FinalizationRegistryConstructor, 358);
