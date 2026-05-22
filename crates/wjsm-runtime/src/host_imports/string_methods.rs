@@ -226,6 +226,49 @@
                 } else {
                     let _ = define_host_data_property_from_caller(&mut caller, arr_ptr as i64, "groups", value::encode_undefined());
                 }
+                // 设置 .indices（仅 d 标志）
+                if entry.flags.contains('d') {
+                    let indices_arr = alloc_array(&mut caller, group_count as u32);
+                    let indices_ptr = resolve_array_ptr(&mut caller, indices_arr).unwrap_or(0);
+                    for i in 0..group_count {
+                        let elem = match m.group(i) {
+                            Some(range) => {
+                                let pair = alloc_array(&mut caller, 2);
+                                let pair_ptr = resolve_array_ptr(&mut caller, pair).unwrap_or(0);
+                                write_array_elem(&mut caller, pair_ptr, 0, value::encode_f64(range.start as f64));
+                                write_array_elem(&mut caller, pair_ptr, 1, value::encode_f64(range.end as f64));
+                                write_array_length(&mut caller, pair_ptr, 2);
+                                pair
+                            }
+                            None => value::encode_undefined(),
+                        };
+                        write_array_elem(&mut caller, indices_ptr, i as u32, elem);
+                    }
+                    write_array_length(&mut caller, indices_ptr, group_count as u32);
+                    // indices.groups
+                    let named: Vec<(&str, Option<std::ops::Range<usize>>)> = m.named_groups().collect();
+                    if !named.is_empty() {
+                        let ig = alloc_host_object_from_caller(&mut caller, named.len() as u32);
+                        for (name, range) in named {
+                            let val = match range {
+                                Some(r) => {
+                                    let pair = alloc_array(&mut caller, 2);
+                                    let pair_ptr = resolve_array_ptr(&mut caller, pair).unwrap_or(0);
+                                    write_array_elem(&mut caller, pair_ptr, 0, value::encode_f64(r.start as f64));
+                                    write_array_elem(&mut caller, pair_ptr, 1, value::encode_f64(r.end as f64));
+                                    write_array_length(&mut caller, pair_ptr, 2);
+                                    pair
+                                }
+                                None => value::encode_undefined(),
+                            };
+                            let _ = define_host_data_property_from_caller(&mut caller, ig, name, val);
+                        }
+                        let _ = define_host_data_property_from_caller(&mut caller, indices_ptr as i64, "groups", ig);
+                    } else {
+                        let _ = define_host_data_property_from_caller(&mut caller, indices_ptr as i64, "groups", value::encode_undefined());
+                    }
+                    let _ = define_host_data_property_from_caller(&mut caller, arr_ptr as i64, "indices", indices_arr);
+                }
                 results.push(arr);
                 if results.len() > 10000 {
                     break;
