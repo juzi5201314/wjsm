@@ -1455,9 +1455,14 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             }
             Some(value::encode_undefined())
         }
-        NativeCallable::WeakRefDerefMethod => Some(value::encode_undefined()),
-        NativeCallable::FinalizationRegistryRegisterMethod => Some(value::encode_undefined()),
-        NativeCallable::FinalizationRegistryUnregisterMethod => Some(value::encode_undefined()),
+        NativeCallable::WeakRefDerefMethod => Some(weakref_deref_impl(caller, this_val)),
+        NativeCallable::FinalizationRegistryRegisterMethod => {
+            Some(fr_register_impl_with_args(caller, this_val, args))
+        }
+        NativeCallable::FinalizationRegistryUnregisterMethod => {
+            let token = args.first().copied().unwrap_or_else(value::encode_undefined);
+            Some(fr_unregister_impl(caller, this_val, token))
+        }
         NativeCallable::StubGlobal(_) => Some(value::encode_undefined()),
         NativeCallable::GcCollect => {
             trigger_gc(caller);
@@ -1498,6 +1503,145 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         }
         NativeCallable::AtomicsGlobal => Some(alloc_host_object_from_caller(caller, 4)),
     }
+}
+pub(crate) fn weakref_deref_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+) -> i64 {
+    if !value::is_object(this_val) {
+        return value::encode_undefined();
+    }
+    let obj_ptr = resolve_handle_idx(
+        caller,
+        value::decode_object_handle(this_val) as usize,
+    );
+    let handle_val = obj_ptr.and_then(|p| {
+        read_object_property_by_name(caller, p, "__weakref_handle__")
+    });
+    let handle = handle_val
+        .map(|v| value::decode_f64(v) as usize)
+        .unwrap_or(0);
+    let table = caller
+        .data()
+        .weakref_table
+        .lock()
+        .expect("weakref table mutex");
+    if handle >= table.len() {
+        return value::encode_undefined();
+    }
+    let entry = &table[handle];
+    if entry.target_handle == 0 {
+        return value::encode_undefined();
+    }
+    value::encode_object_handle(entry.target_handle)
+}
+pub(crate) fn fr_unregister_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    token: i64,
+) -> i64 {
+    if !value::is_object(this_val) {
+        return value::encode_bool(false);
+    }
+    let obj_ptr = resolve_handle_idx(
+        caller,
+        value::decode_object_handle(this_val) as usize,
+    );
+    let handle_val = obj_ptr.and_then(|p| {
+        read_object_property_by_name(
+            caller,
+            p,
+            "__finalization_registry_handle__",
+        )
+    });
+    let handle = handle_val
+        .map(|v| value::decode_f64(v) as usize)
+        .unwrap_or(0);
+    if handle == 0 {
+        return value::encode_bool(false);
+    }
+    let mut table = caller
+        .data()
+        .finalization_registry_table
+        .lock()
+        .expect("finalization registry table mutex");
+    if handle >= table.len() {
+        return value::encode_bool(false);
+    }
+    let entry = &mut table[handle];
+    let initial_len = entry.registrations.len();
+    entry.registrations.retain(|r| {
+        match &r.unregister_token {
+            Some(t) => !same_value_zero(*t, token),
+            None => true,
+        }
+    });
+    value::encode_bool(entry.registrations.len() < initial_len)
+}
+pub(crate) fn fr_register_impl_with_args(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    args: Vec<i64>,
+) -> i64 {
+    if args.len() < 2 {
+        return value::encode_undefined();
+    }
+    let target = args[0];
+    let held_value = args[1];
+    let unregister_token = if args.len() >= 3 {
+        let token = args[2];
+        if value::is_js_object(token) || value::is_symbol(token) {
+            Some(token)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if !value::is_js_object(target) {
+        return value::encode_undefined();
+    }
+    let target_handle = match resolve_handle(caller, target) {
+        Some(ptr) => ptr as u32,
+        None => return value::encode_undefined(),
+    };
+    if !value::is_object(this_val) {
+        return value::encode_undefined();
+    }
+    let obj_ptr = resolve_handle_idx(
+        caller,
+        value::decode_object_handle(this_val) as usize,
+    );
+    let handle_val = obj_ptr.and_then(|p| {
+        read_object_property_by_name(
+            caller,
+            p,
+            "__finalization_registry_handle__",
+        )
+    });
+    let handle = handle_val
+        .map(|v| value::decode_f64(v) as usize)
+        .unwrap_or(0);
+    if handle == 0 {
+        return value::encode_undefined();
+    }
+    {
+        let mut table = caller
+            .data()
+            .finalization_registry_table
+            .lock()
+            .expect("finalization registry table mutex");
+        if handle < table.len() {
+            table[handle]
+                .registrations
+                .push(FinalizationRegistration {
+                    target_handle,
+                    held_value,
+                    unregister_token,
+                });
+        }
+    }
+    value::encode_undefined()
 }
 /// Trigger a mark-sweep GC cycle.
 pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
@@ -1729,61 +1873,5 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
     // Reset alloc counter
     *caller.data().alloc_counter.lock().expect("alloc_counter") = 0;
 
-    // Process weak references
-    {
-        let mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits");
-        let is_marked = |handle_idx: u32| -> bool {
-            let word = (handle_idx as usize) / 64;
-            let bit = (handle_idx as usize) % 64;
-            word < mark_bits.len() && (mark_bits[word] & (1u64 << bit)) != 0
-        };
-        // WeakRef
-        {
-            let mut wr_table = caller.data().weakref_table.lock().expect("weakref_table");
-            for entry in wr_table.iter_mut() {
-                if entry.target_handle != 0 && !is_marked(entry.target_handle) {
-                    entry.target_handle = 0;
-                }
-            }
-        }
-        // FinalizationRegistry
-        {
-            let mut fr_table = caller.data().finalization_registry_table.lock().expect("fr_table");
-            for entry in fr_table.iter_mut() {
-                if !is_marked(entry.object_handle) { continue; }
-                let mut held_values = Vec::new();
-                entry.registrations.retain(|reg| {
-                    if !is_marked(reg.target_handle) {
-                        held_values.push(reg.held_value);
-                        false
-                    } else {
-                        true
-                    }
-                });
-                if !held_values.is_empty() {
-                    let mut pending = caller.data().pending_cleanup_callbacks
-                        .lock().expect("pending_cleanup");
-                    pending.push((entry.callback, held_values));
-                }
-            }
-        }
-    }
 
-    // Schedule FinalizationRegistry cleanup microtasks
-    {
-        let mut pending = caller.data().pending_cleanup_callbacks
-            .lock().expect("pending_cleanup");
-        let microtasks_to_schedule: Vec<(i64, Vec<i64>)> = pending.drain(..).collect();
-        drop(pending);
-        let mut mq = caller.data().microtask_queue
-            .lock().expect("microtask_queue");
-        for (callback, held_values) in microtasks_to_schedule {
-            for held_value in held_values {
-                mq.push_back(Microtask::CleanupFinalizationRegistry {
-                    callback,
-                    held_value,
-                });
-            }
-        }
-    }
 }

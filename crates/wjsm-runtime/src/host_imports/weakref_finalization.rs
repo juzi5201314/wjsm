@@ -41,25 +41,25 @@
          args_count: i32|
          -> i64 {
             if args_count < 1 {
-                *caller.data().runtime_error.lock().expect("error mutex") =
-                    Some("TypeError: WeakRef constructor requires a target argument".to_string());
-                return value::encode_undefined();
+                let msg_val = store_runtime_string(&mut caller, "TypeError: WeakRef constructor requires a target argument".to_string());
+                let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
+                return value::encode_exception(value::decode_object_handle(error_obj));
             }
             let target = read_shadow_arg(&mut caller, args_base, 0);
             // Validate: target must be a JS object (per spec, Type(target) must be Object)
             if !value::is_js_object(target) {
-                *caller.data().runtime_error.lock().expect("error mutex") =
-                    Some("TypeError: WeakRef: target must be an object".to_string());
-                return value::encode_undefined();
+                let msg_val = store_runtime_string(&mut caller, "TypeError: WeakRef: target must be an object".to_string());
+                let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
+                return value::encode_exception(value::decode_object_handle(error_obj));
             }
             // Resolve target's handle from the VM object table
             let target_handle = match resolve_handle(&mut caller, target) {
                 Some(ptr) => ptr as u32,
                 None => {
                     // If handle resolution fails, target is not a heap-allocated object
-                    *caller.data().runtime_error.lock().expect("error mutex") =
-                        Some("TypeError: WeakRef: cannot resolve target handle".to_string());
-                    return value::encode_undefined();
+                    let msg_val = store_runtime_string(&mut caller, "TypeError: WeakRef: cannot resolve target handle".to_string());
+                    let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
+                    return value::encode_exception(value::decode_object_handle(error_obj));
                 }
             };
             // Push a new WeakRef entry and get its index
@@ -97,33 +97,7 @@
     let weakref_proto_deref_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            if !value::is_object(this_val) {
-                return value::encode_undefined();
-            }
-            let obj_ptr = resolve_handle_idx(
-                &mut caller,
-                value::decode_object_handle(this_val) as usize,
-            );
-            let handle_val = obj_ptr.and_then(|p| {
-                read_object_property_by_name(&mut caller, p, "__weakref_handle__")
-            });
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
-            let table = caller
-                .data()
-                .weakref_table
-                .lock()
-                .expect("weakref table mutex");
-            if handle >= table.len() {
-                return value::encode_undefined();
-            }
-            let entry = &table[handle];
-            if entry.target_handle == 0 {
-                return value::encode_undefined();
-            }
-            // Re-encode the stored handle as an object value
-            value::encode_object_handle(entry.target_handle)
+            weakref_deref_impl(&mut caller, this_val)
         },
     );
 
@@ -281,44 +255,7 @@
     let finalization_registry_proto_unregister_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, token: i64| -> i64 {
-            if !value::is_object(this_val) {
-                return value::encode_bool(false);
-            }
-            let obj_ptr = resolve_handle_idx(
-                &mut caller,
-                value::decode_object_handle(this_val) as usize,
-            );
-            let handle_val = obj_ptr.and_then(|p| {
-                read_object_property_by_name(
-                    &mut caller,
-                    p,
-                    "__finalization_registry_handle__",
-                )
-            });
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
-            if handle == 0 {
-                return value::encode_bool(false);
-            }
-            let mut table = caller
-                .data()
-                .finalization_registry_table
-                .lock()
-                .expect("finalization registry table mutex");
-            if handle >= table.len() {
-                return value::encode_bool(false);
-            }
-            let entry = &mut table[handle];
-            let initial_len = entry.registrations.len();
-            // Remove all registrations whose unregister_token matches `token`
-            entry.registrations.retain(|r| {
-                match &r.unregister_token {
-                    Some(t) => !same_value_zero(*t, token),
-                    None => true, // no token → cannot be matched
-                }
-            });
-            value::encode_bool(entry.registrations.len() < initial_len)
+            fr_unregister_impl(&mut caller, this_val, token)
         },
     );
 

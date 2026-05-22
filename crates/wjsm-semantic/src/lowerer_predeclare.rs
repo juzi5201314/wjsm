@@ -388,6 +388,11 @@ impl Lowerer {
     /// Also checks for eval_continue_block set by lower_direct_eval_call.
     pub(crate) fn resolve_store_block(&mut self, block: BasicBlockId) -> BasicBlockId {
         // eval 异常检查分叉后，后续代码应插入到 continue block
+        // new_expr (WeakRef/FR constructor) 异常检查分叉后，后续代码应插入到 continue block
+        if let Some(cont) = self.new_expr_continue_block.take() {
+            return cont;
+        }
+
         if let Some(cont) = self.eval_continue_block.take() {
             return cont;
         }

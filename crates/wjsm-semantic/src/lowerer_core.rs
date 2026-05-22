@@ -72,6 +72,7 @@ impl Lowerer {
             active_using_vars: Vec::new(),
             typedarray_bindings: std::collections::HashSet::new(),
             eval_continue_block: None,
+            new_expr_continue_block: None,
             eval_completion: None,
         }
     }

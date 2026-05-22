@@ -736,7 +736,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64Const(0x1F));
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(value::TAG_NATIVE_CALLABLE as i64));
         self.emit(WasmInstruction::I64Eq);
@@ -752,7 +752,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64Const(0x1F));
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(0xA)); // TAG_CLOSURE
         self.emit(WasmInstruction::I64Eq);

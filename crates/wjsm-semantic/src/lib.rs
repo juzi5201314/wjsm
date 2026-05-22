@@ -1296,6 +1296,8 @@ struct Lowerer {
     /// eval 调用在表达式上下文时的异常检查分叉后的 continue block。
     /// 由 lower_direct_eval_call 设置，由 resolve_store_block 消费。
     pub(crate) eval_continue_block: Option<BasicBlockId>,
+    /// 由 lower_new_expr 在构建了异常检查分叉后设置，由 resolve_store_block 消费。
+    pub(crate) new_expr_continue_block: Option<BasicBlockId>,
     /// 当前作用域中活跃的 using 变量（用于作用域退出时自动 dispose）
     active_using_vars: Vec<ActiveUsingVar>,
     /// 追踪当前作用域中已推断为 TypedArray 的绑定（scope_id, name）。
