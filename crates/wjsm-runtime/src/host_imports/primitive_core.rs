@@ -808,14 +808,14 @@
             // 检查 replace 是否为函数（支持函数替换）
             let is_func_replace = value::is_callable(replace);
 
-            /// 处理 JavaScript 替换模式：$$, $&, $`, $', $n, $nn
+            /// 处理 JavaScript 替换模式：$$, $&, $`, $', $n, $nn, $<name>
             fn process_replacement(
                 replace_str: &str,
                 s: &str,
-                match_start: usize,
-                match_end: usize,
-                captures: &[Option<std::ops::Range<usize>>],
+                m: &regress::Match,
             ) -> String {
+                let match_start = m.start();
+                let match_end = m.end();
                 let mut result = String::new();
                 let chars: Vec<char> = replace_str.chars().collect();
                 let mut i = 0;
@@ -824,24 +824,39 @@
                         let next = chars[i + 1];
                         match next {
                             '$' => {
-                                // $$ → $
                                 result.push('$');
                                 i += 2;
                             }
                             '&' => {
-                                // $& → matched substring
                                 result.push_str(&s[match_start..match_end]);
                                 i += 2;
                             }
                             '`' => {
-                                // $` → portion before match
                                 result.push_str(&s[..match_start]);
                                 i += 2;
                             }
                             '\'' => {
-                                // $' → portion after match
                                 result.push_str(&s[match_end..]);
                                 i += 2;
+                            }
+                            '<' => {
+                                // $<name> → named capture group
+                                if let Some(close_pos) =
+                                    chars[i + 2..].iter().position(|&c| c == '>')
+                                {
+                                    let name: String =
+                                        chars[i + 2..i + 2 + close_pos].iter().collect();
+                                    if let Some(range) = m.named_group(&name) {
+                                        result.push_str(&s[range]);
+                                    }
+                                    // 命名组不存在或未匹配 → 空字符串（ES 规范）
+                                    i += 3 + close_pos; // skip past $<name>
+                                } else {
+                                    // 未闭合的 $<，保持原样
+                                    result.push('$');
+                                    result.push('<');
+                                    i += 2;
+                                }
                             }
                             '0'..='9' => {
                                 // $n or $nn → captured group
@@ -856,30 +871,28 @@
                                 }
                                 // 检查是否为两位数 $nn
                                 if i + 2 < chars.len()
-                                    && let Some('0'..='9') = chars.get(i + 2) {
-                                        let next_digit = (chars[i + 2] as u8 - b'0') as usize;
-                                        let two_digit = group_num * 10 + next_digit;
-                                        // $00 不是特殊模式，只有 $01-$99 是
-                                        if two_digit > 0 && two_digit <= captures.len() {
-                                            group_num = two_digit;
-                                            consumed = 3;
-                                        }
+                                    && let Some('0'..='9') = chars.get(i + 2)
+                                {
+                                    let next_digit = (chars[i + 2] as u8 - b'0') as usize;
+                                    let two_digit = group_num * 10 + next_digit;
+                                    // $00 不是特殊模式，只有 $01-$99 是
+                                    if two_digit > 0 && two_digit <= m.captures.len() {
+                                        group_num = two_digit;
+                                        consumed = 3;
                                     }
-                                // 获取捕获组
-                                if group_num < captures.len() {
-                                    if let Some(ref range) = captures[group_num] {
-                                        result.push_str(&s[range.clone()]);
+                                }
+                                // 获取捕获组（group_num ≥ 1）
+                                if group_num <= m.captures.len() {
+                                    if let Some(range) = m.group(group_num) {
+                                        result.push_str(&s[range]);
                                     }
-                                    // 如果捕获组未匹配，什么都不添加
                                 } else {
-                                    // 无效的组号，保持原样
                                     result.push('$');
                                     result.push(next);
                                 }
                                 i += consumed;
                             }
                             _ => {
-                                // 未知模式，保持原样
                                 result.push('$');
                                 result.push(next);
                                 i += 2;
@@ -1015,7 +1028,7 @@
                             )
                         } else {
                             let replace_str = get_string_value(&mut caller, replace);
-                            process_replacement(&replace_str, &s, m.start(), m.end(), &captures)
+                            process_replacement(&replace_str, &s, &m)
                         };
                         result.push_str(&replaced);
                         last_end = m.end();
@@ -1039,7 +1052,7 @@
                                 )
                             } else {
                                 let replace_str = get_string_value(&mut caller, replace);
-                                process_replacement(&replace_str, &s, m.start(), m.end(), &captures)
+                                process_replacement(&replace_str, &s, &m)
                             };
                             let mut result = String::new();
                             result.push_str(&s[..m.start()]);
