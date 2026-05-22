@@ -426,7 +426,7 @@
             let mut seen = [false; 128u8 as usize];
             for c in flags.chars() {
                 if !VALID_FLAGS.contains(&c) {
-                    *caller.data().runtime_error.lock().unwrap() =
+                    *caller.data().runtime_error.lock().expect("runtime error mutex") =
                         Some(format!(
                             "SyntaxError: Invalid regular expression flag: '{}'",
                             c
@@ -436,7 +436,7 @@
                 let idx = c as usize;
                 if idx < seen.len() {
                     if seen[idx] {
-                        *caller.data().runtime_error.lock().unwrap() =
+                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
                             Some(format!(
                                 "SyntaxError: Duplicate regular expression flag: '{}'",
                                 c
@@ -601,7 +601,7 @@
                     }
 
                     // 构建结果数组 [full_match, group1, group2, ...]
-                    let group_count = m.captures.len() + 1; // +1 for group 0 (full match)
+                    let group_count = m.captures.len() + 1;
                     let arr = alloc_array(&mut caller, group_count as u32);
                     let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
                         return value::encode_null();
@@ -612,11 +612,50 @@
                             let group_str = &s[range];
                             store_runtime_string(&caller, group_str.to_string())
                         } else {
-                            value::encode_undefined() // 捕获组未匹配时为 undefined
+                            value::encode_undefined()
                         };
                         write_array_elem(&mut caller, arr_ptr, i as u32, elem);
                     }
                     write_array_length(&mut caller, arr_ptr, group_count as u32);
+
+                    // 设置 .index 属性
+                    let index_val = value::encode_f64(m.start() as f64);
+                    let _ = define_host_data_property_from_caller(
+                        &mut caller, arr_ptr as i64, "index", index_val,
+                    );
+
+                    // 设置 .input 属性
+                    let input_val = store_runtime_string(&caller, s.clone());
+                    let _ = define_host_data_property_from_caller(
+                        &mut caller, arr_ptr as i64, "input", input_val,
+                    );
+
+                    // 设置 .groups 属性
+                    let named: Vec<(&str, Option<std::ops::Range<usize>>)> =
+                        m.named_groups().collect();
+                    if !named.is_empty() {
+                        let groups_obj =
+                            alloc_host_object_from_caller(&mut caller, named.len() as u32);
+                        for (name, range) in named {
+                            let val = match range {
+                                Some(r) => {
+                                    store_runtime_string(&caller, s[r].to_string())
+                                }
+                                None => value::encode_undefined(),
+                            };
+                            let _ = define_host_data_property_from_caller(
+                                &mut caller, groups_obj, name, val,
+                            );
+                        }
+                        let _ = define_host_data_property_from_caller(
+                            &mut caller, arr_ptr as i64, "groups", groups_obj,
+                        );
+                    } else {
+                        let _ = define_host_data_property_from_caller(
+                            &mut caller, arr_ptr as i64, "groups", value::encode_undefined(),
+                        );
+                    }
+
                     arr
                 }
                 None => {
