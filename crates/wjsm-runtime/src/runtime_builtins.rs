@@ -1502,7 +1502,251 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             Some(value::encode_f64(start.elapsed().as_millis() as f64))
         }
         NativeCallable::AtomicsGlobal => Some(alloc_host_object_from_caller(caller, 4)),
+        // ── Async iterator methods ──
+        NativeCallable::AsyncIteratorProtoSymbolAsyncIterator => Some(this_val),
+        NativeCallable::AsyncFromSyncNext { handle } => Some(advance_async_from_sync(caller, handle)),
+        NativeCallable::AsyncFromSyncReturn { handle } => {
+            let arg = args.first().copied().unwrap_or(value::encode_undefined());
+            let (sync_iter_handle, sync_done) = {
+                let table = caller
+                    .data()
+                    .async_from_sync_iterators
+                    .lock()
+                    .expect("async-from-sync iterators mutex");
+                let entry = match table.get(handle as usize) {
+                    Some(e) => e,
+                    None => return Some(value::encode_undefined()),
+                };
+                (entry.sync_iterator, entry.sync_done)
+            };
+            if sync_done {
+                let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+                let result = alloc_iterator_result_from_caller(caller, arg, true);
+                resolve_promise_from_caller(caller, promise, result);
+                return Some(promise);
+            }
+            {
+                let mut table = caller
+                    .data()
+                    .async_from_sync_iterators
+                    .lock()
+                    .expect("async-from-sync iterators mutex");
+                if let Some(entry) = table.get_mut(handle as usize) {
+                    entry.sync_done = true;
+                }
+            }
+            Some(call_sync_iter_and_wrap(caller, sync_iter_handle, Some(arg), false))
+        }
+        NativeCallable::AsyncFromSyncThrow { handle } => {
+            let arg = args.first().copied().unwrap_or(value::encode_undefined());
+            let (_sync_iter_handle, sync_done) = {
+                let table = caller
+                    .data()
+                    .async_from_sync_iterators
+                    .lock()
+                    .expect("async-from-sync iterators mutex");
+                let entry = match table.get(handle as usize) {
+                    Some(e) => e,
+                    None => return Some(value::encode_undefined()),
+                };
+                (entry.sync_iterator, entry.sync_done)
+            };
+            if sync_done {
+                let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+                settle_promise(caller.data(), promise, PromiseSettlement::Reject(arg));
+                return Some(promise);
+            }
+            {
+                let mut table = caller
+                    .data()
+                    .async_from_sync_iterators
+                    .lock()
+                    .expect("async-from-sync iterators mutex");
+                if let Some(entry) = table.get_mut(handle as usize) {
+                    entry.sync_done = true;
+                }
+            }
+            let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+            settle_promise(caller.data(), promise, PromiseSettlement::Reject(arg));
+            Some(promise)
+        }
     }
+}
+/// 创建 AsyncFromSyncIterator：将同步迭代器包装为异步迭代器协议。
+/// 在 iterators 表中注册 ObjectIter（next/return 为 NativeCallable），
+/// 返回 TAG_ITERATOR 句柄供 for-await 使用。
+pub(crate) fn create_async_from_sync_iterator(
+    caller: &mut Caller<'_, RuntimeState>,
+    sync_iter_handle: i64,
+) -> i64 {
+    // 注册 async-from-sync iterator 状态条目
+    let table_idx = {
+        let mut table = caller
+            .data()
+            .async_from_sync_iterators
+            .lock()
+            .expect("async-from-sync iterators mutex");
+        let idx = table.len() as u32;
+        table.push(AsyncFromSyncIteratorEntry {
+            sync_iterator: sync_iter_handle,
+            sync_done: false,
+        });
+        idx
+    };
+
+    // 创建 NativeCallable 包装 next/return/throw
+    let next_callable = {
+        let mut nc = caller
+            .data()
+            .native_callables
+            .lock()
+            .expect("native callables mutex");
+        let handle = nc.len() as u32;
+        nc.push(NativeCallable::AsyncFromSyncNext { handle: table_idx });
+        value::encode_native_callable_idx(handle)
+    };
+    let return_callable = {
+        let mut nc = caller
+            .data()
+            .native_callables
+            .lock()
+            .expect("native callables mutex");
+        let handle = nc.len() as u32;
+        nc.push(NativeCallable::AsyncFromSyncReturn { handle: table_idx });
+        value::encode_native_callable_idx(handle)
+    };
+
+    // 注册为 ObjectIter（next/return 为 NativeCallable）
+    let mut iters = caller
+        .data()
+        .iterators
+        .lock()
+        .expect("iterators mutex");
+    let iter_handle = iters.len() as u32;
+    iters.push(IteratorState::ObjectIter {
+        next: next_callable,
+        return_method: Some(return_callable),
+        current_value: value::encode_undefined(),
+        has_current: false,
+        done: false,
+    });
+    value::encode_handle(value::TAG_ITERATOR, iter_handle)
+}
+
+/// 调用同步迭代器的方法并将结果包装为 resolved Promise。
+fn call_sync_iter_and_wrap(
+    caller: &mut Caller<'_, RuntimeState>,
+    sync_iter_handle: i64,
+    arg_if_return: Option<i64>,
+    is_throw: bool,
+) -> i64 {
+    let sync_handle_idx = value::decode_handle(sync_iter_handle) as usize;
+
+    let table = caller
+        .get_export("__table")
+        .and_then(|e| e.into_table());
+    let Some(func_table) = table else {
+        return value::encode_undefined();
+    };
+
+    let method_to_call = {
+        let iters = caller.data().iterators.lock().expect("iterators mutex");
+        match iters.get(sync_handle_idx) {
+            Some(IteratorState::ObjectIter { next, return_method, .. }) => {
+                if arg_if_return.is_some() {
+                    return_method.unwrap_or(*next)
+                } else {
+                    *next
+                }
+            }
+            _ => return value::encode_undefined(),
+        }
+    };
+
+    if is_throw {
+        let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+        settle_promise(
+            caller.data(),
+            promise,
+            PromiseSettlement::Reject(arg_if_return.unwrap_or(value::encode_undefined())),
+        );
+        return promise;
+    }
+
+    let call_arg = arg_if_return.unwrap_or(value::encode_undefined());
+    let raw_result =
+        call_host_function_from_caller(caller, &func_table, method_to_call, call_arg)
+            .unwrap_or(value::encode_undefined());
+
+    let (done, current_value) =
+        if (value::is_object(raw_result)
+            || value::is_function(raw_result)
+            || value::is_array(raw_result))
+            && let Some(ptr) = resolve_handle(caller, raw_result)
+        {
+            let done = read_object_property_by_name(caller, ptr, "done")
+                .map(nanbox_to_bool)
+                .unwrap_or(true);
+            let value = read_object_property_by_name(caller, ptr, "value")
+                .unwrap_or(value::encode_undefined());
+            (done, value)
+        } else {
+            (true, call_arg)
+        };
+
+    let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+    let result = alloc_iterator_result_from_caller(caller, current_value, done);
+    resolve_promise_from_caller(caller, promise, result);
+    promise
+}
+
+/// AsyncFromSyncIterator.next()：推进同步迭代器并返回 Promise<IteratorResult>。
+fn advance_async_from_sync(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle: u32,
+) -> i64 {
+    let (sync_iter_handle, sync_done) = {
+        let table = caller
+            .data()
+            .async_from_sync_iterators
+            .lock()
+            .expect("async-from-sync iterators mutex");
+        let entry = match table.get(handle as usize) {
+            Some(e) => e,
+            None => return value::encode_undefined(),
+        };
+        (entry.sync_iterator, entry.sync_done)
+    };
+
+    if sync_done {
+        let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+        let result =
+            alloc_iterator_result_from_caller(caller, value::encode_undefined(), true);
+        resolve_promise_from_caller(caller, promise, result);
+        return promise;
+    }
+
+    let promise = call_sync_iter_and_wrap(caller, sync_iter_handle, None, false);
+
+    {
+        let sync_handle_idx = value::decode_handle(sync_iter_handle) as usize;
+        let iters = caller.data().iterators.lock().expect("iterators mutex");
+        if let Some(IteratorState::ObjectIter { done, .. }) = iters.get(sync_handle_idx) {
+            if *done {
+                drop(iters);
+                let mut table = caller
+                    .data()
+                    .async_from_sync_iterators
+                    .lock()
+                    .expect("async-from-sync iterators mutex");
+                if let Some(entry) = table.get_mut(handle as usize) {
+                    entry.sync_done = true;
+                }
+            }
+        }
+    }
+
+    promise
 }
 pub(crate) fn weakref_deref_impl(
     caller: &mut Caller<'_, RuntimeState>,

@@ -15,7 +15,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 378] = [
+const HOST_IMPORT_NAMES: [&str; 379] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -410,6 +410,7 @@ const HOST_IMPORT_NAMES: [&str; 378] = [
     "atomics_wait",                             // 375
     "atomics_notify",                           // 376
     "atomics_wait_async",                       // 377
+    "async_iterator_from",                      // 378
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -418,7 +419,7 @@ const HOST_IMPORT_NAMES: [&str; 378] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        378,
+        379,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1033,6 +1034,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::IteratorFrom => ("iterator.from", 1),
         Builtin::IteratorNext => ("iterator.next", 1),
         Builtin::IteratorClose => ("iterator.close", 1),
+        Builtin::AsyncIteratorFrom => ("async_iterator.from", 1),
         Builtin::IteratorValue => ("iterator.value", 1),
         Builtin::IteratorDone => ("iterator.done", 1),
         Builtin::EnumeratorFrom => ("enumerator.from", 1),
