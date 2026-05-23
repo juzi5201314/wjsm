@@ -15,7 +15,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 379] = [
+const HOST_IMPORT_NAMES: [&str; 381] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -411,6 +411,8 @@ const HOST_IMPORT_NAMES: [&str; 379] = [
     "atomics_notify",                           // 376
     "atomics_wait_async",                       // 377
     "async_iterator_from",                      // 378
+    "object.group_by",                          // 379
+    "map.group_by",                             // 380
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -419,7 +421,7 @@ const HOST_IMPORT_NAMES: [&str; 379] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        379,
+        381,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -1109,6 +1111,8 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ObjectSetPrototypeOf => ("object.set_prototype_of", 2),
         Builtin::ObjectGetOwnPropertyNames => ("object.get_own_property_names", 1),
         Builtin::ObjectIs => ("object.is", 2),
+        Builtin::ObjectGroupBy => ("object.group_by", 2),
+        Builtin::MapGroupBy => ("map.group_by", 2),
         Builtin::BigIntFromLiteral => ("bigint.from_literal", 2),
         Builtin::BigIntAdd => ("bigint.add", 2),
         Builtin::BigIntSub => ("bigint.sub", 2),

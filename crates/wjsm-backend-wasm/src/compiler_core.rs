@@ -12,6 +12,7 @@ impl Compiler {
     }
 
     pub(crate) fn new_with_data_base(mode: CompileMode, data_base: u32) -> Self {
+        let num_imports = if mode == CompileMode::Eval { 389u32 } else { 375u32 };
         let mut types = TypeSection::new();
         // Type 0: (i64) -> ()  — console_log
         types.ty().function(vec![ValType::I64], vec![]);
@@ -997,6 +998,11 @@ impl Compiler {
             import_eval_global(&mut imports, "__eval_var_map_ptr", ValType::I32, false);
             import_eval_global(&mut imports, "__eval_var_map_count", ValType::I32, false);
         }
+        // ── Array grouping imports (indices 373-374) ──
+        // Import index 373: object_group_by: (i64, i64) -> i64
+        imports.import("env", "object_group_by", EntityType::Function(2));
+        // Import index 374: map_group_by: (i64, i64) -> i64
+        imports.import("env", "map_group_by", EntityType::Function(2));
         let mut builtin_func_indices = HashMap::new();
         builtin_func_indices.insert(Builtin::ConsoleLog, 0);
         builtin_func_indices.insert(Builtin::ConsoleError, 23);
@@ -1378,6 +1384,8 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::PrivateHas, 318);
         // ── WeakRef builtins ──
         builtin_func_indices.insert(Builtin::WeakRefConstructor, 356);
+        builtin_func_indices.insert(Builtin::ObjectGroupBy, 379);
+        builtin_func_indices.insert(Builtin::MapGroupBy, 380);
         builtin_func_indices.insert(Builtin::WeakRefProtoDeref, 357);
         // ── FinalizationRegistry builtins ──
         builtin_func_indices.insert(Builtin::FinalizationRegistryConstructor, 358);

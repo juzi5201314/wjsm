@@ -101,6 +101,9 @@ pub enum Builtin {
     ObjectSetPrototypeOf,
     ObjectGetOwnPropertyNames,
     ObjectIs,
+    ObjectGroupBy,
+    // ── Map.groupBy ──
+    MapGroupBy,
     // ── BigInt operations ──────────────────────────────────────────────
     BigIntFromLiteral,
     BigIntAdd,
@@ -514,6 +517,8 @@ impl fmt::Display for Builtin {
             Self::ObjectSetPrototypeOf => "object.set_prototype_of",
             Self::ObjectGetOwnPropertyNames => "object.get_own_property_names",
             Self::ObjectIs => "object.is",
+            Self::ObjectGroupBy => "object.group_by",
+            Self::MapGroupBy => "map.group_by",
             Self::BigIntFromLiteral => "bigint.from_literal",
             Self::BigIntAdd => "bigint.add",
             Self::BigIntSub => "bigint.sub",

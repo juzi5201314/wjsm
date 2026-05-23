@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 exit_code: 0
 --- stdout ---
 2026-05-22
@@ -6,3 +7,13 @@ exit_code: 0
 22
 undefined
 --- stderr ---
+=======
+exit_code: 2
+--- stdout ---
+--- stderr ---
+Runtime error: WASM validation failed: failed to parse WebAssembly module
+
+Caused by:
+    unknown function 384: func index out of bounds (at offset 0x4244)
+
+>>>>>>> feat/array-grouping

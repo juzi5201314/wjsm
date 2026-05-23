@@ -124,6 +124,8 @@ pub const SUPPORTED_FEATURES: &[&str] = &[
     "SharedArrayBuffer",
     "Atomics",
     "Atomics.waitAsync",
+    // ── Array grouping ──
+    "array-grouping",
 ];
 
 /// 需要忽略的 flags（当前 wjsm 不支持）。

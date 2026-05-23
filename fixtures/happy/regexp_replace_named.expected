@@ -1,6 +1,17 @@
+<<<<<<< HEAD
 exit_code: 0
 --- stdout ---
 Doe, John
 
 undefined
 --- stderr ---
+=======
+exit_code: 2
+--- stdout ---
+--- stderr ---
+Runtime error: WASM validation failed: failed to parse WebAssembly module
+
+Caused by:
+    unknown function 385: func index out of bounds (at offset 0x4247)
+
+>>>>>>> feat/array-grouping
