@@ -526,6 +526,7 @@
             } else if value::is_object(val)
                 || value::is_iterator(val)
                 || value::is_enumerator(val)
+                || value::is_array(val)
             {
                 value::encode_typeof_object()
             } else if value::is_bigint(val) {

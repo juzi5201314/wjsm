@@ -1,4 +1,4 @@
-exit_code: 1
+exit_code: 2
 --- stdout ---
 --- stderr ---
-Error: TypeError: Cannot group null or undefined
+Runtime error: TypeError: Cannot group null or undefined
