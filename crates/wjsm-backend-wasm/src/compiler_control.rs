@@ -1106,9 +1106,39 @@ impl Compiler {
 
                 if true_terminates && false_terminates {
                     self.emit(WasmInstruction::Unreachable);
-                }
+                    Ok(true)
+                } else {
+                    // 处理内层 merge block（如嵌套三元的中间 Phi）
+                    // compile_structured 的 Branch 处理器有此逻辑，
+                    // 但 compile_branch_body 缺少，导致内层 Phi 的 phi_local 从未被赋值。
+                    let merge = if false_is_merge {
+                        false_idx
+                    } else if true_is_merge {
+                        true_idx
+                    } else {
+                        self.find_merge(blocks, true_idx, false_idx)
+                    };
 
-                Ok(true_terminates && false_terminates)
+                    if self.compiled_blocks.contains(&merge) {
+                        // merge 已被某分支体编译，为 fall-through 路径重发射其 Phi
+                        if let Some(merge_block) = blocks.get(merge) {
+                            for instruction in merge_block.instructions() {
+                                if let Instruction::Phi { dest, .. } = instruction
+                                    && let Some(&phi_local) = self.phi_locals.get(&dest.0)
+                                {
+                                    self.emit(WasmInstruction::LocalGet(phi_local));
+                                    self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+                                }
+                            }
+                        }
+                        Ok(false)
+                    } else {
+                        // merge 未编译，作为 branch body 的一部分继续编译
+                        self.compile_branch_body_with_context(
+                            module, blocks, merge, case_start, extra_depth,
+                        )
+                    }
+                }
             }
             _ => {
                 self.emit(WasmInstruction::Unreachable);
