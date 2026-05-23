@@ -1,6 +1,9 @@
-exit_code: 0
+exit_code: 2
 --- stdout ---
-1
-true
-typeof wr3.deref(): object
 --- stderr ---
+Runtime error: WASM trap: error while executing at wasm backtrace:
+    0:   0x4999 - <unknown>!<wasm function 378>
+
+Caused by:
+    wasm trap: indirect call type mismatch
+

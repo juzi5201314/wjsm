@@ -421,8 +421,40 @@
             })
             .into_owned();
 
+            // 标志校验
+            const VALID_FLAGS: &[char] = &['d', 'g', 'i', 'm', 's', 'u', 'v', 'y'];
+            let mut seen = [false; 128u8 as usize];
+            for c in flags.chars() {
+                if !VALID_FLAGS.contains(&c) {
+                    *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                        Some(format!(
+                            "SyntaxError: Invalid regular expression flag: '{}'",
+                            c
+                        ));
+                    return value::encode_undefined();
+                }
+                let idx = c as usize;
+                if idx < seen.len() {
+                    if seen[idx] {
+                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                            Some(format!(
+                                "SyntaxError: Duplicate regular expression flag: '{}'",
+                                c
+                            ));
+                        return value::encode_undefined();
+                    }
+                    seen[idx] = true;
+                }
+            }
+
+            // 仅将引擎相关标志传给 regress
+            let engine_flags: String = flags
+                .chars()
+                .filter(|c| matches!(c, 'i' | 'm' | 's' | 'u' | 'v'))
+                .collect();
+
             // 编译正则表达式
-            match regress::Regex::with_flags(&pattern, flags.as_str()) {
+            match regress::Regex::with_flags(&pattern, engine_flags.as_str()) {
                 Ok(compiled) => {
                     let mut table = caller.data_mut().regex_table.lock().unwrap();
                     let handle = table.len() as u32;
@@ -435,7 +467,6 @@
                     value::encode_regexp_handle(handle)
                 }
                 Err(e) => {
-                    // 编译失败，抛出 SyntaxError
                     *caller
                         .data()
                         .runtime_error
@@ -514,6 +545,98 @@
             value::encode_bool(found)
         },
     );
+/// 从 regress::Match 构建 RegExp 执行结果数组
+// 返回的数组包含 .index, .input, .groups 属性；
+// 若 flags 包含 'd' 则额外设置 .indices 及 indices.groups。
+// named_groups() 只 collect 一次，供 .groups 和 .indices.groups 复用。
+fn build_match_result(
+    caller: &mut Caller<'_, RuntimeState>,
+    m: &regress::Match,
+    s: &str,
+    group_count: u32,
+    flags: &str,
+) -> i64 {
+    let arr = alloc_array(caller, group_count);
+    let Some(arr_ptr) = resolve_array_ptr(caller, arr) else {
+        return value::encode_null();
+    };
+    for i in 0..group_count {
+        let elem = if let Some(range) = m.group(i as usize) {
+            let group_str = &s[range];
+            store_runtime_string(caller, group_str.to_string())
+        } else {
+            value::encode_undefined()
+        };
+        write_array_elem(caller, arr_ptr, i as u32, elem);
+    }
+    write_array_length(caller, arr_ptr, group_count);
+    // .index — 使用 m.start() 保持一致
+    let index_val = value::encode_f64(m.start() as f64);
+    let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "index", index_val);
+    // .input
+    let input_val = store_runtime_string(caller, s.to_string());
+    let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "input", input_val);
+    // .groups（collect 一次，供 .groups 和 .indices.groups 复用）
+    let named: Vec<(&str, Option<std::ops::Range<usize>>)> = m.named_groups().collect();
+    if !named.is_empty() {
+        let groups_obj = alloc_host_null_proto_object_from_caller(caller, named.len() as u32);
+        for (name, range) in &named {
+            let val = match range {
+                Some(r) => store_runtime_string(caller, s[r.clone()].to_string()),
+                None => value::encode_undefined(),
+            };
+            let _ = define_host_data_property_from_caller(caller, groups_obj, name, val);
+        }
+        let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "groups", groups_obj);
+    } else {
+        let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "groups", value::encode_undefined());
+    }
+    // .indices（仅 d 标志）
+    if flags.contains('d') {
+        let indices_arr = alloc_array(caller, group_count);
+        let Some(indices_ptr) = resolve_array_ptr(caller, indices_arr) else {
+            return value::encode_null();
+        };
+        for i in 0..group_count {
+            let elem = match m.group(i as usize) {
+                Some(range) => {
+                    let pair = alloc_array(caller, 2);
+                    let pair_ptr = resolve_array_ptr(caller, pair).unwrap_or(0);
+                    write_array_elem(caller, pair_ptr, 0, value::encode_f64(range.start as f64));
+                    write_array_elem(caller, pair_ptr, 1, value::encode_f64(range.end as f64));
+                    write_array_length(caller, pair_ptr, 2);
+                    pair
+                }
+                None => value::encode_undefined(),
+            };
+            write_array_elem(caller, indices_ptr, i as u32, elem);
+        }
+        write_array_length(caller, indices_ptr, group_count);
+        if !named.is_empty() {
+            let ig = alloc_host_null_proto_object_from_caller(caller, named.len() as u32);
+            for (name, range) in &named {
+                let val = match range {
+                    Some(r) => {
+                        let pair = alloc_array(caller, 2);
+                        let pair_ptr = resolve_array_ptr(caller, pair).unwrap_or(0);
+                        write_array_elem(caller, pair_ptr, 0, value::encode_f64(r.start as f64));
+                        write_array_elem(caller, pair_ptr, 1, value::encode_f64(r.end as f64));
+                        write_array_length(caller, pair_ptr, 2);
+                        pair
+                    }
+                    None => value::encode_undefined(),
+                };
+                let _ = define_host_data_property_from_caller(caller, ig, name, val);
+            }
+            let _ = define_host_data_property_from_caller(caller, indices_ptr as i64, "groups", ig);
+        } else {
+            let _ = define_host_data_property_from_caller(caller, indices_ptr as i64, "groups", value::encode_undefined());
+        }
+        let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "indices", indices_arr);
+    }
+    arr
+}
+
 
     // ── Import 111: regex_exec(i64, i64) → i64 ───────────────────────────────────
     let regex_exec_fn = Func::wrap(
@@ -568,25 +691,7 @@
                             e.last_index = m.end() as i64;
                         }
                     }
-
-                    // 构建结果数组 [full_match, group1, group2, ...]
-                    let group_count = m.captures.len() + 1; // +1 for group 0 (full match)
-                    let arr = alloc_array(&mut caller, group_count as u32);
-                    let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                        return value::encode_null();
-                    };
-
-                    for i in 0..group_count {
-                        let elem = if let Some(range) = m.group(i) {
-                            let group_str = &s[range];
-                            store_runtime_string(&caller, group_str.to_string())
-                        } else {
-                            value::encode_undefined() // 捕获组未匹配时为 undefined
-                        };
-                        write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                    }
-                    write_array_length(&mut caller, arr_ptr, group_count as u32);
-                    arr
+                    build_match_result(&mut caller, &m, &s, (m.captures.len() + 1) as u32, &entry.flags)
                 }
                 None => {
                     // 无匹配时重置 lastIndex
@@ -630,22 +735,7 @@
                         // 非全局匹配：返回第一个匹配结果
                         match entry.compiled.find(&s) {
                             Some(m) => {
-                                let group_count = m.captures.len() + 1;
-                                let arr = alloc_array(&mut caller, group_count as u32);
-                                let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                                    return value::encode_null();
-                                };
-                                for i in 0..group_count {
-                                    let elem = if let Some(range) = m.group(i) {
-                                        let group_str = &s[range];
-                                        store_runtime_string(&caller, group_str.to_string())
-                                    } else {
-                                        value::encode_undefined()
-                                    };
-                                    write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                                }
-                                write_array_length(&mut caller, arr_ptr, group_count as u32);
-                                return arr;
+                                return build_match_result(&mut caller, &m, &s, (m.captures.len() + 1) as u32, "");
                             }
                             None => return value::encode_null(),
                         }
@@ -705,23 +795,7 @@
                 // 非全局：返回 exec 结果（数组或 null）
                 match entry.compiled.find(&s) {
                     Some(m) => {
-                        // 构建结果数组 [full_match, group1, group2, ...]
-                        let group_count = m.captures.len() + 1; // +1 for group 0 (full match)
-                        let arr = alloc_array(&mut caller, group_count as u32);
-                        let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                            return value::encode_null();
-                        };
-                        for i in 0..group_count {
-                            let elem = if let Some(range) = m.group(i) {
-                                let group_str = &s[range];
-                                store_runtime_string(&caller, group_str.to_string())
-                            } else {
-                                value::encode_undefined()
-                            };
-                            write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                        }
-                        write_array_length(&mut caller, arr_ptr, group_count as u32);
-                        arr
+                        build_match_result(&mut caller, &m, &s, (m.captures.len() + 1) as u32, &entry.flags)
                     }
                     None => value::encode_null(),
                 }
@@ -738,14 +812,14 @@
             // 检查 replace 是否为函数（支持函数替换）
             let is_func_replace = value::is_callable(replace);
 
-            /// 处理 JavaScript 替换模式：$$, $&, $`, $', $n, $nn
+            /// 处理 JavaScript 替换模式：$$, $&, $`, $', $n, $nn, $<name>
             fn process_replacement(
                 replace_str: &str,
                 s: &str,
-                match_start: usize,
-                match_end: usize,
-                captures: &[Option<std::ops::Range<usize>>],
+                m: &regress::Match,
             ) -> String {
+                let match_start = m.start();
+                let match_end = m.end();
                 let mut result = String::new();
                 let chars: Vec<char> = replace_str.chars().collect();
                 let mut i = 0;
@@ -754,24 +828,39 @@
                         let next = chars[i + 1];
                         match next {
                             '$' => {
-                                // $$ → $
                                 result.push('$');
                                 i += 2;
                             }
                             '&' => {
-                                // $& → matched substring
                                 result.push_str(&s[match_start..match_end]);
                                 i += 2;
                             }
                             '`' => {
-                                // $` → portion before match
                                 result.push_str(&s[..match_start]);
                                 i += 2;
                             }
                             '\'' => {
-                                // $' → portion after match
                                 result.push_str(&s[match_end..]);
                                 i += 2;
+                            }
+                            '<' => {
+                                // $<name> → named capture group
+                                if let Some(close_pos) =
+                                    chars[i + 2..].iter().position(|&c| c == '>')
+                                {
+                                    let name: String =
+                                        chars[i + 2..i + 2 + close_pos].iter().collect();
+                                    if let Some(range) = m.named_group(&name) {
+                                        result.push_str(&s[range]);
+                                    }
+                                    // 命名组不存在或未匹配 → 空字符串（ES 规范）
+                                    i += 3 + close_pos; // skip past $<name>
+                                } else {
+                                    // 未闭合的 $<，保持原样
+                                    result.push('$');
+                                    result.push('<');
+                                    i += 2;
+                                }
                             }
                             '0'..='9' => {
                                 // $n or $nn → captured group
@@ -786,30 +875,28 @@
                                 }
                                 // 检查是否为两位数 $nn
                                 if i + 2 < chars.len()
-                                    && let Some('0'..='9') = chars.get(i + 2) {
-                                        let next_digit = (chars[i + 2] as u8 - b'0') as usize;
-                                        let two_digit = group_num * 10 + next_digit;
-                                        // $00 不是特殊模式，只有 $01-$99 是
-                                        if two_digit > 0 && two_digit <= captures.len() {
-                                            group_num = two_digit;
-                                            consumed = 3;
-                                        }
+                                    && let Some('0'..='9') = chars.get(i + 2)
+                                {
+                                    let next_digit = (chars[i + 2] as u8 - b'0') as usize;
+                                    let two_digit = group_num * 10 + next_digit;
+                                    // $00 不是特殊模式，只有 $01-$99 是
+                                    if two_digit > 0 && two_digit <= m.captures.len() {
+                                        group_num = two_digit;
+                                        consumed = 3;
                                     }
-                                // 获取捕获组
-                                if group_num < captures.len() {
-                                    if let Some(ref range) = captures[group_num] {
-                                        result.push_str(&s[range.clone()]);
+                                }
+                                // 获取捕获组（group_num ≥ 1）
+                                if group_num <= m.captures.len() {
+                                    if let Some(range) = m.group(group_num) {
+                                        result.push_str(&s[range]);
                                     }
-                                    // 如果捕获组未匹配，什么都不添加
                                 } else {
-                                    // 无效的组号，保持原样
                                     result.push('$');
                                     result.push(next);
                                 }
                                 i += consumed;
                             }
                             _ => {
-                                // 未知模式，保持原样
                                 result.push('$');
                                 result.push(next);
                                 i += 2;
@@ -823,6 +910,24 @@
                 result
             }
 
+            /// 从 Match 构建命名捕获组对象
+            let build_groups_obj =
+                |caller: &mut Caller<'_, RuntimeState>, m: &regress::Match| -> i64 {
+                    let named: Vec<(&str, Option<std::ops::Range<usize>>)> =
+                        m.named_groups().collect();
+                    if named.is_empty() {
+                        return value::encode_undefined();
+                    }
+                    let obj = alloc_host_null_proto_object_from_caller(caller, named.len() as u32);
+                    for (name, range) in named {
+                        let val = match range {
+                            Some(r) => store_runtime_string(caller, s[r].to_string()),
+                            None => value::encode_undefined(),
+                        };
+                        let _ = define_host_data_property_from_caller(caller, obj, name, val);
+                    }
+                    obj
+                };
             /// 调用替换函数并返回替换字符串
             fn call_replace_func(
                 caller: &mut Caller<'_, RuntimeState>,
@@ -831,10 +936,11 @@
                 match_start: usize,
                 match_end: usize,
                 captures: &[Option<std::ops::Range<usize>>],
+                named_groups_obj: i64,
             ) -> String {
-                // 参数数量：matched + captures + offset + string
+                // 参数数量：matched + captures + offset + string + groups
                 let capture_count = captures.len().saturating_sub(1); // 不包括 group 0（完整匹配）
-                let args_count = 1 + capture_count + 1 + 1; // matched + captures + offset + string
+                let args_count = 1 + capture_count + 1 + 1 + 1; // matched + captures + offset + string + groups
 
                 // 获取 shadow_sp 和 memory
                 let shadow_sp_global = caller
@@ -899,6 +1005,16 @@
                         &string_val.to_le_bytes(),
                     )
                     .unwrap();
+                arg_idx += 1;
+
+                // 5. named groups object
+                memory
+                    .write(
+                        &mut *caller,
+                        (shadow_sp + arg_idx * 8) as usize,
+                        &named_groups_obj.to_le_bytes(),
+                    )
+                    .unwrap();
 
                 // 调用函数
                 let result = resolve_and_call(
@@ -935,6 +1051,7 @@
                             (0..m.captures.len() + 1).map(|i| m.group(i)).collect();
                         // 根据是否为函数选择替换方式
                         let replaced = if is_func_replace {
+                            let groups_obj = build_groups_obj(&mut caller, &m);
                             call_replace_func(
                                 &mut caller,
                                 replace,
@@ -942,10 +1059,11 @@
                                 m.start(),
                                 m.end(),
                                 &captures,
+                                groups_obj,
                             )
                         } else {
                             let replace_str = get_string_value(&mut caller, replace);
-                            process_replacement(&replace_str, &s, m.start(), m.end(), &captures)
+                            process_replacement(&replace_str, &s, &m)
                         };
                         result.push_str(&replaced);
                         last_end = m.end();
@@ -959,6 +1077,7 @@
                             let captures: Vec<Option<std::ops::Range<usize>>> =
                                 (0..m.captures.len() + 1).map(|i| m.group(i)).collect();
                             let replaced = if is_func_replace {
+                                let groups_obj = build_groups_obj(&mut caller, &m);
                                 call_replace_func(
                                     &mut caller,
                                     replace,
@@ -966,10 +1085,11 @@
                                     m.start(),
                                     m.end(),
                                     &captures,
+                                    groups_obj,
                                 )
                             } else {
                                 let replace_str = get_string_value(&mut caller, replace);
-                                process_replacement(&replace_str, &s, m.start(), m.end(), &captures)
+                                process_replacement(&replace_str, &s, &m)
                             };
                             let mut result = String::new();
                             result.push_str(&s[..m.start()]);
@@ -995,6 +1115,7 @@
                             pos,
                             pos + search_str.len(),
                             &captures,
+                            value::encode_undefined(),
                         )
                     } else {
                         get_string_value(&mut caller, replace)

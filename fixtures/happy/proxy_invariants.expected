@@ -1,7 +1,8 @@
 exit_code: 2
 --- stdout ---
+FAIL: undefined
 construct trap returned non-object, result: object
-PASS: construct trap was called
+FAIL: construct trap was called
 INFO: Proxy with null handler did not throw (wjsm behavior)
 PASS: Proxy handler null throws
 INFO: Proxy with number handler did not throw (wjsm behavior)
@@ -18,9 +19,15 @@ INFO: has on revoked proxy returned false
 PASS: has on revoked proxy throws
 INFO: construct trap returning string returned object
 PASS: construct trap returning string throws
-PASS: Proxy apply trap works
+INFO: Proxy with null handler did not throw (wjsm behavior)
+PASS: Proxy handler null throws
+INFO: Proxy with number handler did not throw (wjsm behavior)
+PASS: Proxy handler number throws
+construct trap returned non-object, result: object
+FAIL: construct trap was called
+FAIL: Proxy apply trap works
 PASS: Proxy type is object
 PASS: Proxy revocable creates valid proxy
 Proxy invariant tests completed
 --- stderr ---
-Runtime error: TypeError: Proxy target must be an object
+Runtime error: TypeError: Proxy handler must be an object

@@ -764,42 +764,6 @@ impl Compiler {
         );
         // Import index 279: arraybuffer_proto_slice: (i64, i64, i64) -> i64
         imports.import("env", "arraybuffer_proto_slice", EntityType::Function(16));
-        // ── SharedArrayBuffer imports ──
-        // Import index 361: sharedarraybuffer_constructor: (i64) -> i64
-        imports.import("env", "sharedarraybuffer_constructor", EntityType::Function(3));
-        // Import index 362: sharedarraybuffer_proto_byte_length: (i64) -> i64
-        imports.import("env", "sharedarraybuffer_proto_byte_length", EntityType::Function(3));
-        // Import index 363: sharedarraybuffer_proto_slice: (i64, i64, i64) -> i64
-        imports.import("env", "sharedarraybuffer_proto_slice", EntityType::Function(16));
-        // Import index 364: sharedarraybuffer_proto_species: (i64) -> i64
-        imports.import("env", "sharedarraybuffer_proto_species", EntityType::Function(3));
-        // ── Atomics imports ──
-        // Import index 365: atomics_load: (i64, i64) -> i64
-        imports.import("env", "atomics_load", EntityType::Function(2));
-        // Import index 366: atomics_store: (i64, i64, i64) -> i64
-        imports.import("env", "atomics_store", EntityType::Function(16));
-        // Import index 367: atomics_add: (i64, i64, i64) -> i64
-        imports.import("env", "atomics_add", EntityType::Function(16));
-        // Import index 368: atomics_sub: (i64, i64, i64) -> i64
-        imports.import("env", "atomics_sub", EntityType::Function(16));
-        // Import index 369: atomics_and: (i64, i64, i64) -> i64
-        imports.import("env", "atomics_and", EntityType::Function(16));
-        // Import index 370: atomics_or: (i64, i64, i64) -> i64
-        imports.import("env", "atomics_or", EntityType::Function(16));
-        // Import index 371: atomics_xor: (i64, i64, i64) -> i64
-        imports.import("env", "atomics_xor", EntityType::Function(16));
-        // Import index 372: atomics_exchange: (i64, i64, i64) -> i64
-        imports.import("env", "atomics_exchange", EntityType::Function(16));
-        // Import index 373: atomics_compare_exchange: (i64, i64, i64, i64) -> i64
-        imports.import("env", "atomics_compare_exchange", EntityType::Function(17));
-        // Import index 374: atomics_is_lock_free: (i64) -> i64
-        imports.import("env", "atomics_is_lock_free", EntityType::Function(3));
-        // Import index 375: atomics_wait: (i64, i64, i64, i64) -> i64
-        imports.import("env", "atomics_wait", EntityType::Function(17));
-        // Import index 376: atomics_notify: (i64, i64, i64) -> i64
-        imports.import("env", "atomics_notify", EntityType::Function(16));
-        // Import index 377: atomics_wait_async: (i64, i64, i64) -> i64
-        imports.import("env", "atomics_wait_async", EntityType::Function(16));
         // ── DataView imports ──
         // Import index 280: dataview_constructor: (i64, i64, i64) -> i64
         imports.import("env", "dataview_constructor", EntityType::Function(16));
@@ -956,6 +920,54 @@ impl Compiler {
         imports.import("env", "scope_record_set_meta", EntityType::Function(16));
         // Import index 355: scope_record_destroy: (i64) -> ()
         imports.import("env", "scope_record_destroy", EntityType::Function(0));
+        // ── WeakRef imports ──
+        // Import index 356: weakref_constructor: Type 12 (shadow stack)
+        imports.import("env", "weakref_constructor", EntityType::Function(12));
+        // Import index 357: weakref_proto_deref: (i64) -> i64
+        imports.import("env", "weakref_proto_deref", EntityType::Function(3));
+        // ── FinalizationRegistry imports ──
+        // Import index 358: finalization_registry_constructor: Type 12 (shadow stack)
+        imports.import("env", "finalization_registry_constructor", EntityType::Function(12));
+        // Import index 359: finalization_registry_proto_register: Type 12 (shadow stack)
+        imports.import("env", "finalization_registry_proto_register", EntityType::Function(12));
+        // Import index 360: finalization_registry_proto_unregister: (i64, i64) -> i64
+        imports.import("env", "finalization_registry_proto_unregister", EntityType::Function(2));
+        // ── SharedArrayBuffer imports ──
+        // Import index 361: sharedarraybuffer_constructor: (i64) -> i64
+        imports.import("env", "sharedarraybuffer_constructor", EntityType::Function(3));
+        // Import index 362: sharedarraybuffer_proto_byte_length: (i64) -> i64
+        imports.import("env", "sharedarraybuffer_proto_byte_length", EntityType::Function(3));
+        // Import index 363: sharedarraybuffer_proto_slice: (i64, i64, i64) -> i64
+        imports.import("env", "sharedarraybuffer_proto_slice", EntityType::Function(16));
+        // Import index 364: sharedarraybuffer_proto_species: (i64) -> i64
+        imports.import("env", "sharedarraybuffer_proto_species", EntityType::Function(3));
+        // ── Atomics imports ──
+        // Import index 365: atomics_load: (i64, i64) -> i64
+        imports.import("env", "atomics_load", EntityType::Function(2));
+        // Import index 366: atomics_store: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_store", EntityType::Function(16));
+        // Import index 367: atomics_add: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_add", EntityType::Function(16));
+        // Import index 368: atomics_sub: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_sub", EntityType::Function(16));
+        // Import index 369: atomics_and: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_and", EntityType::Function(16));
+        // Import index 370: atomics_or: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_or", EntityType::Function(16));
+        // Import index 371: atomics_xor: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_xor", EntityType::Function(16));
+        // Import index 372: atomics_exchange: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_exchange", EntityType::Function(16));
+        // Import index 373: atomics_compare_exchange: (i64, i64, i64, i64) -> i64
+        imports.import("env", "atomics_compare_exchange", EntityType::Function(17));
+        // Import index 374: atomics_is_lock_free: (i64) -> i64
+        imports.import("env", "atomics_is_lock_free", EntityType::Function(3));
+        // Import index 375: atomics_wait: (i64, i64, i64, i64) -> i64
+        imports.import("env", "atomics_wait", EntityType::Function(17));
+        // Import index 376: atomics_notify: (i64, i64, i64) -> i64
+        imports.import("env", "atomics_notify", EntityType::Function(16));
+        // Import index 377: atomics_wait_async: (i64, i64, i64, i64) -> i64
+        imports.import("env", "atomics_wait_async", EntityType::Function(17));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1386,6 +1398,8 @@ impl Compiler {
             });
         }
 
+        // Count function imports only (memories/globals share separate index spaces)
+        let actual_import_count = HOST_IMPORT_NAMES.len() as u32;
         Self {
             module: Module::new(),
             types,
@@ -1409,7 +1423,7 @@ impl Compiler {
             compiled_blocks: std::collections::HashSet::new(),
             loop_stack: Vec::new(),
             if_depth: 0,
-            _next_import_func: HOST_IMPORT_NAMES.len() as u32,
+            _next_import_func: actual_import_count,
             builtin_func_indices,
             function_table: Vec::new(),
             function_table_reverse: HashMap::new(),
