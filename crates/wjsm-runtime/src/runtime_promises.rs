@@ -743,7 +743,7 @@ pub(crate) fn resolve_promise_from_store(
         || value::is_callable(resolution))
         && let Some(ptr) =
             resolve_handle_from_store(store, memory, obj_table_ptr_global, resolution)
-        && let Some(then) = read_object_property_by_name_from_store(store, memory, ptr, "then")
+        && let Some(then) = read_object_property_by_name_from_store(store, memory, obj_table_ptr_global, ptr, "then")
         && value::is_callable(then)
     {
         let mut queue = store

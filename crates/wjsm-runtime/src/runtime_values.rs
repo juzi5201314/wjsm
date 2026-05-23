@@ -293,6 +293,96 @@ pub(crate) fn merge_sort_by<T: Copy>(
     }
 }
 
+/// 沿原型链递归查找属性（带 visited set 防环路）
+fn read_object_property_by_name_proto_walk(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    prop_name: &str,
+    visited: &mut std::collections::HashSet<usize>,
+) -> Option<i64> {
+    if !visited.insert(obj_ptr) {
+        return None; // 环路检测
+    }
+    let num_props = {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data(&*caller);
+        if obj_ptr + 16 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]) as usize
+    };
+    let mut name_ids = Vec::with_capacity(num_props);
+    {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data(&*caller);
+        for i in 0..num_props {
+            let slot_offset = obj_ptr + 16 + i * 32;
+            if slot_offset + 4 > data.len() {
+                break;
+            }
+            name_ids.push(u32::from_le_bytes([
+                data[slot_offset],
+                data[slot_offset + 1],
+                data[slot_offset + 2],
+                data[slot_offset + 3],
+            ]));
+        }
+    }
+    for (i, name_id) in name_ids.iter().enumerate() {
+        let name_bytes = read_string_bytes(caller, *name_id);
+        if name_bytes == prop_name.as_bytes() {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return None;
+            };
+            let data = memory.data(&*caller);
+            let slot_offset = obj_ptr + 16 + i * 32;
+            if slot_offset + 32 > data.len() {
+                return None;
+            }
+            return Some(i64::from_le_bytes([
+                data[slot_offset + 8],
+                data[slot_offset + 9],
+                data[slot_offset + 10],
+                data[slot_offset + 11],
+                data[slot_offset + 12],
+                data[slot_offset + 13],
+                data[slot_offset + 14],
+                data[slot_offset + 15],
+            ]));
+        }
+    }
+    // 自身未找到 → 继续沿原型链
+    let proto_handle = {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data(&*caller);
+        if obj_ptr + 4 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr],
+            data[obj_ptr + 1],
+            data[obj_ptr + 2],
+            data[obj_ptr + 3],
+        ])
+    };
+    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
+        return None;
+    }
+    let proto_ptr = resolve_handle_idx(caller, proto_handle as usize)?;
+    read_object_property_by_name_proto_walk(caller, proto_ptr, prop_name, visited)
+}
+
 /// 从对象中按名称读取属性值（用于 define_property 等）
 pub(crate) fn read_object_property_by_name(
     caller: &mut Caller<'_, RuntimeState>,
@@ -356,7 +446,29 @@ pub(crate) fn read_object_property_by_name(
             ]));
         }
     }
-    None
+    // 自身属性未找到 → 沿 [[Prototype]] 链查找
+    let proto_handle = {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return None;
+        };
+        let data = memory.data(&*caller);
+        if obj_ptr + 4 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr],
+            data[obj_ptr + 1],
+            data[obj_ptr + 2],
+            data[obj_ptr + 3],
+        ])
+    };
+    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
+        return None;
+    }
+    let proto_ptr = resolve_handle_idx(caller, proto_handle as usize)?;
+    let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    visited.insert(obj_ptr);
+    read_object_property_by_name_proto_walk(caller, proto_ptr, prop_name, &mut visited)
 }
 
 /// 从对象中按 name_id 查找属性的 slot_offset
