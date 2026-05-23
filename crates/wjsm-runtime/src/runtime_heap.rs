@@ -375,9 +375,92 @@ pub(crate) fn resolve_handle_from_store(
     resolve_handle_idx_from_store(store, memory, obj_table_ptr_global, handle_idx)
 }
 
+/// 沿原型链递归查找属性（store 版本，带 visited set 防环路）
+fn read_object_property_by_name_from_store_proto_walk(
+    store: &mut Store<RuntimeState>,
+    memory: &Memory,
+    obj_table_ptr_global: &Global,
+    obj_ptr: usize,
+    prop_name: &str,
+    visited: &mut std::collections::HashSet<usize>,
+) -> Option<i64> {
+    if !visited.insert(obj_ptr) {
+        return None;
+    }
+    let num_props = {
+        let data = memory.data(&mut *store);
+        if obj_ptr + 16 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]) as usize
+    };
+    let mut name_ids = Vec::with_capacity(num_props);
+    {
+        let data = memory.data(&mut *store);
+        for i in 0..num_props {
+            let slot_offset = obj_ptr + 16 + i * 32;
+            if slot_offset + 4 > data.len() {
+                break;
+            }
+            name_ids.push(u32::from_le_bytes([
+                data[slot_offset],
+                data[slot_offset + 1],
+                data[slot_offset + 2],
+                data[slot_offset + 3],
+            ]));
+        }
+    }
+    for (index, name_id) in name_ids.iter().enumerate() {
+        if read_string_bytes_from_store(store, memory, *name_id) == prop_name.as_bytes() {
+            let data = memory.data(&mut *store);
+            let slot_offset = obj_ptr + 16 + index * 32;
+            if slot_offset + 16 > data.len() {
+                return None;
+            }
+            return Some(i64::from_le_bytes([
+                data[slot_offset + 8],
+                data[slot_offset + 9],
+                data[slot_offset + 10],
+                data[slot_offset + 11],
+                data[slot_offset + 12],
+                data[slot_offset + 13],
+                data[slot_offset + 14],
+                data[slot_offset + 15],
+            ]));
+        }
+    }
+    let proto_handle = {
+        let data = memory.data(&mut *store);
+        if obj_ptr + 4 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr],
+            data[obj_ptr + 1],
+            data[obj_ptr + 2],
+            data[obj_ptr + 3],
+        ])
+    };
+    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
+        return None;
+    }
+    let proto_ptr = resolve_handle_idx_from_store(
+        store, memory, obj_table_ptr_global, proto_handle as usize,
+    )?;
+    read_object_property_by_name_from_store_proto_walk(
+        store, memory, obj_table_ptr_global, proto_ptr, prop_name, visited,
+    )
+}
+
 pub(crate) fn read_object_property_by_name_from_store(
     store: &mut Store<RuntimeState>,
     memory: &Memory,
+    obj_table_ptr_global: &Global,
     obj_ptr: usize,
     prop_name: &str,
 ) -> Option<i64> {
@@ -428,7 +511,29 @@ pub(crate) fn read_object_property_by_name_from_store(
             ]));
         }
     }
-    None
+    // 自身属性未找到 → 沿 [[Prototype]] 链查找
+    let proto_handle = {
+        let data = memory.data(&mut *store);
+        if obj_ptr + 4 > data.len() {
+            return None;
+        }
+        u32::from_le_bytes([
+            data[obj_ptr],
+            data[obj_ptr + 1],
+            data[obj_ptr + 2],
+            data[obj_ptr + 3],
+        ])
+    };
+    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
+        return None;
+    }
+    let proto_ptr =
+        resolve_handle_idx_from_store(store, memory, obj_table_ptr_global, proto_handle as usize)?;
+    let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    visited.insert(obj_ptr);
+    read_object_property_by_name_from_store_proto_walk(
+        store, memory, obj_table_ptr_global, proto_ptr, prop_name, &mut visited,
+    )
 }
 
 pub(crate) fn alloc_host_object_from_store(
