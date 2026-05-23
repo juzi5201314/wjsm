@@ -535,18 +535,18 @@
         sab_byte_length_stub.into(),       // 362
         sab_slice_stub.into(),             // 363
         sab_species_stub.into(),           // 364
-        atomics_load_fn.into(),                   // 365
-        atomics_store_fn.into(),                  // 366
-        atomics_add_fn.into(),                    // 367
-        atomics_sub_fn.into(),                    // 368
-        atomics_and_fn.into(),                    // 369
-        atomics_or_fn.into(),                     // 370
-        atomics_xor_fn.into(),                    // 371
-        atomics_exchange_fn.into(),               // 372
-        atomics_compare_exchange_fn.into(),       // 373
-        atomics_is_lock_free_fn.into(),           // 374
+        atomics_load_fn.into(),            // 365
+        atomics_store_fn.into(),           // 366
+        atomics_add_fn.into(),             // 367
+        atomics_sub_fn.into(),             // 368
+        atomics_and_fn.into(),             // 369
+        atomics_or_fn.into(),              // 370
+        atomics_xor_fn.into(),             // 371
+        atomics_exchange_fn.into(),        // 372
         atomics_wait_fn.into(),                   // 375
         atomics_notify_fn.into(),                 // 376
         atomics_wait_async_fn.into(),             // 377
+        atomics_compare_exchange_fn.into(),       // 378
+        atomics_is_lock_free_fn.into(),           // 379
     ]
 }

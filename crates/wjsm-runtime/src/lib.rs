@@ -416,6 +416,205 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     imports.push(async_iterator_from_fn.into());
+    // ── Import 379-380: Object.groupBy / Map.groupBy ─────────────────────
+    let object_group_by_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
+            // Check items is not null/undefined
+            if value::is_null(items) || value::is_undefined(items) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: Cannot group null or undefined".to_string());
+                return value::encode_undefined();
+            }
+
+            // Check callback is callable
+            if !value::is_callable(callbackfn) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: callbackfn is not callable".to_string());
+                return value::encode_undefined();
+            }
+
+            // Create null-prototype object
+            let result = alloc_object(&mut caller, 0);
+            let Some(result_ptr) = resolve_handle(&mut caller, result) else {
+                return result;
+            };
+
+            // Array fast path
+            let mut index = 0u32;
+            if value::is_array(items) {
+                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
+                    let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                    for i in 0..len {
+                        let elem = read_array_elem(&mut caller, arr_ptr, i)
+                            .unwrap_or(value::encode_undefined());
+                        let idx_val = value::encode_f64(index as f64);
+                        let key = match call_wasm_callback(
+                            &mut caller,
+                            callbackfn,
+                            value::encode_undefined(),
+                            &[elem, idx_val],
+                        ) {
+                            Ok(k) => k,
+                            Err(_) => return value::encode_undefined(),
+                        };
+
+                        // ToPropertyKey: convert key to string for object property
+                        let key_str = to_property_key(&mut caller, key);
+                        // If to_property_key failed (Symbol key), check runtime_error
+                        if caller.data().runtime_error.lock().expect("mutex").is_some() {
+                            return value::encode_undefined();
+                        }
+
+                        // Find or create group array
+                        if let Some(arr_val) =
+                            read_object_property_by_name(&mut caller, result_ptr, &key_str)
+                        {
+                            if value::is_array(arr_val) {
+                                if let Some(arr_data_ptr) =
+                                    resolve_array_ptr(&mut caller, arr_val)
+                                {
+                                    let arr_len = read_array_length(&mut caller, arr_data_ptr)
+                                        .unwrap_or(0);
+                                    write_array_elem(&mut caller, arr_data_ptr, arr_len, elem);
+                                    write_array_length(&mut caller, arr_data_ptr, arr_len + 1);
+                                }
+                            }
+                        } else {
+                            let new_arr = alloc_array(&mut caller, 1);
+                            if let Some(new_arr_ptr) = resolve_array_ptr(&mut caller, new_arr) {
+                                write_array_elem(&mut caller, new_arr_ptr, 0, elem);
+                                write_array_length(&mut caller, new_arr_ptr, 1);
+                                define_host_data_property(&mut caller, result, &key_str, new_arr);
+                            }
+                        }
+                        index += 1;
+                    }
+                    return result;
+                }
+            }
+
+            // TODO: General iterable support (non-array iterables)
+            result
+        },
+    );
+    imports.push(object_group_by_fn.into());
+
+    let map_group_by_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
+            // Check items is not null/undefined
+            if value::is_null(items) || value::is_undefined(items) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: Cannot group null or undefined".to_string());
+                return value::encode_undefined();
+            }
+
+            // Check callback is callable
+            if !value::is_callable(callbackfn) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: callbackfn is not callable".to_string());
+                return value::encode_undefined();
+            }
+
+            // Create Map internal state
+            let map_handle = {
+                let mut map_table = caller.data().map_table.lock().expect("map table mutex");
+                let handle = map_table.len();
+                map_table.push(MapEntry {
+                    keys: Vec::new(),
+                    values: Vec::new(),
+                });
+                handle
+            };
+            let map_result = alloc_object(&mut caller, 0);
+            if let Some(_map_ptr) = resolve_handle(&mut caller, map_result) {
+                let handle_val = value::encode_f64(map_handle as f64);
+                define_host_data_property(&mut caller, map_result, "__map_handle__", handle_val);
+            }
+
+            // Array fast path
+            let mut index = 0u32;
+            if value::is_array(items) {
+                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
+                    let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                    for i in 0..len {
+                        let elem = read_array_elem(&mut caller, arr_ptr, i)
+                            .unwrap_or(value::encode_undefined());
+                        let idx_val = value::encode_f64(index as f64);
+                        let key = match call_wasm_callback(
+                            &mut caller,
+                            callbackfn,
+                            value::encode_undefined(),
+                            &[elem, idx_val],
+                        ) {
+                            Ok(k) => k,
+                            Err(_) => return value::encode_undefined(),
+                        };
+
+                        // Look up key in Map using SameValueZero
+                        let arr_val: Option<i64> = {
+                            let table =
+                                caller.data().map_table.lock().expect("map table mutex");
+                            let entry = &table[map_handle];
+                            let mut result = None;
+                            for j in 0..entry.keys.len() {
+                                if same_value_zero(entry.keys[j], key) {
+                                    result = Some(entry.values[j]);
+                                    break;
+                                }
+                            }
+                            result
+                        };
+
+                        if let Some(arr_val) = arr_val {
+                            // Push element to existing array
+                            if let Some(arr_ptr2) = resolve_array_ptr(&mut caller, arr_val) {
+                                let arr_len = read_array_length(&mut caller, arr_ptr2)
+                                    .unwrap_or(0);
+                                write_array_elem(&mut caller, arr_ptr2, arr_len, elem);
+                                write_array_length(&mut caller, arr_ptr2, arr_len + 1);
+                            }
+                        } else {
+                            // Create new array and add to map
+                            let new_arr = alloc_array(&mut caller, 1);
+                            if let Some(new_arr_ptr) = resolve_array_ptr(&mut caller, new_arr) {
+                                write_array_elem(&mut caller, new_arr_ptr, 0, elem);
+                                write_array_length(&mut caller, new_arr_ptr, 1);
+                            }
+                            let mut table = caller
+                                .data()
+                                .map_table
+                                .lock()
+                                .expect("map table mutex");
+                            table[map_handle].keys.push(key);
+                            table[map_handle].values.push(new_arr);
+                        }
+                        index += 1;
+                    }
+                }
+            }
+
+            map_result
+        },
+    );
+    imports.push(map_group_by_fn.into());
     let instance = Instance::new(&mut store, &module, &imports)?;
     // ── Create %AsyncIteratorPrototype% and AsyncGenerator.prototype ──
     let memory = instance

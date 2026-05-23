@@ -988,6 +988,7 @@ pub(crate) fn eval_to_number(val: i64) -> f64 {
     }
 }
 
+
 pub(crate) fn eval_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
     if value::is_string(val) {
         read_value_string_bytes(caller, val)
@@ -1010,6 +1011,23 @@ pub(crate) fn eval_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) ->
         "[object Object]".to_string()
     }
 }
+
+/// ToPropertyKey 抽象操作 (ECMAScript 7.1.14)
+/// 先 ToPrimitive hint String，若结果是 Symbol 则抛出 TypeError
+pub(crate) fn to_property_key(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
+    let key = to_primitive(caller, val);
+    if value::is_symbol(key) {
+        *caller
+            .data()
+            .runtime_error
+            .lock()
+            .expect("runtime error mutex") =
+            Some("TypeError: Cannot convert a Symbol to a string".to_string());
+        return String::new();
+    }
+    eval_to_string(caller, key)
+}
+
 
 pub(crate) fn scope_record_create(
     mut caller: Caller<'_, RuntimeState>,
