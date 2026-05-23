@@ -1,4 +1,10 @@
 exit_code: 0
 --- stdout ---
-7
+true
+false
+false
+true
+b
+a
+b
 --- stderr ---
