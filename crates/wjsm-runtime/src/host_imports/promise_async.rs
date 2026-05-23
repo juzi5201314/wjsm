@@ -1072,6 +1072,19 @@
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, continuation: i64| -> i64 {
             let generator = alloc_object(&mut caller, 4);
+            // 设置 [[Prototype]] = AsyncGenerator.prototype
+            let async_gen_proto = caller.data().async_gen_prototype;
+            if !value::is_undefined(async_gen_proto) {
+                if let Some(ptr) = resolve_handle(&mut caller, generator) {
+                    let memory = caller
+                        .get_export("memory")
+                        .and_then(|e| e.into_memory())
+                        .expect("memory");
+                    let data = memory.data_mut(&mut caller);
+                    data[ptr + 4..ptr + 8]
+                        .copy_from_slice(&value::decode_object_handle(async_gen_proto).to_le_bytes());
+                }
+            }
             if !value::is_object(generator) {
                 return value::encode_undefined();
             }

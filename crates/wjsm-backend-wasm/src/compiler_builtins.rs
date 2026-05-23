@@ -385,6 +385,18 @@ impl Compiler {
                 self.emit(WasmInstruction::Call(func_idx));
                 Ok(())
             }
+            Builtin::AsyncIteratorFrom => {
+                let val = args
+                    .first()
+                    .context("AsyncIteratorFrom expects 1 arg")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
             Builtin::IteratorValue | Builtin::EnumeratorKey => {
                 let handle = args
                     .first()

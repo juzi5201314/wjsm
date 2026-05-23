@@ -764,6 +764,7 @@ impl Compiler {
         );
         // Import index 279: arraybuffer_proto_slice: (i64, i64, i64) -> i64
         imports.import("env", "arraybuffer_proto_slice", EntityType::Function(16));
+
         // ── DataView imports ──
         // Import index 280: dataview_constructor: (i64, i64, i64) -> i64
         imports.import("env", "dataview_constructor", EntityType::Function(16));
@@ -968,6 +969,8 @@ impl Compiler {
         imports.import("env", "atomics_notify", EntityType::Function(16));
         // Import index 377: atomics_wait_async: (i64, i64, i64, i64) -> i64
         imports.import("env", "atomics_wait_async", EntityType::Function(17));
+        // Import index 378: async_iterator_from: (i64) -> i64
+        imports.import("env", "async_iterator_from", EntityType::Function(3));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1009,6 +1012,7 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::IteratorFrom, 4);
         builtin_func_indices.insert(Builtin::IteratorNext, 5);
         builtin_func_indices.insert(Builtin::IteratorClose, 6);
+        builtin_func_indices.insert(Builtin::AsyncIteratorFrom, 378);
         builtin_func_indices.insert(Builtin::IteratorValue, 7);
         builtin_func_indices.insert(Builtin::IteratorDone, 8);
         builtin_func_indices.insert(Builtin::EnumeratorFrom, 9);
