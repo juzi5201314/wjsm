@@ -125,6 +125,7 @@ pub(crate) fn builtin_from_static_member(object: &str, property: &str) -> Option
         },
         "Array" => match property {
             "isArray" => Some(Builtin::ArrayIsArray),
+            "from" => Some(Builtin::ArrayFrom),
             _ => None,
         },
         "Object" => match property {

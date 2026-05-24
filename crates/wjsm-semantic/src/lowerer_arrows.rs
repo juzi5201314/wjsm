@@ -54,8 +54,21 @@ impl Lowerer {
                 let body_entry =
                     self.emit_arrow_param_inits(&arrow.params, &param_ir_names, entry)?;
                 let val = self.lower_expr(expr, body_entry)?;
-                self.current_function
-                    .set_terminator(body_entry, Terminator::Return { value: Some(val) });
+                // 如果表达式 lowered 时产生了分支（如三元运算符），body_entry 已经被 set_terminator，
+                // 此时需要在 merge block 处加 Return，而不是覆盖 body_entry 的 Branch。
+                let has_branch = self.current_function.block(body_entry)
+                    .map(|b| !matches!(b.terminator(), Terminator::Unreachable))
+                    .unwrap_or(false);
+                if has_branch {
+                    // lower_cond 创建的 merge block 是最后一个 block，给它加 Return
+                    let last_block = self.current_function.last_block_id();
+                    self.current_function
+                        .set_terminator(last_block, Terminator::Return { value: Some(val) });
+                } else {
+                    self.current_function
+                        .set_terminator(body_entry, Terminator::Return { value: Some(val) });
+                }
+                self.expr_merge_block = None;
                 inner_flow = StmtFlow::Terminated;
             }
         }

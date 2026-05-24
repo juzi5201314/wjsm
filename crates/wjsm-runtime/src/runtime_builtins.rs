@@ -33,6 +33,9 @@ pub(crate) fn advance_object_iterator_from_caller(
     let result =
         call_host_function_from_caller(caller, func_table, next, value::encode_undefined())
             .unwrap_or_else(value::encode_undefined);
+    if is_promise_value(caller.data(), result) {
+        return (result, value::encode_undefined(), false, false);
+    }
     if (value::is_object(result) || value::is_function(result) || value::is_array(result))
         && let Some(ptr) = resolve_handle(caller, result)
     {
@@ -1262,11 +1265,38 @@ pub(crate) fn call_map_set_method_from_caller(
             }
             value::encode_f64(0.0)
         }
-        // TODO: implement forEach/keys/values/entries — currently stubbed
-        MapSetMethodKind::ForEach
-        | MapSetMethodKind::Keys
-        | MapSetMethodKind::Values
-        | MapSetMethodKind::Entries => value::encode_undefined(),
+        MapSetMethodKind::ForEach => value::encode_undefined(),
+        MapSetMethodKind::Keys => {
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let keys = table[handle].keys.clone();
+                    drop(table);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let iter_handle = iters.len() as u32;
+                    iters.push(IteratorState::MapKeyIter { keys, index: 0 });
+                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                }
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::Values => {
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let values = table[handle].values.clone();
+                    drop(table);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let iter_handle = iters.len() as u32;
+                    iters.push(IteratorState::MapValueIter { values, index: 0 });
+                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                }
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::Entries => value::encode_undefined(),
     }
 }
 
@@ -1725,19 +1755,80 @@ fn advance_async_from_sync(
         resolve_promise_from_caller(caller, promise, result);
         return promise;
     }
+    let sync_handle_idx = value::decode_handle(sync_iter_handle) as usize;
+
+    // Direct advancement for non-ObjectIter types
+    let direct_result = {
+        let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+        match iters.get_mut(sync_handle_idx) {
+            Some(IteratorState::ArrayIter { ptr, index, length }) => {
+                if *index < *length {
+                    let idx = *index;
+                    let array_ptr = *ptr;
+                    *index += 1;
+                    drop(iters);
+                    let val = read_array_elem(caller, array_ptr, idx)
+                        .unwrap_or(value::encode_undefined());
+                    Some((false, val))
+                } else {
+                    Some((true, value::encode_undefined()))
+                }
+            }
+            Some(IteratorState::MapKeyIter { keys, index }) => {
+                if (*index as usize) < keys.len() {
+                    let val = keys[*index as usize];
+                    *index += 1;
+                    Some((false, val))
+                } else {
+                    Some((true, value::encode_undefined()))
+                }
+            }
+            Some(IteratorState::MapValueIter { values, index }) => {
+                if (*index as usize) < values.len() {
+                    let val = values[*index as usize];
+                    *index += 1;
+                    Some((false, val))
+                } else {
+                    Some((true, value::encode_undefined()))
+                }
+            }
+            Some(IteratorState::StringIter { byte_pos, data }) => {
+                if *byte_pos < data.len() {
+                    let ch = data[*byte_pos] as char;
+                    *byte_pos += 1;
+                    drop(iters);
+                    let val = store_runtime_string(&caller, ch.to_string());
+                    Some((false, val))
+                } else {
+                    Some((true, value::encode_undefined()))
+                }
+            }
+            _ => None,
+        }
+    };
+
+    if let Some((done, current_value)) = direct_result {
+        if done {
+            let mut table = caller.data().async_from_sync_iterators.lock()
+                .expect("async-from-sync iterators mutex");
+            if let Some(entry) = table.get_mut(handle as usize) {
+                entry.sync_done = true;
+            }
+        }
+        let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+        let result = alloc_iterator_result_from_caller(caller, current_value, done);
+        resolve_promise_from_caller(caller, promise, result);
+        return promise;
+    }
 
     let promise = call_sync_iter_and_wrap(caller, sync_iter_handle, None, false);
 
     {
-        let sync_handle_idx = value::decode_handle(sync_iter_handle) as usize;
         let iters = caller.data().iterators.lock().expect("iterators mutex");
         if let Some(IteratorState::ObjectIter { done, .. }) = iters.get(sync_handle_idx) {
             if *done {
                 drop(iters);
-                let mut table = caller
-                    .data()
-                    .async_from_sync_iterators
-                    .lock()
+                let mut table = caller.data().async_from_sync_iterators.lock()
                     .expect("async-from-sync iterators mutex");
                 if let Some(entry) = table.get_mut(handle as usize) {
                     entry.sync_done = true;

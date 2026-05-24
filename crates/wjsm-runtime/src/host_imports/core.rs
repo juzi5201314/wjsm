@@ -165,6 +165,14 @@
                         *index += 1;
                         return value::encode_undefined();
                     }
+                    IteratorState::MapKeyIter { index, .. } => {
+                        *index += 1;
+                        return value::encode_undefined();
+                    }
+                    IteratorState::MapValueIter { index, .. } => {
+                        *index += 1;
+                        return value::encode_undefined();
+                    }
                     IteratorState::ObjectIter { next, .. } => *next,
                     IteratorState::Error => return value::encode_undefined(),
                 }
@@ -268,6 +276,20 @@
                             value::encode_undefined()
                         }
                     }
+                    IteratorState::MapKeyIter { keys, index } => {
+                        if (*index as usize) < keys.len() {
+                            keys[*index as usize]
+                        } else {
+                            value::encode_undefined()
+                        }
+                    }
+                    IteratorState::MapValueIter { values, index } => {
+                        if (*index as usize) < values.len() {
+                            values[*index as usize]
+                        } else {
+                            value::encode_undefined()
+                        }
+                    }
                     IteratorState::ObjectIter { current_value, .. } => *current_value,
                     IteratorState::Error => {
                         *caller
@@ -301,6 +323,12 @@
                     }
                     IteratorState::ArrayIter { index, length, .. } => {
                         return value::encode_bool(*index >= *length);
+                    }
+                    IteratorState::MapKeyIter { keys, index } => {
+                        return value::encode_bool(*index as usize >= keys.len());
+                    }
+                    IteratorState::MapValueIter { values, index } => {
+                        return value::encode_bool(*index as usize >= values.len());
                     }
                     IteratorState::ObjectIter {
                         next,

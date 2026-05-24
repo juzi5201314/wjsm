@@ -2,22 +2,7 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::fixture_runner::FixtureRunner;
 
-#[test]
-fn happy() -> Result<()> {
-    FixtureRunner::new()?.run_suite("happy")
-}
-
-#[test]
-fn errors() -> Result<()> {
-    FixtureRunner::new()?.run_suite("errors")
-}
-
-#[test]
-fn modules() -> Result<()> {
-    FixtureRunner::new()?.run_suite("modules")
-}
 
 #[test]
 fn modules_respects_explicit_root_flag() -> Result<()> {

@@ -359,6 +359,9 @@ impl FunctionBuilder {
         self.blocks.push(BasicBlock::new(id));
         id
     }
+    fn last_block_id(&self) -> BasicBlockId {
+        BasicBlockId(self.blocks.len().saturating_sub(1) as u32)
+    }
 
     fn append_instruction(&mut self, block: BasicBlockId, instruction: Instruction) {
         if let Some(b) = self.block_mut(block) {
@@ -1298,6 +1301,9 @@ struct Lowerer {
     pub(crate) eval_continue_block: Option<BasicBlockId>,
     /// 由 lower_new_expr 在构建了异常检查分叉后设置，由 resolve_store_block 消费。
     pub(crate) new_expr_continue_block: Option<BasicBlockId>,
+    /// 由 lower_logical / lower_cond 在创建控制流表达式后设置其 merge block，
+    /// 由 resolve_store_block 消费，确保后续指令插入到正确的继续块中。
+    pub(crate) expr_merge_block: Option<BasicBlockId>,
     /// 当前作用域中活跃的 using 变量（用于作用域退出时自动 dispose）
     active_using_vars: Vec<ActiveUsingVar>,
     /// 追踪当前作用域中已推断为 TypedArray 的绑定（scope_id, name）。

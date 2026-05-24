@@ -73,6 +73,7 @@ impl Lowerer {
             typedarray_bindings: std::collections::HashSet::new(),
             eval_continue_block: None,
             new_expr_continue_block: None,
+            expr_merge_block: None,
             eval_completion: None,
         }
     }

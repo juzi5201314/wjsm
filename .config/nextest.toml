@@ -7,3 +7,4 @@ success-output = "never"
 status-level = "pass"
 final-status-level = "all"
 fail-fast = false
+slow-timeout = { period = "3s", terminate-after = 3 }

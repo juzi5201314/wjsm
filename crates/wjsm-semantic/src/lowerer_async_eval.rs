@@ -1343,6 +1343,7 @@ impl Lowerer {
                 args,
             },
         );
+        self.expr_merge_block = Some(call_block);
         Ok(dest)
     }
 

@@ -1133,10 +1133,7 @@ impl Compiler {
                         }
                         Ok(false)
                     } else {
-                        // merge 未编译，作为 branch body 的一部分继续编译
-                        self.compile_branch_body_with_context(
-                            module, blocks, merge, case_start, extra_depth,
-                        )
+                        return Ok(false); // merge 未编译，交给外层主循环，不在分支体内递归编译
                     }
                 }
             }

@@ -17,3 +17,6 @@ artifacts/
 .trae/
 .factory/
 .commandcode/
+# Generated test fixtures
+tests/gen/generated_fixtures.rs
+out.wasm

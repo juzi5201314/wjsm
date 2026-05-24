@@ -59,6 +59,39 @@ impl FixtureRunner {
             failures.join("\n\n")
         );
     }
+    /// Run a single fixture by its suite-relative path (without extension).
+    /// Example: `run_single("happy/hello")` runs `fixtures/happy/hello.js`.
+    pub fn run_single(&self, name: &str) -> Result<()> {
+        let js_path = self.fixtures_root.join(format!("{name}.js"));
+        let ts_path = self.fixtures_root.join(format!("{name}.ts"));
+        let input_path;
+        if js_path.exists() {
+            input_path = js_path;
+        } else if ts_path.exists() {
+            input_path = ts_path;
+        } else {
+            bail!(
+                "Fixture not found: {name}.js or {name}.ts (searched in {})",
+                self.fixtures_root.display()
+            );
+        }
+
+        let expected_path = input_path.with_extension("expected");
+        let relative_path = input_path
+            .strip_prefix(&self.fixtures_root)
+            .with_context(|| {
+                format!("Failed to build relative path for {}", input_path.display())
+            })?
+            .to_path_buf();
+
+        let fixture = FixtureCase {
+            input_path,
+            expected_path,
+            relative_path,
+        };
+
+        self.run_fixture(&fixture)
+    }
 
     fn discover(&self, suite: &str) -> Result<Vec<FixtureCase>> {
         let suite_dir = self.fixtures_root.join(suite);
