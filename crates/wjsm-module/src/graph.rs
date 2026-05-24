@@ -46,12 +46,24 @@ impl ModuleGraph {
         while let Some(module_id) = queue.pop_front() {
             let module = resolver.get_module(module_id).unwrap();
             let imports = module.imports.clone();
+            let exports = module.exports.clone();
             let dynamic_imports = module.dynamic_imports.clone();
             let path = module.path.clone();
 
             // 解析所有静态 import 依赖
             for import in &imports {
                 let dep_id = resolver.resolve(&import.specifier, &path)?;
+                if discovered.insert(dep_id) {
+                    queue.push_back(dep_id);
+                }
+            }
+            for export in &exports {
+                let source = match export {
+                    ExportEntry::NamedReExport { source, .. } => source,
+                    ExportEntry::All { source } => source,
+                    _ => continue,
+                };
+                let dep_id = resolver.resolve(source, &path)?;
                 if discovered.insert(dep_id) {
                     queue.push_back(dep_id);
                 }
@@ -108,6 +120,26 @@ impl ModuleGraph {
                 let dep_path = ModuleResolver::resolve_path(&import.specifier, &module.path)?;
                 if let Some(dep_id) = resolver.get_id_by_path(&dep_path) {
                     imports_with_ids.push((dep_id, import.clone()));
+                }
+            }
+            // 添加重导出（export { ... } from / export * from）的源模块作为依赖
+            for export in &module.exports {
+                let source = match export {
+                    ExportEntry::NamedReExport { source, .. } => source.clone(),
+                    ExportEntry::All { source } => source.clone(),
+                    _ => continue,
+                };
+                if imports_with_ids.iter().any(|(_, i)| i.specifier == source) {
+                    continue; // 已通过 import 引入，跳过重复
+                }
+                let dep_path = ModuleResolver::resolve_path(&source, &module.path)?;
+                if let Some(dep_id) = resolver.get_id_by_path(&dep_path) {
+                    // 用空 names 创建合成 ImportEntry（表示依赖关系，不引入绑定）
+                    imports_with_ids.push((dep_id, ImportEntry {
+                        specifier: source,
+                        names: Vec::new(),
+                        source_span: Default::default(),
+                    }));
                 }
             }
 

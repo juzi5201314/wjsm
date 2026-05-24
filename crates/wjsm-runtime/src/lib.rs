@@ -308,6 +308,24 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 return value::encode_undefined();
             };
 
+            // 数组 fast path
+            if value::is_array(iterable) {
+                if let Some(arr_ptr) = resolve_handle(&mut caller, iterable) {
+                    let length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                    let sync_iter_handle = {
+                        let mut iters = caller.data().iterators.lock()
+                            .expect("iterators mutex");
+                        let sync_handle = iters.len() as u32;
+                        iters.push(IteratorState::ArrayIter {
+                            ptr: arr_ptr,
+                            index: 0,
+                            length,
+                        });
+                        value::encode_handle(value::TAG_ITERATOR, sync_handle)
+                    };
+                    return create_async_from_sync_iterator(&mut caller, sync_iter_handle);
+                }
+            }
             // 尝试 @@asyncIterator
             if let Some(method) =
                 read_object_property_by_name(&mut caller, ptr, "Symbol.asyncIterator")
@@ -535,7 +553,30 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 });
                 handle
             };
-            let map_result = alloc_object(&mut caller, 0);
+            let map_result = alloc_object(&mut caller, 12);
+            {
+                let state = caller.data();
+                let set_fn = create_map_set_method(state, MapSetMethodKind::MapSet);
+                let get_fn = create_map_set_method(state, MapSetMethodKind::MapGet);
+                let has_fn = create_map_set_method(state, MapSetMethodKind::Has);
+                let delete_fn = create_map_set_method(state, MapSetMethodKind::Delete);
+                let clear_fn = create_map_set_method(state, MapSetMethodKind::Clear);
+                let size_fn = create_map_set_method(state, MapSetMethodKind::Size);
+                let for_each_fn = create_map_set_method(state, MapSetMethodKind::ForEach);
+                let keys_fn = create_map_set_method(state, MapSetMethodKind::Keys);
+                let values_fn = create_map_set_method(state, MapSetMethodKind::Values);
+                let entries_fn = create_map_set_method(state, MapSetMethodKind::Entries);
+                let _ = define_host_data_property(&mut caller, map_result, "set", set_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "get", get_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "has", has_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "delete", delete_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "clear", clear_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "size", size_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "forEach", for_each_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "keys", keys_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "values", values_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "entries", entries_fn);
+            }
             if let Some(_map_ptr) = resolve_handle(&mut caller, map_result) {
                 let handle_val = value::encode_f64(map_handle as f64);
                 define_host_data_property(&mut caller, map_result, "__map_handle__", handle_val);
@@ -602,6 +643,93 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     imports.push(map_group_by_fn.into());
+    // ── Import 381: symbol_property_key(i64) -> i32 ───────────────────
+    let symbol_property_key_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+            if value::is_symbol(key) {
+                let handle = value::decode_handle(key) as usize;
+                let desc_str = {
+                    let table = caller.data().symbol_table.lock().expect("symbol table");
+                    table.get(handle).and_then(|e| e.description.clone())
+                };
+                if let Some(desc) = desc_str {
+                    let trimmed = desc
+                        .strip_prefix("Symbol(")
+                        .and_then(|s| s.strip_suffix(")"))
+                        .unwrap_or(&desc);
+                    let name_id = find_memory_c_string(&mut caller, trimmed)
+                        .or_else(|| alloc_heap_c_string(&mut caller, trimmed));
+                    if let Some(id) = name_id {
+                        return id as i32;
+                    }
+                }
+            }
+            key as i32
+        },
+    );
+    imports.push(symbol_property_key_fn.into());
+    // ── Import 382: array.from ──
+    let array_from_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64, _this_val: i64, args_base: i32, args_count: i32|
+         -> i64 {
+            if args_count < 1 { return value::encode_undefined(); }
+            let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+            let mut buf = [0u8; 8];
+            let _ = memory.read(&mut caller, args_base as usize, &mut buf);
+            let source = i64::from_le_bytes(buf);
+            if value::is_iterator(source) {
+                let handle_idx = value::decode_handle(source) as usize;
+                let mut values = Vec::new();
+                loop {
+                    let mut done = true;
+                    { let mut iters = caller.data().iterators.lock().expect("iters");
+                      if let Some(iter) = iters.get_mut(handle_idx) {
+                        match iter {
+                            IteratorState::MapKeyIter { keys, index } => {
+                                if (*index as usize) < keys.len() { values.push(keys[*index as usize]); *index += 1; done = false; }
+                            }
+                            IteratorState::MapValueIter { values: v, index } => {
+                                if (*index as usize) < v.len() { values.push(v[*index as usize]); *index += 1; done = false; }
+                            }
+                            _ => {}
+                        }
+                    } }
+                    if done { break; }
+                }
+                let arr = alloc_array(&mut caller, values.len() as u32);
+                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
+                    for (i, &val) in values.iter().enumerate() {
+                        write_array_elem(&mut caller, arr_ptr, i as u32, val);
+                    }
+                    write_array_length(&mut caller, arr_ptr, values.len() as u32);
+                }
+                return arr;
+            }
+            if value::is_array(source) { return source; }
+            value::encode_undefined()
+        },
+    );
+    imports.push(array_from_fn.into());
+    // ── Import 383: obj_get_by_index(i64, i32) -> i64 ────────────────────
+    let obj_get_by_index_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, boxed: i64, index: i32| -> i64 {
+            if !value::is_object(boxed) && !value::is_array(boxed) && !value::is_function(boxed) {
+                return value::encode_undefined();
+            }
+            let Some(ptr) = resolve_handle(&mut caller, boxed) else {
+                return value::encode_undefined();
+            };
+            let key = index.to_string();
+            let mut visited = std::collections::HashSet::new();
+            read_object_property_by_name_proto_walk(&mut caller, ptr, &key, &mut visited)
+                .unwrap_or(value::encode_undefined())
+        },
+    );
+    imports.push(obj_get_by_index_fn.into());
     let instance = Instance::new(&mut store, &module, &imports)?;
     // ── Create %AsyncIteratorPrototype% and AsyncGenerator.prototype ──
     let memory = instance
@@ -1372,6 +1500,14 @@ enum IteratorState {
         ptr: usize,
         index: u32,
         length: u32,
+    },
+    MapKeyIter {
+        keys: Vec<i64>,
+        index: u32,
+    },
+    MapValueIter {
+        values: Vec<i64>,
+        index: u32,
     },
     ObjectIter {
         next: i64,

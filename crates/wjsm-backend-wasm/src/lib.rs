@@ -15,7 +15,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 381] = [
+const HOST_IMPORT_NAMES: [&str; 384] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -413,6 +413,9 @@ const HOST_IMPORT_NAMES: [&str; 381] = [
     "async_iterator_from",                      // 378
     "object.group_by",                          // 379
     "map.group_by",                             // 380
+    "symbol_property_key",                      // 381
+    "array.from",                               // 382
+    "obj_get_by_index",                         // 383
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -421,7 +424,7 @@ const HOST_IMPORT_NAMES: [&str; 381] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        381,
+        384,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -511,6 +514,8 @@ struct Compiler {
     current_func_returns_value: bool,
     /// Whether the current function is main (for throw handling).
     current_func_is_main: bool,
+    /// WASM func index where user functions begin (= import count + helper count)
+    user_func_base_idx: u32,
     /// Base offset for SSA value WASM local indices (0 for main, 8 for Type 6 JS functions).
     ssa_local_base: u32,
     /// String ptr cache: maps string content → data segment offset.
@@ -525,6 +530,8 @@ struct Compiler {
     eval_var_base_local_idx: u32,
     /// WASM function index for gc_collect host function.
     gc_collect_func_idx: u32,
+    /// WASM function index for obj_get_by_index host function.
+    obj_get_by_index_func_idx: u32,
     /// WASM global index for alloc_counter (GC heuristic).
     alloc_counter_global_idx: u32,
     /// WASM global index for __object_heap_start (runtime GC heap base).
@@ -559,6 +566,8 @@ struct Compiler {
     get_proto_from_ctor_func_idx: u32,
     /// WASM function index for nul-terminated string equality helper.
     string_eq_func_idx: u32,
+    /// WASM function index for symbol_property_key host import.
+    symbol_key_func_idx: u32,
     /// WASM global index for Object.prototype handle.
     object_proto_handle_global_idx: u32,
     /// WASM global index for __eval_var_map_ptr.
@@ -921,6 +930,11 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
     loops.sort_by_key(|l| l.header_idx);
     let all_loops = loops.clone();
     loops.retain(|loop_info| {
+        // 过滤掉终止符为 Jump 的"幻影循环"：只有 Branch 终止符才能是真正的循环头。
+        // Jump 终止符的块是空块（如 for 循环增量），不应被当作独立循环。
+        if !matches!(blocks[loop_info.header_idx].terminator(), Terminator::Branch { .. }) {
+            return false;
+        }
         if let Terminator::Branch { true_block, .. } = blocks[loop_info.header_idx].terminator() {
             let true_idx = true_block.0 as usize;
             if true_idx < loop_info.header_idx {
@@ -1090,6 +1104,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ArrayFlatMap => ("array.flat_map", 1),
         Builtin::ArraySpliceVa => ("array.splice_va", 1),
         Builtin::ArrayIsArray => ("array.is_array", 1),
+        Builtin::ArrayFrom => ("array.from", 1),
         Builtin::ArrayConcatVa => ("array.concat_va", 1),
         Builtin::FuncCall => ("func_call", 1),
         Builtin::FuncApply => ("func_apply", 3),
