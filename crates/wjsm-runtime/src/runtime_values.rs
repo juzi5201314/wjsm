@@ -294,7 +294,7 @@ pub(crate) fn merge_sort_by<T: Copy>(
 }
 
 /// 沿原型链递归查找属性（带 visited set 防环路）
-fn read_object_property_by_name_proto_walk(
+pub(crate) fn read_object_property_by_name_proto_walk(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
     prop_name: &str,
@@ -1187,6 +1187,20 @@ pub(crate) fn resolve_callable_and_call(
             );
         }
         return value::encode_undefined();
+    } else if value::is_native_callable(callee) {
+        // 从影子栈读取参数
+        let memory = caller
+            .get_export("memory")
+            .and_then(|e| e.into_memory())
+            .unwrap();
+        let mut collected_args = Vec::with_capacity(args_count as usize);
+        for i in 0..args_count {
+            let mut buf = [0u8; 8];
+            let _ = memory.read(&mut *caller, (args_base + i * 8) as usize, &mut buf);
+            collected_args.push(i64::from_le_bytes(buf));
+        }
+        return call_native_callable_with_args_from_caller(caller, callee, this_val, collected_args)
+            .unwrap_or_else(value::encode_undefined);
     } else {
         return value::encode_undefined();
     };

@@ -975,6 +975,12 @@ impl Compiler {
         imports.import("env", "object.group_by", EntityType::Function(2));
         // Import index 380: map.group_by: (i64, i64) -> i64
         imports.import("env", "map.group_by", EntityType::Function(2));
+        // Import index 381: symbol_property_key: (i64) -> i32
+        imports.import("env", "symbol_property_key", EntityType::Function(10));
+        // Import index 382: array.from — Type 12 (shadow stack variadic)
+        imports.import("env", "array.from", EntityType::Function(12));
+        // Import index 383: obj_get_by_index: (i64, i32) -> i64 — Type 8
+        imports.import("env", "obj_get_by_index", EntityType::Function(8));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1066,6 +1072,7 @@ impl Compiler {
         builtin_func_indices.insert(Builtin::ArrayFlatMap, 74);
         builtin_func_indices.insert(Builtin::ArraySpliceVa, 75);
         builtin_func_indices.insert(Builtin::ArrayIsArray, 76);
+        builtin_func_indices.insert(Builtin::ArrayFrom, 382);
         builtin_func_indices.insert(Builtin::ArrayConcatVa, 55);
         builtin_func_indices.insert(Builtin::FuncCall, 78);
         builtin_func_indices.insert(Builtin::FuncApply, 79);
@@ -1448,6 +1455,7 @@ impl Compiler {
             to_int32_func_idx: 0,
             current_func_returns_value: false,
             current_func_is_main: false,
+            user_func_base_idx: 0,
             heap_ptr_global_idx: 0,
             func_props_global_idx: 0,
             obj_table_global_idx: 0,
@@ -1460,6 +1468,7 @@ impl Compiler {
             shadow_sp_scratch_idx: 0,
             eval_var_base_local_idx: 0,
             gc_collect_func_idx: 22,
+            obj_get_by_index_func_idx: 383,
             alloc_counter_global_idx: 0,
             object_heap_start_global_idx: 6,
             num_ir_functions_global_idx: 7,
@@ -1478,6 +1487,7 @@ impl Compiler {
             get_proto_from_ctor_func_idx: 0,
             string_eq_func_idx: 0,
             object_proto_handle_global_idx: 0,
+            symbol_key_func_idx: 381,
             eval_var_map_ptr_global_idx: 11,
             eval_var_map_count_global_idx: 12,
             eval_var_map_records: Vec::new(),

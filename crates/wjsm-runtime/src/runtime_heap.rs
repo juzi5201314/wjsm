@@ -21,6 +21,12 @@ pub(crate) fn alloc_host_object_from_caller(
         .unwrap_or(0) as u32;
     let size = 16 + capacity * 32;
     let new_heap_ptr = heap_ptr.saturating_add(size);
+    // Read __object_proto_handle before borrowing memory (avoids borrow conflict)
+    let proto = caller
+        .get_export("__object_proto_handle")
+        .and_then(|e| e.into_global())
+        .and_then(|g| g.get(&mut *caller).i32())
+        .unwrap_or(-1) as u32;
     {
         let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
             return value::encode_undefined();
@@ -30,7 +36,8 @@ pub(crate) fn alloc_host_object_from_caller(
         if new_heap_ptr as usize > data.len() {
             return value::encode_undefined();
         }
-        data[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
+        // proto slot
+        data[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());
         data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
         data[ptr + 5..ptr + 8].fill(0);
         data[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes());
