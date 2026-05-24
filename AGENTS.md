@@ -80,6 +80,15 @@ src/
   nextest.toml       # Nextest configuration
 ```
 
+## Temporary Files
+
+临时产物（编译输出、下载缓存等）**必须**放到 `/tmp`，禁止留在项目目录中。尤其注意：
+- `*.wasm`、`*.o` 等构建产物
+- 测试脚本生成的临时数据
+- 下载的依赖缓存
+
+这些文件如果误提交，用 `git rm --cached <file>` 移除后 commit。
+
 ## Development Commands
 
 ```bash
