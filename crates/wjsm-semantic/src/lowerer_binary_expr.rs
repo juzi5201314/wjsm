@@ -259,6 +259,20 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         let lhs = self.lower_expr(bin.left.as_ref(), block)?;
         let branch_block = self.resolve_store_block(block);
+        // 若 resolve_store_block 返回的 block 含 Phi（来自嵌套逻辑/条件表达式），
+        // 不能直接在其上设置 Branch，否则同一 block 有 Phi + Branch → WASM codegen 错误。
+        let branch_block = if self.current_function.block(branch_block).is_some_and(|b| {
+            b.instructions()
+                .iter()
+                .any(|i| matches!(i, Instruction::Phi { .. }))
+        }) {
+            let new_branch = self.current_function.new_block();
+            self.current_function
+                .set_terminator(branch_block, Terminator::Jump { target: new_branch });
+            new_branch
+        } else {
+            branch_block
+        };
         let rhs_block = self.current_function.new_block();
         let merge = self.current_function.new_block();
 
@@ -315,6 +329,8 @@ impl Lowerer {
                 ],
             },
         );
+
+        self.expr_merge_block = Some(merge);
 
         Ok(result)
     }
@@ -635,6 +651,20 @@ impl Lowerer {
         // 评估条件表达式
         let test = self.lower_expr(&cond.test, block)?;
         let branch_block = self.resolve_store_block(block);
+        // 若 resolve_store_block 返回的 block 含 Phi（来自嵌套逻辑/条件表达式），
+        // 不能直接在其上设置 Branch，否则同一 block 有 Phi + Branch → WASM codegen 错误。
+        let branch_block = if self.current_function.block(branch_block).is_some_and(|b| {
+            b.instructions()
+                .iter()
+                .any(|i| matches!(i, Instruction::Phi { .. }))
+        }) {
+            let new_branch = self.current_function.new_block();
+            self.current_function
+                .set_terminator(branch_block, Terminator::Jump { target: new_branch });
+            new_branch
+        } else {
+            branch_block
+        };
 
         let cons_block = self.current_function.new_block();
         let alt_block = self.current_function.new_block();
@@ -675,6 +705,8 @@ impl Lowerer {
                 ],
             },
         );
+
+        self.expr_merge_block = Some(merge);
 
         Ok(result)
     }

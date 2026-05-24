@@ -74,6 +74,7 @@ pub enum Builtin {
     ArrayEvery,
     ArrayFlatMap,
     ArrayIsArray,
+    ArrayFrom,
     ArraySpliceVa,
     ArrayConcatVa,
     // ── 函数原型方法 ──
@@ -495,6 +496,7 @@ impl fmt::Display for Builtin {
             Self::ArrayEvery => "array.every",
             Self::ArrayFlatMap => "array.flat_map",
             Self::ArrayIsArray => "array.is_array",
+            Self::ArrayFrom => "array.from",
             Self::ArraySpliceVa => "array.splice_va",
             Self::ArrayConcatVa => "array.concat_va",
             Self::FuncCall => "func_call",

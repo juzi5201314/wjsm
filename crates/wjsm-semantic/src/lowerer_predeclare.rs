@@ -397,6 +397,10 @@ impl Lowerer {
             return cont;
         }
 
+        if let Some(cont) = self.expr_merge_block.take() {
+            return cont;
+        }
+
         let Some(b) = self.current_function.block(block) else {
             return block;
         };

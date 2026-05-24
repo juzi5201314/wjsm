@@ -247,6 +247,8 @@ impl Compiler {
         self.eval_var_map_ptr_global_idx = 11;
         self.eval_var_map_count_global_idx = 12;
 
+        // Record user function base index (after all imports + helpers)
+        self.user_func_base_idx = self._next_import_func;
         for function in module.functions() {
             if function.name() == "main" {
                 self.compile_function(module, function)?;

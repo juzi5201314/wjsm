@@ -358,7 +358,7 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key: lower 32 bits (string pointer or name_id).
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::Call(self.symbol_key_func_idx));
                 // Call $obj_get(boxed, name_id) -> i64
                 self.emit(WasmInstruction::Call(self.obj_get_func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
@@ -369,7 +369,7 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::Call(self.symbol_key_func_idx));
                 // Value (i64 NaN-boxed).
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 // Call $obj_set(boxed, name_id, value)
@@ -381,7 +381,7 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key: lower 32 bits.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::Call(self.symbol_key_func_idx));
                 // Call $obj_delete(boxed, name_id) -> i64 (NaN-boxed bool)
                 self.emit(WasmInstruction::Call(self.obj_delete_func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
@@ -898,10 +898,21 @@ impl Compiler {
             .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
         // 确定 this_val 和影子栈参数
         // ArrayIsArray: this_val=undefined, 所有 args 走影子栈
+        // FuncCall/FuncBind: env_obj=func, this_val=args[1], shadow_args=args[2..]
         // 其他方法: this_val=args[0], args[1..] 走影子栈
-        let (this_val_idx, shadow_args) = if matches!(
+        let (env_obj_val, this_val_idx, shadow_args) = if matches!(
+            builtin,
+            Builtin::FuncCall | Builtin::FuncBind
+        ) {
+            // args = [func, this_val, ...restArgs]
+            let func: ValueId = args.first().copied().unwrap_or(ValueId(0));
+            let this: Option<ValueId> = args.get(1).copied();
+            let shadow_slice: &[ValueId] = if args.len() > 2 { &args[2..] } else { &[] };
+            (Some(func), this, shadow_slice)
+        } else if matches!(
             builtin,
             Builtin::ArrayIsArray
+                | Builtin::ArrayFrom
                 | Builtin::StringFromCharCode
                 | Builtin::StringFromCodePoint
                 | Builtin::MathMax
@@ -909,12 +920,12 @@ impl Compiler {
                 | Builtin::MathHypot
                 | Builtin::DateConstructor
         ) {
-            (None, args)
+            (None, None, args)
         } else {
             let this = args
                 .first()
                 .with_context(|| format!("{builtin} expects at least 1 argument (this_val)"))?;
-            (Some(this.0), &args[1..])
+            (None, Some(*this), &args[1..])
         };
         // 保存 shadow_sp 基址
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
@@ -937,11 +948,15 @@ impl Compiler {
             self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
         }
         // 推入 Type 12 调用参数: env_obj, this_val, args_base, args_count
-        // env_obj = undefined
-        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        // env_obj
+        if let Some(val) = env_obj_val {
+            self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+        } else {
+            self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        }
         // this_val
-        if let Some(val_idx) = this_val_idx {
-            self.emit(WasmInstruction::LocalGet(self.local_idx(val_idx)));
+        if let Some(val) = this_val_idx {
+            self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
         } else {
             self.emit(WasmInstruction::I64Const(value::encode_undefined()));
         }
@@ -1038,7 +1053,7 @@ impl Compiler {
         if is_prop {
             self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
             self.emit(WasmInstruction::LocalGet(self.local_idx(k.0)));
-            self.emit(WasmInstruction::I32WrapI64);
+            self.emit(WasmInstruction::Call(self.symbol_key_func_idx));
             self.emit(WasmInstruction::Call(self.obj_get_func_idx));
         } else {
             // OptionalGetElem: object, to_int32(key)

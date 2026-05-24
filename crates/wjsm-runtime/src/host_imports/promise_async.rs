@@ -958,35 +958,25 @@
                     }
                     PromiseState::Fulfilled(val) => {
                         let val = *val;
-                        drop(p_table);
-                        let mut queue = caller
-                            .data()
-                            .microtask_queue
-                            .lock()
-                            .expect("microtask queue mutex");
-                        queue.push_back(Microtask::AsyncResume {
-                            fn_table_idx: cont_fn_idx,
+                        let reactions = vec![PromiseReaction::new_async(
+                            cont_fn_idx as i64,
                             continuation,
-                            state: state as u32,
-                            resume_val: val,
-                            is_rejected: false,
-                        });
+                            ReactionType::Fulfill,
+                            state,
+                        )];
+                        drop(p_table);
+                        queue_promise_reactions(caller.data(), reactions, val, false);
                     }
                     PromiseState::Rejected(reason) => {
                         let reason = *reason;
-                        drop(p_table);
-                        let mut queue = caller
-                            .data()
-                            .microtask_queue
-                            .lock()
-                            .expect("microtask queue mutex");
-                        queue.push_back(Microtask::AsyncResume {
-                            fn_table_idx: cont_fn_idx,
+                        let reactions = vec![PromiseReaction::new_async(
+                            cont_fn_idx as i64,
                             continuation,
-                            state: state as u32,
-                            resume_val: reason,
-                            is_rejected: true,
-                        });
+                            ReactionType::Reject,
+                            state,
+                        )];
+                        drop(p_table);
+                        queue_promise_reactions(caller.data(), reactions, reason, true);
                     }
                 }
             }
@@ -1081,7 +1071,7 @@
                         .and_then(|e| e.into_memory())
                         .expect("memory");
                     let data = memory.data_mut(&mut caller);
-                    data[ptr + 4..ptr + 8]
+                    data[ptr..ptr + 4]
                         .copy_from_slice(&value::decode_object_handle(async_gen_proto).to_le_bytes());
                 }
             }

@@ -980,6 +980,7 @@ impl Compiler {
             | Builtin::ArrayConcatVa
             | Builtin::ArrayUnshiftVa => self.compile_proto_method_call(dest, builtin, args),
             Builtin::ArrayIsArray => self.compile_proto_method_call(dest, builtin, args),
+            Builtin::ArrayFrom => self.compile_proto_method_call(dest, builtin, args),
             Builtin::AbortShadowStackOverflow => {
                 bail!("AbortShadowStackOverflow should not appear in compile_builtin_call");
             }

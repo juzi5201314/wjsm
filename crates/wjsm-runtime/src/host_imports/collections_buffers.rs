@@ -424,8 +424,29 @@
 
     let map_set_keys_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
-            value::encode_undefined()
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            let map_handle = if let Some(ptr) = resolve_handle(&mut caller, this_val) {
+                read_object_property_by_name(&mut caller, ptr, "__map_handle__")
+                    .map(|v| value::decode_f64(v) as usize)
+                    .unwrap_or(usize::MAX)
+            } else {
+                return value::encode_undefined();
+            };
+            let keys = {
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if let Some(entry) = table.get(map_handle) {
+                    entry.keys.clone()
+                } else {
+                    return value::encode_undefined();
+                }
+            };
+            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+            let iter_handle = iters.len() as u32;
+            iters.push(IteratorState::MapKeyIter {
+                keys,
+                index: 0,
+            });
+            value::encode_handle(value::TAG_ITERATOR, iter_handle)
         },
     );
 
