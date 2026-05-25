@@ -595,7 +595,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
 
             // Use Vec of (key, elements) pairs to collect groups, avoiding mid-loop WASM manipulation
+            // Also use HashMap for O(1) key lookup while maintaining insertion order
             let mut groups: Vec<(i64, Vec<i64>)> = Vec::new();
+            let mut key_to_index: HashMap<i64, usize> = HashMap::new();
 
             // Array fast path
             let mut index = 0u32;
@@ -616,17 +618,36 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             Err(_) => return value::encode_undefined(),
                         };
 
-                        // Look up key in groups using SameValueZero
-                        let mut found = false;
-                        for (existing_key, elements) in &mut groups {
-                            if same_value_zero(*existing_key, key) {
-                                elements.push(elem);
-                                found = true;
-                                break;
+                        // Look up key in groups using HashMap for O(1) average case
+                        // Fall back to linear search for SameValueZero edge cases (e.g., NaN)
+                        let group_index = if let Some(&idx) = key_to_index.get(&key) {
+                            // Verify with SameValueZero to handle edge cases
+                            if same_value_zero(groups[idx].0, key) {
+                                Some(idx)
+                            } else {
+                                None
                             }
-                        }
-                        if !found {
-                            groups.push((key, vec![elem]));
+                        } else {
+                            None
+                        };
+
+                        if let Some(idx) = group_index {
+                            groups[idx].1.push(elem);
+                        } else {
+                            // Linear search for edge cases or if HashMap miss
+                            let mut found = false;
+                            for (existing_key, elements) in &mut groups {
+                                if same_value_zero(*existing_key, key) {
+                                    elements.push(elem);
+                                    key_to_index.insert(*existing_key, groups.len() - 1);
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if !found {
+                                key_to_index.insert(key, groups.len());
+                                groups.push((key, vec![elem]));
+                            }
                         }
                         index += 1;
                     }

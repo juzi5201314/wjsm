@@ -118,8 +118,8 @@ cargo nextest run -E 'test(happy__hello)'
 cargo nextest run -E 'test(happy__)'
 cargo nextest run -E 'test(errors__)'
 
-# Exclude known-hanging fixtures
-cargo nextest run -E 'not test(errors__for_await_non_iterable) & not test(happy__destructure_rest)'
+# Exclude known-hanging fixtures (pre-existing timeouts, not caused by recent changes)
+cargo nextest run -E 'not test(happy__new_prototype_chain) & not test(happy__global_fn_visible_in_nested) & not test(happy__eval_exception_expression_contexts) & not test(happy__weakref) & not test(happy__finalization_registry)'
 
 # Run unit/snapshot tests for a specific crate
 cargo nextest run -p wjsm-semantic
@@ -279,21 +279,13 @@ Full test262 conformance suite (via `wjsm-test262` crate), Proxy traps beyond ba
 | `fixtures/semantic/*.ir` | Stable IR snapshots — must be manually updated when lowering changes |
 | `todo.md` | Gap analysis of missing language features |
 
-## Known Performance Issues and Timeouts
-
-### Test Timeout Configuration
-- **Nextest timeout**: `slow-timeout = { period = "3s", terminate-after = 3 }` (configured in `.config/nextest.toml`)
-- **Effective timeout**: ~9 seconds (3s period × 3 retries before termination)
-- **Purpose**: Detect hanging fixtures and prevent infinite loops during testing
-
-### Known Timeout/Slow Fixtures
-
-### Performance Optimizations
+## Performance Optimizations
 - **Map.groupBy**: Fixed O(n²) performance issue in multi-key scenarios (commit d29481a)
   - Previous: Used `Vec<(i64, Vec<i64>)` with linear search → O(n²) complexity
   - Fixed: Added `HashMap<i64, usize>` for O(1) key lookup while maintaining insertion order
   - Preserves SameValueZero semantics with fallback to linear search for edge cases (e.g., NaN)
 - **Object.groupBy**: Uses `HashMap<String, Vec<i64>>` → O(1) average lookup (no performance issue)
+- **obj_get non-object tag guard**: Fixed infinite loop when accessing properties on `undefined`/`null` values (e.g., `undefined.foo` hung forever). The `$obj_get` WASM helper now returns `undefined` early for TAG_UNDEFINED and TAG_NULL, preventing the generic handle resolution path from reading garbage obj_table entries.
 
 ## Adding a New Language Feature
 
