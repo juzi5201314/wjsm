@@ -53,7 +53,7 @@ impl Compiler {
     pub(crate) fn compile_module(&mut self, module: &IrModule) -> Result<()> {
         // Pass 1: Register all IR functions as WASM functions.
         let mut main_wasm_idx: Option<u32> = None;
-        for function in module.functions() {
+        for (i, function) in module.functions().iter().enumerate() {
             let wasm_idx = self._next_import_func;
             self.function_name_to_wasm_idx
                 .insert(function.name().to_string(), wasm_idx);
@@ -84,6 +84,7 @@ impl Compiler {
             }
 
             self.push_func_table(wasm_idx);
+            self.function_id_to_wasm_idx.insert(i as u32, wasm_idx);
             self._next_import_func += 1;
         }
 

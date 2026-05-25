@@ -304,10 +304,23 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let async_iterator_from_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, iterable: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, iterable) else {
-                return value::encode_undefined();
-            };
+            if !(value::is_object(iterable)
+                || value::is_array(iterable)
+                || value::is_function(iterable)
+                || value::is_proxy(iterable))
+            {
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                let handle = iters.len() as u32;
+                iters.push(IteratorState::Error);
+                return value::encode_handle(value::TAG_ITERATOR, handle);
+            }
 
+            let Some(ptr) = resolve_handle(&mut caller, iterable) else {
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                let handle = iters.len() as u32;
+                iters.push(IteratorState::Error);
+                return value::encode_handle(value::TAG_ITERATOR, handle);
+            };
             // 数组 fast path
             if value::is_array(iterable) {
                 if let Some(arr_ptr) = resolve_handle(&mut caller, iterable) {
@@ -953,7 +966,17 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── Timer event loop (only if main succeeded) ─────────────────────────
     // Poll timers; fire expired callbacks via the WASM function table.
     if main_ok {
+        let mut timer_iterations = 0u32;
+        const MAX_TIMER_ITERATIONS: u32 = 1000;
         loop {
+            timer_iterations += 1;
+            if timer_iterations > MAX_TIMER_ITERATIONS {
+                writeln!(
+                    store.data().output.lock().expect("output mutex"),
+                    "Internal error: timer event loop exceeded max iterations"
+                ).ok();
+                break;
+            }
             let now = Instant::now();
             let mut _entry_to_fire: Option<TimerEntry> = None;
 

@@ -423,9 +423,13 @@ impl Compiler {
                 memory_index: 0,
             }));
             func.instruction(&WasmInstruction::LocalTee(3)); // 暂存 proto_handle 到 local 3
-            // 如果 proto_handle == -1 (哨兵)，退出循环
+            // 如果 proto_handle == -1 或 0（null sentinel），退出循环
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::I32Const(-1));
             func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::I32Or);
             func.instruction(&WasmInstruction::BrIf(1));
             // 通过 handle 表解析 proto_handle → proto_ptr
             func.instruction(&WasmInstruction::LocalGet(3));

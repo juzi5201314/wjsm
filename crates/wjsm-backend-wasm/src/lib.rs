@@ -484,6 +484,8 @@ struct Compiler {
     function_table_reverse: HashMap<u32, u32>,
     /// IR function name → WASM func index.
     function_name_to_wasm_idx: HashMap<String, u32>,
+    /// IR function ID → WASM function index (bridge for FunctionRef → table position).
+    function_id_to_wasm_idx: HashMap<u32, u32>,
     /// WASM index of $obj_new helper.
     obj_new_func_idx: u32,
     /// WASM index of $obj_get helper.

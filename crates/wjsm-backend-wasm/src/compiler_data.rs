@@ -27,12 +27,8 @@ impl Compiler {
             Constant::Null => Ok(value::encode_null()),
             Constant::Undefined => Ok(value::encode_undefined()),
             Constant::FunctionRef(function_id) => {
-                let wasm_idx = function_id.0;
-                let table_idx = self
-                    .function_table_reverse
-                    .get(&wasm_idx)
-                    .copied()
-                    .unwrap_or(wasm_idx);
+                let wasm_idx = self.function_id_to_wasm_idx.get(&function_id.0).copied().unwrap_or(0);
+                let table_idx = self.function_table_reverse.get(&wasm_idx).copied().unwrap_or(0);
                 Ok(value::encode_function_idx(table_idx))
             }
             Constant::NativeCallableEval => Ok(value::encode_native_callable_idx(0)),

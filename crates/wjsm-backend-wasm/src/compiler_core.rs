@@ -1486,6 +1486,7 @@ impl Compiler {
             proxy_trap_delete_func_idx: 320,
             get_proto_from_ctor_func_idx: 0,
             string_eq_func_idx: 0,
+            function_id_to_wasm_idx: HashMap::new(),
             object_proto_handle_global_idx: 0,
             symbol_key_func_idx: 381,
             eval_var_map_ptr_global_idx: 11,
