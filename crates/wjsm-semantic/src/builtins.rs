@@ -313,12 +313,14 @@ pub(crate) fn builtin_from_function_proto_method(name: &str) -> Option<Builtin> 
 /// 将 Object.prototype 方法名映射到 Builtin 变体，用于语义层优化。
 /// 当 `obj.hasOwnProperty(key)` 被识别时，跳过运行时属性解析，直接发出 CallBuiltin。
 ///
-/// 注意: toString / valueOf 未在此处拦截，因为它们在不同原型上有不同实现
-/// (Array.prototype.toString、Date.prototype.valueOf 等)，编译时无法确定接收者类型。
-/// 这些方法将在原型链实现后通过运行时属性查找调用。
+/// 注意: toString / valueOf 在此处拦截，用于 Object.prototype.toString/valueOf 调用。
+/// 对于 Array.prototype.toString、Date.prototype.valueOf 等特定原型的实现，
+/// 仍需通过运行时原型链查找调用（当前未实现）。
 pub(crate) fn builtin_from_object_proto_method(name: &str) -> Option<Builtin> {
     match name {
         "hasOwnProperty" => Some(Builtin::HasOwnProperty),
+        "toString" => Some(Builtin::ObjectProtoToString),
+        "valueOf" => Some(Builtin::ObjectProtoValueOf),
         _ => None,
     }
 }

@@ -85,6 +85,14 @@ fn collect_fixtures(dir: &Path, suite_dir: &Path, suite: &str, cases: &mut Vec<(
             if ext != Some("js") && ext != Some("ts") {
                 continue;
             }
+
+            // 只为有 .expected 快照的 fixture 生成测试
+            // 没有 .expected 的文件不是独立可运行的入口（例如 CJS 循环依赖中的非入口模块）
+            let expected_path = path.with_extension("expected");
+            if !expected_path.exists() {
+                continue;
+            }
+
             let relative = path
                 .strip_prefix(suite_dir)
                 .unwrap()

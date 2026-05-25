@@ -232,6 +232,21 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
+            // 对 undefined/null/bool/string/bigint/symbol 等标量类型直接返回 undefined，
+            // 防止错误地将 NaN-boxed 值的低位当作 obj_table handle 导致死循环或内存越界。
+            // 保留 TAG_OBJECT(8)、TAG_FUNCTION(9)、TAG_ARRAY(11)、TAG_EXCEPTION(5)、
+            // TAG_ITERATOR(6)、TAG_ENUMERATOR(7) 等对象类型通过。
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(value::TAG_UNDEFINED as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(value::TAG_NULL as i32));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::I32Or);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
             func.instruction(&WasmInstruction::I32Const(4));

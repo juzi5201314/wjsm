@@ -2,5 +2,5 @@ exit_code: 0
 --- stdout ---
 Doe, John
 
-undefined
+[object Object]
 --- stderr ---
