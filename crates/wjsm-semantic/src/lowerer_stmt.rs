@@ -742,8 +742,29 @@ impl Lowerer {
             },
         );
 
-        // async_iterator.next() already returns a Promise, no need for Promise.resolve()
-        let next_result = next_call_result;
+        // ES spec: for-await 的迭代值需要通过 Promise.resolve 包装
+        // 当 next() 返回非 Promise 值（如普通对象）时，Suspend 需要一个真正的 Promise
+        let promised = self.alloc_value();
+        {
+            let undef_const = self.module.add_constant(Constant::Undefined);
+            let undef_val = self.alloc_value();
+            self.current_function.append_instruction(
+                header,
+                Instruction::Const {
+                    dest: undef_val,
+                    constant: undef_const,
+                },
+            );
+            self.current_function.append_instruction(
+                header,
+                Instruction::CallBuiltin {
+                    dest: Some(promised),
+                    builtin: Builtin::PromiseResolveStatic,
+                    args: vec![undef_val, next_call_result],
+                },
+            );
+        }
+        let next_result = promised;
 
         let next_state = self.async_state_counter;
         self.async_state_counter += 1;

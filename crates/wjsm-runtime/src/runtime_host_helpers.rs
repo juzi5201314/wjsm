@@ -52,7 +52,10 @@ pub(crate) fn call_wasm_callback(
     // 解析函数：支持闭包、函数引用、代理链
     let mut resolved = func_val;
     loop {
-        if value::is_closure(resolved) || value::is_function(resolved) {
+        if value::is_closure(resolved) || value::is_function(resolved) || value::is_native_callable(resolved) {
+            break;
+        }
+        if value::is_bound(resolved) {
             break;
         }
         if !value::is_proxy(resolved) {
@@ -82,6 +85,26 @@ pub(crate) fn call_wasm_callback(
         // No apply trap, forward to target
         resolved = entry.target;
         continue;
+    }
+    if value::is_native_callable(resolved) {
+        // 先恢复 shadow_sp，因为 native_callable 不走 WASM 调用路径
+        let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+        return call_native_callable_with_args_from_caller(&mut *caller, resolved, this_val, args.to_vec())
+            .ok_or_else(|| anyhow::anyhow!("native callable returned None"));
+    }
+    if value::is_bound(resolved) {
+        let bound_idx = value::decode_bound_idx(resolved) as usize;
+        let (bound_func, bound_this, bound_args) = {
+            let bound = caller.data().bound_objects.lock().unwrap();
+            let record = &bound[bound_idx];
+            (record.target_func, record.bound_this, record.bound_args.clone())
+        };
+        // 先恢复 shadow_sp
+        let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+        // 合并 bound_args 和 args
+        let mut combined_args = bound_args;
+        combined_args.extend_from_slice(args);
+        return call_wasm_callback(&mut *caller, bound_func, bound_this, &combined_args);
     }
     let (func_idx, env_obj) = if value::is_closure(resolved) {
         let idx = value::decode_closure_idx(resolved) as usize;

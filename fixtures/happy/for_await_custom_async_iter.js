@@ -5,7 +5,8 @@ async function run() {
       return {
         async next() {
           if (i < 3) {
-            return { value: ++i, done: false };
+            i = i + 1;
+            return { value: i, done: false };
           }
           return { value: undefined, done: true };
         }

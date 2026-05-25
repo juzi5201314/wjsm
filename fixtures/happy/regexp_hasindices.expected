@@ -1,14 +1,6 @@
 exit_code: 0
 --- stdout ---
-<<<<<<< HEAD
 undefined undefined
 undefined undefined
 undefined undefined
 undefined
-=======
-0 2
-0 1
-1 2
-{"x":[0,1]}
->>>>>>> feat/array-grouping
---- stderr ---
