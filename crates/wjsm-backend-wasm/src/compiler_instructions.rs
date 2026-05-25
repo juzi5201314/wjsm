@@ -274,6 +274,7 @@ impl Compiler {
                     .get(&dest.0)
                     .copied()
                     .with_context(|| format!("phi {dest} has no assigned WASM local"))?;
+
                 self.emit(WasmInstruction::LocalGet(phi_local));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(false)

@@ -1042,7 +1042,6 @@ impl Compiler {
                 }
             }
             Terminator::Throw { value } => {
-                self.emit_eval_var_frame_exit();
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 let func_idx = self
                     .builtin_func_indices
@@ -1133,10 +1132,31 @@ impl Compiler {
                         }
                         Ok(false)
                     } else {
-                        return Ok(false); // merge 未编译，交给外层主循环，不在分支体内递归编译
-                    }
-                }
-            }
+                        // 仅对非 loop 的简单 Jump 做内联 merge 编译
+                        // 条件：merge 必须为 Jump 终止，且目标非 loop 头/exit
+                        let is_simple_merge = blocks.get(merge).is_some_and(|b| {
+                            if let Terminator::Jump { target } = b.terminator() {
+                                let t = target.0 as usize;
+                                !self.loop_continue_depth(t).is_some()
+                                    && !self.loop_break_depth(t).is_some()
+                            } else {
+                                false // 非 Jump 终止（如 Branch）不内联编译
+                            }
+                        });
+                        if is_simple_merge {
+                            self.compiled_blocks.insert(merge);
+                            return self.compile_branch_body_with_context(
+                                module,
+                                blocks,
+                                merge,
+                                case_start,
+                                extra_depth,
+                            );
+                        }
+                        return Ok(false);
+                }           // closes inner else
+            }               // closes outer else
+            }               // closes Branch arm
             _ => {
                 self.emit(WasmInstruction::Unreachable);
                 Ok(true)
