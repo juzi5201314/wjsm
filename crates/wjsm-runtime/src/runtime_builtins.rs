@@ -2155,12 +2155,27 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
                     data[slot_addr + 2], data[slot_addr + 3],
                 ]) as usize;
                 if old_ptr == 0 { continue; }
-                if old_ptr + 12 > data.len() { continue; }
-                let capacity = u32::from_le_bytes([
-                    data[old_ptr + 4], data[old_ptr + 5],
-                    data[old_ptr + 6], data[old_ptr + 7],
-                ]) as usize;
-                let size = 12 + capacity * 32;
+                if old_ptr + 16 > data.len() { continue; }
+                let heap_type = data[old_ptr + 4];
+                let (capacity, elem_size) = if heap_type == wjsm_ir::HEAP_TYPE_ARRAY {
+                    (
+                        u32::from_le_bytes([
+                            data[old_ptr + 12], data[old_ptr + 13],
+                            data[old_ptr + 14], data[old_ptr + 15],
+                        ]) as usize,
+                        8usize,
+                    )
+                } else {
+                    (
+                        u32::from_le_bytes([
+                            data[old_ptr + 8], data[old_ptr + 9],
+                            data[old_ptr + 10], data[old_ptr + 11],
+                        ]) as usize,
+                        32usize,
+                    )
+                };
+                let Some(payload_size) = capacity.checked_mul(elem_size) else { continue; };
+                let Some(size) = 16usize.checked_add(payload_size) else { continue; };
                 live_objects.push((handle_idx, old_ptr, size));
             }
         }

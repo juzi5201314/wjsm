@@ -765,7 +765,6 @@ impl Lowerer {
             );
         }
         let next_result = promised;
-
         let next_state = self.async_state_counter;
         self.async_state_counter += 1;
 

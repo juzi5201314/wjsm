@@ -420,7 +420,47 @@ impl Compiler {
                 self.emit(WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
                 self.emit(WasmInstruction::I64Eq);
 
-                // (2) OR (3): tag_valid → i32
+                // (4) tag == TAG_CLOSURE: ((val >> 32) & 0xF) == TAG_CLOSURE → i32
+                self.emit(WasmInstruction::LocalGet(val_local));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I64Const(0xF));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
+                self.emit(WasmInstruction::I64Eq);
+
+                // (5) tag == TAG_ARRAY: ((val >> 32) & 0xF) == TAG_ARRAY → i32
+                self.emit(WasmInstruction::LocalGet(val_local));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I64Const(0xF));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(value::TAG_ARRAY as i64));
+                self.emit(WasmInstruction::I64Eq);
+
+                // (6) tag == TAG_BOUND: ((val >> 32) & 0xF) == TAG_BOUND → i32
+                self.emit(WasmInstruction::LocalGet(val_local));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I64Const(0xF));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(value::TAG_BOUND as i64));
+                self.emit(WasmInstruction::I64Eq);
+
+                // (7) tag == TAG_PROXY: ((val >> 32) & 0xF) == TAG_PROXY → i32
+                self.emit(WasmInstruction::LocalGet(val_local));
+                self.emit(WasmInstruction::I64Const(32));
+                self.emit(WasmInstruction::I64ShrU);
+                self.emit(WasmInstruction::I64Const(0xF));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I64Const(value::TAG_PROXY as i64));
+                self.emit(WasmInstruction::I64Eq);
+
+                // (2) OR (3) OR (4) OR (5) OR (6) OR (7): tag_valid → i32
+                self.emit(WasmInstruction::I32Or);
+                self.emit(WasmInstruction::I32Or);
+                self.emit(WasmInstruction::I32Or);
+                self.emit(WasmInstruction::I32Or);
                 self.emit(WasmInstruction::I32Or);
                 // (1) AND tag_valid: combined → i32
                 self.emit(WasmInstruction::I32And);
