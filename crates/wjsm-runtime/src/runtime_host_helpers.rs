@@ -1,14 +1,13 @@
 use super::*;
+use crate::wasm_env::WasmEnv;
 
-pub(crate) fn read_shadow_arg(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn read_shadow_arg_with_env<C: AsContext>(
+    ctx: &C,
+    env: &WasmEnv,
     args_base: i32,
     index: u32,
 ) -> i64 {
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-        return value::encode_undefined();
-    };
-    let data = memory.data(&*caller);
+    let data = env.memory.data(ctx);
     let offset = args_base as usize + (index as usize) * 8;
     if offset + 8 > data.len() {
         return value::encode_undefined();
@@ -154,34 +153,18 @@ pub(crate) fn call_wasm_callback(
 }
 
 // ── 辅助函数：分配新数组 ────────────────────────────────────────
-pub(crate) fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
-    let heap_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-            return value::encode_undefined();
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as u32
-    };
-    let obj_table_count = {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else {
-            return value::encode_undefined();
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as u32
-    };
-    let obj_table_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
-            return value::encode_undefined();
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as u32
-    };
+pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    capacity: u32,
+) -> i64 {
+    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let size = 16 + capacity * 8;
     let new_heap_ptr = heap_ptr + size;
-    if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
-        let _ = g.set(&mut *caller, Val::I32(new_heap_ptr as i32));
-    }
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return value::encode_undefined();
-    };
-    let d = mem.data_mut(&mut *caller);
+    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
+    let d = env.memory.data_mut(&mut *ctx);
     let ptr = heap_ptr as usize;
     if (new_heap_ptr as usize) > d.len() {
         return value::encode_undefined();
@@ -196,15 +179,16 @@ pub(crate) fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) 
         d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
     }
     let _ = d;
-    if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
-        let _ = g.set(&mut *caller, Val::I32((obj_table_count + 1) as i32));
-    }
+    let _ = env
+        .obj_table_count
+        .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
     value::encode_handle(value::TAG_ARRAY, obj_table_count)
 }
 // ── arr_proto_push (#49) ──────────────────────────────────────────
 /// 从 host 元素设置数组元素（直接写入堆内存）
-pub(crate) fn set_array_elem(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn set_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
     arr_val: i64,
     index: i32,
     val: i64,
@@ -213,13 +197,10 @@ pub(crate) fn set_array_elem(
         return;
     }
     let handle = value::decode_handle(arr_val) as usize;
-    let Some(ptr) = resolve_handle_idx(caller, handle) else {
+    let Some(ptr) = resolve_handle_idx_with_env(ctx, env, handle) else {
         return;
     };
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-        return;
-    };
-    let data = memory.data_mut(&mut *caller);
+    let data = env.memory.data_mut(&mut *ctx);
     let slot_offset = ptr + 16 + index as usize * 8;
     if slot_offset + 8 > data.len() {
         return;
@@ -234,34 +215,18 @@ pub(crate) fn set_array_elem(
     }
 }
 // ── 辅助函数：分配新对象 ────────────────────────────────────────────
-pub(crate) fn alloc_object(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
-    let heap_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-            return value::encode_undefined();
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as u32
-    };
-    let obj_table_count = {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else {
-            return value::encode_undefined();
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as u32
-    };
-    let obj_table_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
-            return value::encode_undefined();
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as u32
-    };
+pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    capacity: u32,
+) -> i64 {
+    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let size = 16 + capacity * 32;
     let new_heap_ptr = heap_ptr + size;
-    if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
-        let _ = g.set(&mut *caller, Val::I32(new_heap_ptr as i32));
-    }
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return value::encode_undefined();
-    };
-    let d = mem.data_mut(&mut *caller);
+    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
+    let d = env.memory.data_mut(&mut *ctx);
     let ptr = heap_ptr as usize;
     if (new_heap_ptr as usize) > d.len() {
         return value::encode_undefined();
@@ -276,61 +241,38 @@ pub(crate) fn alloc_object(caller: &mut Caller<'_, RuntimeState>, capacity: u32)
         d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
     }
     let _ = d;
-    if let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") {
-        let _ = g.set(&mut *caller, Val::I32((obj_table_count + 1) as i32));
-    }
+    let _ = env
+        .obj_table_count
+        .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
     value::encode_object_handle(obj_table_count)
 }
 
-pub(crate) fn alloc_promise(caller: &mut Caller<'_, RuntimeState>, entry: PromiseEntry) -> i64 {
-    let promise = alloc_object(caller, 0);
-    if value::is_object(promise) {
-        let handle = value::decode_object_handle(promise) as usize;
-        let mut table = caller
-            .data()
-            .promise_table
-            .lock()
-            .expect("promise table mutex");
-        insert_promise_entry(&mut table, handle, entry);
-    }
-    promise
-}
-
-pub(crate) fn find_memory_c_string(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn find_memory_c_string_with_env<C: AsContext>(
+    ctx: &C,
+    env: &WasmEnv,
     name: &str,
 ) -> Option<u32> {
     let mut needle = Vec::with_capacity(name.len() + 1);
     needle.extend_from_slice(name.as_bytes());
     needle.push(0);
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-        return None;
-    };
-    memory
-        .data(&*caller)
+    env.memory
+        .data(ctx)
         .windows(needle.len())
         .position(|window| window == needle.as_slice())
         .map(|offset| offset as u32)
 }
 
-pub(crate) fn alloc_heap_c_string(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn alloc_heap_c_string_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
     name: &str,
 ) -> Option<u32> {
-    let heap_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-            return None;
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as usize
-    };
+    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as usize;
     let bytes = name.as_bytes();
     let end = heap_ptr.checked_add(bytes.len() + 1)?;
     let aligned_end = (end + 7) & !7;
     {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data_mut(&mut *caller);
+        let data = env.memory.data_mut(&mut *ctx);
         if aligned_end > data.len() {
             return None;
         }
@@ -338,26 +280,23 @@ pub(crate) fn alloc_heap_c_string(
         data[heap_ptr + bytes.len()] = 0;
         data[end..aligned_end].fill(0);
     }
-    if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
-        let _ = g.set(&mut *caller, Val::I32(aligned_end as i32));
-    }
+    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(aligned_end as i32));
     Some(heap_ptr as u32)
 }
 
-pub(crate) fn define_host_data_property(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn define_host_data_property_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
     obj: i64,
     name: &str,
     val: i64,
 ) -> Option<()> {
-    let name_id =
-        find_memory_c_string(caller, name).or_else(|| alloc_heap_c_string(caller, name))?;
-    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize)?;
+    let name_id = find_memory_c_string_with_env(ctx, env, name)
+        .or_else(|| alloc_heap_c_string_with_env(ctx, env, name))?;
+    let obj_ptr =
+        resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize)?;
     let (capacity, num_props) = {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(&*caller);
+        let data = env.memory.data(&*ctx);
         if obj_ptr + 16 > data.len() {
             return None;
         }
@@ -375,16 +314,11 @@ pub(crate) fn define_host_data_property(
         ]);
         (capacity, num_props)
     };
-    let actual_ptr = if num_props >= capacity {
-        let new_cap = capacity.saturating_mul(2).max(num_props + 1).max(1);
-        grow_object(caller, obj_ptr, obj, new_cap)?
-    } else {
-        obj_ptr
-    };
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+    if num_props >= capacity {
         return None;
-    };
-    let data = memory.data_mut(&mut *caller);
+    }
+    let actual_ptr = obj_ptr;
+    let data = env.memory.data_mut(&mut *ctx);
     let slot_offset = actual_ptr + 16 + num_props as usize * 32;
     if slot_offset + 32 > data.len() {
         return None;
@@ -1189,4 +1123,120 @@ pub(crate) fn reflect_get_impl(
     value::encode_undefined()
 }
 
+// ── Caller 双参数便捷入口（委托 WasmEnv 泛型实现）────────────────────
+
+#[inline]
+pub(crate) fn read_shadow_arg(
+    caller: &mut Caller<'_, RuntimeState>,
+    args_base: i32,
+    index: u32,
+) -> i64 {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    read_shadow_arg_with_env(caller, &env, args_base, index)
+}
+
+#[inline]
+pub(crate) fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    alloc_array_with_env(caller, &env, capacity)
+}
+
+#[inline]
+pub(crate) fn set_array_elem(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr_val: i64,
+    index: i32,
+    val: i64,
+) {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    set_array_elem_with_env(caller, &env, arr_val, index, val);
+}
+
+#[inline]
+pub(crate) fn alloc_object(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    alloc_object_with_env(caller, &env, capacity)
+}
+
+#[inline]
+pub(crate) fn alloc_promise(caller: &mut Caller<'_, RuntimeState>, entry: PromiseEntry) -> i64 {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let promise = alloc_object_with_env(caller, &env, 0);
+    if value::is_object(promise) {
+        let handle = value::decode_object_handle(promise) as usize;
+        let mut table = caller
+            .data()
+            .promise_table
+            .lock()
+            .expect("promise table mutex");
+        insert_promise_entry(&mut table, handle, entry);
+    }
+    promise
+}
+
+#[inline]
+pub(crate) fn find_memory_c_string(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    find_memory_c_string_with_env(caller, &env, name)
+}
+
+#[inline]
+pub(crate) fn alloc_heap_c_string(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    alloc_heap_c_string_with_env(caller, &env, name)
+}
+
+#[inline]
+pub(crate) fn define_host_data_property(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+    val: i64,
+) -> Option<()> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let name_id = find_memory_c_string_with_env(caller, &env, name)
+        .or_else(|| alloc_heap_c_string_with_env(caller, &env, name))?;
+    let obj_ptr =
+        resolve_handle_idx_with_env(caller, &env, value::decode_object_handle(obj) as usize)?;
+    let (capacity, num_props) = {
+        let data = env.memory.data(&*caller);
+        if obj_ptr + 16 > data.len() {
+            return None;
+        }
+        let capacity = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]);
+        let num_props = u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]);
+        (capacity, num_props)
+    };
+    let actual_ptr = if num_props >= capacity {
+        let new_cap = capacity.saturating_mul(2).max(num_props + 1).max(1);
+        grow_object(caller, obj_ptr, obj, new_cap)?
+    } else {
+        obj_ptr
+    };
+    let data = env.memory.data_mut(&mut *caller);
+    let slot_offset = actual_ptr + 16 + num_props as usize * 32;
+    if slot_offset + 32 > data.len() {
+        return None;
+    }
+    let flags =
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
+    let undef = value::encode_undefined();
+    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
+    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
+    data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
+    Some(())
+}
 
