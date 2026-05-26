@@ -221,85 +221,34 @@ pub(crate) fn alloc_aggregate_error_from_caller(
     obj
 }
 
-pub(crate) fn define_host_data_property_from_store(
-    store: &mut Store<RuntimeState>,
-    env: &WasmEnv,
-    obj: i64,
-    name: &str,
-    val: i64,
-) -> Option<()> {
-    let name_id = find_memory_c_string_with_env(store, env, name)
-        .or_else(|| alloc_heap_c_string_with_env(store, env, name))?;
-    let obj_ptr = resolve_handle_idx_with_env(
-        store,
-        env,
-        value::decode_object_handle(obj) as usize,
-    )?;
-    let (capacity, num_props) = {
-        let data = env.memory.data(&mut *store);
-        if obj_ptr + 16 > data.len() {
-            return None;
-        }
-        let capacity = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]);
-        let num_props = u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]);
-        (capacity, num_props)
-    };
-    if num_props >= capacity {
-        return None;
-    }
-    let data = env.memory.data_mut(&mut *store);
-    let slot_offset = obj_ptr + 16 + num_props as usize * 32;
-    if slot_offset + 32 > data.len() {
-        return None;
-    }
-    let flags =
-        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
-    let undef = value::encode_undefined();
-    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
-    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
-    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
-    Some(())
-}
-
-pub(crate) fn alloc_all_settled_result_from_store(
-    store: &mut Store<RuntimeState>,
+pub(crate) fn alloc_all_settled_result<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
     env: &WasmEnv,
     status: &str,
     value_name: &str,
     val: i64,
 ) -> i64 {
-    let obj = alloc_host_object(store, env, 2);
-    let status_value = store_runtime_string_in_state(store.data(), status.to_string());
-    let _ = define_host_data_property_from_store(store, env, obj, "status", status_value);
-    let _ = define_host_data_property_from_store(store, env, obj, value_name, val);
+    let obj = alloc_host_object(ctx, env, 2);
+    let status_value = store_runtime_string_in_state(ctx.as_context_mut().data_mut(), status.to_string());
+    let _ = define_host_data_property_with_env(ctx, env, obj, "status", status_value);
+    let _ = define_host_data_property_with_env(ctx, env, obj, value_name, val);
     obj
 }
 
-pub(crate) fn alloc_aggregate_error_from_store(
-    store: &mut Store<RuntimeState>,
+pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
     env: &WasmEnv,
     errors: i64,
 ) -> i64 {
-    let obj = alloc_host_object(store, env, 3);
-    let name = store_runtime_string_in_state(store.data(), "AggregateError".to_string());
-    let message =
-        store_runtime_string_in_state(store.data(), "All promises were rejected".to_string());
-    let _ = define_host_data_property_from_store(store, env, obj, "name", name);
-    let _ = define_host_data_property_from_store(store, env, obj, "message", message);
-    let _ = define_host_data_property_from_store(store, env, obj, "errors", errors);
+    let obj = alloc_host_object(ctx, env, 3);
+    let name = store_runtime_string_in_state(ctx.as_context_mut().data_mut(), "AggregateError".to_string());
+    let message = store_runtime_string_in_state(
+        ctx.as_context_mut().data_mut(),
+        "All promises were rejected".to_string(),
+    );
+    let _ = define_host_data_property_with_env(ctx, env, obj, "name", name);
+    let _ = define_host_data_property_with_env(ctx, env, obj, "message", message);
+    let _ = define_host_data_property_with_env(ctx, env, obj, "errors", errors);
     obj
 }
 

@@ -1,4 +1,21 @@
 use super::*;
+use crate::wasm_env::WasmEnv;
+
+trait RuntimeStateAccess {
+    fn state_mut(&mut self) -> &mut RuntimeState;
+}
+
+impl RuntimeStateAccess for Caller<'_, RuntimeState> {
+    fn state_mut(&mut self) -> &mut RuntimeState {
+        Caller::data_mut(self)
+    }
+}
+
+impl RuntimeStateAccess for Store<RuntimeState> {
+    fn state_mut(&mut self) -> &mut RuntimeState {
+        Store::data_mut(self)
+    }
+}
 
 pub(crate) fn promise_entry_mut(
     table: &mut [PromiseEntry],
@@ -416,96 +433,38 @@ pub(crate) fn decrement_combinator_remaining(
     }
 }
 
-pub(crate) fn handle_combinator_reaction_from_caller(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn handle_combinator_reaction<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
     handler: i64,
     argument: i64,
 ) -> bool {
-    let Some((context, index, kind)) = combinator_reaction_record(caller.data(), handler) else {
-        return false;
+    let (context, index, kind) = match {
+        let state = ctx.state_mut();
+        combinator_reaction_record(state, handler)
+    } {
+        Some(record) => record,
+        None => return false,
     };
-    let Some((_, result_array)) = open_combinator_context(caller.data(), context) else {
-        return true;
+    let (_, result_array) = match {
+        let state = ctx.state_mut();
+        open_combinator_context(state, context)
+    } {
+        Some(record) => record,
+        None => return true,
     };
 
     match kind {
         PromiseCombinatorReactionKind::AllFulfill => {
-            if let Some(result_ptr) = resolve_array_ptr(caller, result_array) {
-                write_array_elem(caller, result_ptr, index as u32, argument);
+            if let Some(result_ptr) = resolve_array_ptr_with_env(ctx, env, result_array) {
+                write_array_elem_with_env(ctx, env, result_ptr, index as u32, argument);
             }
-            if let Some((result_promise, result_array)) =
-                decrement_combinator_remaining(caller.data(), context)
-            {
+            if let Some((result_promise, result_array)) = {
+                let state = ctx.state_mut();
+                decrement_combinator_remaining(state, context)
+            } {
                 settle_promise(
-                    caller.data(),
-                    result_promise,
-                    PromiseSettlement::Fulfill(result_array),
-                );
-            }
-        }
-        PromiseCombinatorReactionKind::AllSettledFulfill
-        | PromiseCombinatorReactionKind::AllSettledReject => {
-            let (status, value_name) = match kind {
-                PromiseCombinatorReactionKind::AllSettledFulfill => ("fulfilled", "value"),
-                PromiseCombinatorReactionKind::AllSettledReject => ("rejected", "reason"),
-                _ => unreachable!(),
-            };
-            let record = alloc_all_settled_result_from_caller(caller, status, value_name, argument);
-            if let Some(result_ptr) = resolve_array_ptr(caller, result_array) {
-                write_array_elem(caller, result_ptr, index as u32, record);
-            }
-            if let Some((result_promise, result_array)) =
-                decrement_combinator_remaining(caller.data(), context)
-            {
-                settle_promise(
-                    caller.data(),
-                    result_promise,
-                    PromiseSettlement::Fulfill(result_array),
-                );
-            }
-        }
-        PromiseCombinatorReactionKind::AnyReject => {
-            if let Some(errors_ptr) = resolve_array_ptr(caller, result_array) {
-                write_array_elem(caller, errors_ptr, index as u32, argument);
-            }
-            if let Some((result_promise, errors_array)) =
-                decrement_combinator_remaining(caller.data(), context)
-            {
-                let aggregate = alloc_aggregate_error_from_caller(caller, errors_array);
-                settle_promise(
-                    caller.data(),
-                    result_promise,
-                    PromiseSettlement::Reject(aggregate),
-                );
-            }
-        }
-    }
-    true
-}
-
-pub(crate) fn handle_combinator_reaction_from_store(
-    store: &mut Store<RuntimeState>,
-    env: &crate::wasm_env::WasmEnv,
-    handler: i64,
-    argument: i64,
-) -> bool {
-    let Some((context, index, kind)) = combinator_reaction_record(store.data(), handler) else {
-        return false;
-    };
-    let Some((_, result_array)) = open_combinator_context(store.data(), context) else {
-        return true;
-    };
-
-    match kind {
-        PromiseCombinatorReactionKind::AllFulfill => {
-            if let Some(result_ptr) = resolve_array_ptr_with_env(store, env, result_array) {
-                write_array_elem_with_env(store, env, result_ptr, index as u32, argument);
-            }
-            if let Some((result_promise, result_array)) =
-                decrement_combinator_remaining(store.data(), context)
-            {
-                settle_promise(
-                    store.data(),
+                    ctx.state_mut(),
                     result_promise,
                     PromiseSettlement::Fulfill(result_array),
                 );
@@ -519,30 +478,33 @@ pub(crate) fn handle_combinator_reaction_from_store(
                 _ => unreachable!(),
             };
             let record =
-                alloc_all_settled_result_from_store(store, env, status, value_name, argument);
-            if let Some(result_ptr) = resolve_array_ptr_with_env(store, env, result_array) {
-                write_array_elem_with_env(store, env, result_ptr, index as u32, record);
+                crate::runtime_heap::alloc_all_settled_result(ctx, env, status, value_name, argument);
+            if let Some(result_ptr) = resolve_array_ptr_with_env(ctx, env, result_array) {
+                write_array_elem_with_env(ctx, env, result_ptr, index as u32, record);
             }
-            if let Some((result_promise, result_array)) =
-                decrement_combinator_remaining(store.data(), context)
-            {
+            if let Some((result_promise, result_array)) = {
+                let state = ctx.state_mut();
+                decrement_combinator_remaining(state, context)
+            } {
                 settle_promise(
-                    store.data(),
+                    ctx.state_mut(),
                     result_promise,
                     PromiseSettlement::Fulfill(result_array),
                 );
             }
         }
         PromiseCombinatorReactionKind::AnyReject => {
-            if let Some(errors_ptr) = resolve_array_ptr_with_env(store, env, result_array) {
-                write_array_elem_with_env(store, env, errors_ptr, index as u32, argument);
+            if let Some(errors_ptr) = resolve_array_ptr_with_env(ctx, env, result_array) {
+                write_array_elem_with_env(ctx, env, errors_ptr, index as u32, argument);
             }
-            if let Some((result_promise, errors_array)) =
-                decrement_combinator_remaining(store.data(), context)
-            {
-                let aggregate = alloc_aggregate_error_from_store(store, env, errors_array);
+            if let Some((result_promise, errors_array)) = {
+                let state = ctx.state_mut();
+                decrement_combinator_remaining(state, context)
+            } {
+                let aggregate =
+                    crate::runtime_heap::alloc_heap_aggregate_error(ctx, env, errors_array);
                 settle_promise(
-                    store.data(),
+                    ctx.state_mut(),
                     result_promise,
                     PromiseSettlement::Reject(aggregate),
                 );
@@ -647,69 +609,23 @@ pub(crate) fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
     }
 }
 
-pub(crate) fn resolve_promise_from_caller(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn resolve_promise<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
     promise: i64,
     resolution: i64,
 ) {
     if promise == resolution {
         let reason = runtime_error_value(
-            caller.data(),
+            ctx.state_mut(),
             "TypeError: cannot resolve promise with itself".to_string(),
         );
-        settle_promise(caller.data(), promise, PromiseSettlement::Reject(reason));
+        settle_promise(ctx.state_mut(), promise, PromiseSettlement::Reject(reason));
         return;
     }
 
-    if is_promise_value(caller.data(), resolution) {
-        adopt_promise(caller.data(), promise, resolution);
-        return;
-    }
-
-    if (value::is_object(resolution)
-        || value::is_function(resolution)
-        || value::is_callable(resolution))
-        && let Some(ptr) = resolve_handle(caller, resolution)
-        && let Some(then) = read_object_property_by_name(caller, ptr, "then")
-        && value::is_callable(then)
-    {
-        let mut queue = caller
-            .data()
-            .microtask_queue
-            .lock()
-            .expect("microtask queue mutex");
-        queue.push_back(Microtask::PromiseResolveThenable {
-            promise,
-            thenable: resolution,
-            then,
-        });
-        return;
-    }
-
-    settle_promise(
-        caller.data(),
-        promise,
-        PromiseSettlement::Fulfill(resolution),
-    );
-}
-
-pub(crate) fn resolve_promise_from_store(
-    store: &mut Store<RuntimeState>,
-    env: &crate::wasm_env::WasmEnv,
-    promise: i64,
-    resolution: i64,
-) {
-    if promise == resolution {
-        let reason = runtime_error_value(
-            store.data(),
-            "TypeError: cannot resolve promise with itself".to_string(),
-        );
-        settle_promise(store.data(), promise, PromiseSettlement::Reject(reason));
-        return;
-    }
-
-    if is_promise_value(store.data(), resolution) {
-        adopt_promise(store.data(), promise, resolution);
+    if is_promise_value(ctx.state_mut(), resolution) {
+        adopt_promise(ctx.state_mut(), promise, resolution);
         return;
     }
 
@@ -717,16 +633,15 @@ pub(crate) fn resolve_promise_from_store(
         || value::is_function(resolution)
         || value::is_callable(resolution))
         && let Some(ptr) = resolve_handle_idx_with_env(
-            store,
+            ctx,
             env,
             (resolution as u64 & 0xFFFF_FFFF) as usize,
         )
-        && let Some(then) =
-            read_object_property_by_name_with_env(store, env, ptr, "then")
+        && let Some(then) = read_object_property_by_name_with_env(ctx, env, ptr, "then")
         && value::is_callable(then)
     {
-        let mut queue = store
-            .data()
+        let mut queue = ctx
+            .state_mut()
             .microtask_queue
             .lock()
             .expect("microtask queue mutex");
@@ -739,10 +654,20 @@ pub(crate) fn resolve_promise_from_store(
     }
 
     settle_promise(
-        store.data(),
+        ctx.state_mut(),
         promise,
         PromiseSettlement::Fulfill(resolution),
     );
+}
+
+#[inline]
+pub(crate) fn resolve_promise_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    promise: i64,
+    resolution: i64,
+) {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    resolve_promise(caller, &env, promise, resolution);
 }
 
 pub(crate) fn passive_reaction_settlement(
@@ -771,14 +696,14 @@ pub(crate) fn set_runtime_error(state: &RuntimeState, message: String) {
     }
 }
 
-pub(crate) fn drain_microtasks_from_caller(
-    caller: &mut Caller<'_, RuntimeState>,
-    func_table: &Table,
+pub(crate) fn drain_microtasks<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
 ) {
     loop {
         let task = {
-            let mut queue = caller
-                .data()
+            let mut queue = ctx
+                .state_mut()
                 .microtask_queue
                 .lock()
                 .expect("microtask queue mutex");
@@ -791,49 +716,51 @@ pub(crate) fn drain_microtasks_from_caller(
                 handler,
                 argument,
             }) => {
-                if handle_combinator_reaction_from_caller(caller, handler, argument) {
+                if handle_combinator_reaction(ctx, env, handler, argument) {
                     continue;
                 }
                 if value::is_callable(handler) {
-                    // §27.2.5.3 — finally 的 handler 应以零参数调用（不传 value/reason）
                     let call_arg = match reaction_type {
                         ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
                             value::encode_undefined()
                         }
                         _ => argument,
                     };
-                    match call_host_function_from_caller(caller, func_table, handler, call_arg) {
+                    match call_host_function(ctx, env, handler, call_arg) {
                         Some(result) => match reaction_type {
                             ReactionType::Fulfill | ReactionType::Reject => {
-                                resolve_promise_from_caller(caller, promise, result);
+                                resolve_promise(ctx, env, promise, result);
                             }
                             ReactionType::FinallyFulfill => {
                                 settle_promise(
-                                    caller.data(),
+                                    ctx.state_mut(),
                                     promise,
                                     PromiseSettlement::Fulfill(argument),
                                 );
                             }
                             ReactionType::FinallyReject => {
                                 settle_promise(
-                                    caller.data(),
+                                    ctx.state_mut(),
                                     promise,
                                     PromiseSettlement::Reject(argument),
                                 );
                             }
                         },
-                        None => settle_promise(
-                            caller.data(),
-                            promise,
-                            PromiseSettlement::Reject(runtime_error_value(
-                                caller.data(),
+                        None => {
+                            let err = runtime_error_value(
+                                ctx.state_mut(),
                                 "TypeError: promise reaction handler failed".to_string(),
-                            )),
-                        ),
+                            );
+                            settle_promise(
+                                ctx.state_mut(),
+                                promise,
+                                PromiseSettlement::Reject(err),
+                            );
+                        }
                     }
                 } else {
                     let settlement = passive_reaction_settlement(reaction_type, argument);
-                    settle_promise(caller.data(), promise, settlement);
+                    settle_promise(ctx.state_mut(), promise, settlement);
                 }
             }
             Some(Microtask::PromiseResolveThenable {
@@ -841,20 +768,16 @@ pub(crate) fn drain_microtasks_from_caller(
                 thenable,
                 then,
             }) => {
-                let (resolve, reject) = create_promise_resolving_functions(caller.data(), promise);
-                if call_host_function_from_caller(caller, func_table, then, resolve).is_none() {
-                    settle_promise(caller.data(), promise, PromiseSettlement::Reject(reject));
+                let (resolve, reject) =
+                    create_promise_resolving_functions(ctx.state_mut(), promise);
+                if call_host_function(ctx, env, then, resolve).is_none() {
+                    settle_promise(ctx.state_mut(), promise, PromiseSettlement::Reject(reject));
                 }
                 let _ = thenable;
             }
             Some(Microtask::MicrotaskCallback { callback }) => {
                 if value::is_callable(callback) {
-                    let _ = call_host_function_from_caller(
-                        caller,
-                        func_table,
-                        callback,
-                        value::encode_undefined(),
-                    );
+                    let _ = call_host_function(ctx, env, callback, value::encode_undefined());
                 }
             }
             Some(Microtask::AsyncResume {
@@ -864,9 +787,9 @@ pub(crate) fn drain_microtasks_from_caller(
                 resume_val,
                 is_rejected,
             }) => {
-                resume_async_function_from_caller(
-                    caller,
-                    func_table,
+                resume_async_function(
+                    ctx,
+                    env,
                     fn_table_idx,
                     continuation,
                     state,
@@ -874,22 +797,22 @@ pub(crate) fn drain_microtasks_from_caller(
                     is_rejected,
                 );
             }
-            Some(Microtask::CleanupFinalizationRegistry { callback, held_value: _ }) => {
-                let _ = call_host_function_from_caller(
-                    caller,
-                    func_table,
-                    callback,
-                    value::encode_undefined(),
-                );
+            Some(Microtask::CleanupFinalizationRegistry {
+                callback,
+                held_value,
+            }) => {
+                ctx.state_mut()
+                    .pending_cleanup_callbacks
+                    .lock()
+                    .expect("pending_cleanup_callbacks mutex")
+                    .push((callback, vec![held_value]));
             }
             None => break,
         }
     }
-    // ── §27.2.1.9 HostPromiseRejectionTracker ────────────────────────────
-    // 微任务队列排空后，扫描 promise table 检测未处理的 rejection 并输出警告
     let unhandled: Vec<i64> = {
-        let table = caller
-            .data()
+        let table = ctx
+            .state_mut()
             .promise_table
             .lock()
             .expect("promise table mutex");
@@ -903,172 +826,6 @@ pub(crate) fn drain_microtasks_from_caller(
             .collect()
     };
     for reason in unhandled {
-        let msg = render_value(caller, reason).unwrap_or_else(|_| String::from("unknown"));
-        eprintln!("UnhandledPromiseRejectionWarning: {msg}");
-    }
-}
-
-pub(crate) fn drain_microtasks_from_store(
-    store: &mut Store<RuntimeState>,
-    func_table: &Table,
-    memory: &Memory,
-    shadow_sp_global: &Global,
-    heap_ptr_global: &Global,
-    obj_table_ptr_global: &Global,
-    obj_table_count_global: &Global,
-    object_proto_handle_global: &Global,
-) {
-    let env = crate::wasm_env::WasmEnv {
-        memory: *memory,
-        func_table: *func_table,
-        shadow_sp: *shadow_sp_global,
-        heap_ptr: *heap_ptr_global,
-        obj_table_ptr: *obj_table_ptr_global,
-        obj_table_count: *obj_table_count_global,
-        object_proto_handle: *object_proto_handle_global,
-    };
-    loop {
-        let task = {
-            let mut queue = store
-                .data()
-                .microtask_queue
-                .lock()
-                .expect("microtask queue mutex");
-            queue.pop_front()
-        };
-        match task {
-            Some(Microtask::PromiseReaction {
-                promise,
-                reaction_type,
-                handler,
-                argument,
-            }) => {
-                if handle_combinator_reaction_from_store(store, &env, handler, argument) {
-                    continue;
-                }
-                if value::is_callable(handler) {
-                    // §27.2.5.3 — finally 的 handler 应以零参数调用（不传 value/reason）
-                    let call_arg = match reaction_type {
-                        ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
-                            value::encode_undefined()
-                        }
-                        _ => argument,
-                    };
-                    match call_host_function_from_store(
-                        store,
-                        func_table,
-                        memory,
-                        shadow_sp_global,
-                        handler,
-                        call_arg,
-                    ) {
-                        Some(result) => match reaction_type {
-                            ReactionType::Fulfill | ReactionType::Reject => {
-                                resolve_promise_from_store(store, &env, promise, result);
-                            }
-                            ReactionType::FinallyFulfill => {
-                                settle_promise(
-                                    store.data(),
-                                    promise,
-                                    PromiseSettlement::Fulfill(argument),
-                                );
-                            }
-                            ReactionType::FinallyReject => {
-                                settle_promise(
-                                    store.data(),
-                                    promise,
-                                    PromiseSettlement::Reject(argument),
-                                );
-                            }
-                        },
-                        None => settle_promise(
-                            store.data(),
-                            promise,
-                            PromiseSettlement::Reject(runtime_error_value(
-                                store.data(),
-                                "TypeError: promise reaction handler failed".to_string(),
-                            )),
-                        ),
-                    }
-                } else {
-                    let settlement = passive_reaction_settlement(reaction_type, argument);
-                    settle_promise(store.data(), promise, settlement);
-                }
-            }
-            Some(Microtask::PromiseResolveThenable {
-                promise,
-                thenable,
-                then,
-            }) => {
-                let (resolve, reject) = create_promise_resolving_functions(store.data(), promise);
-                if call_host_function_from_store(
-                    store,
-                    func_table,
-                    memory,
-                    shadow_sp_global,
-                    then,
-                    resolve,
-                )
-                .is_none()
-                {
-                    settle_promise(store.data(), promise, PromiseSettlement::Reject(reject));
-                }
-                let _ = thenable;
-            }
-            Some(Microtask::MicrotaskCallback { callback }) => {
-                if value::is_callable(callback) {
-                    let _ = call_host_function_from_store(
-                        store,
-                        func_table,
-                        memory,
-                        shadow_sp_global,
-                        callback,
-                        value::encode_undefined(),
-                    );
-                }
-            }
-            Some(Microtask::AsyncResume {
-                fn_table_idx,
-                continuation,
-                state,
-                resume_val,
-                is_rejected,
-            }) => {
-                resume_async_function_from_store(
-                    store,
-                    func_table,
-                    fn_table_idx,
-                    continuation,
-                    state,
-                    resume_val,
-                    is_rejected,
-                );
-            }
-            Some(Microtask::CleanupFinalizationRegistry { .. }) => {
-                // In the store variant, cleanup is handled separately via pending_cleanup_callbacks
-            }
-            None => break,
-        }
-    }
-    // ── §27.2.1.9 HostPromiseRejectionTracker ────────────────────────────
-    // 微任务队列排空后，扫描 promise table 检测未处理的 rejection 并输出警告
-    let unhandled: Vec<i64> = {
-        let table = store
-            .data()
-            .promise_table
-            .lock()
-            .expect("promise table mutex");
-        table
-            .iter()
-            .filter(|e| e.is_promise && !e.handled)
-            .filter_map(|e| match &e.state {
-                PromiseState::Rejected(reason) => Some(*reason),
-                _ => None,
-            })
-            .collect()
-    };
-    for reason in unhandled {
-        // store 变体无法直接调用 render_value，使用简化格式
         let msg = if value::is_string(reason) {
             String::from("<string>")
         } else if value::is_f64(reason) {
@@ -1082,70 +839,66 @@ pub(crate) fn drain_microtasks_from_store(
     }
 }
 
-pub(crate) fn call_host_function_from_caller(
+#[inline]
+pub(crate) fn drain_microtasks_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
-    func_table: &Table,
+    _func_table: &Table,
+) {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    drain_microtasks(caller, &env);
+}
+
+pub(crate) fn call_host_function<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
     handler: i64,
     argument: i64,
 ) -> Option<i64> {
-    if value::is_native_callable(handler) {
-        return call_native_callable_from_caller(caller, handler, Some(argument));
-    }
-
-    let (func_idx, env_obj) = if value::is_closure(handler) {
-        let idx = value::decode_closure_idx(handler);
-        let closures = caller.data().closures.lock().unwrap();
-        let entry = &closures[idx as usize];
-        (entry.func_idx, entry.env_obj)
-    } else if value::is_function(handler) {
-        (
-            value::decode_function_idx(handler),
-            value::encode_undefined(),
-        )
-    } else if value::is_bound(handler) {
-        let bound_idx = value::decode_bound_idx(handler);
-        let bound = caller.data().bound_objects.lock().unwrap();
-        let record = &bound[bound_idx as usize];
-        (
-            value::decode_function_idx(record.target_func),
-            record.bound_this,
-        )
-    } else {
-        return None;
+    let (func_idx, env_obj) = {
+        let state = ctx.state_mut();
+        if value::is_closure(handler) {
+            let idx = value::decode_closure_idx(handler);
+            let closures = state.closures.lock().unwrap();
+            let entry = &closures[idx as usize];
+            (entry.func_idx, entry.env_obj)
+        } else if value::is_function(handler) {
+            (
+                value::decode_function_idx(handler),
+                value::encode_undefined(),
+            )
+        } else if value::is_bound(handler) {
+            let bound_idx = value::decode_bound_idx(handler);
+            let bound = state.bound_objects.lock().unwrap();
+            let record = &bound[bound_idx as usize];
+            (
+                value::decode_function_idx(record.target_func),
+                record.bound_this,
+            )
+        } else {
+            return None;
+        }
     };
 
-    let shadow_sp_global = caller
-        .get_export("__shadow_sp")
-        .and_then(|e| e.into_global());
-    let saved_sp = shadow_sp_global
-        .as_ref()
-        .and_then(|g| g.get(&mut *caller).i32())
-        .unwrap_or(0);
-
-    if let Some(sp_global) = &shadow_sp_global {
-        let sp = saved_sp;
-        let new_sp = sp + 8;
-        if let Some(Extern::Memory(memory)) = caller.get_export("memory") {
-            let data = memory.data_mut(&mut *caller);
-            let offset = sp as usize;
-            if offset + 8 <= data.len() {
-                data[offset..offset + 8].copy_from_slice(&argument.to_le_bytes());
-            }
+    let saved_sp = env.shadow_sp.get(&mut *ctx).i32().unwrap_or(0);
+    {
+        let data = env.memory.data_mut(&mut *ctx);
+        let offset = saved_sp as usize;
+        if offset + 8 <= data.len() {
+            data[offset..offset + 8].copy_from_slice(&argument.to_le_bytes());
         }
-        let _ = sp_global.set(&mut *caller, Val::I32(new_sp));
     }
+    let new_sp = saved_sp + 8;
+    let _ = env.shadow_sp.set(&mut *ctx, Val::I32(new_sp));
 
-    let func_ref = func_table.get(&mut *caller, func_idx as u64);
+    let func_ref = env.func_table.get(&mut *ctx, func_idx as u64);
     let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
     let Some(func) = func else {
-        if let Some(sp_global) = &shadow_sp_global {
-            let _ = sp_global.set(&mut *caller, Val::I32(saved_sp));
-        }
+        let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
         return None;
     };
     let mut results = [Val::I64(0)];
     if let Err(err) = func.call(
-        &mut *caller,
+        &mut *ctx,
         &[
             Val::I64(env_obj),
             Val::I64(value::encode_undefined()),
@@ -1155,20 +908,30 @@ pub(crate) fn call_host_function_from_caller(
         &mut results,
     ) {
         set_runtime_error(
-            caller.data(),
+            ctx.state_mut(),
             format!("promise reaction handler error: {err}"),
         );
-        if let Some(sp_global) = &shadow_sp_global {
-            let _ = sp_global.set(&mut *caller, Val::I32(saved_sp));
-        }
+        let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
         return None;
     }
 
-    if let Some(sp_global) = &shadow_sp_global {
-        let _ = sp_global.set(&mut *caller, Val::I32(saved_sp));
-    }
+    let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
 
     results[0].i64()
+}
+
+#[inline]
+pub(crate) fn call_host_function_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    _func_table: &Table,
+    handler: i64,
+    argument: i64,
+) -> Option<i64> {
+    if value::is_native_callable(handler) {
+        return call_native_callable_from_caller(caller, handler, Some(argument));
+    }
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    call_host_function(caller, &env, handler, argument)
 }
 
 pub(crate) fn nanbox_to_usize(val: i64) -> usize {
@@ -1191,9 +954,9 @@ pub(crate) fn nanbox_to_bool(val: i64) -> bool {
     }
 }
 
-pub(crate) fn resume_async_function_from_caller(
-    caller: &mut Caller<'_, RuntimeState>,
-    func_table: &Table,
+pub(crate) fn resume_async_function<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
     fn_table_idx: u32,
     continuation: i64,
     state: u32,
@@ -1202,8 +965,8 @@ pub(crate) fn resume_async_function_from_caller(
 ) {
     {
         let cont_handle = value::decode_object_handle(continuation) as usize;
-        let mut c_table = caller
-            .data()
+        let mut c_table = ctx
+            .state_mut()
             .continuation_table
             .lock()
             .expect("continuation table mutex");
@@ -1215,12 +978,12 @@ pub(crate) fn resume_async_function_from_caller(
             entry.captured_vars[1] = value::encode_bool(is_rejected);
         }
     }
-    let func_ref = func_table.get(&mut *caller, fn_table_idx as u64);
+    let func_ref = env.func_table.get(&mut *ctx, fn_table_idx as u64);
     let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
     let Some(func) = func else { return };
     let mut results = [Val::I64(0)];
     let _ = func.call(
-        &mut *caller,
+        &mut *ctx,
         &[
             Val::I64(continuation),
             Val::I64(resume_val),
@@ -1231,113 +994,3 @@ pub(crate) fn resume_async_function_from_caller(
     );
 }
 
-pub(crate) fn call_host_function_from_store(
-    store: &mut Store<RuntimeState>,
-    func_table: &Table,
-    memory: &Memory,
-    shadow_sp_global: &Global,
-    handler: i64,
-    argument: i64,
-) -> Option<i64> {
-    let (func_idx, env_obj) = if value::is_closure(handler) {
-        let idx = value::decode_closure_idx(handler);
-        let closures = store.data().closures.lock().unwrap();
-        let entry = &closures[idx as usize];
-        (entry.func_idx, entry.env_obj)
-    } else if value::is_function(handler) {
-        (
-            value::decode_function_idx(handler),
-            value::encode_undefined(),
-        )
-    } else if value::is_bound(handler) {
-        let bound_idx = value::decode_bound_idx(handler);
-        let bound = store.data().bound_objects.lock().unwrap();
-        let record = &bound[bound_idx as usize];
-        (
-            value::decode_function_idx(record.target_func),
-            record.bound_this,
-        )
-    } else {
-        return None;
-    };
-
-    let saved_sp = shadow_sp_global.get(&mut *store).i32().unwrap_or(0);
-    {
-        let data = memory.data_mut(&mut *store);
-        let offset = saved_sp as usize;
-        if offset + 8 <= data.len() {
-            data[offset..offset + 8].copy_from_slice(&argument.to_le_bytes());
-        }
-    }
-    let new_sp = saved_sp + 8;
-    let _ = shadow_sp_global.set(&mut *store, Val::I32(new_sp));
-
-    let func_ref = func_table.get(&mut *store, func_idx as u64);
-    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
-    let Some(func) = func else {
-        let _ = shadow_sp_global.set(&mut *store, Val::I32(saved_sp));
-        return None;
-    };
-    let mut results = [Val::I64(0)];
-    if let Err(err) = func.call(
-        &mut *store,
-        &[
-            Val::I64(env_obj),
-            Val::I64(value::encode_undefined()),
-            Val::I32(saved_sp),
-            Val::I32(1),
-        ],
-        &mut results,
-    ) {
-        set_runtime_error(
-            store.data(),
-            format!("promise reaction handler error: {err}"),
-        );
-        let _ = shadow_sp_global.set(&mut *store, Val::I32(saved_sp));
-        return None;
-    }
-
-    let _ = shadow_sp_global.set(&mut *store, Val::I32(saved_sp));
-
-    results[0].i64()
-}
-
-pub(crate) fn resume_async_function_from_store(
-    store: &mut Store<RuntimeState>,
-    func_table: &Table,
-    fn_table_idx: u32,
-    continuation: i64,
-    state: u32,
-    resume_val: i64,
-    is_rejected: bool,
-) {
-    {
-        let cont_handle = value::decode_object_handle(continuation) as usize;
-        let mut c_table = store
-            .data()
-            .continuation_table
-            .lock()
-            .expect("continuation table mutex");
-        if let Some(entry) = c_table.get_mut(cont_handle) {
-            while entry.captured_vars.len() < 2 {
-                entry.captured_vars.push(value::encode_undefined());
-            }
-            entry.captured_vars[0] = value::encode_f64(state as f64);
-            entry.captured_vars[1] = value::encode_bool(is_rejected);
-        }
-    }
-    let func_ref = func_table.get(&mut *store, fn_table_idx as u64);
-    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
-    let Some(func) = func else { return };
-    let mut results = [Val::I64(0)];
-    let _ = func.call(
-        &mut *store,
-        &[
-            Val::I64(continuation),
-            Val::I64(resume_val),
-            Val::I32(0),
-            Val::I32(0),
-        ],
-        &mut results,
-    );
-}
