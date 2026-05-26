@@ -1,69 +1,56 @@
-{
-    let console_log = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+use anyhow::Result;
+use wasmtime::{Caller, Linker};
+
+use crate::*;
+
+pub(crate) fn define_core(linker: &mut Linker<RuntimeState>) -> Result<()> {
+    linker.func_wrap("env", "console_log", |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, None);
         },
-    );
-    let console_error = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+    )?;
+    linker.func_wrap("env", "console_error", |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, Some("error"));
         },
-    );
-    let console_warn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+    )?;
+    linker.func_wrap("env", "console_warn", |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, Some("warn"));
         },
-    );
-    let console_info = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+    )?;
+    linker.func_wrap("env", "console_info", |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, Some("info"));
         },
-    );
-    let console_debug = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+    )?;
+    linker.func_wrap("env", "console_debug", |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, Some("debug"));
         },
-    );
-    let console_trace = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+    )?;
+    linker.func_wrap("env", "console_trace", |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, Some("trace"));
         },
-    );
+    )?;
 
     // ── Import 1: f64_mod(i64, i64) → i64 ───────────────────────────────
-    let f64_mod = Func::wrap(
-        &mut store,
-        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+    linker.func_wrap("env", "f64_mod", |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let af = f64::from_bits(a as u64);
             let bf = f64::from_bits(b as u64);
             let result = af - bf * (af / bf).trunc();
             result.to_bits() as i64
         },
-    );
+    )?;
 
     // ── Import 2: f64_pow(i64, i64) → i64 ───────────────────────────────
-    let f64_pow = Func::wrap(
-        &mut store,
-        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+    linker.func_wrap("env", "f64_pow", |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let af = f64::from_bits(a as u64);
             let bf = f64::from_bits(b as u64);
             let result = af.powf(bf);
             result.to_bits() as i64
         },
-    );
+    )?;
 
     // 已弃用：异常传播现在通过 create_exception (import 313) + WASM return 实现。
     // throw_fn 保留仅为兼容旧的 WASM 二进制，不再被新编译的代码调用。
     // 注意：由于 import table 索引稳定性约束，不能移除此函数。
-    let throw_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| {
+    linker.func_wrap("env", "throw", |mut caller: Caller<'_, RuntimeState>, val: i64| {
             // 将异常值存入 error_table，以便 eval 调用方能通过 ExceptionValue 恢复原始值
             {
                 let mut errors = caller.data().error_table.lock().unwrap();
@@ -86,12 +73,10 @@
                 .lock()
                 .expect("runtime error mutex") = Some(format!("Uncaught exception: {rendered}"));
         },
-    );
+    )?;
 
     // ── Import 4: iterator_from(i64) → i64 ──────────────────────────────
-    let iterator_from = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+    linker.func_wrap("env", "iterator_from", |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             if let Some(string_data) = read_value_string_bytes(&mut caller, val) {
                 let mut iters = caller.data().iterators.lock().expect("iterators mutex");
                 let handle = iters.len() as u32;
@@ -140,12 +125,10 @@
             iters.push(IteratorState::Error);
             value::encode_handle(value::TAG_ITERATOR, handle)
         },
-    );
+    )?;
 
     // ── Import 5: iterator_next(i64) → i64 ──────────────────────────────
-    let iterator_next = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    linker.func_wrap("env", "iterator_next", |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let table = caller.get_export("__table").and_then(|e| e.into_table());
             let Some(func_table) = table else {
@@ -204,12 +187,10 @@
             }
             result
         },
-    );
+    )?;
 
     // ── Import 6: iterator_close(i64) → () ──────────────────────────────
-    let iterator_close = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, handle: i64| {
+    linker.func_wrap("env", "iterator_close", |mut caller: Caller<'_, RuntimeState>, handle: i64| {
             let handle_idx = value::decode_handle(handle) as usize;
             let return_method = {
                 let mut iters = caller.data().iterators.lock().expect("iterators mutex");
@@ -254,11 +235,9 @@
                 *done = true;
             }
         },
-    );
+    )?;
 
-    let iterator_value = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    linker.func_wrap("env", "iterator_value", |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             if let Some(iter) = iters.get_mut(handle_idx) {
@@ -312,12 +291,10 @@
                 value::encode_undefined()
             }
         },
-    );
+    )?;
 
     // ── Import 8: iterator_done(i64) → i64 ──────────────────────────────
-    let iterator_done = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    linker.func_wrap("env", "iterator_done", |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let next = {
                 let mut iters = caller.data().iterators.lock().expect("iterators mutex");
@@ -385,12 +362,10 @@
             }
             value::encode_bool(next_done)
         },
-    );
+    )?;
 
     // ── Import 9: enumerator_from(i64) → i64 ────────────────────────────
-    let enumerator_from = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+    linker.func_wrap("env", "enumerator_from", |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             if let Some(string_data) = read_value_string_bytes(&mut caller, val) {
                 // 字符串枚举：遍历字节索引
                 let len = string_data.len();
@@ -433,12 +408,10 @@
                 value::encode_handle(value::TAG_ENUMERATOR, handle)
             }
         },
-    );
+    )?;
 
     // ── Import 10: enumerator_next(i64) → i64 ───────────────────────────
-    let enumerator_next = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    linker.func_wrap("env", "enumerator_next", |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
             if let Some(enm) = enums.get_mut(handle_idx) {
@@ -458,12 +431,10 @@
             }
             value::encode_undefined()
         },
-    );
+    )?;
 
     // ── Import 11: enumerator_key(i64) → i64 ────────────────────────────
-    let enumerator_key = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    linker.func_wrap("env", "enumerator_key", |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
             if let Some(enm) = enums.get_mut(handle_idx) {
@@ -491,12 +462,10 @@
             }
             value::encode_undefined()
         },
-    );
+    )?;
 
     // ── Import 12: enumerator_done(i64) → i64 ───────────────────────────
-    let enumerator_done = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    linker.func_wrap("env", "enumerator_done", |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
             let done = if let Some(enm) = enums.get_mut(handle_idx) {
@@ -518,12 +487,10 @@
             };
             value::encode_bool(done)
         },
-    );
+    )?;
 
     // ── Import 13: typeof(i64) → i64 ───────────────────────────────────────
-    let typeof_fn = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+    linker.func_wrap("env", "typeof", |caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             if value::is_undefined(val) {
                 value::encode_typeof_undefined()
             } else if value::is_null(val) {
@@ -574,12 +541,10 @@
                 value::encode_typeof_number()
             }
         },
-    );
+    )?;
 
     // ── Import 14: op_in(i64, i64) → i64 ───────────────────────────────────
-    let op_in = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, object: i64, prop: i64| -> i64 {
+    linker.func_wrap("env", "op_in", |mut caller: Caller<'_, RuntimeState>, object: i64, prop: i64| -> i64 {
             // Proxy: 触发 has trap
             if value::is_proxy(object) {
                 let handle = value::decode_proxy_handle(object) as usize;
@@ -614,7 +579,7 @@
             }
             op_in_impl(&mut caller, object, prop)
         },
-    );
+    )?;
 
     fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, prop: i64) -> i64 {
             // 检查 object 是否有 prop 属性
@@ -735,9 +700,7 @@
     }
 
     // ── Import 15: op_instanceof(i64, i64) ────────────────────────────
-    let op_instanceof = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, value: i64, constructor: i64| -> i64 {
+    linker.func_wrap("env", "op_instanceof", |mut caller: Caller<'_, RuntimeState>, value: i64, constructor: i64| -> i64 {
             // 1. 原始类型直接返回 false
             if !value::is_js_object(value) {
                 return value::encode_bool(false);
@@ -808,12 +771,10 @@
                 current_ptr = proto_ptr;
             }
         },
-    );
+    )?;
 
     // ── Import 16: string_concat(i64, i64) → i64 ──────────────────────────────
-    let string_concat = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+    linker.func_wrap("env", "string_concat", |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             if value::is_string(a) || value::is_string(b) {
                 // 至少一个操作数是字符串 → 执行字符串连接
                 let a_s = if value::is_string(a) {
@@ -839,12 +800,10 @@
                 value::encode_undefined()
             }
         },
-    );
+    )?;
 
     // ── Import 17: string_concat_va(i32, i32) → i64 ────────────────────────
-    let string_concat_va = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
+    linker.func_wrap("env", "string_concat_va", |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
             let mut result = Vec::new();
             for i in 0..args_count as u32 {
                 let arg = read_shadow_arg(&mut caller, args_base, i);
@@ -854,12 +813,10 @@
             let s = String::from_utf8(result).unwrap_or_default();
             store_runtime_string(&caller, s)
         },
-    );
+    )?;
 
     // ── Import 18: define_property(i64, i32, i64) → () ────────────────────
-    let define_property_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32, desc: i64| {
+    linker.func_wrap("env", "define_property", |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32, desc: i64| {
             // 检查 obj 和 desc 是否是对象或函数
             if (!value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj))
                 || (!value::is_object(desc) && !value::is_function(desc) && !value::is_array(desc))
@@ -1067,11 +1024,9 @@
                     .copy_from_slice(&(new_num_props as u32).to_le_bytes());
             }
         },
-    );
+    )?;
 
-    let get_own_prop_desc_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32| -> i64 {
+    linker.func_wrap("env", "get_own_prop_desc", |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32| -> i64 {
             // 检查 obj 是否是对象或函数
             if !value::is_object(obj) && !value::is_function(obj) {
                 *caller
@@ -1160,12 +1115,10 @@
                 None => value::encode_undefined(),
             }
         },
-    );
+    )?;
 
     // ── Import 19: abstract_eq(i64, i64) → i64 ──────────────────────────────
-    let abstract_eq = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+    linker.func_wrap("env", "abstract_eq", |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             // 实现 Abstract Equality Comparison (ECMAScript 7.2.15)
             // 使用迭代而非递归来避免无限循环
             // 最多迭代 10 次防止死循环
@@ -1319,12 +1272,10 @@
             // 迭代次数超限 → false
             value::encode_bool(false)
         },
-    );
+    )?;
 
     // ── Import 20: abstract_compare(i64, i64) → i64 ──────────────────────────────
-    let abstract_compare = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+    linker.func_wrap("env", "abstract_compare", |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             // 实现 Abstract Relational Comparison (ECMAScript 7.2.17)
             // 返回值: true (a < b), false (a >= b 或无法比较)
 
@@ -1353,14 +1304,12 @@
             // 5. 否则 → px < py 的数值比较
             value::encode_bool(af < bf)
         },
-    );
+    )?;
 
     // ── Import 21: gc_collect(i32) → i32 ─────────────────────────────────────
     // 标记-清除 GC：尝试回收足够空间满足 requested_size。
     // 返回新的 heap_ptr 或 0（失败）。
-    let gc_collect = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, requested_size: i32| -> i32 {
+    linker.func_wrap("env", "gc_collect", |mut caller: Caller<'_, RuntimeState>, requested_size: i32| -> i32 {
             // 获取全局变量
             let heap_ptr = {
                 let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
@@ -1755,40 +1704,11 @@
 
             new_heap_end as i32
         },
-    );
+    )?;
 
     // ── Import 22: console_error(i64) → () ────────────────────────────────
     // Already created above as `console_error`.
 
     // ── Import 27: set_timeout(i64, i64) → i64 ────────────────────────────
-    vec![
-        console_log.into(),                    // 0
-        f64_mod.into(),                        // 1
-        f64_pow.into(),                        // 2
-        throw_fn.into(),                       // 3
-        iterator_from.into(),                  // 4
-        iterator_next.into(),                  // 5
-        iterator_close.into(),                 // 6
-        iterator_value.into(),                 // 7
-        iterator_done.into(),                  // 8
-        enumerator_from.into(),                // 9
-        enumerator_next.into(),                // 10
-        enumerator_key.into(),                 // 11
-        enumerator_done.into(),                // 12
-        typeof_fn.into(),                      // 13
-        op_in.into(),                          // 14
-        op_instanceof.into(),                  // 15
-        string_concat.into(),                  // 16
-        string_concat_va.into(),               // 17
-        define_property_fn.into(),             // 18
-        get_own_prop_desc_fn.into(),           // 19
-        abstract_eq.into(),                    // 20
-        abstract_compare.into(),               // 21
-        gc_collect.into(),                     // 22
-        console_error.into(),                  // 23
-        console_warn.into(),                   // 24
-        console_info.into(),                   // 25
-        console_debug.into(),                  // 26
-        console_trace.into(),                  // 27
-    ]
+    Ok(())
 }

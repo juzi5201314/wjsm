@@ -1,7 +1,10 @@
-{
-    let set_timeout_fn = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, callback: i64, delay: i64| -> i64 {
+use anyhow::Result;
+use wasmtime::{Caller, Linker};
+
+use crate::*;
+
+pub(crate) fn define_timers_arrays(linker: &mut Linker<RuntimeState>) -> Result<()> {
+    linker.func_wrap("env", "set_timeout", |caller: Caller<'_, RuntimeState>, callback: i64, delay: i64| -> i64 {
             let delay_f64 = if value::is_f64(delay) {
                 f64::from_bits(delay as u64)
             } else {
@@ -35,12 +38,10 @@
             });
             value::encode_f64(id as f64)
         },
-    );
+    )?;
 
     // ── Import 28: clear_timeout(i64) → () ────────────────────────────────
-    let clear_timeout_fn = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, timer_id: i64| {
+    linker.func_wrap("env", "clear_timeout", |caller: Caller<'_, RuntimeState>, timer_id: i64| {
             if value::is_f64(timer_id) {
                 let id = f64::from_bits(timer_id as u64) as u32;
                 caller
@@ -52,12 +53,10 @@
             }
             // For simplicity, mark as cancelled rather than removing from the vec
         },
-    );
+    )?;
 
     // ── Import 29: set_interval(i64, i64) → i64 ───────────────────────────
-    let set_interval_fn = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, callback: i64, delay: i64| -> i64 {
+    linker.func_wrap("env", "set_interval", |caller: Caller<'_, RuntimeState>, callback: i64, delay: i64| -> i64 {
             let delay_f64 = if value::is_f64(delay) {
                 f64::from_bits(delay as u64)
             } else {
@@ -91,12 +90,10 @@
             });
             value::encode_f64(id as f64)
         },
-    );
+    )?;
 
     // ── Import 30: clear_interval(i64) → () ───────────────────────────────
-    let clear_interval_fn = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, timer_id: i64| {
+    linker.func_wrap("env", "clear_interval", |caller: Caller<'_, RuntimeState>, timer_id: i64| {
             if value::is_f64(timer_id) {
                 let id = f64::from_bits(timer_id as u64) as u32;
                 caller
@@ -108,12 +105,10 @@
             }
             // simplified no-op
         },
-    );
+    )?;
 
     // ── Import 31: fetch(i64) → i64 ────────────────────────────────────────
-    let fetch_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, url_val: i64| -> i64 {
+    linker.func_wrap("env", "fetch", |mut caller: Caller<'_, RuntimeState>, url_val: i64| -> i64 {
             let url_str = if value::is_string(url_val) {
                 if value::is_runtime_string_handle(url_val) {
                     let handle = value::decode_runtime_string_handle(url_val) as usize;
@@ -143,21 +138,17 @@
                 store_runtime_string(&caller, body)
             }
         },
-    );
+    )?;
 
     // ── Import 32: json_stringify(i64) → i64 ──────────────────────────────
-    let json_stringify_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+    linker.func_wrap("env", "json_stringify", |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             let json_str = runtime_json_stringify(&mut caller, val);
             store_runtime_string(&caller, json_str)
         },
-    );
+    )?;
 
     // ── Import 33: json_parse(i64) → i64 ──────────────────────────────────
-    let json_parse_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+    linker.func_wrap("env", "json_parse", |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             let json_str = if value::is_string(val) {
                 if value::is_runtime_string_handle(val) {
                     let handle = value::decode_runtime_string_handle(val) as usize;
@@ -178,11 +169,9 @@
             // For now, just return the string as-is (simplified parse)
             store_runtime_string(&caller, json_str)
         },
-    );
+    )?;
     // ── Import 34: closure_create(i32, i64) -> i64 ────────────────────────────
-    let closure_create_fn = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, func_idx: i32, env_obj: i64| -> i64 {
+    linker.func_wrap("env", "closure_create", |caller: Caller<'_, RuntimeState>, func_idx: i32, env_obj: i64| -> i64 {
             let mut closures = caller.data().closures.lock().expect("closures mutex");
             let idx = closures.len() as u32;
             closures.push(ClosureEntry {
@@ -191,33 +180,27 @@
             });
             value::encode_closure_idx(idx)
         },
-    );
+    )?;
     // ── Import 35: closure_get_func(i32) -> i32 ─────────────────────────────
-    let closure_get_func_fn = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i32 {
+    linker.func_wrap("env", "closure_get_func", |caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i32 {
             let closures = caller.data().closures.lock().expect("closures mutex");
             closures
                 .get(closure_idx as usize)
                 .map(|e| e.func_idx as i32)
                 .unwrap_or(-1)
         },
-    );
+    )?;
     // ── Import 36: closure_get_env(i32) -> i64 ─────────────────────────────
-    let closure_get_env_fn = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i64 {
+    linker.func_wrap("env", "closure_get_env", |caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i64 {
             let closures = caller.data().closures.lock().expect("closures mutex");
             closures
                 .get(closure_idx as usize)
                 .map(|e| e.env_obj)
                 .unwrap_or_else(value::encode_undefined)
         },
-    );
+    )?;
     // ── Array method host functions (imports 37-48) ────────────────────
-    let arr_push_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
+    linker.func_wrap("env", "arr_push", |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return value::encode_undefined();
             };
@@ -237,10 +220,8 @@
             write_array_length(&mut caller, ptr, len + 1);
             value::encode_f64((len + 1) as f64)
         },
-    );
-    let arr_pop_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+    )?;
+    linker.func_wrap("env", "arr_pop", |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return value::encode_undefined();
             };
@@ -254,10 +235,8 @@
             write_array_length(&mut caller, ptr, new_len);
             val
         },
-    );
-    let arr_includes_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
+    )?;
+    linker.func_wrap("env", "arr_includes", |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return value::encode_bool(false);
             };
@@ -270,10 +249,8 @@
             }
             value::encode_bool(false)
         },
-    );
-    let arr_index_of_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, from_val: i64| -> i64 {
+    )?;
+    linker.func_wrap("env", "arr_index_of", |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, from_val: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return value::encode_f64(-1.0);
             };
@@ -296,10 +273,8 @@
             }
             value::encode_f64(-1.0)
         },
-    );
-    let arr_join_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, sep_val: i64| -> i64 {
+    )?;
+    linker.func_wrap("env", "arr_join", |mut caller: Caller<'_, RuntimeState>, arr: i64, sep_val: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return value::encode_undefined();
             };
@@ -315,22 +290,16 @@
             }
             store_runtime_string(&caller, parts.join(&sep_str))
         },
-    );
-    let arr_concat_fn = Func::wrap(
-        &mut store,
-        |_caller: Caller<'_, RuntimeState>, _arr1: i64, _arr2: i64| -> i64 {
+    )?;
+    linker.func_wrap("env", "arr_concat", |_caller: Caller<'_, RuntimeState>, _arr1: i64, _arr2: i64| -> i64 {
             unimplemented!("Array.prototype.concat is not yet implemented in wjsm")
         },
-    );
-    let arr_slice_fn = Func::wrap(
-        &mut store,
-        |_caller: Caller<'_, RuntimeState>, _arr: i64, _start: i64, _end: i64| -> i64 {
+    )?;
+    linker.func_wrap("env", "arr_slice", |_caller: Caller<'_, RuntimeState>, _arr: i64, _start: i64, _end: i64| -> i64 {
             unimplemented!("Array.prototype.slice is not yet implemented in wjsm")
         },
-    );
-    let arr_fill_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, _start: i64, _end: i64| -> i64 {
+    )?;
+    linker.func_wrap("env", "arr_fill", |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, _start: i64, _end: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return arr;
             };
@@ -340,10 +309,8 @@
             }
             arr
         },
-    );
-    let arr_reverse_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+    )?;
+    linker.func_wrap("env", "arr_reverse", |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return arr;
             };
@@ -357,16 +324,12 @@
             }
             arr
         },
-    );
-    let arr_flat_fn = Func::wrap(
-        &mut store,
-        |_caller: Caller<'_, RuntimeState>, _arr: i64, _depth: i64| -> i64 {
+    )?;
+    linker.func_wrap("env", "arr_flat", |_caller: Caller<'_, RuntimeState>, _arr: i64, _depth: i64| -> i64 {
             unimplemented!("Array.prototype.flat is not yet implemented in wjsm")
         },
-    );
-    let arr_init_length_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, len_val: i64| -> i64 {
+    )?;
+    linker.func_wrap("env", "arr_init_length", |mut caller: Caller<'_, RuntimeState>, arr: i64, len_val: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return arr;
             };
@@ -378,39 +341,14 @@
             write_array_length(&mut caller, ptr, len);
             arr
         },
-    );
-    let arr_get_length_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
+    )?;
+    linker.func_wrap("env", "arr_get_length", |mut caller: Caller<'_, RuntimeState>, arr: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             value::encode_f64(len as f64)
         },
-    );
-    vec![
-        set_timeout_fn.into(),                 // 28
-        clear_timeout_fn.into(),               // 29
-        set_interval_fn.into(),                // 30
-        clear_interval_fn.into(),              // 31
-        fetch_fn.into(),                       // 32
-        json_stringify_fn.into(),              // 33
-        json_parse_fn.into(),                  // 34
-        closure_create_fn.into(),              // 35
-        closure_get_func_fn.into(),            // 36
-        closure_get_env_fn.into(),             // 37
-        arr_push_fn.into(),                    // 38
-        arr_pop_fn.into(),                     // 39
-        arr_includes_fn.into(),                // 40
-        arr_index_of_fn.into(),                // 41
-        arr_join_fn.into(),                    // 42
-        arr_concat_fn.into(),                  // 43
-        arr_slice_fn.into(),                   // 44
-        arr_fill_fn.into(),                    // 45
-        arr_reverse_fn.into(),                 // 46
-        arr_flat_fn.into(),                    // 47
-        arr_init_length_fn.into(),             // 48
-        arr_get_length_fn.into(),              // 49
-    ]
+    )?;
+    Ok(())
 }
