@@ -522,21 +522,27 @@ pub(crate) fn queue_promise_reactions(
 ) {
     let mut queue = state.microtask_queue.lock().expect("microtask queue mutex");
     for reaction in reactions {
-        if let Some(async_state) = reaction.async_resume_state {
-            queue.push_back(Microtask::AsyncResume {
-                fn_table_idx: reaction.handler as u32,
-                continuation: reaction.target_promise,
-                state: async_state as u32,
-                resume_val: value,
-                is_rejected,
-            });
-        } else {
-            queue.push_back(Microtask::PromiseReaction {
-                promise: reaction.target_promise,
-                reaction_type: reaction.reaction_type,
-                handler: reaction.handler,
-                argument: value,
-            });
+        match reaction.kind {
+            PromiseReactionKind::AsyncResume {
+                fn_table_idx,
+                state: resume_state,
+            } => {
+                queue.push_back(Microtask::AsyncResume {
+                    fn_table_idx,
+                    continuation: reaction.target_promise,
+                    state: resume_state,
+                    resume_val: value,
+                    is_rejected,
+                });
+            }
+            PromiseReactionKind::Normal { handler } => {
+                queue.push_back(Microtask::PromiseReaction {
+                    promise: reaction.target_promise,
+                    reaction_type: reaction.reaction_type,
+                    handler,
+                    argument: value,
+                });
+            }
         }
     }
 }

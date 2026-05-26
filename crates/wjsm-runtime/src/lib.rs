@@ -1602,33 +1602,39 @@ impl PromiseEntry {
 }
 
 #[derive(Clone)]
+enum PromiseReactionKind {
+    Normal { handler: i64 },
+    AsyncResume { fn_table_idx: u32, state: u32 },
+}
+
+#[derive(Clone)]
 struct PromiseReaction {
-    handler: i64,
+    kind: PromiseReactionKind,
     target_promise: i64,
     reaction_type: ReactionType,
-    async_resume_state: Option<i64>,
 }
 
 impl PromiseReaction {
     fn new(handler: i64, target_promise: i64, reaction_type: ReactionType) -> Self {
         Self {
-            handler,
+            kind: PromiseReactionKind::Normal { handler },
             target_promise,
             reaction_type,
-            async_resume_state: None,
         }
     }
     fn new_async(
-        handler: i64,
+        fn_table_idx: u32,
         target_promise: i64,
         reaction_type: ReactionType,
-        state: i64,
+        state: u32,
     ) -> Self {
         Self {
-            handler,
+            kind: PromiseReactionKind::AsyncResume {
+                fn_table_idx,
+                state,
+            },
             target_promise,
             reaction_type,
-            async_resume_state: Some(state),
         }
     }
 }
