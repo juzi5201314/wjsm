@@ -1422,14 +1422,14 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             if value::is_object(this_val) {
                 Some(this_val)
             } else {
-                Some(alloc_host_object_from_caller(caller, 4))
+                Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) })
             }
         }
         NativeCallable::ObjectConstructor => {
             if value::is_object(this_val) || value::is_function(this_val) {
                 Some(this_val)
             } else {
-                Some(alloc_host_object_from_caller(caller, 4))
+                Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) })
             }
         }
         NativeCallable::FunctionConstructor
@@ -1464,20 +1464,20 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             Some(create_error_object(caller, error_name, msg))
         }
-        NativeCallable::MapConstructor => Some(alloc_host_object_from_caller(caller, 0)),
-        NativeCallable::SetConstructor => Some(alloc_host_object_from_caller(caller, 0)),
-        NativeCallable::WeakMapConstructor => Some(alloc_host_object_from_caller(caller, 0)),
-        NativeCallable::WeakSetConstructor => Some(alloc_host_object_from_caller(caller, 0)),
-        NativeCallable::WeakRefConstructor => Some(alloc_host_object_from_caller(caller, 0)),
-        NativeCallable::FinalizationRegistryConstructor => Some(alloc_host_object_from_caller(caller, 0)),
-        NativeCallable::DateConstructorGlobal => Some(alloc_host_object_from_caller(caller, 4)),
-        NativeCallable::PromiseConstructor => Some(alloc_host_object_from_caller(caller, 0)),
+        NativeCallable::MapConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
+        NativeCallable::SetConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
+        NativeCallable::WeakMapConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
+        NativeCallable::WeakSetConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
+        NativeCallable::WeakRefConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
+        NativeCallable::FinalizationRegistryConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
+        NativeCallable::DateConstructorGlobal => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
+        NativeCallable::PromiseConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
         NativeCallable::ArrayBufferConstructorGlobal => {
-            Some(alloc_host_object_from_caller(caller, 4))
+            Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) })
         }
-        NativeCallable::DataViewConstructorGlobal => Some(alloc_host_object_from_caller(caller, 4)),
-        NativeCallable::TypedArrayConstructor(_) => Some(alloc_host_object_from_caller(caller, 4)),
-        NativeCallable::ProxyConstructor => Some(alloc_host_object_from_caller(caller, 4)),
+        NativeCallable::DataViewConstructorGlobal => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
+        NativeCallable::TypedArrayConstructor(_) => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
+        NativeCallable::ProxyConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
         NativeCallable::ProxyRevoker { proxy_handle } => {
             let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
             if let Some(entry) = table.get_mut(proxy_handle as usize) {
@@ -1531,7 +1531,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             let start = START.get_or_init(std::time::Instant::now);
             Some(value::encode_f64(start.elapsed().as_millis() as f64))
         }
-        NativeCallable::AtomicsGlobal => Some(alloc_host_object_from_caller(caller, 4)),
+        NativeCallable::AtomicsGlobal => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
         // ── Async iterator methods ──
         NativeCallable::AsyncIteratorProtoSymbolAsyncIterator => Some(this_val),
         NativeCallable::AsyncFromSyncNext { handle } => Some(advance_async_from_sync(caller, handle)),

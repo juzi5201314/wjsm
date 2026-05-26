@@ -68,7 +68,7 @@
                     create_map_set_method(state, MapSetMethodKind::Entries),
                 )
             };
-            let obj = alloc_host_object_from_caller(&mut caller, 11);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 11) };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__map_handle__", handle_val);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "set", set_fn);
@@ -208,7 +208,7 @@
                     create_map_set_method(state, MapSetMethodKind::Entries),
                 )
             };
-            let obj = alloc_host_object_from_caller(&mut caller, 10);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 10) };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__set_handle__", handle_val);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "add", add_fn);
@@ -483,7 +483,7 @@
                     create_weakmap_method(state, WeakMapMethodKind::Delete),
                 )
             };
-            let obj = alloc_host_object_from_caller(&mut caller, 5);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 5) };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__weakmap_handle__", handle_val);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "set", set_fn);
@@ -589,7 +589,7 @@
                     create_weakset_method(state, WeakSetMethodKind::Delete),
                 )
             };
-            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__weakset_handle__", handle_val);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "add", add_fn);
@@ -674,7 +674,7 @@
                 handle = table.len() as u32;
                 table.push(ArrayBufferEntry { data: vec![0; len as usize] });
             }
-            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__arraybuffer_handle__", handle_val);
             let bl_val = value::encode_f64(len as f64);
@@ -729,7 +729,7 @@
                 }
                 ab_table.push(ArrayBufferEntry { data: new_data });
             }
-            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
             let handle_val = value::encode_f64(new_buf_handle as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__arraybuffer_handle__", handle_val);
             let bl_val = value::encode_f64(new_len as f64);
@@ -767,7 +767,7 @@
                 handle = table.len() as u32;
                 table.push(DataViewEntry { buffer_handle: buf_handle, byte_offset: offset, byte_length: length });
             }
-            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__dataview_handle__", handle_val);
             obj
@@ -895,7 +895,7 @@
                         handle = table.len() as u32;
                         table.push(TypedArrayEntry { buffer_handle: buf_handle, byte_offset: offset, length: len, element_size: $size, element_kind: $kind, is_shared: false });
                     }
-                    let obj = alloc_host_object_from_caller(&mut caller, 4);
+                    let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
                     let handle_val = value::encode_f64(handle as f64);
                     let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", handle_val);
                     let len_val = value::encode_f64(len as f64);
@@ -1247,7 +1247,7 @@
                         is_shared: false,
                     });
                 }
-                let obj = alloc_host_object_from_caller(&mut caller, 4);
+                let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
                 let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", value::encode_f64(new_ta_handle as f64));
                 let _ = define_host_data_property_from_caller(&mut caller, obj, "length", value::encode_f64(0.0));
                 let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", value::encode_f64(0.0));
@@ -1309,7 +1309,7 @@
                 });
             }
 
-            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", value::encode_f64(new_ta_handle as f64));
             let _ = define_host_data_property_from_caller(&mut caller, obj, "length", value::encode_f64(slice_len as f64));
             let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", value::encode_f64((slice_len * elem_size as u32) as f64));
@@ -1384,7 +1384,7 @@
                 });
             }
 
-            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", value::encode_f64(new_ta_handle as f64));
             let _ = define_host_data_property_from_caller(&mut caller, obj, "length", value::encode_f64(sub_len as f64));
             let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", value::encode_f64((sub_len * elem_size as u32) as f64));
@@ -1397,7 +1397,7 @@
     let create_global_object_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>| -> i64 {
-            let obj = alloc_host_object_from_caller(&mut caller, 60);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 60) };
             let builtin_pairs: &[(&str, NativeCallable)] = &[
                 ("Array", NativeCallable::ArrayConstructor),
                 ("Object", NativeCallable::ObjectConstructor),
@@ -1444,7 +1444,7 @@
             let _ = define_host_data_property_from_caller(&mut caller, obj, "globalThis", obj);
 
             // Create $262.agent for test262 multi-agent testing
-            let sub_agent_obj = alloc_host_object_from_caller(&mut caller, 6);
+            let sub_agent_obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 6) };
             let agent_methods: &[(&str, NativeCallable)] = &[
                 ("start", NativeCallable::AgentStart),
                 ("broadcast", NativeCallable::AgentBroadcast),
@@ -1612,7 +1612,7 @@
                 )
             };
 
-            let obj = alloc_host_object_from_caller(&mut caller, 40);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 40) };
             let ms_val = value::encode_f64(ms);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__date_ms__", ms_val);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "getDate", get_date_fn);

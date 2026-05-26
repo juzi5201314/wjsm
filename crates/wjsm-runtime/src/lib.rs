@@ -25,6 +25,7 @@ mod runtime_promises;
 mod runtime_render;
 mod runtime_values;
 mod wasm_env;
+pub(crate) use wasm_env::WasmEnv;
 
 use runtime_builtins::*;
 use runtime_arguments::*;
@@ -795,16 +796,30 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         .get_export(&mut store, "__obj_table_count")
         .and_then(|e| e.into_global())
         .expect("__obj_table_count export");
+    let func_table = instance
+        .get_export(&mut store, "__table")
+        .and_then(|e| e.into_table())
+        .expect("__table export");
+    let shadow_sp_global = instance
+        .get_export(&mut store, "__shadow_sp")
+        .and_then(|e| e.into_global())
+        .expect("__shadow_sp export");
+    let object_proto_handle_global = instance
+        .get_export(&mut store, "__object_proto_handle")
+        .and_then(|e| e.into_global())
+        .expect("__object_proto_handle export");
+    let wasm_env = wasm_env::WasmEnv {
+        memory,
+        func_table,
+        shadow_sp: shadow_sp_global,
+        heap_ptr: heap_ptr_global,
+        obj_table_ptr: obj_table_ptr_global,
+        obj_table_count: obj_table_count_global,
+        object_proto_handle: object_proto_handle_global,
+    };
 
     // 创建 %AsyncIteratorPrototype%
-    let async_iterator_proto = alloc_host_object_from_store(
-        &mut store,
-        &memory,
-        &heap_ptr_global,
-        &obj_table_ptr_global,
-        &obj_table_count_global,
-        2,
-    );
+    let async_iterator_proto = alloc_host_object(&mut store, &wasm_env, 2);
 
     // 创建 AsyncIteratorProtoSymbolAsyncIterator native callable
     let async_iterator_symbol_async_iterator = {
@@ -843,14 +858,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     );
 
     // 创建 AsyncGenerator.prototype
-    let async_gen_proto = alloc_host_object_from_store(
-        &mut store,
-        &memory,
-        &heap_ptr_global,
-        &obj_table_ptr_global,
-        &obj_table_count_global,
-        2,
-    );
+    let async_gen_proto = alloc_host_object(&mut store, &wasm_env, 2);
 
     // 设置 AsyncGenerator.prototype.[[Prototype]] = %AsyncIteratorPrototype%
     let async_gen_handle = value::decode_object_handle(async_gen_proto);
@@ -937,30 +945,16 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     };
 
     // ── Drain microtasks after main() ────────────────────────────────────
-    if main_ok
-        && let Some(Extern::Table(func_table)) = instance.get_export(&mut store, "__table")
-        && let (
-            Some(Extern::Memory(memory)),
-            Some(Extern::Global(shadow_sp_global)),
-            Some(Extern::Global(heap_ptr_global)),
-            Some(Extern::Global(obj_table_ptr_global)),
-            Some(Extern::Global(obj_table_count_global)),
-        ) = (
-            instance.get_export(&mut store, "memory"),
-            instance.get_export(&mut store, "__shadow_sp"),
-            instance.get_export(&mut store, "__heap_ptr"),
-            instance.get_export(&mut store, "__obj_table_ptr"),
-            instance.get_export(&mut store, "__obj_table_count"),
-        )
-    {
+    if main_ok {
         drain_microtasks_from_store(
             &mut store,
-            &func_table,
-            &memory,
-            &shadow_sp_global,
-            &heap_ptr_global,
-            &obj_table_ptr_global,
-            &obj_table_count_global,
+            &wasm_env.func_table,
+            &wasm_env.memory,
+            &wasm_env.shadow_sp,
+            &wasm_env.heap_ptr,
+            &wasm_env.obj_table_ptr,
+            &wasm_env.obj_table_count,
+            &wasm_env.object_proto_handle,
         );
     }
 
@@ -1061,6 +1055,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             &heap_ptr_global,
                             &obj_table_ptr_global,
                             &obj_table_count_global,
+                            &wasm_env.object_proto_handle,
                         );
                     }
                 }

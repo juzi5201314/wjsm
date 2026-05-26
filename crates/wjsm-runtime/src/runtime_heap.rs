@@ -1,42 +1,27 @@
 use super::*;
+use crate::wasm_env::WasmEnv;
 
-pub(crate) fn alloc_host_object_from_caller(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    let heap_ptr = caller
-        .get_export("__heap_ptr")
-        .and_then(|e| e.into_global())
-        .and_then(|g| g.get(&mut *caller).i32())
-        .unwrap_or(0) as u32;
-    let obj_table_count = caller
-        .get_export("__obj_table_count")
-        .and_then(|e| e.into_global())
-        .and_then(|g| g.get(&mut *caller).i32())
-        .unwrap_or(0) as u32;
-    let obj_table_ptr = caller
-        .get_export("__obj_table_ptr")
-        .and_then(|e| e.into_global())
-        .and_then(|g| g.get(&mut *caller).i32())
-        .unwrap_or(0) as u32;
+    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let size = 16 + capacity * 32;
     let new_heap_ptr = heap_ptr.saturating_add(size);
-    // Read __object_proto_handle before borrowing memory (avoids borrow conflict)
-    let proto = caller
-        .get_export("__object_proto_handle")
-        .and_then(|e| e.into_global())
-        .and_then(|g| g.get(&mut *caller).i32())
+    let proto = env
+        .object_proto_handle
+        .get(&mut *ctx)
+        .i32()
         .unwrap_or(-1) as u32;
     {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return value::encode_undefined();
-        };
-        let data = memory.data_mut(&mut *caller);
+        let data = env.memory.data_mut(&mut *ctx);
         let ptr = heap_ptr as usize;
         if new_heap_ptr as usize > data.len() {
             return value::encode_undefined();
         }
-        // proto slot
         data[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());
         data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
         data[ptr + 5..ptr + 8].fill(0);
@@ -47,45 +32,29 @@ pub(crate) fn alloc_host_object_from_caller(
             data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
         }
     }
-    if let Some(Extern::Global(global)) = caller.get_export("__heap_ptr") {
-        let _ = global.set(&mut *caller, Val::I32(new_heap_ptr as i32));
-    }
-    if let Some(Extern::Global(global)) = caller.get_export("__obj_table_count") {
-        let _ = global.set(&mut *caller, Val::I32((obj_table_count + 1) as i32));
-    }
+    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
+    let _ = env
+        .obj_table_count
+        .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
     value::encode_object_handle(obj_table_count)
 }
-pub(crate) fn alloc_host_null_proto_object_from_caller(
-    caller: &mut Caller<'_, RuntimeState>,
+
+pub(crate) fn alloc_host_null_proto_object<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    let heap_ptr = caller
-        .get_export("__heap_ptr")
-        .and_then(|e| e.into_global())
-        .and_then(|g| g.get(&mut *caller).i32())
-        .unwrap_or(0) as u32;
-    let obj_table_count = caller
-        .get_export("__obj_table_count")
-        .and_then(|e| e.into_global())
-        .and_then(|g| g.get(&mut *caller).i32())
-        .unwrap_or(0) as u32;
-    let obj_table_ptr = caller
-        .get_export("__obj_table_ptr")
-        .and_then(|e| e.into_global())
-        .and_then(|g| g.get(&mut *caller).i32())
-        .unwrap_or(0) as u32;
+    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let size = 16 + capacity * 32;
     let new_heap_ptr = heap_ptr.saturating_add(size);
     {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return value::encode_undefined();
-        };
-        let data = memory.data_mut(&mut *caller);
+        let data = env.memory.data_mut(&mut *ctx);
         let ptr = heap_ptr as usize;
         if new_heap_ptr as usize > data.len() {
             return value::encode_undefined();
         }
-        // proto slot: null prototype sentinel (0xFFFFFFFF)
         data[ptr..ptr + 4].copy_from_slice(&(-1i32 as u32).to_le_bytes());
         data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
         data[ptr + 5..ptr + 8].fill(0);
@@ -96,12 +65,10 @@ pub(crate) fn alloc_host_null_proto_object_from_caller(
             data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
         }
     }
-    if let Some(Extern::Global(global)) = caller.get_export("__heap_ptr") {
-        let _ = global.set(&mut *caller, Val::I32(new_heap_ptr as i32));
-    }
-    if let Some(Extern::Global(global)) = caller.get_export("__obj_table_count") {
-        let _ = global.set(&mut *caller, Val::I32((obj_table_count + 1) as i32));
-    }
+    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
+    let _ = env
+        .obj_table_count
+        .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
     value::encode_object_handle(obj_table_count)
 }
 
@@ -138,7 +105,8 @@ pub(crate) fn create_error_object(
             value: value::encode_undefined(),
         });
     }
-    let obj = alloc_host_object_from_caller(caller, 2);
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let obj = alloc_host_object(caller, &env, 2);
     let name_val = store_runtime_string(caller, error_name.to_string());
     let _ = define_host_data_property_from_caller(caller, obj, "name", name_val);
     let message_val = store_runtime_string(caller, message);
@@ -276,7 +244,8 @@ pub(crate) fn alloc_all_settled_result_from_caller(
     value_name: &str,
     val: i64,
 ) -> i64 {
-    let obj = alloc_host_object_from_caller(caller, 2);
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let obj = alloc_host_object(caller, &env, 2);
     let status_value = store_runtime_string(caller, status.to_string());
     let _ = define_host_data_property_from_caller(caller, obj, "status", status_value);
     let _ = define_host_data_property_from_caller(caller, obj, value_name, val);
@@ -287,7 +256,8 @@ pub(crate) fn alloc_aggregate_error_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     errors: i64,
 ) -> i64 {
-    let obj = alloc_host_object_from_caller(caller, 3);
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let obj = alloc_host_object(caller, &env, 3);
     let name = store_runtime_string(caller, "AggregateError".to_string());
     let message = store_runtime_string(caller, "All promises were rejected".to_string());
     let _ = define_host_data_property_from_caller(caller, obj, "name", name);
@@ -543,40 +513,6 @@ pub(crate) fn read_object_property_by_name_from_store(
     )
 }
 
-pub(crate) fn alloc_host_object_from_store(
-    store: &mut Store<RuntimeState>,
-    memory: &Memory,
-    heap_ptr_global: &Global,
-    obj_table_ptr_global: &Global,
-    obj_table_count_global: &Global,
-    capacity: u32,
-) -> i64 {
-    let heap_ptr = heap_ptr_global.get(&mut *store).i32().unwrap_or(0) as u32;
-    let obj_table_count = obj_table_count_global.get(&mut *store).i32().unwrap_or(0) as u32;
-    let obj_table_ptr = obj_table_ptr_global.get(&mut *store).i32().unwrap_or(0) as u32;
-    let size = 16 + capacity * 32;
-    let new_heap_ptr = heap_ptr.saturating_add(size);
-    {
-        let data = memory.data_mut(&mut *store);
-        let ptr = heap_ptr as usize;
-        if new_heap_ptr as usize > data.len() {
-            return value::encode_undefined();
-        }
-        data[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes());
-        data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
-        data[ptr + 5..ptr + 8].fill(0);
-        data[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes());
-        data[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
-        let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
-        if slot_addr + 4 <= data.len() {
-            data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
-        }
-    }
-    let _ = heap_ptr_global.set(&mut *store, Val::I32(new_heap_ptr as i32));
-    let _ = obj_table_count_global.set(&mut *store, Val::I32((obj_table_count + 1) as i32));
-    value::encode_object_handle(obj_table_count)
-}
-
 pub(crate) fn write_array_elem_from_store(
     store: &mut Store<RuntimeState>,
     memory: &Memory,
@@ -650,22 +586,15 @@ pub(crate) fn define_host_data_property_from_store(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn alloc_all_settled_result_from_store(
     store: &mut Store<RuntimeState>,
+    env: &WasmEnv,
     memory: &Memory,
     heap_ptr_global: &Global,
     obj_table_ptr_global: &Global,
-    obj_table_count_global: &Global,
     status: &str,
     value_name: &str,
     val: i64,
 ) -> i64 {
-    let obj = alloc_host_object_from_store(
-        store,
-        memory,
-        heap_ptr_global,
-        obj_table_ptr_global,
-        obj_table_count_global,
-        2,
-    );
+    let obj = alloc_host_object(store, env, 2);
     let status_value = store_runtime_string_in_state(store.data(), status.to_string());
     let _ = define_host_data_property_from_store(
         store,
@@ -690,20 +619,13 @@ pub(crate) fn alloc_all_settled_result_from_store(
 
 pub(crate) fn alloc_aggregate_error_from_store(
     store: &mut Store<RuntimeState>,
+    env: &WasmEnv,
     memory: &Memory,
     heap_ptr_global: &Global,
     obj_table_ptr_global: &Global,
-    obj_table_count_global: &Global,
     errors: i64,
 ) -> i64 {
-    let obj = alloc_host_object_from_store(
-        store,
-        memory,
-        heap_ptr_global,
-        obj_table_ptr_global,
-        obj_table_count_global,
-        3,
-    );
+    let obj = alloc_host_object(store, env, 3);
     let name = store_runtime_string_in_state(store.data(), "AggregateError".to_string());
     let message =
         store_runtime_string_in_state(store.data(), "All promises were rejected".to_string());
