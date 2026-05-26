@@ -10,6 +10,7 @@ codedb.snapshot
 .antigravity/
 CONTEXT.md
 artifacts/
+.worktrees/
 
 # Editor local config
 .opencode/
