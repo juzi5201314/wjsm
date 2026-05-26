@@ -112,6 +112,7 @@
                 if let Some(entry) = promise_entry_mut(&mut table, handle) {
                     // §27.2.5.3.1 step 10 — .then() 总是标记为已处理
                     entry.handled = true;
+                    clear_pending_unhandled_rejection(caller.data(), handle);
                     match entry.state.clone() {
                         PromiseState::Pending => {
                             entry.fulfill_reactions.push(PromiseReaction::new(
@@ -173,6 +174,7 @@
                 insert_promise_entry(&mut table, result_handle, result_entry);
                 if let Some(entry) = promise_entry_mut(&mut table, handle) {
                     entry.handled = true;
+                    clear_pending_unhandled_rejection(caller.data(), handle);
                     match entry.state.clone() {
                         PromiseState::Pending => {
                             entry.fulfill_reactions.push(PromiseReaction::new(
@@ -234,6 +236,7 @@
                 insert_promise_entry(&mut table, result_handle, result_entry);
                 if let Some(entry) = promise_entry_mut(&mut table, handle) {
                     entry.handled = true;
+                    clear_pending_unhandled_rejection(caller.data(), handle);
                     match entry.state.clone() {
                         PromiseState::Pending => {
                             entry.fulfill_reactions.push(PromiseReaction::new(
@@ -826,6 +829,7 @@
                 fn_table_idx,
                 outer_promise,
                 captured_vars: vec![value::encode_undefined(); 4],
+                completed: false,
             });
             if let Some(entry) = c_table.get_mut(cont_handle as usize) {
                 entry.captured_vars[0] = value::encode_f64(0.0);
@@ -932,6 +936,7 @@
             if let Some(entry) = promise_entry_mut(&mut p_table, awaited_handle) {
                 // §15.8.1 — await 标记 promise 为已处理
                 entry.handled = true;
+                clear_pending_unhandled_rejection(caller.data(), awaited_handle);
                 match &entry.state {
                     PromiseState::Pending => {
                         entry.fulfill_reactions.push(PromiseReaction::new_async(
@@ -1002,6 +1007,7 @@
                 fn_table_idx: resolved_fn_idx,
                 outer_promise,
                 captured_vars: vec![value::encode_undefined(); total_slots],
+                completed: false,
             });
             if let Some(entry) = table.get_mut(handle as usize) {
                 entry.captured_vars[0] = value::encode_f64(0.0);
@@ -1107,7 +1113,7 @@
                     continuation: value::encode_undefined(),
                     active_request: None,
                     waiting_resume_promise: None,
-                    queue: Vec::new(),
+                    queue: VecDeque::new(),
                 });
             }
             table[handle] = AsyncGeneratorEntry {
@@ -1115,7 +1121,7 @@
                 continuation,
                 active_request: None,
                 waiting_resume_promise: None,
-                queue: Vec::new(),
+                queue: VecDeque::new(),
             };
             generator
         },
@@ -1184,7 +1190,7 @@
                         entry.state = AsyncGeneratorState::Completed;
                         AsyncGeneratorHostAction::Immediate {
                             active: None,
-                            queued: vec![],
+                            queued: VecDeque::new(),
                         }
                     }
                     _ => {
@@ -1244,7 +1250,7 @@
                         entry.state = AsyncGeneratorState::Completed;
                         AsyncGeneratorHostAction::Immediate {
                             active: None,
-                            queued: vec![],
+                            queued: VecDeque::new(),
                         }
                     }
                     _ => {

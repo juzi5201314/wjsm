@@ -37,23 +37,52 @@ pub(crate) fn is_promise_value(state: &RuntimeState, val: i64) -> bool {
     promise_entry(&table, handle).is_some()
 }
 
+pub(crate) fn create_native_callable(state: &RuntimeState, callable: NativeCallable) -> i64 {
+    let mut table = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    let mut free_slots = state
+        .native_callable_free_slots
+        .lock()
+        .expect("native callable free slots mutex");
+    let handle = if let Some(slot) = free_slots.pop() {
+        table[slot as usize] = callable;
+        slot
+    } else {
+        let handle = table.len() as u32;
+        table.push(callable);
+        handle
+    };
+    value::encode_native_callable_idx(handle)
+}
+
+pub(crate) fn recycle_native_callable(state: &RuntimeState, callable: i64) {
+    if !value::is_native_callable(callable) {
+        return;
+    }
+    let idx = value::decode_native_callable_idx(callable);
+    state
+        .native_callable_free_slots
+        .lock()
+        .expect("native callable free slots mutex")
+        .push(idx);
+}
+
 pub(crate) fn create_promise_resolving_function(
     state: &RuntimeState,
     promise: i64,
     already_resolved: Arc<Mutex<bool>>,
     kind: PromiseResolvingKind,
 ) -> i64 {
-    let mut table = state
-        .native_callables
-        .lock()
-        .expect("native callable table mutex");
-    let handle = table.len() as u32;
-    table.push(NativeCallable::PromiseResolvingFunction {
-        promise,
-        already_resolved,
-        kind,
-    });
-    value::encode_native_callable_idx(handle)
+    create_native_callable(
+        state,
+        NativeCallable::PromiseResolvingFunction {
+            promise,
+            already_resolved,
+            kind,
+        },
+    )
 }
 
 pub(crate) fn create_promise_resolving_functions(state: &RuntimeState, promise: i64) -> (i64, i64) {
@@ -113,13 +142,10 @@ pub(crate) fn create_async_generator_method(
     generator: i64,
     kind: AsyncGeneratorCompletionType,
 ) -> i64 {
-    let mut table = state
-        .native_callables
-        .lock()
-        .expect("native callable table mutex");
-    let handle = table.len() as u32;
-    table.push(NativeCallable::AsyncGeneratorMethod { generator, kind });
-    value::encode_native_callable_idx(handle)
+    create_native_callable(
+        state,
+        NativeCallable::AsyncGeneratorMethod { generator, kind },
+    )
 }
 
 pub(crate) fn alloc_iterator_result_from_caller(
@@ -218,7 +244,7 @@ pub(crate) fn pump_async_generator_from_caller(
                     entry.waiting_resume_promise = Some(resume_promise);
                     None
                 } else {
-                    let request = entry.queue.remove(0);
+                    let request = entry.queue.pop_front().expect("non-empty queue");
                     entry.active_request = Some(request);
                     entry.state = AsyncGeneratorState::Executing;
                     match request.completion_type {
@@ -250,7 +276,7 @@ pub(crate) fn pump_async_generator_from_caller(
                 if entry.queue.is_empty() {
                     None
                 } else {
-                    let request = entry.queue.remove(0);
+                    let request = entry.queue.pop_front().expect("non-empty queue");
                     match request.completion_type {
                         AsyncGeneratorCompletionType::Next => {
                             entry.active_request = Some(request);
@@ -362,17 +388,14 @@ pub(crate) fn create_combinator_reaction_handler(
     index: usize,
     kind: PromiseCombinatorReactionKind,
 ) -> i64 {
-    let mut table = state
-        .native_callables
-        .lock()
-        .expect("native callable table mutex");
-    let handle = table.len() as u32;
-    table.push(NativeCallable::PromiseCombinatorReaction {
-        context,
-        index,
-        kind,
-    });
-    value::encode_native_callable_idx(handle)
+    create_native_callable(
+        state,
+        NativeCallable::PromiseCombinatorReaction {
+            context,
+            index,
+            kind,
+        },
+    )
 }
 
 pub(crate) fn combinator_reaction_record(
@@ -433,6 +456,22 @@ pub(crate) fn decrement_combinator_remaining(
     }
 }
 
+pub(crate) fn clear_pending_unhandled_rejection(state: &RuntimeState, handle: usize) {
+    state
+        .pending_unhandled_rejections
+        .lock()
+        .expect("pending_unhandled_rejections mutex")
+        .remove(&handle);
+}
+
+pub(crate) fn is_promise_settled(state: &RuntimeState, promise: i64) -> bool {
+    let handle = raw_promise_handle(promise);
+    let table = state.promise_table.lock().expect("promise table mutex");
+    promise_entry(&table, handle)
+        .map(|entry| !matches!(entry.state, PromiseState::Pending))
+        .unwrap_or(true)
+}
+
 pub(crate) fn handle_combinator_reaction<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -446,6 +485,8 @@ pub(crate) fn handle_combinator_reaction<C: AsContextMut<Data = RuntimeState> + 
         Some(record) => record,
         None => return false,
     };
+    let state = ctx.state_mut();
+    recycle_native_callable(state, handler);
     let (_, result_array) = match {
         let state = ctx.state_mut();
         open_combinator_context(state, context)
@@ -564,6 +605,13 @@ pub(crate) fn settle_promise(state: &RuntimeState, promise: i64, settlement: Pro
                 (reactions, value, false)
             }
             PromiseSettlement::Reject(reason) => {
+                if !entry.handled {
+                    state
+                        .pending_unhandled_rejections
+                        .lock()
+                        .expect("pending_unhandled_rejections mutex")
+                        .insert(handle);
+                }
                 let reactions = std::mem::take(&mut entry.reject_reactions);
                 entry.state = PromiseState::Rejected(reason);
                 (reactions, reason, true)
@@ -583,6 +631,7 @@ pub(crate) fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
             return;
         };
         source_entry.handled = true;
+        clear_pending_unhandled_rejection(state, source_handle);
         match source_entry.state.clone() {
             PromiseState::Pending => {
                 source_entry.fulfill_reactions.push(PromiseReaction::new(
@@ -816,18 +865,38 @@ pub(crate) fn drain_microtasks<C: AsContextMut<Data = RuntimeState> + RuntimeSta
             None => break,
         }
     }
+    {
+        let mut c_table = ctx
+            .state_mut()
+            .continuation_table
+            .lock()
+            .expect("continuation table mutex");
+        c_table.retain(|entry| !entry.completed);
+    }
     let unhandled: Vec<i64> = {
+        let rejections = std::mem::take(
+            &mut *ctx
+                .state_mut()
+                .pending_unhandled_rejections
+                .lock()
+                .expect("pending_unhandled_rejections mutex"),
+        );
         let table = ctx
             .state_mut()
             .promise_table
             .lock()
             .expect("promise table mutex");
-        table
+        rejections
             .iter()
-            .filter(|e| e.is_promise && !e.handled)
-            .filter_map(|e| match &e.state {
-                PromiseState::Rejected(reason) => Some(*reason),
-                _ => None,
+            .filter_map(|&h| {
+                let entry = table.get(h).filter(|e| e.is_promise)?;
+                if entry.handled {
+                    return None;
+                }
+                match entry.state {
+                    PromiseState::Rejected(reason) => Some(reason),
+                    _ => None,
+                }
             })
             .collect()
     };
@@ -998,5 +1067,27 @@ pub(crate) fn resume_async_function<C: AsContextMut<Data = RuntimeState> + Runti
         ],
         &mut results,
     );
+    let cont_handle = value::decode_object_handle(continuation) as usize;
+    let outer_promise = {
+        let c_table = ctx
+            .state_mut()
+            .continuation_table
+            .lock()
+            .expect("continuation table mutex");
+        c_table.get(cont_handle).map(|entry| entry.outer_promise)
+    };
+    if let Some(outer_promise) = outer_promise {
+        let settled = is_promise_settled(ctx.state_mut(), outer_promise);
+        if settled {
+            let mut c_table = ctx
+                .state_mut()
+                .continuation_table
+                .lock()
+                .expect("continuation table mutex");
+            if let Some(entry) = c_table.get_mut(cont_handle) {
+                entry.completed = true;
+            }
+        }
+    }
 }
 
