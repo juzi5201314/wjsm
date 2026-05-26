@@ -25,6 +25,8 @@ mod runtime_promises;
 mod runtime_render;
 mod runtime_values;
 mod wasm_env;
+mod host_imports;
+pub(crate) use host_imports::register_all_imports;
 pub(crate) use wasm_env::WasmEnv;
 
 use runtime_builtins::*;
@@ -204,7 +206,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     imports.extend(include!("host_imports/timers_arrays.rs"));
     imports.extend(include!("host_imports/array_object.rs"));
     imports.extend(include!("host_imports/primitive_core.rs"));
-    imports.extend(include!("host_imports/promise_async.rs"));
+    imports.extend(register_all_imports(&mut store));
     imports.extend(include!("host_imports/string_methods.rs"));
     imports.extend(include!("host_imports/math_number_error.rs"));
     imports.extend(include!("host_imports/collections_buffers.rs"));
