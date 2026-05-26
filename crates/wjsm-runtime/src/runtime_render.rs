@@ -369,12 +369,8 @@ pub(crate) fn read_runtime_string(caller: &mut Caller<'_, RuntimeState>, val: i6
     }
 }
 
-pub(crate) fn read_string_bytes(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Vec<u8> {
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-        return Vec::new();
-    };
-
-    let data = memory.data(caller);
+pub(crate) fn read_string_bytes_mem<C: AsContext>(ctx: &C, memory: &Memory, ptr: u32) -> Vec<u8> {
+    let data = memory.data(ctx);
     let start = ptr as usize;
     if start >= data.len() {
         return Vec::new();
@@ -386,6 +382,13 @@ pub(crate) fn read_string_bytes(caller: &mut Caller<'_, RuntimeState>, ptr: u32)
         .map_or(data.len(), |offset| start + offset);
 
     data[start..end].to_vec()
+}
+
+pub(crate) fn read_string_bytes(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Vec<u8> {
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return Vec::new();
+    };
+    read_string_bytes_mem(caller, &memory, ptr)
 }
 
 pub(crate) fn read_value_string_bytes(

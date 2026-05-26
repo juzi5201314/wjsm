@@ -836,9 +836,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // 设置 %AsyncIteratorPrototype%[Symbol.asyncIterator]
     let _ = define_host_data_property_from_store(
         &mut store,
-        &memory,
-        &heap_ptr_global,
-        &obj_table_ptr_global,
+        &wasm_env,
         async_iterator_proto,
         "Symbol.asyncIterator",
         async_iterator_symbol_async_iterator,
@@ -849,9 +847,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         store_runtime_string_in_state(store.data(), "AsyncIterator".to_string());
     let _ = define_host_data_property_from_store(
         &mut store,
-        &memory,
-        &heap_ptr_global,
-        &obj_table_ptr_global,
+        &wasm_env,
         async_iterator_proto,
         "Symbol.toStringTag",
         async_iterator_tag,
@@ -863,10 +859,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // 设置 AsyncGenerator.prototype.[[Prototype]] = %AsyncIteratorPrototype%
     let async_gen_handle = value::decode_object_handle(async_gen_proto);
     let async_iterator_handle = value::decode_object_handle(async_iterator_proto);
-    let obj_ptr = resolve_handle_idx_from_store(
+    let obj_ptr = resolve_handle_idx_with_env(
         &mut store,
-        &memory,
-        &obj_table_ptr_global,
+        &wasm_env,
         async_gen_handle as usize,
     )
     .expect("async_gen_proto object ptr");
@@ -877,9 +872,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
     let _ = define_host_data_property_from_store(
         &mut store,
-        &memory,
-        &heap_ptr_global,
-        &obj_table_ptr_global,
+        &wasm_env,
         async_gen_proto,
         "Symbol.toStringTag",
         async_gen_tag,

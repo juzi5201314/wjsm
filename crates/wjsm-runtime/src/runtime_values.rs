@@ -1,4 +1,5 @@
 use super::*;
+use crate::wasm_env::WasmEnv;
 
 /// 通过 handle 表解析 boxed value 的真实对象指针。
 /// 支持 TAG_OBJECT 和 TAG_FUNCTION（统一走 handle 表）。
@@ -25,21 +26,14 @@ pub(crate) fn same_value_zero(a: i64, b: i64) -> bool {
 }
 
 /// 通过 handle_idx 解析真实对象指针。
-pub(crate) fn resolve_handle_idx(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn resolve_handle_idx_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
     handle_idx: usize,
 ) -> Option<usize> {
-    let obj_table_ptr = {
-        let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
-            return None;
-        };
-        g.get(&mut *caller).i32().unwrap_or(0) as usize
-    };
+    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as usize;
     let slot_addr = obj_table_ptr + handle_idx * 4;
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return None;
-    };
-    let d = mem.data(&*caller);
+    let d = env.memory.data(&*ctx);
     if slot_addr + 4 > d.len() {
         return None;
     }
@@ -58,17 +52,22 @@ pub(crate) fn resolve_handle_idx(
 // ── Array helpers ──────────────────────────────────────────────────────
 
 /// 解析 TAG_ARRAY 值 → 数组对象的内存指针
-pub(crate) fn resolve_array_ptr(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
+pub(crate) fn resolve_array_ptr_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    val: i64,
+) -> Option<usize> {
     let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
-    resolve_handle_idx(caller, handle_idx)
+    resolve_handle_idx_with_env(ctx, env, handle_idx)
 }
 
 /// 读取数组的 length 字段（offset 8）
-pub(crate) fn read_array_length(caller: &mut Caller<'_, RuntimeState>, ptr: usize) -> Option<u32> {
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return None;
-    };
-    let d = mem.data(&*caller);
+pub(crate) fn read_array_length_with_env<C: AsContext>(
+    ctx: &C,
+    env: &WasmEnv,
+    ptr: usize,
+) -> Option<u32> {
+    let d = env.memory.data(ctx);
     if ptr + 16 > d.len() {
         return None;
     }
@@ -80,11 +79,13 @@ pub(crate) fn read_array_length(caller: &mut Caller<'_, RuntimeState>, ptr: usiz
     ]))
 }
 
-pub(crate) fn write_array_length(caller: &mut Caller<'_, RuntimeState>, ptr: usize, len: u32) {
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return;
-    };
-    let d = mem.data_mut(&mut *caller);
+pub(crate) fn write_array_length_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    ptr: usize,
+    len: u32,
+) {
+    let d = env.memory.data_mut(&mut *ctx);
     if ptr + 16 > d.len() {
         return;
     }
@@ -112,15 +113,13 @@ pub(crate) fn read_array_capacity(
 }
 
 /// 读取数组元素 elements[index]（offset 16 + index * 8）
-pub(crate) fn read_array_elem(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn read_array_elem_with_env<C: AsContext>(
+    ctx: &C,
+    env: &WasmEnv,
     ptr: usize,
     index: u32,
 ) -> Option<i64> {
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return None;
-    };
-    let d = mem.data(&*caller);
+    let d = env.memory.data(ctx);
     let elem_offset = ptr + 16 + (index as usize) * 8;
     if elem_offset + 8 > d.len() {
         return None;
@@ -138,16 +137,14 @@ pub(crate) fn read_array_elem(
 }
 
 /// 写入数组元素
-pub(crate) fn write_array_elem(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn write_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
     ptr: usize,
     index: u32,
     val: i64,
 ) {
-    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-        return;
-    };
-    let d = mem.data_mut(&mut *caller);
+    let d = env.memory.data_mut(&mut *ctx);
     let elem_offset = ptr + 16 + (index as usize) * 8;
     if elem_offset + 8 > d.len() {
         return;
@@ -294,8 +291,9 @@ pub(crate) fn merge_sort_by<T: Copy>(
 }
 
 /// 沿原型链递归查找属性（带 visited set 防环路）
-pub(crate) fn read_object_property_by_name_proto_walk(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn read_object_property_by_name_proto_walk_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
     obj_ptr: usize,
     prop_name: &str,
     visited: &mut std::collections::HashSet<usize>,
@@ -304,10 +302,7 @@ pub(crate) fn read_object_property_by_name_proto_walk(
         return None; // 环路检测
     }
     let num_props = {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(&*caller);
+        let data = env.memory.data(&*ctx);
         if obj_ptr + 16 > data.len() {
             return None;
         }
@@ -320,10 +315,7 @@ pub(crate) fn read_object_property_by_name_proto_walk(
     };
     let mut name_ids = Vec::with_capacity(num_props);
     {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(&*caller);
+        let data = env.memory.data(&*ctx);
         for i in 0..num_props {
             let slot_offset = obj_ptr + 16 + i * 32;
             if slot_offset + 4 > data.len() {
@@ -338,12 +330,9 @@ pub(crate) fn read_object_property_by_name_proto_walk(
         }
     }
     for (i, name_id) in name_ids.iter().enumerate() {
-        let name_bytes = read_string_bytes(caller, *name_id);
+        let name_bytes = read_string_bytes_mem(ctx, &env.memory, *name_id);
         if name_bytes == prop_name.as_bytes() {
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return None;
-            };
-            let data = memory.data(&*caller);
+            let data = env.memory.data(&*ctx);
             let slot_offset = obj_ptr + 16 + i * 32;
             if slot_offset + 32 > data.len() {
                 return None;
@@ -362,10 +351,7 @@ pub(crate) fn read_object_property_by_name_proto_walk(
     }
     // 自身未找到 → 继续沿原型链
     let proto_handle = {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(&*caller);
+        let data = env.memory.data(&*ctx);
         if obj_ptr + 4 > data.len() {
             return None;
         }
@@ -379,21 +365,19 @@ pub(crate) fn read_object_property_by_name_proto_walk(
     if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
         return None;
     }
-    let proto_ptr = resolve_handle_idx(caller, proto_handle as usize)?;
-    read_object_property_by_name_proto_walk(caller, proto_ptr, prop_name, visited)
+    let proto_ptr = resolve_handle_idx_with_env(ctx, env, proto_handle as usize)?;
+    read_object_property_by_name_proto_walk_with_env(ctx, env, proto_ptr, prop_name, visited)
 }
 
 /// 从对象中按名称读取属性值（用于 define_property 等）
-pub(crate) fn read_object_property_by_name(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn read_object_property_by_name_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
     obj_ptr: usize,
     prop_name: &str,
 ) -> Option<i64> {
     let num_props = {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(&*caller);
+        let data = env.memory.data(&*ctx);
         if obj_ptr + 16 > data.len() {
             return None;
         }
@@ -406,10 +390,7 @@ pub(crate) fn read_object_property_by_name(
     };
     let mut name_ids = Vec::with_capacity(num_props);
     {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(&*caller);
+        let data = env.memory.data(&*ctx);
         for i in 0..num_props {
             let slot_offset = obj_ptr + 16 + i * 32;
             if slot_offset + 4 > data.len() {
@@ -424,12 +405,9 @@ pub(crate) fn read_object_property_by_name(
         }
     }
     for (i, name_id) in name_ids.iter().enumerate() {
-        let name_bytes = read_string_bytes(caller, *name_id);
+        let name_bytes = read_string_bytes_mem(ctx, &env.memory, *name_id);
         if name_bytes == prop_name.as_bytes() {
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return None;
-            };
-            let data = memory.data(&*caller);
+            let data = env.memory.data(&*ctx);
             let slot_offset = obj_ptr + 16 + i * 32;
             if slot_offset + 32 > data.len() {
                 return None;
@@ -448,10 +426,7 @@ pub(crate) fn read_object_property_by_name(
     }
     // 自身属性未找到 → 沿 [[Prototype]] 链查找
     let proto_handle = {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(&*caller);
+        let data = env.memory.data(&*ctx);
         if obj_ptr + 4 > data.len() {
             return None;
         }
@@ -465,23 +440,21 @@ pub(crate) fn read_object_property_by_name(
     if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
         return None;
     }
-    let proto_ptr = resolve_handle_idx(caller, proto_handle as usize)?;
+    let proto_ptr = resolve_handle_idx_with_env(ctx, env, proto_handle as usize)?;
     let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
     visited.insert(obj_ptr);
-    read_object_property_by_name_proto_walk(caller, proto_ptr, prop_name, &mut visited)
+    read_object_property_by_name_proto_walk_with_env(ctx, env, proto_ptr, prop_name, &mut visited)
 }
 
 /// 从对象中按 name_id 查找属性的 slot_offset
-pub(crate) fn find_property_slot_by_name_id(
-    caller: &mut Caller<'_, RuntimeState>,
+pub(crate) fn find_property_slot_by_name_id_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
     obj_ptr: usize,
     name_id: u32,
 ) -> Option<(usize, i32, i64)> {
     let num_props = {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(&*caller);
+        let data = env.memory.data(&*ctx);
         if obj_ptr + 16 > data.len() {
             return None;
         }
@@ -492,14 +465,11 @@ pub(crate) fn find_property_slot_by_name_id(
             data[obj_ptr + 15],
         ]) as usize
     };
-    let target_name_bytes = read_string_bytes(caller, name_id);
+    let target_name_bytes = read_string_bytes_mem(ctx, &env.memory, name_id);
     for i in 0..num_props {
         let slot_offset = obj_ptr + 16 + i * 32;
         let (slot_name_id, flags, val) = {
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return None;
-            };
-            let data = memory.data(&*caller);
+            let data = env.memory.data(&*ctx);
             if slot_offset + 32 > data.len() {
                 break;
             }
@@ -529,7 +499,7 @@ pub(crate) fn find_property_slot_by_name_id(
         };
         let same_name = slot_name_id == name_id
             || (!target_name_bytes.is_empty()
-                && read_string_bytes(caller, slot_name_id) == target_name_bytes);
+                && read_string_bytes_mem(ctx, &env.memory, slot_name_id) == target_name_bytes);
         if same_name {
             return Some((slot_offset, flags, val));
         }
@@ -542,7 +512,9 @@ pub(crate) fn read_object_property_by_name_id(
     obj_ptr: usize,
     name_id: u32,
 ) -> Option<i64> {
-    let (slot_offset, _flags, val) = find_property_slot_by_name_id(caller, obj_ptr, name_id)?;
+    let env = WasmEnv::from_caller(caller)?;
+    let (slot_offset, _flags, val) =
+        find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id)?;
     let _ = slot_offset;
     Some(val)
 }
@@ -555,7 +527,8 @@ pub(crate) fn write_object_property_by_name_id(
     val: i64,
     flags: i32,
 ) {
-    let found = find_property_slot_by_name_id(caller, obj_ptr, name_id);
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let found = find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id);
     if let Some((slot_offset, _, _)) = found {
         let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
             return;
@@ -1282,4 +1255,85 @@ pub(crate) fn object_rest_impl(
 pub(crate) fn obj_spread_impl(_caller: &mut Caller<'_, RuntimeState>, _dest: i64, _source: i64) {
     // 简化实现：不做任何复制
     // 完整实现需要遍历 source 的 own properties 并复制到 dest
+}
+
+// ── Caller 双参数便捷入口（委托 WasmEnv 泛型实现）────────────────────
+
+#[inline]
+pub(crate) fn resolve_handle_idx(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle_idx: usize,
+) -> Option<usize> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    resolve_handle_idx_with_env(caller, &env, handle_idx)
+}
+
+#[inline]
+pub(crate) fn resolve_array_ptr(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    resolve_array_ptr_with_env(caller, &env, val)
+}
+
+#[inline]
+pub(crate) fn read_array_length(caller: &mut Caller<'_, RuntimeState>, ptr: usize) -> Option<u32> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    read_array_length_with_env(caller, &env, ptr)
+}
+
+#[inline]
+pub(crate) fn write_array_length(caller: &mut Caller<'_, RuntimeState>, ptr: usize, len: u32) {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    write_array_length_with_env(caller, &env, ptr, len);
+}
+
+#[inline]
+pub(crate) fn read_array_elem(
+    caller: &mut Caller<'_, RuntimeState>,
+    ptr: usize,
+    index: u32,
+) -> Option<i64> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    read_array_elem_with_env(caller, &env, ptr, index)
+}
+
+#[inline]
+pub(crate) fn write_array_elem(
+    caller: &mut Caller<'_, RuntimeState>,
+    ptr: usize,
+    index: u32,
+    val: i64,
+) {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    write_array_elem_with_env(caller, &env, ptr, index, val);
+}
+
+#[inline]
+pub(crate) fn read_object_property_by_name(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    prop_name: &str,
+) -> Option<i64> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    read_object_property_by_name_with_env(caller, &env, obj_ptr, prop_name)
+}
+
+#[inline]
+pub(crate) fn read_object_property_by_name_proto_walk(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    prop_name: &str,
+    visited: &mut std::collections::HashSet<usize>,
+) -> Option<i64> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    read_object_property_by_name_proto_walk_with_env(caller, &env, obj_ptr, prop_name, visited)
+}
+
+#[inline]
+pub(crate) fn find_property_slot_by_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    name_id: u32,
+) -> Option<(usize, i32, i64)> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id)
 }

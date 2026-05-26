@@ -321,231 +321,22 @@ pub(crate) fn alloc_heap_c_string_from_store(
     Some(heap_ptr as u32)
 }
 
-pub(crate) fn resolve_handle_idx_from_store(
-    store: &mut Store<RuntimeState>,
-    memory: &Memory,
-    obj_table_ptr_global: &Global,
-    handle_idx: usize,
-) -> Option<usize> {
-    let obj_table_ptr = obj_table_ptr_global.get(&mut *store).i32().unwrap_or(0) as usize;
-    let slot_addr = obj_table_ptr + handle_idx * 4;
-    let data = memory.data(&mut *store);
-    if slot_addr + 4 > data.len() {
-        return None;
-    }
-    let ptr = u32::from_le_bytes([
-        data[slot_addr],
-        data[slot_addr + 1],
-        data[slot_addr + 2],
-        data[slot_addr + 3],
-    ]) as usize;
-    if ptr == 0 { None } else { Some(ptr) }
-}
-
-pub(crate) fn resolve_handle_from_store(
-    store: &mut Store<RuntimeState>,
-    memory: &Memory,
-    obj_table_ptr_global: &Global,
-    val: i64,
-) -> Option<usize> {
-    let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
-    resolve_handle_idx_from_store(store, memory, obj_table_ptr_global, handle_idx)
-}
-
-/// 沿原型链递归查找属性（store 版本，带 visited set 防环路）
-fn read_object_property_by_name_from_store_proto_walk(
-    store: &mut Store<RuntimeState>,
-    memory: &Memory,
-    obj_table_ptr_global: &Global,
-    obj_ptr: usize,
-    prop_name: &str,
-    visited: &mut std::collections::HashSet<usize>,
-) -> Option<i64> {
-    if !visited.insert(obj_ptr) {
-        return None;
-    }
-    let num_props = {
-        let data = memory.data(&mut *store);
-        if obj_ptr + 16 > data.len() {
-            return None;
-        }
-        u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]) as usize
-    };
-    let mut name_ids = Vec::with_capacity(num_props);
-    {
-        let data = memory.data(&mut *store);
-        for i in 0..num_props {
-            let slot_offset = obj_ptr + 16 + i * 32;
-            if slot_offset + 4 > data.len() {
-                break;
-            }
-            name_ids.push(u32::from_le_bytes([
-                data[slot_offset],
-                data[slot_offset + 1],
-                data[slot_offset + 2],
-                data[slot_offset + 3],
-            ]));
-        }
-    }
-    for (index, name_id) in name_ids.iter().enumerate() {
-        if read_string_bytes_from_store(store, memory, *name_id) == prop_name.as_bytes() {
-            let data = memory.data(&mut *store);
-            let slot_offset = obj_ptr + 16 + index * 32;
-            if slot_offset + 16 > data.len() {
-                return None;
-            }
-            return Some(i64::from_le_bytes([
-                data[slot_offset + 8],
-                data[slot_offset + 9],
-                data[slot_offset + 10],
-                data[slot_offset + 11],
-                data[slot_offset + 12],
-                data[slot_offset + 13],
-                data[slot_offset + 14],
-                data[slot_offset + 15],
-            ]));
-        }
-    }
-    let proto_handle = {
-        let data = memory.data(&mut *store);
-        if obj_ptr + 4 > data.len() {
-            return None;
-        }
-        u32::from_le_bytes([
-            data[obj_ptr],
-            data[obj_ptr + 1],
-            data[obj_ptr + 2],
-            data[obj_ptr + 3],
-        ])
-    };
-    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
-        return None;
-    }
-    let proto_ptr = resolve_handle_idx_from_store(
-        store, memory, obj_table_ptr_global, proto_handle as usize,
-    )?;
-    read_object_property_by_name_from_store_proto_walk(
-        store, memory, obj_table_ptr_global, proto_ptr, prop_name, visited,
-    )
-}
-
-pub(crate) fn read_object_property_by_name_from_store(
-    store: &mut Store<RuntimeState>,
-    memory: &Memory,
-    obj_table_ptr_global: &Global,
-    obj_ptr: usize,
-    prop_name: &str,
-) -> Option<i64> {
-    let num_props = {
-        let data = memory.data(&mut *store);
-        if obj_ptr + 16 > data.len() {
-            return None;
-        }
-        u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]) as usize
-    };
-    let mut name_ids = Vec::with_capacity(num_props);
-    {
-        let data = memory.data(&mut *store);
-        for i in 0..num_props {
-            let slot_offset = obj_ptr + 16 + i * 32;
-            if slot_offset + 4 > data.len() {
-                break;
-            }
-            name_ids.push(u32::from_le_bytes([
-                data[slot_offset],
-                data[slot_offset + 1],
-                data[slot_offset + 2],
-                data[slot_offset + 3],
-            ]));
-        }
-    }
-    for (index, name_id) in name_ids.iter().enumerate() {
-        if read_string_bytes_from_store(store, memory, *name_id) == prop_name.as_bytes() {
-            let data = memory.data(&mut *store);
-            let slot_offset = obj_ptr + 16 + index * 32;
-            if slot_offset + 16 > data.len() {
-                return None;
-            }
-            return Some(i64::from_le_bytes([
-                data[slot_offset + 8],
-                data[slot_offset + 9],
-                data[slot_offset + 10],
-                data[slot_offset + 11],
-                data[slot_offset + 12],
-                data[slot_offset + 13],
-                data[slot_offset + 14],
-                data[slot_offset + 15],
-            ]));
-        }
-    }
-    // 自身属性未找到 → 沿 [[Prototype]] 链查找
-    let proto_handle = {
-        let data = memory.data(&mut *store);
-        if obj_ptr + 4 > data.len() {
-            return None;
-        }
-        u32::from_le_bytes([
-            data[obj_ptr],
-            data[obj_ptr + 1],
-            data[obj_ptr + 2],
-            data[obj_ptr + 3],
-        ])
-    };
-    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
-        return None;
-    }
-    let proto_ptr =
-        resolve_handle_idx_from_store(store, memory, obj_table_ptr_global, proto_handle as usize)?;
-    let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    visited.insert(obj_ptr);
-    read_object_property_by_name_from_store_proto_walk(
-        store, memory, obj_table_ptr_global, proto_ptr, prop_name, &mut visited,
-    )
-}
-
-pub(crate) fn write_array_elem_from_store(
-    store: &mut Store<RuntimeState>,
-    memory: &Memory,
-    ptr: usize,
-    index: u32,
-    val: i64,
-) {
-    let data = memory.data_mut(&mut *store);
-    let elem_offset = ptr + 16 + index as usize * 8;
-    if elem_offset + 8 <= data.len() {
-        data[elem_offset..elem_offset + 8].copy_from_slice(&val.to_le_bytes());
-    }
-}
-
 pub(crate) fn define_host_data_property_from_store(
     store: &mut Store<RuntimeState>,
-    memory: &Memory,
-    heap_ptr_global: &Global,
-    obj_table_ptr_global: &Global,
+    env: &WasmEnv,
     obj: i64,
     name: &str,
     val: i64,
 ) -> Option<()> {
-    let name_id = find_memory_c_string_from_store(store, memory, name)
-        .or_else(|| alloc_heap_c_string_from_store(store, memory, heap_ptr_global, name))?;
-    let obj_ptr = resolve_handle_idx_from_store(
+    let name_id = find_memory_c_string_from_store(store, &env.memory, name)
+        .or_else(|| alloc_heap_c_string_from_store(store, &env.memory, &env.heap_ptr, name))?;
+    let obj_ptr = resolve_handle_idx_with_env(
         store,
-        memory,
-        obj_table_ptr_global,
+        env,
         value::decode_object_handle(obj) as usize,
     )?;
     let (capacity, num_props) = {
-        let data = memory.data(&mut *store);
+        let data = env.memory.data(&mut *store);
         if obj_ptr + 16 > data.len() {
             return None;
         }
@@ -566,7 +357,7 @@ pub(crate) fn define_host_data_property_from_store(
     if num_props >= capacity {
         return None;
     }
-    let data = memory.data_mut(&mut *store);
+    let data = env.memory.data_mut(&mut *store);
     let slot_offset = obj_ptr + 16 + num_props as usize * 32;
     if slot_offset + 32 > data.len() {
         return None;
@@ -583,79 +374,32 @@ pub(crate) fn define_host_data_property_from_store(
     Some(())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn alloc_all_settled_result_from_store(
     store: &mut Store<RuntimeState>,
     env: &WasmEnv,
-    memory: &Memory,
-    heap_ptr_global: &Global,
-    obj_table_ptr_global: &Global,
     status: &str,
     value_name: &str,
     val: i64,
 ) -> i64 {
     let obj = alloc_host_object(store, env, 2);
     let status_value = store_runtime_string_in_state(store.data(), status.to_string());
-    let _ = define_host_data_property_from_store(
-        store,
-        memory,
-        heap_ptr_global,
-        obj_table_ptr_global,
-        obj,
-        "status",
-        status_value,
-    );
-    let _ = define_host_data_property_from_store(
-        store,
-        memory,
-        heap_ptr_global,
-        obj_table_ptr_global,
-        obj,
-        value_name,
-        val,
-    );
+    let _ = define_host_data_property_from_store(store, env, obj, "status", status_value);
+    let _ = define_host_data_property_from_store(store, env, obj, value_name, val);
     obj
 }
 
 pub(crate) fn alloc_aggregate_error_from_store(
     store: &mut Store<RuntimeState>,
     env: &WasmEnv,
-    memory: &Memory,
-    heap_ptr_global: &Global,
-    obj_table_ptr_global: &Global,
     errors: i64,
 ) -> i64 {
     let obj = alloc_host_object(store, env, 3);
     let name = store_runtime_string_in_state(store.data(), "AggregateError".to_string());
     let message =
         store_runtime_string_in_state(store.data(), "All promises were rejected".to_string());
-    let _ = define_host_data_property_from_store(
-        store,
-        memory,
-        heap_ptr_global,
-        obj_table_ptr_global,
-        obj,
-        "name",
-        name,
-    );
-    let _ = define_host_data_property_from_store(
-        store,
-        memory,
-        heap_ptr_global,
-        obj_table_ptr_global,
-        obj,
-        "message",
-        message,
-    );
-    let _ = define_host_data_property_from_store(
-        store,
-        memory,
-        heap_ptr_global,
-        obj_table_ptr_global,
-        obj,
-        "errors",
-        errors,
-    );
+    let _ = define_host_data_property_from_store(store, env, obj, "name", name);
+    let _ = define_host_data_property_from_store(store, env, obj, "message", message);
+    let _ = define_host_data_property_from_store(store, env, obj, "errors", errors);
     obj
 }
 

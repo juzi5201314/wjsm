@@ -486,9 +486,6 @@ pub(crate) fn handle_combinator_reaction_from_caller(
 pub(crate) fn handle_combinator_reaction_from_store(
     store: &mut Store<RuntimeState>,
     env: &crate::wasm_env::WasmEnv,
-    memory: &Memory,
-    heap_ptr_global: &Global,
-    obj_table_ptr_global: &Global,
     handler: i64,
     argument: i64,
 ) -> bool {
@@ -501,10 +498,8 @@ pub(crate) fn handle_combinator_reaction_from_store(
 
     match kind {
         PromiseCombinatorReactionKind::AllFulfill => {
-            if let Some(result_ptr) =
-                resolve_handle_from_store(store, memory, obj_table_ptr_global, result_array)
-            {
-                write_array_elem_from_store(store, memory, result_ptr, index as u32, argument);
+            if let Some(result_ptr) = resolve_array_ptr_with_env(store, env, result_array) {
+                write_array_elem_with_env(store, env, result_ptr, index as u32, argument);
             }
             if let Some((result_promise, result_array)) =
                 decrement_combinator_remaining(store.data(), context)
@@ -523,20 +518,10 @@ pub(crate) fn handle_combinator_reaction_from_store(
                 PromiseCombinatorReactionKind::AllSettledReject => ("rejected", "reason"),
                 _ => unreachable!(),
             };
-            let record = alloc_all_settled_result_from_store(
-                store,
-                env,
-                memory,
-                heap_ptr_global,
-                obj_table_ptr_global,
-                status,
-                value_name,
-                argument,
-            );
-            if let Some(result_ptr) =
-                resolve_handle_from_store(store, memory, obj_table_ptr_global, result_array)
-            {
-                write_array_elem_from_store(store, memory, result_ptr, index as u32, record);
+            let record =
+                alloc_all_settled_result_from_store(store, env, status, value_name, argument);
+            if let Some(result_ptr) = resolve_array_ptr_with_env(store, env, result_array) {
+                write_array_elem_with_env(store, env, result_ptr, index as u32, record);
             }
             if let Some((result_promise, result_array)) =
                 decrement_combinator_remaining(store.data(), context)
@@ -549,22 +534,13 @@ pub(crate) fn handle_combinator_reaction_from_store(
             }
         }
         PromiseCombinatorReactionKind::AnyReject => {
-            if let Some(errors_ptr) =
-                resolve_handle_from_store(store, memory, obj_table_ptr_global, result_array)
-            {
-                write_array_elem_from_store(store, memory, errors_ptr, index as u32, argument);
+            if let Some(errors_ptr) = resolve_array_ptr_with_env(store, env, result_array) {
+                write_array_elem_with_env(store, env, errors_ptr, index as u32, argument);
             }
             if let Some((result_promise, errors_array)) =
                 decrement_combinator_remaining(store.data(), context)
             {
-                let aggregate = alloc_aggregate_error_from_store(
-                    store,
-                    env,
-                    memory,
-                    heap_ptr_global,
-                    obj_table_ptr_global,
-                    errors_array,
-                );
+                let aggregate = alloc_aggregate_error_from_store(store, env, errors_array);
                 settle_promise(
                     store.data(),
                     result_promise,
@@ -719,8 +695,7 @@ pub(crate) fn resolve_promise_from_caller(
 
 pub(crate) fn resolve_promise_from_store(
     store: &mut Store<RuntimeState>,
-    memory: &Memory,
-    obj_table_ptr_global: &Global,
+    env: &crate::wasm_env::WasmEnv,
     promise: i64,
     resolution: i64,
 ) {
@@ -741,9 +716,13 @@ pub(crate) fn resolve_promise_from_store(
     if (value::is_object(resolution)
         || value::is_function(resolution)
         || value::is_callable(resolution))
-        && let Some(ptr) =
-            resolve_handle_from_store(store, memory, obj_table_ptr_global, resolution)
-        && let Some(then) = read_object_property_by_name_from_store(store, memory, obj_table_ptr_global, ptr, "then")
+        && let Some(ptr) = resolve_handle_idx_with_env(
+            store,
+            env,
+            (resolution as u64 & 0xFFFF_FFFF) as usize,
+        )
+        && let Some(then) =
+            read_object_property_by_name_with_env(store, env, ptr, "then")
         && value::is_callable(then)
     {
         let mut queue = store
@@ -964,15 +943,7 @@ pub(crate) fn drain_microtasks_from_store(
                 handler,
                 argument,
             }) => {
-                if handle_combinator_reaction_from_store(
-                    store,
-                    &env,
-                    memory,
-                    heap_ptr_global,
-                    obj_table_ptr_global,
-                    handler,
-                    argument,
-                ) {
+                if handle_combinator_reaction_from_store(store, &env, handler, argument) {
                     continue;
                 }
                 if value::is_callable(handler) {
@@ -993,13 +964,7 @@ pub(crate) fn drain_microtasks_from_store(
                     ) {
                         Some(result) => match reaction_type {
                             ReactionType::Fulfill | ReactionType::Reject => {
-                                resolve_promise_from_store(
-                                    store,
-                                    memory,
-                                    obj_table_ptr_global,
-                                    promise,
-                                    result,
-                                );
+                                resolve_promise_from_store(store, &env, promise, result);
                             }
                             ReactionType::FinallyFulfill => {
                                 settle_promise(
