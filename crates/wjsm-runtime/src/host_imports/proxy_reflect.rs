@@ -1,8 +1,11 @@
+use anyhow::Result;
+use wasmtime::{Caller, Linker, Func};
+use wasmtime::Store;
+
 use crate::*;
 
-pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>) -> Vec<Extern> {
-    let proxy_create_fn = Func::wrap(
-        &mut store,
+pub(crate) fn define_proxy_reflect(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
+    let proxy_create_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
             if !value::is_js_object(target) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
@@ -23,9 +26,9 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             value::encode_proxy_handle(handle)
         },
     );
+    linker.define(&mut store, "env", "proxy_create", proxy_create_fn)?;
 
-    let reflect_get_fn = Func::wrap(
-        &mut store,
+    let reflect_get_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, receiver: i64| -> i64 {
             // Proxy target: 触发 get trap
             if value::is_proxy(target) {
@@ -55,10 +58,10 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             reflect_get_impl(&mut caller, target, prop)
         },
     );
+    linker.define(&mut store, "env", "reflect_get", reflect_get_fn)?;
 
 
-    let proxy_revocable_fn = Func::wrap(
-        &mut store,
+    let proxy_revocable_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
             if !value::is_js_object(target) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
@@ -89,9 +92,9 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             obj
         },
     );
+    linker.define(&mut store, "env", "proxy_revocable", proxy_revocable_fn)?;
 
-    let reflect_set_fn = Func::wrap(
-        &mut store,
+    let reflect_set_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64, receiver: i64| -> i64 {
             if value::is_proxy(target) {
                 let handle = value::decode_proxy_handle(target) as usize;
@@ -112,6 +115,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             reflect_set_impl(&mut caller, target, prop, val)
         },
     );
+    linker.define(&mut store, "env", "reflect_set", reflect_set_fn)?;
 
     fn reflect_set_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64, val: i64) -> i64 {
         let Ok(prop_name) = render_value(caller, prop) else { return value::encode_bool(false); };
@@ -133,8 +137,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
         value::encode_bool(true)
     }
 
-    let reflect_has_fn = Func::wrap(
-        &mut store,
+    let reflect_has_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64| -> i64 {
             if value::is_proxy(target) {
                 let handle = value::decode_proxy_handle(target) as usize;
@@ -155,6 +158,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             reflect_has_impl(&mut caller, target, prop)
         },
     );
+    linker.define(&mut store, "env", "reflect_has", reflect_has_fn)?;
 
     fn reflect_has_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64) -> i64 {
         let obj_ptr = resolve_handle(caller, target);
@@ -167,8 +171,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
         value::encode_bool(false)
     }
 
-    let reflect_delete_property_fn = Func::wrap(
-        &mut store,
+    let reflect_delete_property_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64| -> i64 {
             if value::is_proxy(target) {
                 let handle = value::decode_proxy_handle(target) as usize;
@@ -189,6 +192,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             reflect_delete_property_impl(&mut caller, target, prop)
         },
     );
+    linker.define(&mut store, "env", "reflect_delete_property", reflect_delete_property_fn)?;
     fn reflect_delete_property_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64) -> i64 {
         let prop_name = match render_value(caller, prop) {
             Ok(name) => name,
@@ -272,8 +276,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
         Ok(elements)
     }
 
-    let reflect_apply_fn = Func::wrap(
-        &mut store,
+    let reflect_apply_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, this_arg: i64, args_array: i64| -> i64 {
             if !is_callable_in_runtime(&mut caller, target) {
                 set_runtime_error(caller.data(), "TypeError: Reflect.apply target must be callable".to_string());
@@ -319,6 +322,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             reflect_apply_impl(&mut caller, target, this_arg, &args)
         },
     );
+    linker.define(&mut store, "env", "reflect_apply", reflect_apply_fn)?;
 
     fn reflect_apply_impl(
         caller: &mut Caller<'_, RuntimeState>,
@@ -338,8 +342,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
         result
     }
 
-    let reflect_construct_fn = Func::wrap(
-        &mut store,
+    let reflect_construct_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, args_array: i64, new_target: i64| -> i64 {
             let n_target = if value::is_undefined(new_target) { target } else { new_target };
             if !is_callable_in_runtime(&mut caller, target) || !is_callable_in_runtime(&mut caller, n_target) {
@@ -394,6 +397,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             reflect_construct_impl(&mut caller, target, &args, n_target)
         },
     );
+    linker.define(&mut store, "env", "reflect_construct", reflect_construct_fn)?;
 
     fn reflect_construct_impl(
         caller: &mut Caller<'_, RuntimeState>,
@@ -425,8 +429,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
         }
     }
 
-    let reflect_get_prototype_of_fn = Func::wrap(
-        &mut store,
+    let reflect_get_prototype_of_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
             if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
                 set_runtime_error(caller.data(), "TypeError: Reflect.getPrototypeOf called on non-object".to_string());
@@ -435,6 +438,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             reflect_get_prototype_of_impl(&mut caller, target)
         },
     );
+    linker.define(&mut store, "env", "reflect_get_prototype_of", reflect_get_prototype_of_fn)?;
 
     fn reflect_get_prototype_of_impl(caller: &mut Caller<'_, RuntimeState>, target: i64) -> i64 {
         if value::is_proxy(target) {
@@ -536,8 +540,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
         value::encode_bool(true)
     }
 
-    let reflect_set_prototype_of_fn = Func::wrap(
-        &mut store,
+    let reflect_set_prototype_of_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, proto: i64| -> i64 {
             if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
                 set_runtime_error(caller.data(), "TypeError: Reflect.setPrototypeOf called on non-object".to_string());
@@ -586,9 +589,9 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             reflect_set_prototype_of_fn_impl(&mut caller, target, proto)
         },
     );
+    linker.define(&mut store, "env", "reflect_set_prototype_of", reflect_set_prototype_of_fn)?;
 
-    let reflect_is_extensible_fn = Func::wrap(
-        &mut store,
+    let reflect_is_extensible_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
             if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
                 set_runtime_error(caller.data(), "TypeError: Reflect.isExtensible called on non-object".to_string());
@@ -631,9 +634,9 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             value::encode_bool(is_extensible_impl(&mut caller, target))
         },
     );
+    linker.define(&mut store, "env", "reflect_is_extensible", reflect_is_extensible_fn)?;
 
-    let reflect_prevent_extensions_fn = Func::wrap(
-        &mut store,
+    let reflect_prevent_extensions_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
             if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
                 set_runtime_error(caller.data(), "TypeError: Reflect.preventExtensions called on non-object".to_string());
@@ -678,9 +681,9 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             value::encode_bool(prevent_extensions_impl(&mut caller, target))
         },
     );
+    linker.define(&mut store, "env", "reflect_prevent_extensions", reflect_prevent_extensions_fn)?;
 
-    let reflect_get_own_property_descriptor_fn = Func::wrap(
-        &mut store,
+    let reflect_get_own_property_descriptor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64| -> i64 {
             // Proxy target: trigger getOwnPropertyDescriptor trap
             if value::is_proxy(target) {
@@ -728,6 +731,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             reflect_get_own_property_descriptor_impl(&mut caller, target, prop)
         },
     );
+    linker.define(&mut store, "env", "reflect_get_own_property_descriptor", reflect_get_own_property_descriptor_fn)?;
     fn reflect_get_own_property_descriptor_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64) -> i64 {
         let prop_name = match render_value(caller, prop) {
             Ok(name) => name,
@@ -776,8 +780,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
         desc
     }
 
-    let reflect_define_property_fn = Func::wrap(
-        &mut store,
+    let reflect_define_property_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, prop: i64, descriptor: i64| -> i64 {
             match define_property_internal(&mut caller, target, prop, descriptor) {
                 Ok(success) => value::encode_bool(success),
@@ -788,6 +791,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             }
         },
     );
+    linker.define(&mut store, "env", "reflect_define_property", reflect_define_property_fn)?;
 
     fn reflect_own_keys_impl(caller: &mut Caller<'_, RuntimeState>, target: i64) -> i64 {
         let Some(ptr) = resolve_handle(caller, target) else { return value::encode_undefined(); };
@@ -800,8 +804,7 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
         arr
     }
 
-    let reflect_own_keys_fn = Func::wrap(
-        &mut store,
+    let reflect_own_keys_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64| -> i64 {
             if value::is_proxy(target) {
                 let handle = value::decode_proxy_handle(target) as usize;
@@ -886,21 +889,6 @@ pub(crate) fn register_proxy_reflect_imports(mut store: &mut Store<RuntimeState>
             reflect_own_keys_impl(&mut caller, target)
         },
     );
-    vec![
-        proxy_create_fn.into(),
-        proxy_revocable_fn.into(),
-        reflect_get_fn.into(),
-        reflect_set_fn.into(),
-        reflect_has_fn.into(),
-        reflect_delete_property_fn.into(),
-        reflect_apply_fn.into(),
-        reflect_construct_fn.into(),
-        reflect_get_prototype_of_fn.into(),
-        reflect_set_prototype_of_fn.into(),
-        reflect_is_extensible_fn.into(),
-        reflect_prevent_extensions_fn.into(),
-        reflect_get_own_property_descriptor_fn.into(),
-        reflect_define_property_fn.into(),
-        reflect_own_keys_fn.into(),
-    ]
+    linker.define(&mut store, "env", "reflect_own_keys", reflect_own_keys_fn)?;
+    Ok(())
 }

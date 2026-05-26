@@ -1,4 +1,10 @@
-{
+use anyhow::Result;
+use wasmtime::{Caller, Linker, Func};
+use wasmtime::Store;
+
+use crate::*;
+
+pub(crate) fn define_atomics(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
     use std::sync::atomic::Ordering;
 
     /// Validate that |this_val| is a TypedArray backed by a SharedArrayBuffer.
@@ -47,8 +53,7 @@
     }
 
     // ── Atomics.load(typedArray, index) → value ──────────────────────
-    let atomics_load_fn = Func::wrap(
-        &mut store,
+    let atomics_load_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index_val: i64| -> i64 {
             let (byte_offset, elem_size, element_kind, sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -78,10 +83,10 @@
             value::encode_f64(val)
         },
     );
+    linker.define(&mut store, "env", "atomics_load", atomics_load_fn)?;
 
     // ── Atomics.store(typedArray, index, value) → value ──────────────
-    let atomics_store_fn = Func::wrap(
-        &mut store,
+    let atomics_store_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index_val: i64, value_val: i64| -> i64 {
             let (byte_offset, elem_size, element_kind, sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -112,10 +117,10 @@
             value_val
         },
     );
+    linker.define(&mut store, "env", "atomics_store", atomics_store_fn)?;
 
     // ── Atomics.add(typedArray, index, value) → old value ────────────
-    let atomics_add_fn = Func::wrap(
-        &mut store,
+    let atomics_add_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index_val: i64, value_val: i64| -> i64 {
             let (byte_offset, elem_size, element_kind, sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -144,10 +149,10 @@
             value::encode_f64(old)
         },
     );
+    linker.define(&mut store, "env", "atomics_add", atomics_add_fn)?;
 
     // ── Atomics.sub(typedArray, index, value) → old value ────────────
-    let atomics_sub_fn = Func::wrap(
-        &mut store,
+    let atomics_sub_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index_val: i64, value_val: i64| -> i64 {
             let (byte_offset, elem_size, element_kind, sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -176,10 +181,10 @@
             value::encode_f64(old)
         },
     );
+    linker.define(&mut store, "env", "atomics_sub", atomics_sub_fn)?;
 
     // ── Atomics.and(typedArray, index, value) → old value ────────────
-    let atomics_and_fn = Func::wrap(
-        &mut store,
+    let atomics_and_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index_val: i64, value_val: i64| -> i64 {
             let (byte_offset, elem_size, element_kind, sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -208,10 +213,10 @@
             value::encode_f64(old)
         },
     );
+    linker.define(&mut store, "env", "atomics_and", atomics_and_fn)?;
 
     // ── Atomics.or(typedArray, index, value) → old value ─────────────
-    let atomics_or_fn = Func::wrap(
-        &mut store,
+    let atomics_or_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index_val: i64, value_val: i64| -> i64 {
             let (byte_offset, elem_size, element_kind, sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -240,10 +245,10 @@
             value::encode_f64(old)
         },
     );
+    linker.define(&mut store, "env", "atomics_or", atomics_or_fn)?;
 
     // ── Atomics.xor(typedArray, index, value) → old value ────────────
-    let atomics_xor_fn = Func::wrap(
-        &mut store,
+    let atomics_xor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index_val: i64, value_val: i64| -> i64 {
             let (byte_offset, elem_size, element_kind, sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -272,10 +277,10 @@
             value::encode_f64(old)
         },
     );
+    linker.define(&mut store, "env", "atomics_xor", atomics_xor_fn)?;
 
     // ── Atomics.exchange(typedArray, index, value) → old value ───────
-    let atomics_exchange_fn = Func::wrap(
-        &mut store,
+    let atomics_exchange_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index_val: i64, value_val: i64| -> i64 {
             let (byte_offset, elem_size, element_kind, sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -304,10 +309,10 @@
             value::encode_f64(old)
         },
     );
+    linker.define(&mut store, "env", "atomics_exchange", atomics_exchange_fn)?;
 
     // ── Atomics.compareExchange(typedArray, index, expected, replacement) → old value ─
-    let atomics_compare_exchange_fn = Func::wrap(
-        &mut store,
+    let atomics_compare_exchange_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index_val: i64, expected_val: i64, replacement_val: i64| -> i64 {
             let (byte_offset, elem_size, element_kind, sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -367,10 +372,10 @@
             value::encode_f64(old)
         },
     );
+    linker.define(&mut store, "env", "atomics_compare_exchange", atomics_compare_exchange_fn)?;
 
     // ── Atomics.isLockFree(size) → bool ──────────────────────────────
-    let atomics_is_lock_free_fn = Func::wrap(
-        &mut store,
+    let atomics_is_lock_free_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, size_val: i64| -> i64 {
             let size = value::decode_f64(size_val) as u8;
             let result = match size {
@@ -381,12 +386,12 @@
             if result { value::encode_f64(1.0) } else { value::encode_f64(0.0) }
         },
     );
+    linker.define(&mut store, "env", "atomics_is_lock_free", atomics_is_lock_free_fn)?;
 
     // ── Atomics.wait(typedArray, index, expected, timeout) → string ──
     // Only valid on Int32Array. Returns "not-equal", "ok", or "timed-out".
     // Simplified: without real threading, always "timed-out" unless value mismatch.
-    let atomics_wait_fn = Func::wrap(
-        &mut store,
+    let atomics_wait_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index_val: i64, expected_val: i64, _timeout_val: i64| -> i64 {
             let (byte_offset, elem_size, element_kind, sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -415,10 +420,10 @@
             store_runtime_string(&mut caller, "timed-out".to_string())
         },
     );
+    linker.define(&mut store, "env", "atomics_wait", atomics_wait_fn)?;
 
     // ── Atomics.notify(typedArray, index, count) → i64 ───────────────
-    let atomics_notify_fn = Func::wrap(
-        &mut store,
+    let atomics_notify_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, _index_val: i64, _count_val: i64| -> i64 {
             let (_byte_offset, elem_size, element_kind, _sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -433,10 +438,10 @@
             value::encode_f64(0.0)
         },
     );
+    linker.define(&mut store, "env", "atomics_notify", atomics_notify_fn)?;
 
     // ── Atomics.waitAsync(typedArray, index, value, timeout) → object ─
-    let atomics_wait_async_fn = Func::wrap(
-        &mut store,
+    let atomics_wait_async_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index_val: i64, value_val: i64, _timeout_val: i64| -> i64 {
             let (byte_offset, elem_size, element_kind, sab_handle) =
                 match validate_ta_for_atomics(&mut caller, this_val) {
@@ -481,9 +486,9 @@
             result
         },
     );
+    linker.define(&mut store, "env", "atomics_wait_async", atomics_wait_async_fn)?;
     // ── SharedArrayBuffer stubs (indices 361-364 in WASM module) ──
-    let sab_constructor_stub = Func::wrap(
-        &mut store,
+    let sab_constructor_stub = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, byte_length_val: i64| -> i64 {
             let byte_length = value::decode_f64(byte_length_val) as u64;
             let shared = match caller.data().shared_state.clone() {
@@ -503,8 +508,8 @@
             obj
         },
     );
-    let sab_byte_length_stub = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "sharedarraybuffer_constructor", sab_constructor_stub)?;
+    let sab_byte_length_stub = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             if !value::is_object(this_val) { return value::encode_undefined(); }
             let obj_ptr = match resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize) {
@@ -517,36 +522,19 @@
             }
         },
     );
-    let sab_slice_stub = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "sharedarraybuffer_proto_byte_length", sab_byte_length_stub)?;
+    let sab_slice_stub = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, this_val: i64, _begin: i64, _end: i64| -> i64 {
             this_val
         },
     );
-    let sab_species_stub = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "sharedarraybuffer_proto_slice", sab_slice_stub)?;
+    let sab_species_stub = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             this_val
         },
     );
+    linker.define(&mut store, "env", "sharedarraybuffer_proto_species", sab_species_stub)?;
 
-    vec![
-        sab_constructor_stub.into(),       // 361
-        sab_byte_length_stub.into(),       // 362
-        sab_slice_stub.into(),             // 363
-        sab_species_stub.into(),           // 364
-        atomics_load_fn.into(),            // 365
-        atomics_store_fn.into(),           // 366
-        atomics_add_fn.into(),             // 367
-        atomics_sub_fn.into(),             // 368
-        atomics_and_fn.into(),             // 369
-        atomics_or_fn.into(),              // 370
-        atomics_xor_fn.into(),             // 371
-        atomics_exchange_fn.into(),        // 372
-        atomics_compare_exchange_fn.into(),// 373
-        atomics_is_lock_free_fn.into(),    // 374
-        atomics_wait_fn.into(),            // 375
-        atomics_notify_fn.into(),          // 376
-        atomics_wait_async_fn.into(),      // 377
-    ]
+    Ok(())
 }

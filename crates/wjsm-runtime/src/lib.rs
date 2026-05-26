@@ -12,6 +12,7 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 use swc_core::ecma::ast as swc_ast;
 use wasmtime::*;
+use wasmtime::Func;
 /// 影子栈大小（必须与后端保持一致）
 const SHADOW_STACK_SIZE: u32 = 65536;
 
@@ -30,7 +31,7 @@ mod runtime_render;
 mod runtime_values;
 mod wasm_env;
 mod host_imports;
-pub(crate) use host_imports::register_all_imports;
+use host_imports::*;
 pub(crate) use wasm_env::WasmEnv;
 
 use runtime_builtins::*;
@@ -208,27 +209,34 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     );
 
     // ── Import 0: console_log(i64) → () ─────────────────────────────────
-    let mut imports: Vec<Extern> = Vec::with_capacity(381);
-    imports.extend(include!("host_imports/core.rs"));
-    imports.extend(include!("host_imports/timers_arrays.rs"));
-    imports.extend(include!("host_imports/array_object.rs"));
-    imports.extend(include!("host_imports/primitive_core.rs"));
-    imports.extend(register_all_imports(&mut store));
-    imports.extend(include!("host_imports/string_methods.rs"));
-    imports.extend(include!("host_imports/math_number_error.rs"));
-    imports.extend(include!("host_imports/collections_buffers.rs"));
+    let mut linker = Linker::new(&engine);
+
+    // ── 注册所有宿主函数（按名字链接） ──
+    define_core(&mut linker, &mut store)?;
+    define_timers_arrays(&mut linker, &mut store)?;
+    define_array_object(&mut linker, &mut store)?;
+    define_primitive_core(&mut linker, &mut store)?;
+    define_promise(&mut linker, &mut store)?;
+    define_promise_combinators(&mut linker, &mut store)?;
+    define_misc(&mut linker, &mut store)?;
+    define_async_fn(&mut linker, &mut store)?;
+    define_async_generator(&mut linker, &mut store)?;
+    define_proxy_reflect(&mut linker, &mut store)?;
+    define_string_methods(&mut linker, &mut store)?;
+    define_math_number_error(&mut linker, &mut store)?;
+    define_collections_buffers(&mut linker, &mut store)?;
     // ── Proxy traps (imports 318-320) ──
-    imports.extend(include!("host_imports/proxy_traps.rs"));
+    define_proxy_traps(&mut linker, &mut store)?;
     // Import 321: get_builtin_global
-    imports.push(include!("host_imports/get_builtin_global_entry.rs"));
+    define_get_builtin_global(&mut linker, &mut store)?;
     // Import 322: new_target
-    let new_target_fn = Func::wrap(
+    let f = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, _dummy: i64| -> i64 { caller.data().new_target.get() },
     );
-    imports.push(new_target_fn.into());
+    linker.define(&mut store, "env", "new_target", f)?;
     // Import 323: new_target_set
-    let new_target_set_fn = Func::wrap(
+    let f = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, new_target: i64| -> i64 {
             let previous = caller.data().new_target.get();
@@ -236,88 +244,88 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             previous
         },
     );
-    imports.push(new_target_set_fn.into());
+    linker.define(&mut store, "env", "new_target_set", f)?;
     // Import 324: create_unmapped_arguments_object: (i64, i64) -> i64
-    let create_unmapped_arguments_fn = Func::wrap(
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, args_array: i64, param_count: i64| -> i64 {
             create_unmapped_arguments_object(&mut caller, args_array, param_count)
         },
     );
-    imports.push(create_unmapped_arguments_fn.into());
+    linker.define(&mut store, "env", "create_unmapped_arguments_object", f)?;
     // Import 325: create_mapped_arguments_object: (i64, i64, i64) -> i64
-    let create_mapped_arguments_fn = Func::wrap(
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, args_array: i64, param_count: i64, func_ref: i64| -> i64 {
             create_mapped_arguments_object(&mut caller, args_array, param_count, func_ref)
         },
     );
-    imports.push(create_mapped_arguments_fn.into());
+    linker.define(&mut store, "env", "create_mapped_arguments_object", f)?;
     // ── TypedArray extra methods (imports 326-347) ──
-    imports.extend(include!("host_imports/typedarray_new_methods.rs"));
+    define_typedarray_new_methods(&mut linker, &mut store)?;
     // ── ScopeRecord eval bridge (imports 348-355) ──
-    let scope_record_create_fn = Func::wrap(
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, capacity: i64| -> i64 {
             scope_record_create(caller, capacity)
         },
     );
-    imports.push(scope_record_create_fn.into());
-    let scope_record_add_binding_fn = Func::wrap(
+    linker.define(&mut store, "env", "scope_record_create", f)?;
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64, is_tdz: i64, is_const: i64| {
             scope_record_add_binding(caller, record, name, val, is_tdz, is_const)
         },
     );
-    imports.push(scope_record_add_binding_fn.into());
-    let eval_get_binding_fn = Func::wrap(
+    linker.define(&mut store, "env", "scope_record_add_binding", f)?;
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
             eval_get_binding(caller, record, name)
         },
     );
-    imports.push(eval_get_binding_fn.into());
-    let eval_set_binding_fn = Func::wrap(
+    linker.define(&mut store, "env", "eval_get_binding", f)?;
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64| -> i64 {
             eval_set_binding(caller, record, name, val)
         },
     );
-    imports.push(eval_set_binding_fn.into());
-    let eval_has_binding_fn = Func::wrap(
+    linker.define(&mut store, "env", "eval_set_binding", f)?;
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
             eval_has_binding(caller, record, name)
         },
     );
-    imports.push(eval_has_binding_fn.into());
-    let eval_super_base_fn = Func::wrap(
+    linker.define(&mut store, "env", "eval_has_binding", f)?;
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, record: i64| -> i64 {
             eval_super_base(caller, record)
         },
     );
-    imports.push(eval_super_base_fn.into());
-    let scope_record_set_meta_fn = Func::wrap(
+    linker.define(&mut store, "env", "eval_super_base", f)?;
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, record: i64, key: i64, val: i64| {
             scope_record_set_meta(caller, record, key, val)
         },
     );
-    imports.push(scope_record_set_meta_fn.into());
-    let scope_record_destroy_fn = Func::wrap(
+    linker.define(&mut store, "env", "scope_record_set_meta", f)?;
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, record: i64| {
             scope_record_destroy(caller, record)
         },
     );
-    imports.push(scope_record_destroy_fn.into());
+    linker.define(&mut store, "env", "scope_record_destroy", f)?;
     // ── WeakRef / FinalizationRegistry (imports 356-360) ──
-    imports.extend(include!("host_imports/weakref_finalization.rs"));
+    define_weakref_finalization(&mut linker, &mut store)?;
     // ── SharedArrayBuffer + Atomics (imports 361-377) ──
-    imports.extend(include!("host_imports/atomics.rs"));
+    define_atomics(&mut linker, &mut store)?;
     // ── Import 378: async_iterator_from(i64) -> i64 ────────────────────────
-    let async_iterator_from_fn = Func::wrap(
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, iterable: i64| -> i64 {
             if !(value::is_object(iterable)
@@ -474,9 +482,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             create_error_object(&mut caller, "TypeError", value::encode_undefined())
         },
     );
-    imports.push(async_iterator_from_fn.into());
+    linker.define(&mut store, "env", "async_iterator_from", f)?;
     // ── Import 379-380: Object.groupBy / Map.groupBy ─────────────────────
-    let object_group_by_fn = Func::wrap(
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
             // Check items is not null/undefined
@@ -557,9 +565,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             result
         },
     );
-    imports.push(object_group_by_fn.into());
+    linker.define(&mut store, "env", "object.group_by", f)?;
 
-    let map_group_by_fn = Func::wrap(
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
             // Check items is not null/undefined
@@ -704,9 +712,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             map_result
         },
     );
-    imports.push(map_group_by_fn.into());
+    linker.define(&mut store, "env", "map.group_by", f)?;
     // ── Import 381: symbol_property_key(i64) -> i32 ───────────────────
-    let symbol_property_key_fn = Func::wrap(
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
             if value::is_symbol(key) {
@@ -730,9 +738,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             key as i32
         },
     );
-    imports.push(symbol_property_key_fn.into());
+    linker.define(&mut store, "env", "symbol_property_key", f)?;
     // ── Import 382: array.from ──
-    let array_from_fn = Func::wrap(
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64, _this_val: i64, args_base: i32, args_count: i32|
@@ -774,9 +782,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_undefined()
         },
     );
-    imports.push(array_from_fn.into());
+    linker.define(&mut store, "env", "array.from", f)?;
     // ── Import 383: obj_get_by_index(i64, i32) -> i64 ────────────────────
-    let obj_get_by_index_fn = Func::wrap(
+    let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, index: i32| -> i64 {
             if !value::is_object(boxed) && !value::is_array(boxed) && !value::is_function(boxed) {
@@ -791,8 +799,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 .unwrap_or(value::encode_undefined())
         },
     );
-    imports.push(obj_get_by_index_fn.into());
-    let instance = Instance::new(&mut store, &module, &imports)?;
+    linker.define(&mut store, "env", "obj_get_by_index", f)?;
+    let instance = linker.instantiate(&mut store, &module)?;
     // ── Create %AsyncIteratorPrototype% and AsyncGenerator.prototype ──
     let memory = instance
         .get_export(&mut store, "memory")

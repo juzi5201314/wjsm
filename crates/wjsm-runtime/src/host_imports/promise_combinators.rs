@@ -1,8 +1,11 @@
+use anyhow::Result;
+use wasmtime::{Caller, Linker, Func};
+use wasmtime::Store;
+
 use crate::*;
 
-pub(crate) fn register_promise_combinators_imports(mut store: &mut Store<RuntimeState>) -> Vec<Extern> {
-    let promise_all_fn = Func::wrap(
-        &mut store,
+pub(crate) fn define_promise_combinators(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
+    let promise_all_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 let mut entry = PromiseEntry::rejected(value::encode_undefined());
@@ -120,10 +123,10 @@ pub(crate) fn register_promise_combinators_imports(mut store: &mut Store<Runtime
             result_promise
         },
     );
+    linker.define(&mut store, "env", "promise_all", promise_all_fn)?;
 
     // ── Import 123: promise_race(i64, i64) -> i64 ────────────────────────────────
-    let promise_race_fn = Func::wrap(
-        &mut store,
+    let promise_race_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
             let mut entry = PromiseEntry::pending();
             if !value::is_undefined(constructor) && !value::is_null(constructor) {
@@ -191,10 +194,10 @@ pub(crate) fn register_promise_combinators_imports(mut store: &mut Store<Runtime
             result_promise
         },
     );
+    linker.define(&mut store, "env", "promise_race", promise_race_fn)?;
 
     // ── Import 124: promise_all_settled(i64, i64) -> i64 ─────────────────────────
-    let promise_all_settled_fn = Func::wrap(
-        &mut store,
+    let promise_all_settled_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
             let mut entry = PromiseEntry::pending();
             if !value::is_undefined(constructor) && !value::is_null(constructor) {
@@ -299,10 +302,10 @@ pub(crate) fn register_promise_combinators_imports(mut store: &mut Store<Runtime
             result_promise
         },
     );
+    linker.define(&mut store, "env", "promise_all_settled", promise_all_settled_fn)?;
 
     // ── Import 125: promise_any(i64, i64) -> i64 ─────────────────────────────────
-    let promise_any_fn = Func::wrap(
-        &mut store,
+    let promise_any_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, constructor: i64, arr: i64| -> i64 {
             let mut entry = PromiseEntry::pending();
             if !value::is_undefined(constructor) && !value::is_null(constructor) {
@@ -420,11 +423,7 @@ pub(crate) fn register_promise_combinators_imports(mut store: &mut Store<Runtime
             result_promise
         },
     );
+    linker.define(&mut store, "env", "promise_any", promise_any_fn)?;
 
-    vec![
-        promise_all_fn.into(),
-        promise_race_fn.into(),
-        promise_all_settled_fn.into(),
-        promise_any_fn.into(),
-    ]
+    Ok(())
 }

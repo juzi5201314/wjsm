@@ -1,127 +1,132 @@
-{
-    let math_abs_fn = Func::wrap(
-        &mut store,
+use anyhow::Result;
+use wasmtime::{Caller, Linker, Func};
+use wasmtime::Store;
+
+use crate::*;
+
+pub(crate) fn define_math_number_error(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
+    let math_abs_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.abs())
         },
     );
-    let math_acos_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_abs", math_abs_fn)?;
+    let math_acos_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.acos())
         },
     );
-    let math_acosh_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_acos", math_acos_fn)?;
+    let math_acosh_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.acosh())
         },
     );
-    let math_asin_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_acosh", math_acosh_fn)?;
+    let math_asin_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.asin())
         },
     );
-    let math_asinh_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_asin", math_asin_fn)?;
+    let math_asinh_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.asinh())
         },
     );
-    let math_atan_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_asinh", math_asinh_fn)?;
+    let math_atan_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.atan())
         },
     );
-    let math_atanh_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_atan", math_atan_fn)?;
+    let math_atanh_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.atanh())
         },
     );
-    let math_atan2_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_atanh", math_atanh_fn)?;
+    let math_atan2_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let y = value_to_number(a);
             let x = value_to_number(b);
             value::encode_f64(y.atan2(x))
         },
     );
-    let math_cbrt_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_atan2", math_atan2_fn)?;
+    let math_cbrt_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.cbrt())
         },
     );
-    let math_ceil_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_cbrt", math_cbrt_fn)?;
+    let math_ceil_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.ceil())
         },
     );
-    let math_clz32_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_ceil", math_ceil_fn)?;
+    let math_clz32_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             let n = x as i32 as u32;
             value::encode_f64(if n == 0 { 32.0 } else { n.leading_zeros() as f64 })
         },
     );
-    let math_cos_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_clz32", math_clz32_fn)?;
+    let math_cos_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.cos())
         },
     );
-    let math_cosh_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_cos", math_cos_fn)?;
+    let math_cosh_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.cosh())
         },
     );
-    let math_exp_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_cosh", math_cosh_fn)?;
+    let math_exp_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.exp())
         },
     );
-    let math_expm1_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_exp", math_exp_fn)?;
+    let math_expm1_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.exp_m1())
         },
     );
-    let math_floor_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_expm1", math_expm1_fn)?;
+    let math_floor_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.floor())
         },
     );
-    let math_fround_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_floor", math_floor_fn)?;
+    let math_fround_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64((x as f32) as f64)
         },
     );
-    let math_hypot_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_fround", math_fround_fn)?;
+    let math_hypot_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
             if args_count == 0 {
                 return value::encode_f64(0.0);
@@ -138,8 +143,8 @@
             value::encode_f64(sum.sqrt())
         },
     );
-    let math_imul_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_hypot", math_hypot_fn)?;
+    let math_imul_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let ai = value_to_number(a) as i32;
             let bi = value_to_number(b) as i32;
@@ -147,36 +152,36 @@
             value::encode_f64((result as i32) as f64)
         },
     );
-    let math_log_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_imul", math_imul_fn)?;
+    let math_log_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.ln())
         },
     );
-    let math_log1p_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_log", math_log_fn)?;
+    let math_log1p_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.ln_1p())
         },
     );
-    let math_log10_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_log1p", math_log1p_fn)?;
+    let math_log10_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.log10())
         },
     );
-    let math_log2_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_log10", math_log10_fn)?;
+    let math_log2_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.log2())
         },
     );
-    let math_max_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_log2", math_log2_fn)?;
+    let math_max_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
             if args_count == 0 {
                 return value::encode_f64(f64::NEG_INFINITY);
@@ -192,8 +197,8 @@
             value::encode_f64(result)
         },
     );
-    let math_min_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_max", math_max_fn)?;
+    let math_min_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
             if args_count == 0 {
                 return value::encode_f64(f64::INFINITY);
@@ -209,30 +214,30 @@
             value::encode_f64(result)
         },
     );
-    let math_pow_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_min", math_min_fn)?;
+    let math_pow_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let base = value_to_number(a);
             let exp = value_to_number(b);
             value::encode_f64(base.powf(exp))
         },
     );
-    let math_random_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_pow", math_pow_fn)?;
+    let math_random_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>| -> i64 {
             let mut rng = rand::thread_rng();
             value::encode_f64(rng.gen_range(0.0_f64..1.0))
         },
     );
-    let math_round_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_random", math_random_fn)?;
+    let math_round_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.round())
         },
     );
-    let math_sign_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_round", math_round_fn)?;
+    let math_sign_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             if x.is_nan() {
@@ -244,51 +249,51 @@
             value::encode_f64(if x > 0.0 { 1.0 } else { -1.0 })
         },
     );
-    let math_sin_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_sign", math_sign_fn)?;
+    let math_sin_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.sin())
         },
     );
-    let math_sinh_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_sin", math_sin_fn)?;
+    let math_sinh_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.sinh())
         },
     );
-    let math_sqrt_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_sinh", math_sinh_fn)?;
+    let math_sqrt_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.sqrt())
         },
     );
-    let math_tan_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_sqrt", math_sqrt_fn)?;
+    let math_tan_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.tan())
         },
     );
-    let math_tanh_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_tan", math_tan_fn)?;
+    let math_tanh_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.tanh())
         },
     );
-    let math_trunc_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "math_tanh", math_tanh_fn)?;
+    let math_trunc_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
             value::encode_f64(x.trunc())
         },
     );
+    linker.define(&mut store, "env", "math_trunc", math_trunc_fn)?;
     // ── Number builtins ─────────────────────────────────────────────────────
-    let number_constructor_fn = Func::wrap(
-        &mut store,
+    let number_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if value::is_f64(arg) {
                 arg
@@ -305,8 +310,8 @@
             }
         },
     );
-    let number_is_nan_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "number_constructor", number_constructor_fn)?;
+    let number_is_nan_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if value::is_f64(arg) {
                 value::encode_bool(f64::from_bits(arg as u64).is_nan())
@@ -322,8 +327,8 @@
             }
         },
     );
-    let number_is_finite_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "number_is_nan", number_is_nan_fn)?;
+    let number_is_finite_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if value::is_f64(arg) {
                 value::encode_bool(f64::from_bits(arg as u64).is_finite())
@@ -332,8 +337,8 @@
             }
         },
     );
-    let number_is_integer_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "number_is_finite", number_is_finite_fn)?;
+    let number_is_integer_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if value::is_f64(arg) {
                 let x = value_to_number(arg);
@@ -343,8 +348,8 @@
             }
         },
     );
-    let number_is_safe_integer_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "number_is_integer", number_is_integer_fn)?;
+    let number_is_safe_integer_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if value::is_f64(arg) {
                 let x = value_to_number(arg);
@@ -355,8 +360,8 @@
             }
         },
     );
-    let number_parse_int_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "number_is_safe_integer", number_is_safe_integer_fn)?;
+    let number_parse_int_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64, radix_val: i64| -> i64 {
             let input_str = if value::is_string(arg) {
                 let s = read_value_string_bytes(&mut caller, arg).unwrap_or_default();
@@ -428,8 +433,8 @@
             }
         },
     );
-    let number_parse_float_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "number_parse_int", number_parse_int_fn)?;
+    let number_parse_float_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if !value::is_string(arg) {
                 if value::is_f64(arg) {
@@ -490,8 +495,8 @@
             }
         },
     );
-    let number_proto_to_string_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "number_parse_float", number_parse_float_fn)?;
+    let number_proto_to_string_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, this_val: i64, radix_val: i64| -> i64 {
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
@@ -523,8 +528,8 @@
             store_runtime_string(&caller, result)
         },
     );
-    let number_proto_value_of_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "number_proto_to_string", number_proto_to_string_fn)?;
+    let number_proto_value_of_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             if value::is_f64(this_val) {
                 this_val
@@ -533,8 +538,8 @@
             }
         },
     );
-    let number_proto_to_fixed_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "number_proto_value_of", number_proto_value_of_fn)?;
+    let number_proto_to_fixed_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
@@ -560,8 +565,8 @@
             store_runtime_string(&caller, s)
         },
     );
-    let number_proto_to_exponential_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "number_proto_to_fixed", number_proto_to_fixed_fn)?;
+    let number_proto_to_exponential_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
@@ -596,8 +601,8 @@
             store_runtime_string(&caller, s)
         },
     );
-    let number_proto_to_precision_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "number_proto_to_exponential", number_proto_to_exponential_fn)?;
+    let number_proto_to_precision_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
@@ -627,15 +632,15 @@
             store_runtime_string(&caller, s)
         },
     );
+    linker.define(&mut store, "env", "number_proto_to_precision", number_proto_to_precision_fn)?;
     // ── Boolean builtins ────────────────────────────────────────────────────
-    let boolean_constructor_fn = Func::wrap(
-        &mut store,
+    let boolean_constructor_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             value::encode_bool(value::is_truthy(arg))
         },
     );
-    let boolean_proto_to_string_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "boolean_constructor", boolean_constructor_fn)?;
+    let boolean_proto_to_string_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             if value::is_bool(this_val) {
                 store_runtime_string(&caller, if value::decode_bool(this_val) { "true" } else { "false" }.to_string())
@@ -644,8 +649,8 @@
             }
         },
     );
-    let boolean_proto_value_of_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "boolean_proto_to_string", boolean_proto_to_string_fn)?;
+    let boolean_proto_value_of_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             if value::is_bool(this_val) {
                 this_val
@@ -654,51 +659,51 @@
             }
         },
     );
+    linker.define(&mut store, "env", "boolean_proto_value_of", boolean_proto_value_of_fn)?;
     // ── Error builtins ────────────────────────────────────────────────────
-    let error_constructor_fn = Func::wrap(
-        &mut store,
+    let error_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             create_error_object(&mut caller, "Error", arg)
         },
     );
-    let type_error_constructor_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "error_constructor", error_constructor_fn)?;
+    let type_error_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             create_error_object(&mut caller, "TypeError", arg)
         },
     );
-    let range_error_constructor_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "type_error_constructor", type_error_constructor_fn)?;
+    let range_error_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             create_error_object(&mut caller, "RangeError", arg)
         },
     );
-    let syntax_error_constructor_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "range_error_constructor", range_error_constructor_fn)?;
+    let syntax_error_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             create_error_object(&mut caller, "SyntaxError", arg)
         },
     );
-    let reference_error_constructor_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "syntax_error_constructor", syntax_error_constructor_fn)?;
+    let reference_error_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             create_error_object(&mut caller, "ReferenceError", arg)
         },
     );
-    let uri_error_constructor_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "reference_error_constructor", reference_error_constructor_fn)?;
+    let uri_error_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             create_error_object(&mut caller, "URIError", arg)
         },
     );
-    let eval_error_constructor_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "uri_error_constructor", uri_error_constructor_fn)?;
+    let eval_error_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             create_error_object(&mut caller, "EvalError", arg)
         },
     );
-    let error_proto_to_string_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "eval_error_constructor", eval_error_constructor_fn)?;
+    let error_proto_to_string_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             if !value::is_object(this_val) {
                 return store_runtime_string(&caller, "Error".to_string());
@@ -728,69 +733,8 @@
             }
         },
     );
+    linker.define(&mut store, "env", "error_proto_to_string", error_proto_to_string_fn)?;
 
     // ── Map / Set helper: SameValueZero equality ──────────────────────
-    vec![
-        math_abs_fn.into(),    // 193
-        math_acos_fn.into(),   // 194
-        math_acosh_fn.into(),  // 195
-        math_asin_fn.into(),   // 196
-        math_asinh_fn.into(),  // 197
-        math_atan_fn.into(),   // 198
-        math_atanh_fn.into(),  // 199
-        math_atan2_fn.into(),  // 200
-        math_cbrt_fn.into(),   // 201
-        math_ceil_fn.into(),   // 202
-        math_clz32_fn.into(),  // 203
-        math_cos_fn.into(),    // 204
-        math_cosh_fn.into(),   // 205
-        math_exp_fn.into(),    // 206
-        math_expm1_fn.into(),  // 207
-        math_floor_fn.into(),  // 208
-        math_fround_fn.into(), // 209
-        math_hypot_fn.into(),  // 210
-        math_imul_fn.into(),   // 211
-        math_log_fn.into(),    // 212
-        math_log1p_fn.into(),  // 213
-        math_log10_fn.into(),  // 214
-        math_log2_fn.into(),   // 215
-        math_max_fn.into(),    // 216
-        math_min_fn.into(),    // 217
-        math_pow_fn.into(),    // 218
-        math_random_fn.into(), // 219
-        math_round_fn.into(),  // 220
-        math_sign_fn.into(),   // 221
-        math_sin_fn.into(),    // 222
-        math_sinh_fn.into(),   // 223
-        math_sqrt_fn.into(),   // 224
-        math_tan_fn.into(),    // 225
-        math_tanh_fn.into(),   // 226
-        math_trunc_fn.into(),  // 227
-        // ── Number imports ──
-        number_constructor_fn.into(),       // 228
-        number_is_nan_fn.into(),            // 229
-        number_is_finite_fn.into(),         // 230
-        number_is_integer_fn.into(),        // 231
-        number_is_safe_integer_fn.into(),   // 232
-        number_parse_int_fn.into(),         // 233
-        number_parse_float_fn.into(),       // 234
-        number_proto_to_string_fn.into(),   // 235
-        number_proto_value_of_fn.into(),    // 236
-        number_proto_to_fixed_fn.into(),    // 237
-        number_proto_to_exponential_fn.into(), // 238
-        number_proto_to_precision_fn.into(),  // 239
-        // ── Boolean imports ──
-        boolean_constructor_fn.into(),      // 240
-        boolean_proto_to_string_fn.into(),  // 241
-        boolean_proto_value_of_fn.into(),   // 242
-        // ── Error imports ──
-        error_constructor_fn.into(),           // 243
-        type_error_constructor_fn.into(),      // 244
-        range_error_constructor_fn.into(),     // 245
-        syntax_error_constructor_fn.into(),    // 246
-        reference_error_constructor_fn.into(), // 247
-        uri_error_constructor_fn.into(),       // 248
-        eval_error_constructor_fn.into(),      // 249
-        error_proto_to_string_fn.into(),       // 250
-    ]
+    Ok(())
 }

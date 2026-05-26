@@ -1,4 +1,10 @@
-{
+use anyhow::Result;
+use wasmtime::{Caller, Linker, Func};
+use wasmtime::Store;
+
+use crate::*;
+
+pub(crate) fn define_proxy_traps(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
     fn proxy_entry(caller: &mut Caller<'_, RuntimeState>, proxy: i64, op: &str) -> Option<(i64, i64)> {
         if !value::is_proxy(proxy) {
             set_runtime_error(
@@ -141,30 +147,26 @@
         value::encode_bool(true)
     }
 
-    let proxy_trap_get = Func::wrap(
-        &mut store,
+    let proxy_trap_get = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, proxy: i64, name_id: i32| -> i64 {
             proxy_internal_get(&mut caller, proxy, name_id)
         },
     );
+    linker.define(&mut store, "env", "proxy_trap_get", proxy_trap_get)?;
 
-    let proxy_trap_set = Func::wrap(
-        &mut store,
+    let proxy_trap_set = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, proxy: i64, name_id: i32, val: i64| {
             proxy_internal_set(&mut caller, proxy, name_id, val);
         },
     );
+    linker.define(&mut store, "env", "proxy_trap_set", proxy_trap_set)?;
 
-    let proxy_trap_delete = Func::wrap(
-        &mut store,
+    let proxy_trap_delete = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, proxy: i64, name_id: i32| -> i64 {
             proxy_internal_delete(&mut caller, proxy, name_id)
         },
     );
+    linker.define(&mut store, "env", "proxy_trap_delete", proxy_trap_delete)?;
 
-    vec![
-        proxy_trap_get.into(),    // 316
-        proxy_trap_set.into(),    // 317
-        proxy_trap_delete.into(), // 318
-    ]
+    Ok(())
 }

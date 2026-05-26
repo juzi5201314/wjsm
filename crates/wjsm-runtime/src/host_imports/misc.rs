@@ -1,18 +1,20 @@
+use anyhow::Result;
+use wasmtime::{Caller, Linker, Func};
+use wasmtime::Store;
+
 use crate::*;
 
-
-pub(crate) fn register_misc_imports(mut store: &mut Store<RuntimeState>) -> Vec<Extern> {
+pub(crate) fn define_misc(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
     // ECMAScript §7.2.3 IsCallable(argument) → boolean
-    let is_callable_fn = Func::wrap(
-        &mut store,
+    let is_callable_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             value::encode_bool(is_callable_in_runtime(&mut caller, val))
         },
     );
+    linker.define(&mut store, "env", "is_callable", is_callable_fn)?;
 
     // ── Import 129: queue_microtask(i64) -> () ──────────────────────────────
-    let queue_microtask_fn = Func::wrap(
-        &mut store,
+    let queue_microtask_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, callback: i64| {
             let mut queue = caller
                 .data()
@@ -22,6 +24,7 @@ pub(crate) fn register_misc_imports(mut store: &mut Store<RuntimeState>) -> Vec<
             queue.push_back(Microtask::MicrotaskCallback { callback });
         },
     );
+    linker.define(&mut store, "env", "queue_microtask", queue_microtask_fn)?;
 
     // ── Import 130: drain_microtasks() -> () ────────────────────────────────
     let drain_microtasks_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
@@ -29,9 +32,9 @@ pub(crate) fn register_misc_imports(mut store: &mut Store<RuntimeState>) -> Vec<
         let Some(func_table) = table else { return };
         drain_microtasks_from_caller(&mut caller, &func_table);
     });
+    linker.define(&mut store, "env", "drain_microtasks", drain_microtasks_fn)?;
 
-    let native_call_fn = Func::wrap(
-        &mut store,
+    let native_call_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          callable: i64,
          this_val: i64,
@@ -121,11 +124,11 @@ pub(crate) fn register_misc_imports(mut store: &mut Store<RuntimeState>) -> Vec<
             result
         },
     );
+    linker.define(&mut store, "env", "native_call", native_call_fn)?;
 
     // ── Import 146: register_module_namespace(i64, i64) -> () ──────────────
     // 将模块命名空间对象注册到运行时缓存
-    let register_module_namespace_fn = Func::wrap(
-        &mut store,
+    let register_module_namespace_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, module_id: i64, namespace_obj: i64| {
             let mid = module_id as u32;
             let mut cache = caller
@@ -136,11 +139,11 @@ pub(crate) fn register_misc_imports(mut store: &mut Store<RuntimeState>) -> Vec<
             cache.insert(mid, namespace_obj);
         },
     );
+    linker.define(&mut store, "env", "register_module_namespace", register_module_namespace_fn)?;
 
     // ── Import 147: dynamic_import(i64) -> i64 ────────────────────────────
     // 动态导入：查找命名空间对象并返回 resolved Promise
-    let dynamic_import_fn = Func::wrap(
-        &mut store,
+    let dynamic_import_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, module_id: i64| -> i64 {
             let mid = module_id as u32;
 
@@ -187,23 +190,23 @@ pub(crate) fn register_misc_imports(mut store: &mut Store<RuntimeState>) -> Vec<
             promise
         },
     );
+    linker.define(&mut store, "env", "dynamic_import", dynamic_import_fn)?;
 
     // ── Import 148/149: eval ────────────────────────────────────────────────
-    let eval_direct_fn = Func::wrap(
-        &mut store,
+    let eval_direct_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, code: i64, scope_env: i64| -> i64 {
             perform_eval_from_caller(&mut caller, code, Some(scope_env))
         },
     );
-    let eval_indirect_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "eval_direct", eval_direct_fn)?;
+    let eval_indirect_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, code: i64| -> i64 {
             perform_eval_from_caller(&mut caller, code, None)
         },
     );
+    linker.define(&mut store, "env", "eval_indirect", eval_indirect_fn)?;
 
-    let jsx_create_element_fn = Func::wrap(
-        &mut store,
+    let jsx_create_element_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, tag: i64, props: i64, children: i64| -> i64 {
             let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
             let _ = define_host_data_property_from_caller(
@@ -218,47 +221,7 @@ pub(crate) fn register_misc_imports(mut store: &mut Store<RuntimeState>) -> Vec<
             obj
         },
     );
+    linker.define(&mut store, "env", "jsx_create_element", jsx_create_element_fn)?;
 
-    vec![
-        queue_microtask_fn.into(),      // 129
-        drain_microtasks_fn.into(),     // 130
-        native_call_fn.into(),          // 141
-        is_callable_fn.into(),          // 144
-        register_module_namespace_fn.into(), // 146
-        dynamic_import_fn.into(),       // 147
-        eval_direct_fn.into(),          // 148
-        eval_indirect_fn.into(),        // 149
-        jsx_create_element_fn.into(),   // 150
-    ]
-}
-
-pub(crate) fn register_all_imports(store: &mut Store<RuntimeState>) -> Vec<Extern> {
-    let mut imports = Vec::with_capacity(50);
-    
-    let mut p = super::promise::register_promise_imports(store);
-    // p: 116,117,118,119,120,121, 126,127,128, 142,143, 145
-    let c = super::promise_combinators::register_promise_combinators_imports(store);
-    // c: 122,123,124,125
-    let mut m = register_misc_imports(store);
-    // m: 129,130, 141, 144, 146,147,148,149,150
-    let a = super::async_fn::register_async_fn_imports(store);
-    // a: 131,132,133,134,135,136
-    let g = super::async_generator::register_async_generator_imports(store);
-    // g: 137,138,139,140
-    let r = super::proxy_reflect::register_proxy_reflect_imports(store);
-    // r: 151..=165
-    
-    imports.extend(p.drain(0..6));  // 116-121
-    imports.extend(c);               // 122-125
-    imports.extend(p.drain(0..3));  // 126-128
-    imports.extend(m.drain(0..2));  // 129-130
-    imports.extend(a);               // 131-136
-    imports.extend(g);               // 137-140
-    imports.push(m.remove(0));      // 141
-    imports.extend(p.drain(0..2));  // 142-143
-    imports.push(m.remove(0));      // 144
-    imports.push(p.remove(0));      // 145
-    imports.extend(m);               // 146-150
-    imports.extend(r);               // 151-165
-    imports
+    Ok(())
 }
