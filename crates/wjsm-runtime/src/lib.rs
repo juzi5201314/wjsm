@@ -24,6 +24,7 @@ mod runtime_arguments;
 mod runtime_promises;
 mod runtime_render;
 mod runtime_values;
+mod wasm_env;
 
 use runtime_builtins::*;
 use runtime_arguments::*;
