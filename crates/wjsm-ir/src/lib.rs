@@ -279,6 +279,10 @@ impl BasicBlock {
         &self.instructions
     }
 
+    pub fn instructions_mut(&mut self) -> &mut Vec<Instruction> {
+        &mut self.instructions
+    }
+
     pub fn terminator(&self) -> &Terminator {
         &self.terminator
     }
