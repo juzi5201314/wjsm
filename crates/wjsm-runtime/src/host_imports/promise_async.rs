@@ -1126,14 +1126,30 @@
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
             let resume_promise = alloc_promise(&mut caller, PromiseEntry::pending());
+            let handle = value::decode_object_handle(generator) as usize;
+            {
+                let table = caller
+                    .data()
+                    .async_generator_table
+                    .lock()
+                    .expect("async generator table mutex");
+                if let Some(entry) = table.get(handle) {
+                    if matches!(entry.state, AsyncGeneratorState::Completed) {
+                        drop(table);
+                        let result =
+                            alloc_iterator_result_from_caller(&mut caller, value::encode_undefined(), true);
+                        resolve_promise_from_caller(&mut caller, resume_promise, result);
+                        return resume_promise;
+                    }
+                }
+            }
             let request_to_fulfill = {
                 let mut table = caller
                     .data()
                     .async_generator_table
                     .lock()
                     .expect("async generator table mutex");
-                let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
-                else {
+                let Some(entry) = table.get_mut(handle) else {
                     return resume_promise;
                 };
                 entry.state = AsyncGeneratorState::SuspendedYield;
@@ -1153,39 +1169,55 @@
     let async_generator_return_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
-            let (active, queued) = {
+            let handle = value::decode_object_handle(generator) as usize;
+            let action = {
                 let mut table = caller
                     .data()
                     .async_generator_table
                     .lock()
                     .expect("async generator table mutex");
-                let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
-                else {
+                let Some(entry) = table.get_mut(handle) else {
                     return value::encode_undefined();
                 };
-                entry.state = AsyncGeneratorState::Completed;
-                let active = entry.active_request.take();
-                let queued = std::mem::take(&mut entry.queue);
-                (active, queued)
-            };
-            if let Some(request) = active {
-                let result = alloc_iterator_result_from_caller(&mut caller, value, true);
-                resolve_promise_from_caller(&mut caller, request.promise, result);
-            }
-            for request in queued {
-                match request.completion_type {
-                    AsyncGeneratorCompletionType::Throw => settle_promise(
-                        caller.data(),
-                        request.promise,
-                        PromiseSettlement::Reject(request.value),
-                    ),
+                match entry.state {
+                    AsyncGeneratorState::SuspendedStart => {
+                        entry.state = AsyncGeneratorState::Completed;
+                        AsyncGeneratorHostAction::Immediate {
+                            active: None,
+                            queued: vec![],
+                        }
+                    }
                     _ => {
-                        let result = alloc_iterator_result_from_caller(
-                            &mut caller,
-                            value::encode_undefined(),
-                            true,
-                        );
+                        entry.state = AsyncGeneratorState::Completed;
+                        AsyncGeneratorHostAction::Immediate {
+                            active: entry.active_request.take(),
+                            queued: std::mem::take(&mut entry.queue),
+                        }
+                    }
+                }
+            };
+            match action {
+                AsyncGeneratorHostAction::Immediate { active, queued } => {
+                    if let Some(request) = active {
+                        let result = alloc_iterator_result_from_caller(&mut caller, value, true);
                         resolve_promise_from_caller(&mut caller, request.promise, result);
+                    }
+                    for request in queued {
+                        match request.completion_type {
+                            AsyncGeneratorCompletionType::Throw => settle_promise(
+                                caller.data(),
+                                request.promise,
+                                PromiseSettlement::Reject(request.value),
+                            ),
+                            _ => {
+                                let result = alloc_iterator_result_from_caller(
+                                    &mut caller,
+                                    value::encode_undefined(),
+                                    true,
+                                );
+                                resolve_promise_from_caller(&mut caller, request.promise, result);
+                            }
+                        }
                     }
                 }
             }
@@ -1196,35 +1228,51 @@
     // ── Import 140: async_generator_throw(i64, i64) -> i64 ──────────────────
     let async_generator_throw_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
-            let (active, queued) = {
+        |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
+            let handle = value::decode_object_handle(generator) as usize;
+            let action = {
                 let mut table = caller
                     .data()
                     .async_generator_table
                     .lock()
                     .expect("async generator table mutex");
-                let Some(entry) = table.get_mut(value::decode_object_handle(generator) as usize)
-                else {
+                let Some(entry) = table.get_mut(handle) else {
                     return value::encode_undefined();
                 };
-                entry.state = AsyncGeneratorState::Completed;
-                let active = entry.active_request.take();
-                let queued = std::mem::take(&mut entry.queue);
-                (active, queued)
+                match entry.state {
+                    AsyncGeneratorState::SuspendedStart => {
+                        entry.state = AsyncGeneratorState::Completed;
+                        AsyncGeneratorHostAction::Immediate {
+                            active: None,
+                            queued: vec![],
+                        }
+                    }
+                    _ => {
+                        entry.state = AsyncGeneratorState::Completed;
+                        AsyncGeneratorHostAction::Immediate {
+                            active: entry.active_request.take(),
+                            queued: std::mem::take(&mut entry.queue),
+                        }
+                    }
+                }
             };
-            if let Some(request) = active {
-                settle_promise(
-                    caller.data(),
-                    request.promise,
-                    PromiseSettlement::Reject(value),
-                );
-            }
-            for request in queued {
-                settle_promise(
-                    caller.data(),
-                    request.promise,
-                    PromiseSettlement::Reject(value),
-                );
+            match action {
+                AsyncGeneratorHostAction::Immediate { active, queued } => {
+                    if let Some(request) = active {
+                        settle_promise(
+                            caller.data(),
+                            request.promise,
+                            PromiseSettlement::Reject(value),
+                        );
+                    }
+                    for request in queued {
+                        settle_promise(
+                            caller.data(),
+                            request.promise,
+                            PromiseSettlement::Reject(value),
+                        );
+                    }
+                }
             }
             value::encode_undefined()
         },

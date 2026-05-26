@@ -1708,6 +1708,13 @@ struct AsyncGeneratorRequest {
     promise: i64,
 }
 
+enum AsyncGeneratorHostAction {
+    Immediate {
+        active: Option<AsyncGeneratorRequest>,
+        queued: Vec<AsyncGeneratorRequest>,
+    },
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AsyncGeneratorCompletionType {
     Next,
