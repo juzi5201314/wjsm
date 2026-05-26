@@ -1,5 +1,10 @@
-{
+use anyhow::Result;
+use wasmtime::{Caller, Linker, Func};
+use wasmtime::Store;
 
+use crate::*;
+
+pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
     // ── Method factory functions ──
     fn create_weakref_deref_method(state: &RuntimeState) -> i64 {
         let mut table = state
@@ -32,8 +37,7 @@
     }
 
     // ── 1. WeakRef constructor (Type 12: env, this, args_base, args_count) ──
-    let weakref_constructor_fn = Func::wrap(
-        &mut store,
+    let weakref_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env: i64,
          _this: i64,
@@ -92,18 +96,18 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "weakref_constructor", weakref_constructor_fn)?;
 
     // ── 2. WeakRef.prototype.deref (direct: this_val → i64) ──
-    let weakref_proto_deref_fn = Func::wrap(
-        &mut store,
+    let weakref_proto_deref_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             weakref_deref_impl(&mut caller, this_val)
         },
     );
+    linker.define(&mut store, "env", "weakref_proto_deref", weakref_proto_deref_fn)?;
 
     // ── 3. FinalizationRegistry constructor (Type 12) ──
-    let finalization_registry_constructor_fn = Func::wrap(
-        &mut store,
+    let finalization_registry_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env: i64,
          _this: i64,
@@ -173,10 +177,10 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "finalization_registry_constructor", finalization_registry_constructor_fn)?;
 
     // ── 4. FinalizationRegistry.prototype.register (Type 12) ──
-    let finalization_registry_proto_register_fn = Func::wrap(
-        &mut store,
+    let finalization_registry_proto_register_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env: i64,
          this_val: i64,
@@ -250,21 +254,16 @@
             value::encode_undefined()
         },
     );
+    linker.define(&mut store, "env", "finalization_registry_proto_register", finalization_registry_proto_register_fn)?;
 
     // ── 5. FinalizationRegistry.prototype.unregister (direct: this_val, token → i64) ──
-    let finalization_registry_proto_unregister_fn = Func::wrap(
-        &mut store,
+    let finalization_registry_proto_unregister_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, token: i64| -> i64 {
             fr_unregister_impl(&mut caller, this_val, token)
         },
     );
+    linker.define(&mut store, "env", "finalization_registry_proto_unregister", finalization_registry_proto_unregister_fn)?;
 
     // ── Exports ──
-    vec![
-        weakref_constructor_fn.into(),
-        weakref_proto_deref_fn.into(),
-        finalization_registry_constructor_fn.into(),
-        finalization_registry_proto_register_fn.into(),
-        finalization_registry_proto_unregister_fn.into(),
-    ]
+    Ok(())
 }

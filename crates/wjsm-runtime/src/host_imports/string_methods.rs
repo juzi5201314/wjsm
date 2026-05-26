@@ -1,4 +1,10 @@
-{
+use anyhow::Result;
+use wasmtime::{Caller, Linker, Func};
+use wasmtime::Store;
+
+use crate::*;
+
+pub(crate) fn define_string_methods(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
     fn utf16_len(s: &str) -> usize {
         s.chars().map(|c| if c as u32 > 0xFFFF { 2 } else { 1 }).sum()
     }
@@ -130,7 +136,7 @@ fn build_match_result(
 
 
     // ── Import 166: string_at(i64, i64) -> i64 ──────────────────────────────────
-    let string_at_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, index: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, index: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let len = utf16_len(&s) as i64;
         let idx = to_f64_or(index, 0.0);
@@ -141,8 +147,9 @@ fn build_match_result(
         let ch = s[byte_off..].chars().next().map(|c| c.to_string()).unwrap_or_default();
         store_runtime_string(&caller, ch)
     });
+    linker.define(&mut store, "env", "string_at", f)?;
     // Import 167: string_char_at(i64, i64) -> i64
-    let string_char_at_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let len = utf16_len(&s);
         let p = to_uint32(pos) as usize;
@@ -151,8 +158,9 @@ fn build_match_result(
         let ch = s[byte_off..].chars().next().map(|c| c.to_string()).unwrap_or_default();
         store_runtime_string(&caller, ch)
     });
+    linker.define(&mut store, "env", "string_char_at", f)?;
     // Import 168: string_char_code_at(i64, i64) -> i64
-    let string_char_code_at_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let len = utf16_len(&s);
         let p = to_uint32(pos) as usize;
@@ -169,8 +177,9 @@ fn build_match_result(
             None => value::encode_f64(f64::NAN),
         }
     });
+    linker.define(&mut store, "env", "string_char_code_at", f)?;
     // Import 169: string_code_point_at(i64, i64) -> i64
-    let string_code_point_at_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, pos: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let len = utf16_len(&s);
         let p = to_uint32(pos) as usize;
@@ -182,8 +191,9 @@ fn build_match_result(
             None => value::encode_undefined(),
         }
     });
+    linker.define(&mut store, "env", "string_code_point_at", f)?;
     // Import 170: string_proto_concat(i64, i64, i32, i32) -> i64
-    let string_proto_concat_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, _env: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, _env: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
         let mut result = get_string_value(&mut caller, this_val);
         let parts: Vec<String> = (0..args_count as u32).map(|i| {
             let arg = read_shadow_arg(&mut caller, args_base, i);
@@ -192,8 +202,9 @@ fn build_match_result(
         for p in parts { result.push_str(&p); }
         store_runtime_string(&caller, result)
     });
+    linker.define(&mut store, "env", "string_proto_concat", f)?;
     // Import 171: string_ends_with(i64, i64, i64) -> i64
-    let string_ends_with_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, end_pos: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, end_pos: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let search_str = get_string_value(&mut caller, search);
         let len = utf16_len(&s);
@@ -201,15 +212,17 @@ fn build_match_result(
         let end_byte = utf16_index_to_byte_offset(&s, end_utf16);
         value::encode_bool(if search_str.is_empty() { true } else { s[..end_byte].ends_with(&search_str) })
     });
+    linker.define(&mut store, "env", "string_ends_with", f)?;
     // Import 172: string_includes(i64, i64, i64) -> i64
-    let string_includes_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let start_utf16 = if pos == value::encode_undefined() { 0 } else { (to_f64_or(pos, 0.0) as usize).min(utf16_len(&s)) };
         let start_byte = utf16_index_to_byte_offset(&s, start_utf16);
         value::encode_bool(s[start_byte..].contains(&get_string_value(&mut caller, search)))
     });
+    linker.define(&mut store, "env", "string_includes", f)?;
     // Import 173: string_index_of(i64, i64, i64) -> i64
-    let string_index_of_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let search_str = get_string_value(&mut caller, search);
         let start_utf16 = if pos == value::encode_undefined() { 0 } else { (to_f64_or(pos, 0.0) as usize).min(utf16_len(&s)) };
@@ -219,8 +232,9 @@ fn build_match_result(
             None => value::encode_f64(-1.0),
         }
     });
+    linker.define(&mut store, "env", "string_index_of", f)?;
     // Import 174: string_last_index_of(i64, i64, i64) -> i64
-    let string_last_index_of_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let search_str = get_string_value(&mut caller, search);
         let len_utf16 = utf16_len(&s);
@@ -235,9 +249,9 @@ fn build_match_result(
             None => value::encode_f64(-1.0),
         }
     });
+    linker.define(&mut store, "env", "string_last_index_of", f)?;
     // Import 175: string_match_all(i64, i64, i32, i32) -> i64
-    let string_match_all_fn = Func::wrap(
-        &mut store,
+    let string_match_all_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, _env: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
             if args_count < 1 {
                 *caller.data().runtime_error.lock().expect("runtime error mutex") =
@@ -305,8 +319,9 @@ fn build_match_result(
             result_arr
         },
     );
+    linker.define(&mut store, "env", "string_match_all", string_match_all_fn)?;
     // Import 176: string_pad_end(i64, i64, i64) -> i64
-    let string_pad_end_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, target_len: i64, pad_str_val: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, target_len: i64, pad_str_val: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let len = utf16_len(&s);
         let target = if value::is_f64(target_len) { to_f64_or(target_len, 0.0) as usize } else { 0 };
@@ -319,8 +334,9 @@ fn build_match_result(
         for i in len..target { result.push(pad_chars[(i - len) % pad_chars.len()]); }
         store_runtime_string(&caller, result)
     });
+    linker.define(&mut store, "env", "string_pad_end", f)?;
     // Import 177: string_pad_start(i64, i64, i64) -> i64
-    let string_pad_start_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, target_len: i64, pad_str_val: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, target_len: i64, pad_str_val: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let len = utf16_len(&s);
         let target = if value::is_f64(target_len) { to_f64_or(target_len, 0.0) as usize } else { 0 };
@@ -334,8 +350,9 @@ fn build_match_result(
         result.push_str(&s);
         store_runtime_string(&caller, result)
     });
+    linker.define(&mut store, "env", "string_pad_start", f)?;
     // Import 178: string_repeat(i64, i64) -> i64
-    let string_repeat_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, count: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, count: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let c = to_f64_or(count, 0.0);
         if c < 0.0 || c.is_infinite() {
@@ -344,8 +361,9 @@ fn build_match_result(
         }
         store_runtime_string(&caller, s.repeat(c as usize))
     });
+    linker.define(&mut store, "env", "string_repeat", f)?;
     // Import 179: string_replace_all(i64, i64, i64) -> i64
-    let string_replace_all_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, replace: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, replace: i64| -> i64 {
         if value::is_regexp(search) {
             *caller.data().runtime_error.lock().expect("runtime error mutex") = Some("TypeError: String.prototype.replaceAll called with a non-global RegExp argument".to_string());
             return value::encode_undefined();
@@ -355,8 +373,9 @@ fn build_match_result(
         let replace_str = get_string_value(&mut caller, replace);
         store_runtime_string(&caller, s.replace(&search_str, &replace_str))
     });
+    linker.define(&mut store, "env", "string_replace_all", f)?;
     // Import 180: string_slice(i64, i64, i64) -> i64
-    let string_slice_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, start: i64, end: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, start: i64, end: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let len = utf16_len(&s) as i64;
         let si = if value::is_f64(start) { let v = to_f64_or(start, 0.0) as i64; if v < 0 { (v + len).max(0) } else { v.min(len) } } else { 0 };
@@ -366,15 +385,17 @@ fn build_match_result(
         let end_byte = utf16_index_to_byte_offset(&s, ei as usize);
         store_runtime_string(&caller, s[start_byte..end_byte].to_string())
     });
+    linker.define(&mut store, "env", "string_slice", f)?;
     // Import 181: string_starts_with(i64, i64, i64) -> i64
-    let string_starts_with_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let start_utf16 = if pos == value::encode_undefined() { 0 } else { (to_f64_or(pos, 0.0) as usize).min(utf16_len(&s)) };
         let start_byte = utf16_index_to_byte_offset(&s, start_utf16);
         value::encode_bool(s[start_byte..].starts_with(&get_string_value(&mut caller, search)))
     });
+    linker.define(&mut store, "env", "string_starts_with", f)?;
     // Import 182: string_substring(i64, i64, i64) -> i64
-    let string_substring_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, start: i64, end: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64, start: i64, end: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let len = utf16_len(&s) as i64;
         let s1 = if value::is_f64(start) { (to_f64_or(start, 0.0) as i64).max(0).min(len) } else { 0 };
@@ -385,33 +406,39 @@ fn build_match_result(
         let hi_byte = utf16_index_to_byte_offset(&s, hi as usize);
         store_runtime_string(&caller, s[lo_byte..hi_byte].to_string())
     });
+    linker.define(&mut store, "env", "string_substring", f)?;
     // Import 183: string_to_lower_case(i64) -> i64
-    let string_to_lower_case_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver).to_lowercase();
         store_runtime_string(&caller, s)
     });
+    linker.define(&mut store, "env", "string_to_lower_case", f)?;
     // Import 184: string_to_upper_case(i64) -> i64
-    let string_to_upper_case_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver).to_uppercase();
         store_runtime_string(&caller, s)
     });
+    linker.define(&mut store, "env", "string_to_upper_case", f)?;
     // Import 185: string_trim(i64) -> i64
-    let string_trim_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver).trim().to_string();
         store_runtime_string(&caller, s)
     });
+    linker.define(&mut store, "env", "string_trim", f)?;
     // Import 186: string_trim_end(i64) -> i64
-    let string_trim_end_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver).trim_end().to_string();
         store_runtime_string(&caller, s)
     });
+    linker.define(&mut store, "env", "string_trim_end", f)?;
     // Import 187: string_trim_start(i64) -> i64
-    let string_trim_start_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver).trim_start().to_string();
         store_runtime_string(&caller, s)
     });
+    linker.define(&mut store, "env", "string_trim_start", f)?;
     // Import 188: string_to_string(i64) -> i64
-    let string_to_string_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
         if value::is_string(receiver) {
             let s = get_string_value(&mut caller, receiver);
             store_runtime_string(&caller, s)
@@ -419,13 +446,15 @@ fn build_match_result(
             obj_proto_to_string_impl(&mut caller, receiver)
         }
     });
+    linker.define(&mut store, "env", "string_to_string", f)?;
     // Import 189: string_value_of(i64) -> i64
-    let string_value_of_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         store_runtime_string(&caller, s)
     });
+    linker.define(&mut store, "env", "string_value_of", f)?;
     // Import 190: string_iterator(i64) -> i64
-    let string_iterator_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, receiver: i64| -> i64 {
         let s = get_string_value(&mut caller, receiver);
         let mut iters = caller.data().iterators.lock().expect("iterators mutex");
         let handle = iters.len() as u32;
@@ -435,8 +464,9 @@ fn build_match_result(
         });
         value::encode_handle(value::TAG_ITERATOR, handle)
     });
+    linker.define(&mut store, "env", "string_iterator", f)?;
     // Import 191: string_from_char_code(i64, i32, i32) -> i64
-    let string_from_char_code_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, _env: i64, _this: i64, args_base: i32, args_count: i32| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, _env: i64, _this: i64, args_base: i32, args_count: i32| -> i64 {
         let mut result = String::new();
         for i in 0..args_count as u32 {
             let arg = read_shadow_arg(&mut caller, args_base, i);
@@ -445,8 +475,9 @@ fn build_match_result(
         }
         store_runtime_string(&caller, result)
     });
+    linker.define(&mut store, "env", "string_from_char_code", f)?;
     // Import 192: string_from_code_point(i64, i32, i32) -> i64
-    let string_from_code_point_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, _env: i64, _this: i64, args_base: i32, args_count: i32| -> i64 {
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, _env: i64, _this: i64, args_base: i32, args_count: i32| -> i64 {
         let mut result = String::new();
         for i in 0..args_count as u32 {
             let arg = read_shadow_arg(&mut caller, args_base, i);
@@ -455,35 +486,8 @@ fn build_match_result(
         }
         store_runtime_string(&caller, result)
     });
+    linker.define(&mut store, "env", "string_from_code_point", f)?;
 
     // ── Import 116: promise_create() -> i64 ────────────────────────────────
-    vec![
-        string_at_fn.into(),           // 166
-        string_char_at_fn.into(),      // 167
-        string_char_code_at_fn.into(), // 168
-        string_code_point_at_fn.into(),// 169
-        string_proto_concat_fn.into(), // 170
-        string_ends_with_fn.into(),    // 171
-        string_includes_fn.into(),     // 172
-        string_index_of_fn.into(),     // 173
-        string_last_index_of_fn.into(),// 174
-        string_match_all_fn.into(),    // 175
-        string_pad_end_fn.into(),      // 176
-        string_pad_start_fn.into(),    // 177
-        string_repeat_fn.into(),       // 178
-        string_replace_all_fn.into(),  // 179
-        string_slice_fn.into(),        // 180
-        string_starts_with_fn.into(),  // 181
-        string_substring_fn.into(),    // 182
-        string_to_lower_case_fn.into(),// 183
-        string_to_upper_case_fn.into(),// 184
-        string_trim_fn.into(),         // 185
-        string_trim_end_fn.into(),     // 186
-        string_trim_start_fn.into(),   // 187
-        string_to_string_fn.into(),    // 188
-        string_value_of_fn.into(),     // 189
-        string_iterator_fn.into(),     // 190
-        string_from_char_code_fn.into(),// 191
-        string_from_code_point_fn.into(),// 192
-    ]
+    Ok(())
 }

@@ -1,6 +1,11 @@
-{
-    let map_constructor_fn = Func::wrap(
-        &mut store,
+use anyhow::Result;
+use wasmtime::{Caller, Linker, Func};
+use wasmtime::Store;
+
+use crate::*;
+
+pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
+    let map_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let handle;
             {
@@ -87,9 +92,9 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "map_constructor", map_constructor_fn)?;
 
-    let map_proto_set_fn = Func::wrap(
-        &mut store,
+    let map_proto_set_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64, val: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_undefined();
@@ -116,9 +121,9 @@
             this_val
         },
     );
+    linker.define(&mut store, "env", "map_proto_set", map_proto_set_fn)?;
 
-    let map_proto_get_fn = Func::wrap(
-        &mut store,
+    let map_proto_get_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_undefined();
@@ -142,10 +147,10 @@
             value::encode_undefined()
         },
     );
+    linker.define(&mut store, "env", "map_proto_get", map_proto_get_fn)?;
 
     // ── Set host functions ────────────────────────────────────────────
-    let set_constructor_fn = Func::wrap(
-        &mut store,
+    let set_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let handle;
             {
@@ -226,9 +231,9 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "set_constructor", set_constructor_fn)?;
 
-    let set_proto_add_fn = Func::wrap(
-        &mut store,
+    let set_proto_add_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, val: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_undefined();
@@ -253,10 +258,10 @@
             this_val
         },
     );
+    linker.define(&mut store, "env", "set_proto_add", set_proto_add_fn)?;
 
     // ── Map/Set shared host functions (dispatch at runtime) ──────────
-    let map_set_has_fn = Func::wrap(
-        &mut store,
+    let map_set_has_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_bool(false);
@@ -298,9 +303,9 @@
             value::encode_bool(false)
         },
     );
+    linker.define(&mut store, "env", "map_set_has", map_set_has_fn)?;
 
-    let map_set_delete_fn = Func::wrap(
-        &mut store,
+    let map_set_delete_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_bool(false);
@@ -345,9 +350,9 @@
             value::encode_bool(false)
         },
     );
+    linker.define(&mut store, "env", "map_set_delete", map_set_delete_fn)?;
 
-    let map_set_clear_fn = Func::wrap(
-        &mut store,
+    let map_set_clear_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_undefined();
@@ -380,9 +385,9 @@
             value::encode_undefined()
         },
     );
+    linker.define(&mut store, "env", "map_set_clear", map_set_clear_fn)?;
 
-    let map_set_get_size_fn = Func::wrap(
-        &mut store,
+    let map_set_get_size_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_f64(0.0);
@@ -414,16 +419,16 @@
             value::encode_f64(0.0)
         },
     );
+    linker.define(&mut store, "env", "map_set_get_size", map_set_get_size_fn)?;
 
-    let map_set_for_each_fn = Func::wrap(
-        &mut store,
+    let map_set_for_each_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
             value::encode_undefined()
         },
     );
+    linker.define(&mut store, "env", "map_set_for_each", map_set_for_each_fn)?;
 
-    let map_set_keys_fn = Func::wrap(
-        &mut store,
+    let map_set_keys_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let map_handle = if let Some(ptr) = resolve_handle(&mut caller, this_val) {
                 read_object_property_by_name(&mut caller, ptr, "__map_handle__")
@@ -449,24 +454,24 @@
             value::encode_handle(value::TAG_ITERATOR, iter_handle)
         },
     );
+    linker.define(&mut store, "env", "map_set_keys", map_set_keys_fn)?;
 
-    let map_set_values_fn = Func::wrap(
-        &mut store,
+    let map_set_values_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
             value::encode_undefined()
         },
     );
+    linker.define(&mut store, "env", "map_set_values", map_set_values_fn)?;
 
-    let map_set_entries_fn = Func::wrap(
-        &mut store,
+    let map_set_entries_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
             value::encode_undefined()
         },
     );
+    linker.define(&mut store, "env", "map_set_entries", map_set_entries_fn)?;
 
     // ── WeakMap host functions ───────────────────────────────────────────
-    let weakmap_constructor_fn = Func::wrap(
-        &mut store,
+    let weakmap_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
             let handle;
             {
@@ -493,9 +498,9 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "weakmap_constructor", weakmap_constructor_fn)?;
 
-    let weakmap_proto_set_fn = Func::wrap(
-        &mut store,
+    let weakmap_proto_set_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64, val: i64| -> i64 {
             if !is_object_key(key) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
@@ -515,9 +520,9 @@
             this_val
         },
     );
+    linker.define(&mut store, "env", "weakmap_proto_set", weakmap_proto_set_fn)?;
 
-    let weakmap_proto_get_fn = Func::wrap(
-        &mut store,
+    let weakmap_proto_get_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 return value::encode_undefined();
@@ -534,9 +539,9 @@
             value::encode_undefined()
         },
     );
+    linker.define(&mut store, "env", "weakmap_proto_get", weakmap_proto_get_fn)?;
 
-    let weakmap_proto_has_fn = Func::wrap(
-        &mut store,
+    let weakmap_proto_has_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 return value::encode_bool(false);
@@ -552,9 +557,9 @@
             value::encode_bool(false)
         },
     );
+    linker.define(&mut store, "env", "weakmap_proto_has", weakmap_proto_has_fn)?;
 
-    let weakmap_proto_delete_fn = Func::wrap(
-        &mut store,
+    let weakmap_proto_delete_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 return value::encode_bool(false);
@@ -570,10 +575,10 @@
             value::encode_bool(false)
         },
     );
+    linker.define(&mut store, "env", "weakmap_proto_delete", weakmap_proto_delete_fn)?;
 
     // ── WeakSet host functions ───────────────────────────────────────────
-    let weakset_constructor_fn = Func::wrap(
-        &mut store,
+    let weakset_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
             let handle;
             {
@@ -598,9 +603,9 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "weakset_constructor", weakset_constructor_fn)?;
 
-    let weakset_proto_add_fn = Func::wrap(
-        &mut store,
+    let weakset_proto_add_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
@@ -620,9 +625,9 @@
             this_val
         },
     );
+    linker.define(&mut store, "env", "weakset_proto_add", weakset_proto_add_fn)?;
 
-    let weakset_proto_has_fn = Func::wrap(
-        &mut store,
+    let weakset_proto_has_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 return value::encode_bool(false);
@@ -638,9 +643,9 @@
             value::encode_bool(false)
         },
     );
+    linker.define(&mut store, "env", "weakset_proto_has", weakset_proto_has_fn)?;
 
-    let weakset_proto_delete_fn = Func::wrap(
-        &mut store,
+    let weakset_proto_delete_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 return value::encode_bool(false);
@@ -656,10 +661,10 @@
             value::encode_bool(false)
         },
     );
+    linker.define(&mut store, "env", "weakset_proto_delete", weakset_proto_delete_fn)?;
 
 
-    let arraybuffer_constructor_fn = Func::wrap(
-        &mut store,
+    let arraybuffer_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, byte_length: i64| -> i64 {
             let len_f64 = value::decode_f64(byte_length);
             if len_f64 < 0.0 {
@@ -682,9 +687,9 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "arraybuffer_constructor", arraybuffer_constructor_fn)?;
 
-    let arraybuffer_proto_byte_length_fn = Func::wrap(
-        &mut store,
+    let arraybuffer_proto_byte_length_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             match obj_ptr {
@@ -698,9 +703,9 @@
             }
         },
     );
+    linker.define(&mut store, "env", "arraybuffer_proto_byte_length", arraybuffer_proto_byte_length_fn)?;
 
-    let arraybuffer_proto_slice_fn = Func::wrap(
-        &mut store,
+    let arraybuffer_proto_slice_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, begin: i64, end: i64| -> i64 {
             let begin_idx = value::decode_f64(begin) as u32;
             let end_idx = value::decode_f64(end) as u32;
@@ -737,9 +742,9 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "arraybuffer_proto_slice", arraybuffer_proto_slice_fn)?;
 
-    let dataview_constructor_fn = Func::wrap(
-        &mut store,
+    let dataview_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, buffer: i64, byte_offset: i64, byte_length: i64| -> i64 {
             let offset = if value::is_undefined(byte_offset) { 0 } else { value::decode_f64(byte_offset) as u32 };
             let (buf_handle, buf_byte_length) = {
@@ -773,11 +778,11 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "dataview_constructor", dataview_constructor_fn)?;
 
     macro_rules! dataview_get_fn {
-        ($name:ident, $size:expr, $conv:expr) => {
-            let $name = Func::wrap(
-                &mut store,
+        ($name:ident, $import:literal, $size:expr, $conv:expr) => {
+            let $name = Func::wrap(&mut store,
                 |mut caller: Caller<'_, RuntimeState>, this_val: i64, byte_offset: i64| -> i64 {
                     let offset = value::decode_f64(byte_offset) as u32;
                     let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
@@ -811,22 +816,22 @@
                     value::encode_undefined()
                 },
             );
+            linker.define(&mut store, "env", $import, $name)?;
         };
     }
 
-    dataview_get_fn!(dataview_proto_get_int8_fn, 1, |bytes: &[u8]| value::encode_f64(bytes[0] as i8 as f64));
-    dataview_get_fn!(dataview_proto_get_uint8_fn, 1, |bytes: &[u8]| value::encode_f64(bytes[0] as f64));
-    dataview_get_fn!(dataview_proto_get_int16_fn, 2, |bytes: &[u8]| value::encode_f64(i16::from_le_bytes([bytes[0], bytes[1]]) as f64));
-    dataview_get_fn!(dataview_proto_get_uint16_fn, 2, |bytes: &[u8]| value::encode_f64(u16::from_le_bytes([bytes[0], bytes[1]]) as f64));
-    dataview_get_fn!(dataview_proto_get_int32_fn, 4, |bytes: &[u8]| value::encode_f64(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
-    dataview_get_fn!(dataview_proto_get_uint32_fn, 4, |bytes: &[u8]| value::encode_f64(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
-    dataview_get_fn!(dataview_proto_get_float32_fn, 4, |bytes: &[u8]| value::encode_f64(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
-    dataview_get_fn!(dataview_proto_get_float64_fn, 8, |bytes: &[u8]| f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]).to_bits() as i64);
+    dataview_get_fn!(dataview_proto_get_int8_fn, "dataview_proto_get_int8", 1, |bytes: &[u8]| value::encode_f64(bytes[0] as i8 as f64));
+    dataview_get_fn!(dataview_proto_get_uint8_fn, "dataview_proto_get_uint8", 1, |bytes: &[u8]| value::encode_f64(bytes[0] as f64));
+    dataview_get_fn!(dataview_proto_get_int16_fn, "dataview_proto_get_int16", 2, |bytes: &[u8]| value::encode_f64(i16::from_le_bytes([bytes[0], bytes[1]]) as f64));
+    dataview_get_fn!(dataview_proto_get_uint16_fn, "dataview_proto_get_uint16", 2, |bytes: &[u8]| value::encode_f64(u16::from_le_bytes([bytes[0], bytes[1]]) as f64));
+    dataview_get_fn!(dataview_proto_get_int32_fn, "dataview_proto_get_int32", 4, |bytes: &[u8]| value::encode_f64(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
+    dataview_get_fn!(dataview_proto_get_uint32_fn, "dataview_proto_get_uint32", 4, |bytes: &[u8]| value::encode_f64(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
+    dataview_get_fn!(dataview_proto_get_float32_fn, "dataview_proto_get_float32", 4, |bytes: &[u8]| value::encode_f64(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
+    dataview_get_fn!(dataview_proto_get_float64_fn, "dataview_proto_get_float64", 8, |bytes: &[u8]| f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]).to_bits() as i64);
 
     macro_rules! dataview_set_fn {
-        ($name:ident, $size:expr, $write:expr) => {
-            let $name = Func::wrap(
-                &mut store,
+        ($name:ident, $import:literal, $size:expr, $write:expr) => {
+            let $name = Func::wrap(&mut store,
                 |mut caller: Caller<'_, RuntimeState>, this_val: i64, byte_offset: i64, value_arg: i64| -> i64 {
                     let offset = value::decode_f64(byte_offset) as u32;
                     let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
@@ -860,22 +865,22 @@
                     value::encode_undefined()
                 },
             );
+            linker.define(&mut store, "env", $import, $name)?;
         };
     }
 
-    dataview_set_fn!(dataview_proto_set_int8_fn, 1, |v: i64| (value::decode_f64(v) as i8).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_uint8_fn, 1, |v: i64| (value::decode_f64(v) as u8).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_int16_fn, 2, |v: i64| (value::decode_f64(v) as i16).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_uint16_fn, 2, |v: i64| (value::decode_f64(v) as u16).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_int32_fn, 4, |v: i64| (value::decode_f64(v) as i32).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_uint32_fn, 4, |v: i64| (value::decode_f64(v) as u32).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_float32_fn, 4, |v: i64| (value::decode_f64(v) as f32).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_float64_fn, 8, |v: i64| value::decode_f64(v).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_int8_fn, "dataview_proto_set_int8", 1, |v: i64| (value::decode_f64(v) as i8).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_uint8_fn, "dataview_proto_set_uint8", 1, |v: i64| (value::decode_f64(v) as u8).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_int16_fn, "dataview_proto_set_int16", 2, |v: i64| (value::decode_f64(v) as i16).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_uint16_fn, "dataview_proto_set_uint16", 2, |v: i64| (value::decode_f64(v) as u16).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_int32_fn, "dataview_proto_set_int32", 4, |v: i64| (value::decode_f64(v) as i32).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_uint32_fn, "dataview_proto_set_uint32", 4, |v: i64| (value::decode_f64(v) as u32).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_float32_fn, "dataview_proto_set_float32", 4, |v: i64| (value::decode_f64(v) as f32).to_le_bytes().to_vec());
+    dataview_set_fn!(dataview_proto_set_float64_fn, "dataview_proto_set_float64", 8, |v: i64| value::decode_f64(v).to_le_bytes().to_vec());
 
     macro_rules! typedarray_constructor {
-        ($name:ident, $size:expr, $kind:expr) => {
-            let $name = Func::wrap(
-                &mut store,
+        ($name:ident, $import:literal, $size:expr, $kind:expr) => {
+            let $name = Func::wrap(&mut store,
                 |mut caller: Caller<'_, RuntimeState>, buffer: i64, byte_offset: i64, length: i64| -> i64 {
                     let offset = value::decode_f64(byte_offset) as u32;
                     let len = value::decode_f64(length) as u32;
@@ -907,20 +912,20 @@
                     obj
                 },
             );
+            linker.define(&mut store, "env", $import, $name)?;
         };
     }
 
-    typedarray_constructor!(int8array_constructor_fn, 1, 0);
-    typedarray_constructor!(uint8array_constructor_fn, 1, 1);
-    typedarray_constructor!(uint8clampedarray_constructor_fn, 1, 2);
-    typedarray_constructor!(int16array_constructor_fn, 2, 0);
-    typedarray_constructor!(uint16array_constructor_fn, 2, 1);
-    typedarray_constructor!(int32array_constructor_fn, 4, 0);
-    typedarray_constructor!(uint32array_constructor_fn, 4, 1);
-    typedarray_constructor!(float32array_constructor_fn, 4, 3);
-    typedarray_constructor!(float64array_constructor_fn, 8, 3);
-    let typedarray_proto_length_fn = Func::wrap(
-        &mut store,
+    typedarray_constructor!(int8array_constructor_fn, "int8array_constructor", 1, 0);
+    typedarray_constructor!(uint8array_constructor_fn, "uint8array_constructor", 1, 1);
+    typedarray_constructor!(uint8clampedarray_constructor_fn, "uint8clampedarray_constructor", 1, 2);
+    typedarray_constructor!(int16array_constructor_fn, "int16array_constructor", 2, 0);
+    typedarray_constructor!(uint16array_constructor_fn, "uint16array_constructor", 2, 1);
+    typedarray_constructor!(int32array_constructor_fn, "int32array_constructor", 4, 0);
+    typedarray_constructor!(uint32array_constructor_fn, "uint32array_constructor", 4, 1);
+    typedarray_constructor!(float32array_constructor_fn, "float32array_constructor", 4, 3);
+    typedarray_constructor!(float64array_constructor_fn, "float64array_constructor", 8, 3);
+    let typedarray_proto_length_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             match obj_ptr {
@@ -934,9 +939,9 @@
             }
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_length", typedarray_proto_length_fn)?;
 
-    let typedarray_proto_byte_length_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_byte_length_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             match obj_ptr {
@@ -950,9 +955,9 @@
             }
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_byte_length", typedarray_proto_byte_length_fn)?;
 
-    let typedarray_proto_byte_offset_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_byte_offset_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             match obj_ptr {
@@ -966,9 +971,9 @@
             }
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_byte_offset", typedarray_proto_byte_offset_fn)?;
 
-    let typedarray_proto_set_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_set_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, source: i64, offset_val: i64| -> i64 {
             // Resolve target TypedArray
             if !value::is_object(this_val) {
@@ -1176,9 +1181,9 @@
             value::encode_undefined()
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_set", typedarray_proto_set_fn)?;
 
-    let typedarray_proto_slice_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_slice_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, begin_val: i64, end_val: i64| -> i64 {
             // Resolve TypedArray
             if !value::is_object(this_val) {
@@ -1317,9 +1322,9 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_slice", typedarray_proto_slice_fn)?;
 
-    let typedarray_proto_subarray_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_subarray_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, begin_val: i64, end_val: i64| -> i64 {
             // Resolve TypedArray
             if !value::is_object(this_val) {
@@ -1392,10 +1397,10 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_subarray", typedarray_proto_subarray_fn)?;
 
 
-    let create_global_object_fn = Func::wrap(
-        &mut store,
+    let create_global_object_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>| -> i64 {
             let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 60) };
             let builtin_pairs: &[(&str, NativeCallable)] = &[
@@ -1466,9 +1471,9 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "create_global_object", create_global_object_fn)?;
 
-    let create_exception_fn = Func::wrap(
-        &mut store,
+    let create_exception_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, thrown_value: i64| -> i64 {
             let rendered = render_value(&mut caller, thrown_value)
                 .unwrap_or_else(|_| "unknown".to_string());
@@ -1482,18 +1487,18 @@
             value::encode_handle(value::TAG_EXCEPTION, idx)
         },
     );
+    linker.define(&mut store, "env", "create_exception", create_exception_fn)?;
 
-    let exception_value_fn = Func::wrap(
-        &mut store,
+    let exception_value_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, exception_handle: i64| -> i64 {
             let idx = value::decode_handle(exception_handle) as usize;
             let errors = caller.data().error_table.lock().unwrap();
             errors.get(idx).map(|e| e.value).unwrap_or(value::encode_undefined())
         },
     );
+    linker.define(&mut store, "env", "exception_value", exception_value_fn)?;
 
-    let date_constructor_fn = Func::wrap(
-        &mut store,
+    let date_constructor_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, _this_val: i64, args_base: i32, args_count: i32| -> i64 {
             let args: Vec<i64> = if args_count > 0 {
                 let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
@@ -1658,17 +1663,17 @@
             obj
         },
     );
+    linker.define(&mut store, "env", "date_constructor", date_constructor_fn)?;
 
-    let date_now_fn = Func::wrap(
-        &mut store,
+    let date_now_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>| -> i64 {
             let now = chrono::Utc::now();
             value::encode_f64(now.timestamp_millis() as f64)
         },
     );
+    linker.define(&mut store, "env", "date_now", date_now_fn)?;
 
-    let date_parse_fn = Func::wrap(
-        &mut store,
+    let date_parse_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let s = if value::is_string(arg) {
                 read_value_string_bytes(&mut caller, arg)
@@ -1704,21 +1709,21 @@
             }
         },
     );
+    linker.define(&mut store, "env", "date_parse", date_parse_fn)?;
 
-    let date_utc_fn = Func::wrap(
-        &mut store,
+    let date_utc_fn = Func::wrap(&mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let args = vec![arg];
             let ms = date_args_to_ms(&args, true);
             value::encode_f64(ms)
         },
     );
+    linker.define(&mut store, "env", "date_utc", date_utc_fn)?;
 
     // TODO: 当前私有字段实现仅通过 "#fieldName" 字符串作为属性键存储在对象的普通属性槽中，
     // 不符合 ECMAScript 规范的 [[PrivateElements]] 语义。任何代码都可以通过 obj["#x"] 访问，
     // 且没有基于类身份的访问控制。未来需要重构为基于类身份的私有槽机制。
-    let private_get_fn = Func::wrap(
-        &mut store,
+    let private_get_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
             if !value::is_object(obj) && !value::is_function(obj) {
                 *caller.data().runtime_error.lock().expect("runtime error mutex") =
@@ -1738,9 +1743,9 @@
             }
         },
     );
+    linker.define(&mut store, "env", "private_get", private_get_fn)?;
 
-    let private_set_fn = Func::wrap(
-        &mut store,
+    let private_set_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32, val: i64| -> i64 {
             if !value::is_object(obj) && !value::is_function(obj) {
                 *caller.data().runtime_error.lock().expect("runtime error mutex") =
@@ -1764,9 +1769,9 @@
             }
         },
     );
+    linker.define(&mut store, "env", "private_set", private_set_fn)?;
 
-    let private_has_fn = Func::wrap(
-        &mut store,
+    let private_has_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
             if !value::is_object(obj) && !value::is_function(obj) {
                 return value::encode_bool(false);
@@ -1778,79 +1783,7 @@
             value::encode_bool(found.is_some())
         },
     );
+    linker.define(&mut store, "env", "private_has", private_has_fn)?;
 
-    vec![
-        map_constructor_fn.into(),              // 251
-        map_proto_set_fn.into(),                // 252
-        map_proto_get_fn.into(),                // 253
-        set_constructor_fn.into(),              // 254
-        set_proto_add_fn.into(),                // 255
-        map_set_has_fn.into(),                  // 256
-        map_set_delete_fn.into(),               // 257
-        map_set_clear_fn.into(),                // 258
-        map_set_get_size_fn.into(),             // 259
-        map_set_for_each_fn.into(),             // 260
-        map_set_keys_fn.into(),                 // 261
-        map_set_values_fn.into(),               // 262
-        map_set_entries_fn.into(),              // 263
-        date_constructor_fn.into(),             // 264
-        date_now_fn.into(),                     // 265
-        date_parse_fn.into(),                   // 266
-        date_utc_fn.into(),                     // 267
-        // ── WeakMap/WeakSet imports ──
-        weakmap_constructor_fn.into(),           // 268
-        weakmap_proto_set_fn.into(),             // 269
-        weakmap_proto_get_fn.into(),             // 270
-        weakmap_proto_has_fn.into(),             // 271
-        weakmap_proto_delete_fn.into(),          // 272
-        weakset_constructor_fn.into(),           // 273
-        weakset_proto_add_fn.into(),             // 274
-        weakset_proto_has_fn.into(),             // 275
-        weakset_proto_delete_fn.into(),          // 276
-        // ── ArrayBuffer imports ──
-        arraybuffer_constructor_fn.into(),       // 277
-        arraybuffer_proto_byte_length_fn.into(), // 278
-        arraybuffer_proto_slice_fn.into(),       // 279
-        // ── DataView imports ──
-        dataview_constructor_fn.into(),          // 280
-        dataview_proto_get_float64_fn.into(),    // 281
-        dataview_proto_get_float32_fn.into(),    // 282
-        dataview_proto_get_int32_fn.into(),      // 283
-        dataview_proto_get_uint32_fn.into(),     // 284
-        dataview_proto_get_int16_fn.into(),      // 285
-        dataview_proto_get_uint16_fn.into(),     // 286
-        dataview_proto_get_int8_fn.into(),       // 287
-        dataview_proto_get_uint8_fn.into(),      // 288
-        dataview_proto_set_float64_fn.into(),    // 289
-        dataview_proto_set_float32_fn.into(),    // 290
-        dataview_proto_set_int32_fn.into(),      // 291
-        dataview_proto_set_uint32_fn.into(),     // 292
-        dataview_proto_set_int16_fn.into(),      // 293
-        dataview_proto_set_uint16_fn.into(),     // 294
-        dataview_proto_set_int8_fn.into(),       // 295
-        dataview_proto_set_uint8_fn.into(),      // 296
-        // ── TypedArray constructor imports ──
-        int8array_constructor_fn.into(),         // 297
-        uint8array_constructor_fn.into(),        // 298
-        uint8clampedarray_constructor_fn.into(), // 299
-        int16array_constructor_fn.into(),        // 300
-        uint16array_constructor_fn.into(),       // 301
-        int32array_constructor_fn.into(),        // 302
-        uint32array_constructor_fn.into(),       // 303
-        float32array_constructor_fn.into(),      // 304
-        float64array_constructor_fn.into(),      // 305
-        // ── TypedArray prototype imports ──
-        typedarray_proto_length_fn.into(),       // 306
-        typedarray_proto_byte_length_fn.into(),  // 307
-        typedarray_proto_byte_offset_fn.into(),  // 308
-        typedarray_proto_set_fn.into(),          // 309
-        typedarray_proto_slice_fn.into(),        // 310
-        typedarray_proto_subarray_fn.into(),     // 311
-        create_global_object_fn.into(),           // 312
-        create_exception_fn.into(),               // 313
-        exception_value_fn.into(),                // 314
-        private_get_fn.into(),                    // 316
-        private_set_fn.into(),                    // 317
-        private_has_fn.into(),                    // 318
-    ]
+    Ok(())
 }

@@ -1,6 +1,11 @@
-{
-    let bigint_from_literal_fn = Func::wrap(
-        &mut store,
+use anyhow::Result;
+use wasmtime::{Caller, Linker, Func};
+use wasmtime::Store;
+
+use crate::*;
+
+pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
+    let bigint_from_literal_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, ptr: i32, _len: i32| -> i64 {
             let s = read_string(&mut caller, ptr as u32).unwrap_or_default();
             // 去掉末尾可能存在的 nul 字符
@@ -19,6 +24,7 @@
             }
         },
     );
+    linker.define(&mut store, "env", "bigint_from_literal", bigint_from_literal_fn)?;
 
     // ── BigInt arithmetic helpers ─────────────────────────────────────
     fn bigint_binary_op(
@@ -53,26 +59,25 @@
         }
     }
 
-    let bigint_add_fn = Func::wrap(
-        &mut store,
+    let bigint_add_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             bigint_binary_op(&mut caller, a, b, |x, y| x + y)
         },
     );
-    let bigint_sub_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "bigint_add", bigint_add_fn)?;
+    let bigint_sub_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             bigint_binary_op(&mut caller, a, b, |x, y| x - y)
         },
     );
-    let bigint_mul_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "bigint_sub", bigint_sub_fn)?;
+    let bigint_mul_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             bigint_binary_op(&mut caller, a, b, |x, y| x * y)
         },
     );
-    let bigint_div_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "bigint_mul", bigint_mul_fn)?;
+    let bigint_div_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
@@ -109,8 +114,8 @@
             }
         },
     );
-    let bigint_mod_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "bigint_div", bigint_div_fn)?;
+    let bigint_mod_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
@@ -147,8 +152,8 @@
             }
         },
     );
-    let bigint_pow_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "bigint_mod", bigint_mod_fn)?;
+    let bigint_pow_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
@@ -198,8 +203,8 @@
             }
         },
     );
-    let bigint_neg_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "bigint_pow", bigint_pow_fn)?;
+    let bigint_neg_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, a: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let a_val = {
@@ -225,8 +230,8 @@
             }
         },
     );
-    let bigint_eq_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "bigint_neg", bigint_neg_fn)?;
+    let bigint_eq_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
@@ -245,8 +250,8 @@
             value::encode_bool(eq)
         },
     );
-    let bigint_cmp_fn = Func::wrap(
-        &mut store,
+    linker.define(&mut store, "env", "bigint_eq", bigint_eq_fn)?;
+    let bigint_cmp_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
@@ -271,14 +276,14 @@
             cmp.to_bits() as i64
         },
     );
+    linker.define(&mut store, "env", "bigint_cmp", bigint_cmp_fn)?;
 
     // ═══════════════════════════════════════════════════════════════════
     // ── Symbol host functions ──────────────────────────────────────────
     // ═══════════════════════════════════════════════════════════════════
 
     // ── Import 105: symbol_create(i64) → i64 ──────────────────────────
-    let symbol_create_fn = Func::wrap(
-        &mut store,
+    let symbol_create_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, desc: i64| -> i64 {
             let description = if value::is_undefined(desc) {
                 None
@@ -300,12 +305,12 @@
             value::encode_symbol_handle(handle)
         },
     );
+    linker.define(&mut store, "env", "symbol_create", symbol_create_fn)?;
 
     // ── Import 106: symbol_for(i64) → i64 ─────────────────────────────
     // 全局 symbol 注册表（static 变量，与 RuntimeState 生命周期相同）
     // Symbol.for(key) 返回全局注册表中的 symbol
-    let symbol_for_fn = Func::wrap(
-        &mut store,
+    let symbol_for_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, key: i64| -> i64 {
             let key_str = if value::is_string(key) {
                 read_value_string_bytes(&mut caller, key)
@@ -335,10 +340,10 @@
             value::encode_symbol_handle(handle)
         },
     );
+    linker.define(&mut store, "env", "symbol_for", symbol_for_fn)?;
 
     // ── Import 107: symbol_key_for(i64) → i64 ─────────────────────────
-    let symbol_key_for_fn = Func::wrap(
-        &mut store,
+    let symbol_key_for_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, sym: i64| -> i64 {
             if !value::is_symbol(sym) {
                 return value::encode_undefined();
@@ -357,11 +362,11 @@
             value::encode_undefined()
         },
     );
+    linker.define(&mut store, "env", "symbol_key_for", symbol_key_for_fn)?;
 
     // ECMAScript § 6.1.5.1 Well-Known Symbols
     // 返回预分配的 well-known symbol（id=0..7）
-    let symbol_well_known_fn = Func::wrap(
-        &mut store,
+    let symbol_well_known_fn = Func::wrap(&mut store,
         |caller: Caller<'_, RuntimeState>, id: i32| -> i64 {
             if !(0..=7).contains(&id) {
                 return value::encode_undefined();
@@ -378,10 +383,10 @@
             }
         },
     );
+    linker.define(&mut store, "env", "symbol_well_known", symbol_well_known_fn)?;
 
     // ── Import 109: regex_create(i32, i32, i32, i32) → i64 ──────────────────────
-    let regex_create_fn = Func::wrap(
-        &mut store,
+    let regex_create_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          pat_ptr: i32,
          pat_len: i32,
@@ -478,10 +483,10 @@
             }
         },
     );
+    linker.define(&mut store, "env", "regex_create", regex_create_fn)?;
 
     // ── Import 110: regex_test(i64, i64) → i64 ───────────────────────────────────
-    let regex_test_fn = Func::wrap(
-        &mut store,
+    let regex_test_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, regex_val: i64, str_val: i64| -> i64 {
             if !value::is_regexp(regex_val) {
                 return value::encode_bool(false);
@@ -545,6 +550,7 @@
             value::encode_bool(found)
         },
     );
+    linker.define(&mut store, "env", "regex_test", regex_test_fn)?;
 /// 从 regress::Match 构建 RegExp 执行结果数组
 // 返回的数组包含 .index, .input, .groups 属性；
 // 若 flags 包含 'd' 则额外设置 .indices 及 indices.groups。
@@ -639,8 +645,7 @@ fn build_match_result(
 
 
     // ── Import 111: regex_exec(i64, i64) → i64 ───────────────────────────────────
-    let regex_exec_fn = Func::wrap(
-        &mut store,
+    let regex_exec_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, regex_val: i64, str_val: i64| -> i64 {
             if !value::is_regexp(regex_val) {
                 return value::encode_null();
@@ -706,10 +711,10 @@ fn build_match_result(
             }
         },
     );
+    linker.define(&mut store, "env", "regex_exec", regex_exec_fn)?;
 
     // ── Import 112: string_match(i64, i64) → i64 ─────────────────────────────────
-    let string_match_fn = Func::wrap(
-        &mut store,
+    let string_match_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, regexp: i64| -> i64 {
             // str.match(regexp)
             let s = get_string_value(&mut caller, receiver);
@@ -802,10 +807,10 @@ fn build_match_result(
             }
         },
     );
+    linker.define(&mut store, "env", "string_match", string_match_fn)?;
 
     // ── Import 113: string_replace(i64, i64, i64) → i64 ──────────────────────────
-    let string_replace_fn = Func::wrap(
-        &mut store,
+    let string_replace_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, replace: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
 
@@ -1131,10 +1136,10 @@ fn build_match_result(
             }
         },
     );
+    linker.define(&mut store, "env", "string_replace", string_replace_fn)?;
 
     // ── Import 114: string_search(i64, i64) → i64 ────────────────────────────────
-    let string_search_fn = Func::wrap(
-        &mut store,
+    let string_search_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, regexp: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
 
@@ -1177,10 +1182,10 @@ fn build_match_result(
             }
         },
     );
+    linker.define(&mut store, "env", "string_search", string_search_fn)?;
 
     // ── Import 115: string_split(i64, i64, i64) → i64 ────────────────────────────
-    let string_split_fn = Func::wrap(
-        &mut store,
+    let string_split_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, sep: i64, limit: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
 
@@ -1317,31 +1322,7 @@ fn build_match_result(
             }
         },
     );
+    linker.define(&mut store, "env", "string_split", string_split_fn)?;
 
-    vec![
-        bigint_from_literal_fn.into(), // 95
-        bigint_add_fn.into(),          // 96
-        bigint_sub_fn.into(),          // 97
-        bigint_mul_fn.into(),          // 98
-        bigint_div_fn.into(),          // 99
-        bigint_mod_fn.into(),          // 100
-        bigint_pow_fn.into(),          // 101
-        bigint_neg_fn.into(),          // 102
-        bigint_eq_fn.into(),           // 103
-        bigint_cmp_fn.into(),          // 104
-        // ── Symbol imports ──
-        symbol_create_fn.into(),     // 105
-        symbol_for_fn.into(),        // 106
-        symbol_key_for_fn.into(),    // 107
-        symbol_well_known_fn.into(), // 108
-        // ── RegExp imports ──
-        regex_create_fn.into(), // 109
-        regex_test_fn.into(),   // 110
-        regex_exec_fn.into(),   // 111
-        // ── String prototype imports ──
-        string_match_fn.into(),   // 112
-        string_replace_fn.into(), // 113
-        string_search_fn.into(),  // 114
-        string_split_fn.into(),   // 115
-    ]
+    Ok(())
 }

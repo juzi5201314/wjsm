@@ -1,4 +1,10 @@
-{
+use anyhow::Result;
+use wasmtime::{Caller, Linker, Func};
+use wasmtime::Store;
+
+use crate::*;
+
+pub(crate) fn define_typedarray_new_methods(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
     // ── TypedArray 辅助函数 ─────────────────────────────────────────
     /// 解析 TypedArray 的 this_val，返回 (buffer_handle, byte_offset, length, element_size, element_kind, is_shared)
     fn ta_resolve(
@@ -184,8 +190,7 @@
     }
 
     // ── typedarray_proto_fill (Type 17, 4-arg: this, value, start, end) ──
-    let typedarray_proto_fill_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_fill_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          this_val: i64,
          value: i64,
@@ -222,10 +227,10 @@
             this_val
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_fill", typedarray_proto_fill_fn)?;
 
     // ── typedarray_proto_reverse (Type 3, 1-arg: this) ──
-    let typedarray_proto_reverse_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_reverse_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
             Some(v) => v,
@@ -242,10 +247,10 @@
             this_val
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_reverse", typedarray_proto_reverse_fn)?;
 
     // ── typedarray_proto_index_of (Type 16, 3-arg: this, searchElement, fromIndex) ──
-    let typedarray_proto_index_of_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_index_of_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, search_element: i64, from_index: i64| -> i64 {
             let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
             Some(v) => v,
@@ -271,10 +276,10 @@
             value::encode_f64(-1.0)
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_index_of", typedarray_proto_index_of_fn)?;
 
     // ── typedarray_proto_last_index_of (Type 16, 3-arg: this, searchElement, fromIndex) ──
-    let typedarray_proto_last_index_of_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_last_index_of_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, search_element: i64, from_index: i64| -> i64 {
             let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
             Some(v) => v,
@@ -301,10 +306,10 @@
             value::encode_f64(-1.0)
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_last_index_of", typedarray_proto_last_index_of_fn)?;
 
     // ── typedarray_proto_includes (Type 16, 3-arg: this, searchElement, fromIndex) ──
-    let typedarray_proto_includes_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_includes_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, search_element: i64, from_index: i64| -> i64 {
             let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
             Some(v) => v,
@@ -330,10 +335,10 @@
             value::encode_bool(false)
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_includes", typedarray_proto_includes_fn)?;
 
     // ── typedarray_proto_join (Type 2, 2-arg: this, separator) ──
-    let typedarray_proto_join_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_join_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, separator: i64| -> i64 {
             let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
             Some(v) => v,
@@ -353,10 +358,10 @@
             store_runtime_string(&caller, parts.join(&sep))
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_join", typedarray_proto_join_fn)?;
 
     // ── typedarray_proto_to_string (Type 3, 1-arg: this) ──
-    let typedarray_proto_to_string_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_to_string_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
             Some(v) => v,
@@ -371,11 +376,11 @@
             store_runtime_string(&caller, parts.join(","))
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_to_string", typedarray_proto_to_string_fn)?;
 
     // ── typedarray_proto_copy_within (Type 16, 3-arg: this, target, start, end via shadow stack) ──
     // Note: backend passes 3 WASM args (this, target, start) but end comes via shadow stack
-    let typedarray_proto_copy_within_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_copy_within_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, target_val: i64, start_val: i64, end_val: i64| -> i64 {
             let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
             Some(v) => v,
@@ -420,10 +425,10 @@
             this_val
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_copy_within", typedarray_proto_copy_within_fn)?;
 
     // ── typedarray_proto_at (Type 2, 2-arg: this, index) ──
-    let typedarray_proto_at_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_at_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, index: i64| -> i64 {
             let (buf_handle, byte_offset, length, elem_size, element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
             Some(v) => v,
@@ -447,10 +452,10 @@
                 .unwrap_or(value::encode_undefined())
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_at", typedarray_proto_at_fn)?;
 
     // ── typedarray_proto_for_each (Type 12, 影子栈: this, callback, thisArg) ──
-    let typedarray_proto_for_each_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_for_each_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -481,10 +486,10 @@
             value::encode_undefined()
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_for_each", typedarray_proto_for_each_fn)?;
 
     // ── typedarray_proto_map (Type 12, 影子栈: this, callback, thisArg) ──
-    let typedarray_proto_map_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_map_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -523,10 +528,10 @@
             new_arr
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_map", typedarray_proto_map_fn)?;
 
     // ── typedarray_proto_filter (Type 12, 影子栈: this, callback, thisArg) ──
-    let typedarray_proto_filter_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_filter_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -570,10 +575,10 @@
             new_arr
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_filter", typedarray_proto_filter_fn)?;
 
     // ── typedarray_proto_reduce (Type 12, 影子栈: this, callback, initialValue) ──
-    let typedarray_proto_reduce_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_reduce_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -616,10 +621,10 @@
             acc
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_reduce", typedarray_proto_reduce_fn)?;
 
     // ── typedarray_proto_reduce_right (Type 12, 影子栈: this, callback, initialValue) ──
-    let typedarray_proto_reduce_right_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_reduce_right_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -662,10 +667,10 @@
             acc
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_reduce_right", typedarray_proto_reduce_right_fn)?;
 
     // ── typedarray_proto_find (Type 12, 影子栈: this, callback, thisArg) ──
-    let typedarray_proto_find_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_find_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -700,10 +705,10 @@
             value::encode_undefined()
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_find", typedarray_proto_find_fn)?;
 
     // ── typedarray_proto_find_index (Type 12, 影子栈: this, callback, thisArg) ──
-    let typedarray_proto_find_index_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_find_index_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -738,10 +743,10 @@
             value::encode_f64(-1.0)
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_find_index", typedarray_proto_find_index_fn)?;
 
     // ── typedarray_proto_some (Type 12, 影子栈: this, callback, thisArg) ──
-    let typedarray_proto_some_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_some_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -776,10 +781,10 @@
             value::encode_bool(false)
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_some", typedarray_proto_some_fn)?;
 
     // ── typedarray_proto_every (Type 12, 影子栈: this, callback, thisArg) ──
-    let typedarray_proto_every_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_every_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -814,10 +819,10 @@
             value::encode_bool(true)
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_every", typedarray_proto_every_fn)?;
 
     // ── typedarray_proto_sort (Type 12, 影子栈: this, compareFn) ──
-    let typedarray_proto_sort_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_sort_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -859,10 +864,10 @@
             this_val
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_sort", typedarray_proto_sort_fn)?;
 
     // ── typedarray_proto_entries (Type 3, 1-arg: this) ──
-    let typedarray_proto_entries_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_entries_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let (buf_handle, byte_offset, length, elem_size, _element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
             Some(v) => v,
@@ -884,10 +889,10 @@
             value::encode_handle(value::TAG_ITERATOR, handle)
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_entries", typedarray_proto_entries_fn)?;
 
     // ── typedarray_proto_keys (Type 3, 1-arg: this) ──
-    let typedarray_proto_keys_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_keys_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let (buf_handle, byte_offset, length, elem_size, _element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
             Some(v) => v,
@@ -909,10 +914,10 @@
             value::encode_handle(value::TAG_ITERATOR, handle)
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_keys", typedarray_proto_keys_fn)?;
 
     // ── typedarray_proto_values (Type 3, 1-arg: this) ──
-    let typedarray_proto_values_fn = Func::wrap(
-        &mut store,
+    let typedarray_proto_values_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let (buf_handle, byte_offset, length, elem_size, _element_kind, is_shared) = match ta_resolve(&mut caller, this_val) {
             Some(v) => v,
@@ -934,29 +939,7 @@
             value::encode_handle(value::TAG_ITERATOR, handle)
         },
     );
+    linker.define(&mut store, "env", "typedarray_proto_values", typedarray_proto_values_fn)?;
 
-    vec![
-        typedarray_proto_fill_fn.into(),              // 326
-        typedarray_proto_reverse_fn.into(),           // 327
-        typedarray_proto_index_of_fn.into(),          // 328
-        typedarray_proto_last_index_of_fn.into(),     // 329
-        typedarray_proto_includes_fn.into(),          // 330
-        typedarray_proto_join_fn.into(),              // 331
-        typedarray_proto_to_string_fn.into(),         // 332
-        typedarray_proto_copy_within_fn.into(),       // 333
-        typedarray_proto_at_fn.into(),                // 334
-        typedarray_proto_for_each_fn.into(),          // 335
-        typedarray_proto_map_fn.into(),               // 336
-        typedarray_proto_filter_fn.into(),            // 337
-        typedarray_proto_reduce_fn.into(),            // 338
-        typedarray_proto_reduce_right_fn.into(),      // 339
-        typedarray_proto_find_fn.into(),              // 340
-        typedarray_proto_find_index_fn.into(),        // 341
-        typedarray_proto_some_fn.into(),              // 342
-        typedarray_proto_every_fn.into(),             // 343
-        typedarray_proto_sort_fn.into(),              // 344
-        typedarray_proto_entries_fn.into(),           // 345
-        typedarray_proto_keys_fn.into(),              // 346
-        typedarray_proto_values_fn.into(),            // 347
-    ]
+    Ok(())
 }
