@@ -79,7 +79,7 @@
                 create_weakref_deref_method(state)
             };
             // Allocate host object and set the internal handle + deref method
-            let obj = alloc_host_object_from_caller(&mut caller, 2);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 2) };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(
                 &mut caller,
@@ -125,7 +125,7 @@
                 return value::encode_undefined();
             }
             // Allocate host object first to get its VM handle
-            let obj = alloc_host_object_from_caller(&mut caller, 3);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 3) };
             let object_handle = value::decode_object_handle(obj);
             // Push a new FinalizationRegistry entry, storing the callback alongside
             let handle;

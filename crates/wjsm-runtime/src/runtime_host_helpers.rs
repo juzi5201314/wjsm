@@ -1162,7 +1162,7 @@ pub(crate) fn reflect_get_impl(
             Some(v) if !value::is_undefined(v) => return v,
             _ => {
                 // 创建默认 prototype 对象并作为函数的 own property 写入，GC 可自然追踪
-                let default_proto = alloc_host_object_from_caller(caller, 4);
+                let default_proto = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) };
                 let _ = define_host_data_property_from_caller(caller, target, "prototype", default_proto);
                 // 设置 proto 的 constructor 属性
                 let ctor_prop_name_id = find_memory_c_string(caller, "constructor");

@@ -70,7 +70,7 @@ fn build_match_result(
     // .groups
     let named: Vec<(&str, Option<std::ops::Range<usize>>)> = m.named_groups().collect();
     if !named.is_empty() {
-        let groups_obj = alloc_host_null_proto_object_from_caller(caller, named.len() as u32);
+        let groups_obj = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_null_proto_object(caller, &_wjsm_env, named.len() as u32) };
         for (name, range) in &named {
             let val = match range {
                 Some(r) => store_runtime_string(caller, s[r.clone()].to_string()),
@@ -104,7 +104,7 @@ fn build_match_result(
         }
         write_array_length(caller, indices_ptr, group_count);
         if !named.is_empty() {
-            let ig = alloc_host_null_proto_object_from_caller(caller, named.len() as u32);
+            let ig = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_null_proto_object(caller, &_wjsm_env, named.len() as u32) };
             for (name, range) in &named {
                 let val = match range {
                     Some(r) => {

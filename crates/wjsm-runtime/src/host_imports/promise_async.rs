@@ -756,7 +756,7 @@
             let (promise, resolve, reject) =
                 new_promise_capability_from_caller(&mut caller, constructor);
             // 创建 { promise, resolve, reject } 对象
-            let obj = alloc_host_object_from_caller(&mut caller, 3);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 3) };
             define_host_data_property_from_caller(&mut caller, obj, "promise", promise);
             define_host_data_property_from_caller(&mut caller, obj, "resolve", resolve);
             define_host_data_property_from_caller(&mut caller, obj, "reject", reject);
@@ -1415,7 +1415,7 @@
     let jsx_create_element_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, tag: i64, props: i64, children: i64| -> i64 {
-            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
             let _ = define_host_data_property_from_caller(
                 &mut caller, obj, "type", tag,
             );
@@ -1512,7 +1512,7 @@
                 native_callables.push(NativeCallable::ProxyRevoker { proxy_handle: handle });
                 value::encode_native_callable_idx(idx)
             };
-            let obj = alloc_host_object_from_caller(&mut caller, 2);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 2) };
             let _ = define_host_data_property_from_caller(&mut caller, obj, "proxy", proxy_val);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "revoke", revoke_fn);
             obj
@@ -1830,7 +1830,7 @@
         args: &[i64],
         new_target: i64,
     ) -> i64 {
-        let this_obj = alloc_host_object_from_caller(caller, 4);
+        let this_obj = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) };
         let proto_prop = store_runtime_string(caller, "prototype".to_string());
         let proto_val = reflect_get_impl(caller, new_target, proto_prop);
         if value::is_object(proto_val) || value::is_array(proto_val) || value::is_proxy(proto_val) || value::is_null(proto_val) {
@@ -2192,7 +2192,7 @@
         } else {
             (value::encode_undefined(), value::encode_undefined())
         };
-        let desc = alloc_host_object_from_caller(caller, 4);
+        let desc = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) };
         if is_accessor {
             let _ = define_host_data_property_from_caller(caller, desc, "get", getter_val);
             let _ = define_host_data_property_from_caller(caller, desc, "set", setter_val);

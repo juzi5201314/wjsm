@@ -60,7 +60,7 @@ pub(crate) fn alloc_promise_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     entry: PromiseEntry,
 ) -> i64 {
-    let promise = alloc_host_object_from_caller(caller, 0);
+    let promise = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) };
     if value::is_object(promise) {
         let handle = value::decode_object_handle(promise) as usize;
         let mut table = caller
@@ -110,7 +110,7 @@ pub(crate) fn alloc_iterator_result_from_caller(
     val: i64,
     done: bool,
 ) -> i64 {
-    let obj = alloc_host_object_from_caller(caller, 2);
+    let obj = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 2) };
     let _ = define_host_data_property_from_caller(caller, obj, "value", val);
     let _ = define_host_data_property_from_caller(caller, obj, "done", value::encode_bool(done));
     obj
@@ -485,10 +485,10 @@ pub(crate) fn handle_combinator_reaction_from_caller(
 
 pub(crate) fn handle_combinator_reaction_from_store(
     store: &mut Store<RuntimeState>,
+    env: &crate::wasm_env::WasmEnv,
     memory: &Memory,
     heap_ptr_global: &Global,
     obj_table_ptr_global: &Global,
-    obj_table_count_global: &Global,
     handler: i64,
     argument: i64,
 ) -> bool {
@@ -525,10 +525,10 @@ pub(crate) fn handle_combinator_reaction_from_store(
             };
             let record = alloc_all_settled_result_from_store(
                 store,
+                env,
                 memory,
                 heap_ptr_global,
                 obj_table_ptr_global,
-                obj_table_count_global,
                 status,
                 value_name,
                 argument,
@@ -559,10 +559,10 @@ pub(crate) fn handle_combinator_reaction_from_store(
             {
                 let aggregate = alloc_aggregate_error_from_store(
                     store,
+                    env,
                     memory,
                     heap_ptr_global,
                     obj_table_ptr_global,
-                    obj_table_count_global,
                     errors_array,
                 );
                 settle_promise(
@@ -937,7 +937,17 @@ pub(crate) fn drain_microtasks_from_store(
     heap_ptr_global: &Global,
     obj_table_ptr_global: &Global,
     obj_table_count_global: &Global,
+    object_proto_handle_global: &Global,
 ) {
+    let env = crate::wasm_env::WasmEnv {
+        memory: *memory,
+        func_table: *func_table,
+        shadow_sp: *shadow_sp_global,
+        heap_ptr: *heap_ptr_global,
+        obj_table_ptr: *obj_table_ptr_global,
+        obj_table_count: *obj_table_count_global,
+        object_proto_handle: *object_proto_handle_global,
+    };
     loop {
         let task = {
             let mut queue = store
@@ -956,10 +966,10 @@ pub(crate) fn drain_microtasks_from_store(
             }) => {
                 if handle_combinator_reaction_from_store(
                     store,
+                    &env,
                     memory,
                     heap_ptr_global,
                     obj_table_ptr_global,
-                    obj_table_count_global,
                     handler,
                     argument,
                 ) {

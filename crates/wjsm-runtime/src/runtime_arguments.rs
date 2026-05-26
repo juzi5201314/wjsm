@@ -19,7 +19,7 @@ pub(crate) fn create_unmapped_arguments_object(
     };
     let len = arr_ptr.and_then(|ptr| read_array_length(caller, ptr)).unwrap_or(0);
     let capacity = (len + 1).max(4);
-    let obj = alloc_host_object_from_caller(caller, capacity);
+    let obj = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, capacity) };
 
     // 覆写 heap type 为 HEAP_TYPE_ARGUMENTS 用于 [object Arguments] 检测
     if let Some(ptr) = resolve_handle(caller, obj) {
@@ -65,7 +65,7 @@ pub(crate) fn create_mapped_arguments_object(
     };
     let len = arr_ptr.and_then(|ptr| read_array_length(caller, ptr)).unwrap_or(0);
     let capacity = (len + 2).max(4);
-    let obj = alloc_host_object_from_caller(caller, capacity);
+    let obj = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, capacity) };
 
     // 覆写 heap type 为 HEAP_TYPE_ARGUMENTS 用于 [object Arguments] 检测
     if let Some(ptr) = resolve_handle(caller, obj) {

@@ -459,7 +459,7 @@
                 (&*(addr as *const std::sync::atomic::AtomicI32)).load(Ordering::SeqCst)
             };
             // Return { async: false, value: "not-equal" } or { async: false, value: "timed-out" }
-            let result = alloc_host_object_from_caller(&mut caller, 4);
+            let result = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
             let _ = define_host_data_property_from_caller(
                 &mut caller,
                 result,
@@ -497,7 +497,7 @@
             let mut table = shared.sab_table.lock().unwrap();
             table.push(entry);
             let handle = (table.len() - 1) as u32;
-            let obj = alloc_host_object_from_caller(&mut caller, 4);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__sharedarraybuffer_handle__", value::encode_f64(handle as f64));
             let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", value::encode_f64(byte_length as f64));
             obj

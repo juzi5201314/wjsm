@@ -878,7 +878,7 @@
                     length,
                 });
             }
-            let obj = alloc_host_object_from_caller(&mut caller, 2);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 2) };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__iter_handle__", handle_val);
             value::encode_handle(value::TAG_ITERATOR, handle)
@@ -903,7 +903,7 @@
                     length,
                 });
             }
-            let obj = alloc_host_object_from_caller(&mut caller, 2);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 2) };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__iter_handle__", handle_val);
             value::encode_handle(value::TAG_ITERATOR, handle)
@@ -928,7 +928,7 @@
                     length,
                 });
             }
-            let obj = alloc_host_object_from_caller(&mut caller, 2);
+            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 2) };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__iter_handle__", handle_val);
             value::encode_handle(value::TAG_ITERATOR, handle)
