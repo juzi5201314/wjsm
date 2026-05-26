@@ -110,6 +110,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let regex_table: Arc<Mutex<Vec<RegexEntry>>> = Arc::new(Mutex::new(Vec::new()));
 
     let promise_table: Arc<Mutex<Vec<PromiseEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let pending_unhandled_rejections: Arc<Mutex<HashSet<usize>>> =
+        Arc::new(Mutex::new(HashSet::new()));
+    let native_callable_free_slots: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
     let non_extensible_handles: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
     let microtask_queue: Arc<Mutex<VecDeque<Microtask>>> = Arc::new(Mutex::new(VecDeque::new()));
     let continuation_table: Arc<Mutex<Vec<ContinuationEntry>>> = Arc::new(Mutex::new(Vec::new()));
@@ -154,11 +157,13 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             closures: Arc::clone(&closures),
             bound_objects: Arc::clone(&bound_objects),
             native_callables: Arc::clone(&native_callables),
+            native_callable_free_slots: Arc::clone(&native_callable_free_slots),
             eval_cache: Arc::clone(&eval_cache),
             bigint_table: Arc::clone(&bigint_table),
             symbol_table: Arc::clone(&symbol_table),
             regex_table: Arc::clone(&regex_table),
             promise_table: Arc::clone(&promise_table),
+            pending_unhandled_rejections: Arc::clone(&pending_unhandled_rejections),
             microtask_queue: Arc::clone(&microtask_queue),
             continuation_table: Arc::clone(&continuation_table),
             async_generator_table: Arc::clone(&async_generator_table),
@@ -1085,6 +1090,8 @@ struct RuntimeState {
     bound_objects: Arc<Mutex<Vec<BoundRecord>>>,
     /// 运行时原生可调用对象表：Promise resolving functions 等宿主创建函数。
     native_callables: Arc<Mutex<Vec<NativeCallable>>>,
+    /// native_callable 表空闲槽位，用于复用已释放条目。
+    native_callable_free_slots: Arc<Mutex<Vec<u32>>>,
     /// eval 编译缓存：code string hash → eval 模式 WASM bytes。
     eval_cache: Arc<Mutex<HashMap<u64, Vec<u8>>>>,
     /// BigInt 侧表：存储任意精度 BigInt 值
@@ -1095,6 +1102,8 @@ struct RuntimeState {
     regex_table: Arc<Mutex<Vec<RegexEntry>>>,
     /// Promise 侧表：object handle → Promise 内部槽；非 Promise object handle 使用空占位。
     promise_table: Arc<Mutex<Vec<PromiseEntry>>>,
+    /// 已 reject 且尚未 handled 的 promise 索引，用于 drain 时避免全表扫描。
+    pending_unhandled_rejections: Arc<Mutex<HashSet<usize>>>,
     /// 微任务队列
     microtask_queue: Arc<Mutex<VecDeque<Microtask>>>,
     /// Continuation 侧表：存储异步函数续延
@@ -1681,6 +1690,7 @@ struct ContinuationEntry {
     fn_table_idx: u32,
     outer_promise: i64,
     captured_vars: Vec<i64>,
+    completed: bool,
 }
 
 #[allow(dead_code)]
@@ -1689,7 +1699,7 @@ struct AsyncGeneratorEntry {
     continuation: i64,
     active_request: Option<AsyncGeneratorRequest>,
     waiting_resume_promise: Option<i64>,
-    queue: Vec<AsyncGeneratorRequest>,
+    queue: VecDeque<AsyncGeneratorRequest>,
 }
 
 #[derive(Clone)]
@@ -1711,7 +1721,7 @@ struct AsyncGeneratorRequest {
 enum AsyncGeneratorHostAction {
     Immediate {
         active: Option<AsyncGeneratorRequest>,
-        queued: Vec<AsyncGeneratorRequest>,
+        queued: VecDeque<AsyncGeneratorRequest>,
     },
 }
 

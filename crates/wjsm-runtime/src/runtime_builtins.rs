@@ -1361,6 +1361,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                     settle_promise(caller.data(), promise, PromiseSettlement::Reject(argument));
                 }
             }
+            recycle_native_callable(caller.data(), callable);
             Some(value::encode_undefined())
         }
         NativeCallable::PromiseCombinatorReaction { .. } => Some(value::encode_undefined()),
@@ -1385,7 +1386,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 if matches!(entry.state, AsyncGeneratorState::Completed) {
                     true
                 } else {
-                    entry.queue.push(request);
+                    entry.queue.push_back(request);
                     false
                 }
             };
