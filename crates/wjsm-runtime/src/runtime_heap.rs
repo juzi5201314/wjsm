@@ -190,52 +190,7 @@ pub(crate) fn define_host_data_property_from_caller(
     name: &str,
     val: i64,
 ) -> Option<()> {
-    let name_id = find_memory_c_string_global(caller, name)
-        .or_else(|| alloc_heap_c_string_global(caller, name))?;
-    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(obj) as usize)?;
-    let (capacity, num_props) = {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return None;
-        };
-        let data = memory.data(&*caller);
-        if obj_ptr + 16 > data.len() {
-            return None;
-        }
-        let capacity = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]);
-        let num_props = u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]);
-        (capacity, num_props)
-    };
-    if num_props >= capacity {
-        return None;
-    }
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-        return None;
-    };
-    let data = memory.data_mut(&mut *caller);
-    let slot_offset = obj_ptr + 16 + num_props as usize * 32;
-    if slot_offset + 32 > data.len() {
-        return None;
-    }
-    let flags =
-        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
-    let undef = value::encode_undefined();
-    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
-    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
-    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
-    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
-    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
-    Some(())
+    define_host_data_property(caller, obj, name, val)
 }
 
 pub(crate) fn alloc_all_settled_result_from_caller(
@@ -266,61 +221,6 @@ pub(crate) fn alloc_aggregate_error_from_caller(
     obj
 }
 
-pub(crate) fn read_string_bytes_from_store(
-    store: &Store<RuntimeState>,
-    memory: &Memory,
-    ptr: u32,
-) -> Vec<u8> {
-    let data = memory.data(store);
-    let start = ptr as usize;
-    if start >= data.len() {
-        return Vec::new();
-    }
-    let end = data[start..]
-        .iter()
-        .position(|byte| *byte == 0)
-        .map_or(data.len(), |offset| start + offset);
-    data[start..end].to_vec()
-}
-
-pub(crate) fn find_memory_c_string_from_store(
-    store: &Store<RuntimeState>,
-    memory: &Memory,
-    name: &str,
-) -> Option<u32> {
-    let mut needle = Vec::with_capacity(name.len() + 1);
-    needle.extend_from_slice(name.as_bytes());
-    needle.push(0);
-    memory
-        .data(store)
-        .windows(needle.len())
-        .position(|window| window == needle.as_slice())
-        .map(|offset| offset as u32)
-}
-
-pub(crate) fn alloc_heap_c_string_from_store(
-    store: &mut Store<RuntimeState>,
-    memory: &Memory,
-    heap_ptr_global: &Global,
-    name: &str,
-) -> Option<u32> {
-    let heap_ptr = heap_ptr_global.get(&mut *store).i32().unwrap_or(0) as usize;
-    let bytes = name.as_bytes();
-    let end = heap_ptr.checked_add(bytes.len() + 1)?;
-    let aligned_end = (end + 7) & !7;
-    {
-        let data = memory.data_mut(&mut *store);
-        if aligned_end > data.len() {
-            return None;
-        }
-        data[heap_ptr..heap_ptr + bytes.len()].copy_from_slice(bytes);
-        data[heap_ptr + bytes.len()] = 0;
-        data[end..aligned_end].fill(0);
-    }
-    let _ = heap_ptr_global.set(&mut *store, Val::I32(aligned_end as i32));
-    Some(heap_ptr as u32)
-}
-
 pub(crate) fn define_host_data_property_from_store(
     store: &mut Store<RuntimeState>,
     env: &WasmEnv,
@@ -328,8 +228,8 @@ pub(crate) fn define_host_data_property_from_store(
     name: &str,
     val: i64,
 ) -> Option<()> {
-    let name_id = find_memory_c_string_from_store(store, &env.memory, name)
-        .or_else(|| alloc_heap_c_string_from_store(store, &env.memory, &env.heap_ptr, name))?;
+    let name_id = find_memory_c_string_with_env(store, env, name)
+        .or_else(|| alloc_heap_c_string_with_env(store, env, name))?;
     let obj_ptr = resolve_handle_idx_with_env(
         store,
         env,
