@@ -22,6 +22,10 @@ mod runtime_heap;
 mod runtime_host_helpers;
 mod runtime_arguments;
 mod runtime_promises;
+mod runtime_microtask;
+mod runtime_combinators;
+mod runtime_async_fn;
+
 mod runtime_render;
 mod runtime_values;
 mod wasm_env;
@@ -35,6 +39,9 @@ use runtime_eval::*;
 use runtime_heap::*;
 use runtime_host_helpers::*;
 use runtime_promises::*;
+use runtime_microtask::*;
+use runtime_combinators::*;
+use runtime_async_fn::*;
 use runtime_render::*;
 use runtime_values::*;
 
