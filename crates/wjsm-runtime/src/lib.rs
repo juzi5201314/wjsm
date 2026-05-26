@@ -834,7 +834,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     };
 
     // 设置 %AsyncIteratorPrototype%[Symbol.asyncIterator]
-    let _ = define_host_data_property_from_store(
+    let _ = define_host_data_property_with_env(
         &mut store,
         &wasm_env,
         async_iterator_proto,
@@ -845,7 +845,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // 设置 %AsyncIteratorPrototype%[Symbol.toStringTag] = "AsyncIterator"
     let async_iterator_tag =
         store_runtime_string_in_state(store.data(), "AsyncIterator".to_string());
-    let _ = define_host_data_property_from_store(
+    let _ = define_host_data_property_with_env(
         &mut store,
         &wasm_env,
         async_iterator_proto,
@@ -870,7 +870,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
     // 设置 AsyncGenerator.prototype[Symbol.toStringTag] = "AsyncGenerator"
     let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
-    let _ = define_host_data_property_from_store(
+    let _ = define_host_data_property_with_env(
         &mut store,
         &wasm_env,
         async_gen_proto,
@@ -939,16 +939,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
 
     // ── Drain microtasks after main() ────────────────────────────────────
     if main_ok {
-        drain_microtasks_from_store(
-            &mut store,
-            &wasm_env.func_table,
-            &wasm_env.memory,
-            &wasm_env.shadow_sp,
-            &wasm_env.heap_ptr,
-            &wasm_env.obj_table_ptr,
-            &wasm_env.obj_table_count,
-            &wasm_env.object_proto_handle,
-        );
+        drain_microtasks(&mut store, &wasm_env);
     }
 
     // ── Timer event loop (only if main succeeded) ─────────────────────────
@@ -1027,30 +1018,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                         }
                     }
                     // Drain microtasks after timer callback
-                    if let (
-                        Some(Extern::Memory(mem)),
-                        Some(Extern::Global(sp_global)),
-                        Some(Extern::Global(heap_ptr_global)),
-                        Some(Extern::Global(obj_table_ptr_global)),
-                        Some(Extern::Global(obj_table_count_global)),
-                    ) = (
-                        instance.get_export(&mut store, "memory"),
-                        instance.get_export(&mut store, "__shadow_sp"),
-                        instance.get_export(&mut store, "__heap_ptr"),
-                        instance.get_export(&mut store, "__obj_table_ptr"),
-                        instance.get_export(&mut store, "__obj_table_count"),
-                    ) {
-                        drain_microtasks_from_store(
-                            &mut store,
-                            &tbl,
-                            &mem,
-                            &sp_global,
-                            &heap_ptr_global,
-                            &obj_table_ptr_global,
-                            &obj_table_count_global,
-                            &wasm_env.object_proto_handle,
-                        );
-                    }
+                    drain_microtasks(&mut store, &wasm_env);
                 }
 
                 // Re-schedule if repeating
