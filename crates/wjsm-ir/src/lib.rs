@@ -1,4 +1,4 @@
-mod builtin;
+pub mod builtin;
 pub mod constants;
 pub mod value;
 
