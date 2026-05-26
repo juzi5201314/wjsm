@@ -906,30 +906,21 @@
         &mut store,
         |caller: Caller<'_, RuntimeState>, continuation: i64, awaited_promise: i64, state: i64| {
             let cont_handle = value::decode_object_handle(continuation) as usize;
-            {
+            let cont_fn_idx = {
                 let mut c_table = caller
                     .data()
                     .continuation_table
                     .lock()
                     .expect("continuation table mutex");
-                if let Some(entry) = c_table.get_mut(cont_handle) {
-                    while entry.captured_vars.len() < 4 {
-                        entry.captured_vars.push(value::encode_undefined());
-                    }
-                    entry.captured_vars[0] = value::encode_f64(state as f64);
-                    entry.captured_vars[1] = value::encode_bool(false);
+                let Some(entry) = c_table.get_mut(cont_handle) else {
+                    return;
+                };
+                while entry.captured_vars.len() < 4 {
+                    entry.captured_vars.push(value::encode_undefined());
                 }
-            }
-            let cont_fn_idx = {
-                let c_table = caller
-                    .data()
-                    .continuation_table
-                    .lock()
-                    .expect("continuation table mutex");
-                c_table
-                    .get(cont_handle)
-                    .map(|e| e.fn_table_idx)
-                    .unwrap_or(0)
+                entry.captured_vars[0] = value::encode_f64(state as f64);
+                entry.captured_vars[1] = value::encode_bool(false);
+                entry.fn_table_idx
             };
 
             let awaited_handle = value::decode_object_handle(awaited_promise) as usize;
@@ -944,25 +935,25 @@
                 match &entry.state {
                     PromiseState::Pending => {
                         entry.fulfill_reactions.push(PromiseReaction::new_async(
-                            cont_fn_idx as i64,
+                            cont_fn_idx,
                             continuation,
                             ReactionType::Fulfill,
-                            state,
+                            state as u32,
                         ));
                         entry.reject_reactions.push(PromiseReaction::new_async(
-                            cont_fn_idx as i64,
+                            cont_fn_idx,
                             continuation,
                             ReactionType::Reject,
-                            state,
+                            state as u32,
                         ));
                     }
                     PromiseState::Fulfilled(val) => {
                         let val = *val;
                         let reactions = vec![PromiseReaction::new_async(
-                            cont_fn_idx as i64,
+                            cont_fn_idx,
                             continuation,
                             ReactionType::Fulfill,
-                            state,
+                            state as u32,
                         )];
                         drop(p_table);
                         queue_promise_reactions(caller.data(), reactions, val, false);
@@ -970,10 +961,10 @@
                     PromiseState::Rejected(reason) => {
                         let reason = *reason;
                         let reactions = vec![PromiseReaction::new_async(
-                            cont_fn_idx as i64,
+                            cont_fn_idx,
                             continuation,
                             ReactionType::Reject,
-                            state,
+                            state as u32,
                         )];
                         drop(p_table);
                         queue_promise_reactions(caller.data(), reactions, reason, true);
