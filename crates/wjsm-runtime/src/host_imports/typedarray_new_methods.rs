@@ -71,6 +71,38 @@ pub(crate) fn define_typedarray_new_methods(linker: &mut Linker<RuntimeState>, m
                 entry.data[off + 6],
                 entry.data[off + 7],
             ]),
+            (8, 4) => {
+                let v = i64::from_le_bytes([
+                    entry.data[off],
+                    entry.data[off + 1],
+                    entry.data[off + 2],
+                    entry.data[off + 3],
+                    entry.data[off + 4],
+                    entry.data[off + 5],
+                    entry.data[off + 6],
+                    entry.data[off + 7],
+                ]);
+                let mut table = caller.data().bigint_table.lock().ok()?;
+                let handle = table.len() as u32;
+                table.push(num_bigint::BigInt::from(v));
+                return Some(value::encode_bigint_handle(handle));
+            }
+            (8, 5) => {
+                let v = u64::from_le_bytes([
+                    entry.data[off],
+                    entry.data[off + 1],
+                    entry.data[off + 2],
+                    entry.data[off + 3],
+                    entry.data[off + 4],
+                    entry.data[off + 5],
+                    entry.data[off + 6],
+                    entry.data[off + 7],
+                ]);
+                let mut table = caller.data().bigint_table.lock().ok()?;
+                let handle = table.len() as u32;
+                table.push(num_bigint::BigInt::from(v));
+                return Some(value::encode_bigint_handle(handle));
+            }
             _ => return None,
         };
         Some(value::encode_f64(val))
@@ -111,6 +143,22 @@ pub(crate) fn define_typedarray_new_methods(linker: &mut Linker<RuntimeState>, m
             (4, 3) => { entry.data[off..off + 4].copy_from_slice(&(f_raw as f32).to_le_bytes()); }
             // Float64
             (8, 3) => { entry.data[off..off + 8].copy_from_slice(&f_raw.to_le_bytes()); }
+            // BigInt64
+            (8, 4) => {
+                let handle = value::decode_bigint_handle(val) as usize;
+                let table = caller.data().bigint_table.lock().ok()?;
+                let bi = table.get(handle)?;
+                let v: i64 = bi.try_into().ok()?;
+                entry.data[off..off + 8].copy_from_slice(&v.to_le_bytes());
+            }
+            // BigUint64
+            (8, 5) => {
+                let handle = value::decode_bigint_handle(val) as usize;
+                let table = caller.data().bigint_table.lock().ok()?;
+                let bi = table.get(handle)?;
+                let v: u64 = bi.try_into().ok()?;
+                entry.data[off..off + 8].copy_from_slice(&v.to_le_bytes());
+            }
             _ => return None,
         }
         Some(())
@@ -150,6 +198,26 @@ pub(crate) fn define_typedarray_new_methods(linker: &mut Linker<RuntimeState>, m
                 data[off], data[off + 1], data[off + 2], data[off + 3],
                 data[off + 4], data[off + 5], data[off + 6], data[off + 7],
             ]),
+            (8, 4) => {
+                let v = i64::from_le_bytes([
+                    data[off], data[off + 1], data[off + 2], data[off + 3],
+                    data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                ]);
+                let mut table = caller.data().bigint_table.lock().ok()?;
+                let handle = table.len() as u32;
+                table.push(num_bigint::BigInt::from(v));
+                return Some(value::encode_bigint_handle(handle));
+            }
+            (8, 5) => {
+                let v = u64::from_le_bytes([
+                    data[off], data[off + 1], data[off + 2], data[off + 3],
+                    data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                ]);
+                let mut table = caller.data().bigint_table.lock().ok()?;
+                let handle = table.len() as u32;
+                table.push(num_bigint::BigInt::from(v));
+                return Some(value::encode_bigint_handle(handle));
+            }
             _ => return None,
         };
         Some(value::encode_f64(val))
@@ -184,6 +252,20 @@ pub(crate) fn define_typedarray_new_methods(linker: &mut Linker<RuntimeState>, m
             (4, 1) => { data[off..off + 4].copy_from_slice(&(f_raw as u32).to_le_bytes()); }
             (4, 3) => { data[off..off + 4].copy_from_slice(&(f_raw as f32).to_le_bytes()); }
             (8, 3) => { data[off..off + 8].copy_from_slice(&f_raw.to_le_bytes()); }
+            (8, 4) => {
+                let handle = value::decode_bigint_handle(val) as usize;
+                let table = caller.data().bigint_table.lock().ok()?;
+                let bi = table.get(handle)?;
+                let v: i64 = bi.try_into().ok()?;
+                data[off..off + 8].copy_from_slice(&v.to_le_bytes());
+            }
+            (8, 5) => {
+                let handle = value::decode_bigint_handle(val) as usize;
+                let table = caller.data().bigint_table.lock().ok()?;
+                let bi = table.get(handle)?;
+                let v: u64 = bi.try_into().ok()?;
+                data[off..off + 8].copy_from_slice(&v.to_le_bytes());
+            }
             _ => return None,
         }
         Some(())
