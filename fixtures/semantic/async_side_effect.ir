@@ -29,29 +29,27 @@ module {
     c26 = undefined
     c27 = string("$0.undefined")
     c28 = undefined
-    c29 = number(4)
-    c30 = number(4)
-    c31 = string("$0.x")
-    c32 = string("$0.x")
-    c33 = number(1)
-    c34 = undefined
+    c29 = string("$0.x")
+    c30 = string("$0.x")
+    c31 = number(1)
+    c32 = undefined
+    c33 = number(0)
+    c34 = number(1)
     c35 = number(0)
-    c36 = number(1)
-    c37 = number(0)
-    c38 = functionref(@0)
-    c39 = number(5)
-    c40 = number(2)
-    c41 = number(3)
-    c42 = number(0)
-    c43 = undefined
-    c44 = bool(false)
-    c45 = functionref(@1)
-    c46 = string("$0.undefined")
+    c36 = functionref(@0)
+    c37 = number(4)
+    c38 = number(2)
+    c39 = number(3)
+    c40 = number(0)
+    c41 = undefined
+    c42 = bool(false)
+    c43 = functionref(@1)
+    c44 = string("$0.undefined")
+    c45 = string("$0.x")
+    c46 = undefined
     c47 = string("$0.x")
-    c48 = undefined
-    c49 = string("$0.x")
-    c50 = functionref(@2)
-    c51 = undefined
+    c48 = functionref(@2)
+    c49 = undefined
 
   fn @inc$async [captures: $0.undefined, $0.x] [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -76,8 +74,8 @@ module {
       store var $1.arguments, %12
       jump bb1
     bb1:
-      %39 = load var $1.$state
-      switch %39 [case c35 -> bb2, case c36 -> bb3], default bb6, exit bb7
+      %33 = load var $1.$state
+      switch %33 [case c33 -> bb2, case c34 -> bb3], default bb6, exit bb7
     bb2:
       %13 = const c26
       %14 = load var $1.$closure_env
@@ -86,37 +84,29 @@ module {
       %17 = call builtin.promise.resolve_static(%13, %16)
       %19 = const c28
       %18 = call builtin.promise.resolve_static(%19, %17)
-      %20 = load var $1.$env
-      %21 = const c29
-      %22 = load var $1.arguments
-      call builtin.continuation.save_var(%20, %21, %22)
       suspend %18, state=1
       jump bb5
     bb3:
-      %23 = load var $1.$env
-      %24 = const c30
-      %25 = call builtin.continuation.load_var(%23, %24)
-      store var $1.arguments, %25
-      %26 = load var $1.$resume_val
-      %27 = load var $1.$is_rejected
-      branch %27, bb4, bb5
+      %20 = load var $1.$resume_val
+      %21 = load var $1.$is_rejected
+      branch %21, bb4, bb5
     bb4:
-      %28 = load var $1.$promise
-      promise_reject %28, %26
+      %22 = load var $1.$promise
+      promise_reject %22, %20
       return
     bb5:
-      %29 = load var $1.$resume_val
-      %30 = load var $1.$closure_env
-      %31 = const c31
-      %32 = load var $1.$closure_env
-      %33 = const c32
-      %34 = get_prop %32, %33
-      %35 = const c33
-      %36 = add %34, %35
-      set_prop %30, %31, %36
-      %37 = const c34
-      %38 = load var $1.$promise
-      promise_resolve %38, %37
+      %23 = load var $1.$resume_val
+      %24 = load var $1.$closure_env
+      %25 = const c29
+      %26 = load var $1.$closure_env
+      %27 = const c30
+      %28 = get_prop %26, %27
+      %29 = const c31
+      %30 = add %28, %29
+      set_prop %24, %25, %30
+      %31 = const c32
+      %32 = load var $1.$promise
+      promise_resolve %32, %31
       return
     bb6:
       return
@@ -126,29 +116,29 @@ module {
   fn @inc [captures: $0.undefined, $0.x] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c37
+      %1 = const c35
       %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $2.arguments, %2
       %3 = new_promise
-      %4 = const c38
+      %4 = const c36
       %5 = load var $2.$env
       %6 = call builtin.create_closure(%4, %5)
-      %7 = const c39
+      %7 = const c37
       %8 = call builtin.continuation.create(%6, %3, %7)
-      %9 = const c40
+      %9 = const c38
       call builtin.continuation.save_var(%8, %9, %3)
-      %10 = const c41
+      %10 = const c39
       call builtin.continuation.save_var(%8, %10, %5)
-      %11 = const c42
-      %12 = const c43
-      %13 = const c44
+      %11 = const c40
+      %12 = const c41
+      %13 = const c42
       call builtin.async_function.resume(%6, %8, %11, %12, %13)
       return %3
 
   fn @arrow_2 [captures: $0.x] [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = load var $env
-      %1 = const c49
+      %1 = const c47
       %2 = get_prop %0, %1
       %3 = call builtin.console.log(%2)
       return %3
@@ -199,22 +189,22 @@ module {
       store var $this, %20
       %21 = const c20
       store var $0.x, %21
-      %22 = const c45
+      %22 = const c43
       %23 = new_object(capacity=2)
       %24 = load var $0.undefined
-      %25 = const c46
+      %25 = const c44
       set_prop %23, %25, %24
       %26 = load var $0.x
-      %27 = const c47
+      %27 = const c45
       set_prop %23, %27, %26
       %28 = call builtin.create_closure(%22, %23)
       store var $0.inc, %28
-      %29 = const c48
+      %29 = const c46
       %30 = load var $0.inc
       %31 = call %30, this=%29
-      %32 = const c50
+      %32 = const c48
       %33 = call builtin.create_closure(%32, %23)
-      %34 = const c51
+      %34 = const c49
       %35 = call builtin.promise.then(%31, %33, %34)
       %36 = is_exception %35
       branch %36, bb2, bb1
