@@ -3,74 +3,129 @@ name: test-driven-development
 description: Use when implementing any feature or bugfix, before writing implementation code
 ---
 
+# Execute
+
+→ Implementing a feature or bugfix under TDD Route `strict`? → **No production code without a failing test first.**
+  Gate: medium/high complexity? → route to brainstorming or writing-plans first.
+  Mode: `auto` chooses strict/light/skipped by risk; `off` disables automatic TDD, not completion verification.
+  Cycle: RED (write test → watch it fail) → GREEN (minimal code → watch it pass) → REFACTOR (clean up → keep green)
+  Regression: shared module → related tests. contract change → producer + consumer. core logic → old + new tests.
+  Ripple signal hit → cover producer+consumer or real user path before claiming green.
+→ Done when: chosen TDD Route is recorded, strict-route tests pass, TDD preflight gate passed when applicable, pre-edit complexity risk was checked for non-trivial source edits, and `verification-before-completion` has fresh evidence.
+
 # Test-Driven Development (TDD)
 
 ## Overview
 
 Write the test first. Watch it fail. Write minimal code to pass.
 
-**Core principle:** If you didn't watch the test fail, you don't know if it tests the right thing.
+If you didn't watch the test fail, you don't know if it tests the right thing.
 
-**Violating the letter of the rules is violating the spirit of the rules.**
+TDD Mode has two values: `auto` and `off`. `auto` lets Aegis choose a
+`TDD Route`; `off` disables automatic TDD routing but never disables
+`verification-before-completion`.
 
 ## When to Use
 
-**Always:**
-- New features
-- Bug fixes
-- Refactoring
-- Behavior changes
+New features, bug fixes, refactoring, behavior/logic changes, interface/data contract changes, cross-module or shared module changes, core logic refactors.
 
-**Exceptions (ask your human partner):**
-- Throwaway prototypes
-- Generated code
-- Configuration files
+Exceptions (ask your human partner): throwaway prototypes, generated code, config files, pure docs cleanup, read-only diagnosis, comment-only changes.
 
-Thinking "skip TDD just this once"? Stop. That's rationalization.
+## TDD Mode and Route
 
-## The Iron Law
+Before source edits, decide:
 
-```
-NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST
+```text
+TDD Route:
+- Mode: auto | off
+- Decision: strict | light | skipped
+- Reason:
+- Verification:
 ```
 
-Write code before the test? Delete it. Start over.
+In `auto`, use `strict` for behavior, bugfix, contract, shared/core, producer /
+consumer, persistence, permission, migration, or meaningful regression risk.
+Use `light` for tiny low-risk edits with an obvious readback or command check.
+Use `skipped` for read-only, docs-only, generated, throwaway, comment-only, or
+environment-bound work where TDD does not fit.
 
-**No exceptions:**
-- Don't keep it as "reference"
-- Don't "adapt" it while writing tests
-- Don't look at it
-- Delete means delete
+In `off`, do not automatically require TDD. Explicit user/project TDD requests
+still apply, and risky work may still justify recommending strict TDD.
+`verification-before-completion` still applies before any completion claim.
 
-Implement fresh from tests. Period.
+## Preflight Gate
+
+TDD is the implementation discipline for an approved behavior or atomic task.
+It is not a substitute for task routing, product clarification, or planning.
+
+Before writing tests or production code, stop and route to brainstorming or
+writing-plans if the current request has any medium- or high-complexity signal:
+
+- multiple files, modules, pages, screens, services, or owners
+- user-visible flows such as navigation, onboarding, checkout, lifecycle, or
+  recovery paths
+- state transitions, routing rules, API or data contracts, compatibility
+  boundaries, migrations, permissions, or persistence
+- more than one acceptance path or manual/visual verification requirement
+- unclear product behavior, competing constraints, or long-running execution
+
+For these tasks, require a baseline read-set, plan, and atomic tasks before TDD.
+High-complexity or ambiguous tasks also need a spec/design review before
+planning. Only proceed directly with TDD for low-complexity work whose intent,
+owner, compatibility boundary, and verification path are already clear.
+
+## Pre-Edit Complexity Check
+
+Before production code edits, check whether the intended source edit would add
+logic to an overloaded or wrong owner. Tiny edits can keep this to one line.
+
+```text
+Pre-Edit Complexity Check:
+- Target edit file:
+- Existing pressure signal:
+- Owner fit:
+- Safer edit boundary:
+- Decision: edit-in-place | extract helper | add owner file | split task | pause for plan update
+```
+
+Pressure signals: 800+ line file, 80+ line block, deep nesting, mixed reasons
+to change, generic owner receiving new responsibility, owner mismatch, or new
+fallback/adapter/guard paths. If the decision is `pause for plan update`, stop
+TDD and return to `writing-plans` or `brainstorming` with the evidence.
+
+When a medium- or high-complexity task needs project records, use configured Aegis workspace support
+lazily. Prefer the installed Aegis workspace helper
+(`python <aegis-workspace-helper> init --root <target-project-root>`) when it
+is available. If the task needs a process trail under `work/`, prefer
+`python <aegis-workspace-helper> new-work --root <target-project-root> ...`
+so the intent, checkpoint, drift, and evidence paths are indexed and
+structurally checkable:
+
+```text
+docs/aegis/
+  README.md
+  INDEX.md
+  BASELINE-GOVERNANCE.md
+  adr/
+  baseline/
+  specs/
+  plans/
+  work/YYYY-MM-DD-<task-slug>/
+    10-intent.md
+    20-checkpoint.md
+    90-evidence.md
+    99-reflection.md
+```
+
+Do not promote reusable project facts, decisions, specs, or plans into those
+directories unless the workflow needs them and no existing project authority
+already owns them.
 
 ## Red-Green-Refactor
 
-```dot
-digraph tdd_cycle {
-    rankdir=LR;
-    red [label="RED\nWrite failing test", shape=box, style=filled, fillcolor="#ffcccc"];
-    verify_red [label="Verify fails\ncorrectly", shape=diamond];
-    green [label="GREEN\nMinimal code", shape=box, style=filled, fillcolor="#ccffcc"];
-    verify_green [label="Verify passes\nAll green", shape=diamond];
-    refactor [label="REFACTOR\nClean up", shape=box, style=filled, fillcolor="#ccccff"];
-    next [label="Next", shape=ellipse];
-
-    red -> verify_red;
-    verify_red -> green [label="yes"];
-    verify_red -> red [label="wrong\nfailure"];
-    green -> verify_green;
-    verify_green -> refactor [label="yes"];
-    verify_green -> green [label="no"];
-    refactor -> verify_green [label="stay\ngreen"];
-    verify_green -> next;
-    next -> red;
-}
-```
-
 ### RED - Write Failing Test
 
-Write one minimal test showing what should happen.
+State: input | output | boundary | acceptance criteria. Check existing test coverage first. Write one minimal test showing what should happen.
 
 <Good>
 ```typescript
@@ -109,6 +164,11 @@ Vague name, tests mock not code
 - One behavior
 - Clear name
 - Real code (no mocks unless unavoidable)
+- If a new feature changes user-observable behavior, prefer one minimal
+  end-to-end or integration test for the main path before narrower unit tests
+- For user-visible work, cover the main journey and the highest-risk experience
+  or operational floor before treating unit tests as sufficient
+- Add unit tests for core rules, boundary conditions, and error branches
 
 ### Verify RED - Watch It Fail
 
@@ -165,6 +225,10 @@ Over-engineered
 
 Don't add features, refactor other code, or "improve" beyond the test.
 
+Fix the real owner of the behavior. Do not add a new fallback, adapter, or
+branch unless the debugging or design workflow identifies why it is necessary
+and what old path retires.
+
 ### Verify GREEN - Watch It Pass
 
 **MANDATORY.**
@@ -195,6 +259,20 @@ Keep tests green. Don't add behavior.
 
 Next failing test for next feature.
 
+## Regression Scope
+
+At minimum, run the target test you just changed or added. Broaden regression
+based on impact:
+
+- Shared module change -> related module tests
+- Interface or data contract change -> producer and consumer tests
+- Cross-module behavior change -> integration or end-to-end path
+- Core logic refactor -> old behavior regression tests plus new behavior tests
+- Ripple Signal Triage fired -> producer+consumer or real user path that proves
+  the downstream effect remains bounded
+
+If the current environment cannot run automated tests, state the blocker and provide reproducible manual verification steps.
+
 ## Good Tests
 
 | Quality | Good | Bad |
@@ -202,72 +280,6 @@ Next failing test for next feature.
 | **Minimal** | One thing. "and" in name? Split it. | `test('validates email and domain and whitespace')` |
 | **Clear** | Name describes behavior | `test('test1')` |
 | **Shows intent** | Demonstrates desired API | Obscures what code should do |
-
-## Why Order Matters
-
-**"I'll write tests after to verify it works"**
-
-Tests written after code pass immediately. Passing immediately proves nothing:
-- Might test wrong thing
-- Might test implementation, not behavior
-- Might miss edge cases you forgot
-- You never saw it catch the bug
-
-Test-first forces you to see the test fail, proving it actually tests something.
-
-**"I already manually tested all the edge cases"**
-
-Manual testing is ad-hoc. You think you tested everything but:
-- No record of what you tested
-- Can't re-run when code changes
-- Easy to forget cases under pressure
-- "It worked when I tried it" ≠ comprehensive
-
-Automated tests are systematic. They run the same way every time.
-
-**"Deleting X hours of work is wasteful"**
-
-Sunk cost fallacy. The time is already gone. Your choice now:
-- Delete and rewrite with TDD (X more hours, high confidence)
-- Keep it and add tests after (30 min, low confidence, likely bugs)
-
-The "waste" is keeping code you can't trust. Working code without real tests is technical debt.
-
-**"TDD is dogmatic, being pragmatic means adapting"**
-
-TDD IS pragmatic:
-- Finds bugs before commit (faster than debugging after)
-- Prevents regressions (tests catch breaks immediately)
-- Documents behavior (tests show how to use code)
-- Enables refactoring (change freely, tests catch breaks)
-
-"Pragmatic" shortcuts = debugging in production = slower.
-
-**"Tests after achieve the same goals - it's spirit not ritual"**
-
-No. Tests-after answer "What does this do?" Tests-first answer "What should this do?"
-
-Tests-after are biased by your implementation. You test what you built, not what's required. You verify remembered edge cases, not discovered ones.
-
-Tests-first force edge case discovery before implementing. Tests-after verify you remembered everything (you didn't).
-
-30 minutes of tests after ≠ TDD. You get coverage, lose proof tests work.
-
-## Common Rationalizations
-
-| Excuse | Reality |
-|--------|---------|
-| "Too simple to test" | Simple code breaks. Test takes 30 seconds. |
-| "I'll test after" | Tests passing immediately prove nothing. |
-| "Tests after achieve same goals" | Tests-after = "what does this do?" Tests-first = "what should this do?" |
-| "Already manually tested" | Ad-hoc ≠ systematic. No record, can't re-run. |
-| "Deleting X hours is wasteful" | Sunk cost fallacy. Keeping unverified code is technical debt. |
-| "Keep as reference, write tests first" | You'll adapt it. That's testing after. Delete means delete. |
-| "Need to explore first" | Fine. Throw away exploration, start with TDD. |
-| "Test hard = design unclear" | Listen to test. Hard to test = hard to use. |
-| "TDD will slow me down" | TDD faster than debugging. Pragmatic = test-first. |
-| "Manual test faster" | Manual doesn't prove edge cases. You'll re-test every change. |
-| "Existing code has no tests" | You're improving it. Add tests for existing code. |
 
 ## Red Flags - STOP and Start Over
 
@@ -326,46 +338,28 @@ Extract validation for multiple fields if needed.
 
 ## Verification Checklist
 
-Before marking work complete:
+- [ ] Defined input, output, boundaries, compatibility, acceptance criteria
+- [ ] Every new function/method has a test that failed first
+- [ ] All tests pass, output pristine
+- [ ] Regression: shared/contract/core changes ran related tests
+- [ ] Ripple signal hit: downstream or real user path covered
+- [ ] If automation blocked → blocker + manual steps documented
 
-- [ ] Every new function/method has a test
-- [ ] Watched each test fail before implementing
-- [ ] Each test failed for expected reason (feature missing, not typo)
-- [ ] Wrote minimal code to pass each test
-- [ ] All tests pass
-- [ ] Output pristine (no errors, warnings)
-- [ ] Tests use real code (mocks only if unavoidable)
-- [ ] Edge cases and errors covered
+Can't check all boxes? Start over.
 
-Can't check all boxes? You skipped TDD. Start over.
+## Exploration and Emergency Exceptions
+
+Exploratory spikes are allowed only as throwaway learning. When the spike ends,
+convert confirmed behavior into tests before formal implementation.
+
+Emergency hotfixes may prioritize the smallest safe repair when delay is more
+dangerous than incomplete TDD. Record the reason, keep the change narrow, and
+add the missing regression test in the same slice or the next nearest slice.
 
 ## When Stuck
 
-| Problem | Solution |
-|---------|----------|
-| Don't know how to test | Write wished-for API. Write assertion first. Ask your human partner. |
-| Test too complicated | Design too complicated. Simplify interface. |
-| Must mock everything | Code too coupled. Use dependency injection. |
-| Test setup huge | Extract helpers. Still complex? Simplify design. |
+Don't know how to test → write wished-for API first. Test too complicated → simplify design. Must mock everything → reduce coupling.
 
 ## Debugging Integration
 
-Bug found? Write failing test reproducing it. Follow TDD cycle. Test proves fix and prevents regression.
-
-Never fix bugs without a test.
-
-## Testing Anti-Patterns
-
-When adding mocks or test utilities, read @testing-anti-patterns.md to avoid common pitfalls:
-- Testing mock behavior instead of real behavior
-- Adding test-only methods to production classes
-- Mocking without understanding dependencies
-
-## Final Rule
-
-```
-Production code → test exists and failed first
-Otherwise → not TDD
-```
-
-No exceptions without your human partner's permission.
+Bug found? Write failing test reproducing it. Follow TDD cycle. Never fix bugs without a test.

@@ -2,64 +2,112 @@
   "version": 1,
   "skills": {
     "brainstorming": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/brainstorming/SKILL.md",
-      "computedHash": "8df9b47092524833138b58682d03f2e153a242e550d1693657afdbee0cc9cdb0"
+      "computedHash": "fde1fbb48b4228a3c400cfa8372df39903d8228d285e195b932066f4674ddcc3"
+    },
+    "communicating-concisely": {
+      "source": "GanyuanRan/Aegis",
+      "sourceType": "github",
+      "skillPath": "skills/communicating-concisely/SKILL.md",
+      "computedHash": "2dfc865db2a6bfabfe049020b8c19139f55262a2b55a7c781372afc29f27b14e"
     },
     "dispatching-parallel-agents": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/dispatching-parallel-agents/SKILL.md",
       "computedHash": "e21044ae7496fc285f1df9ff3fb518a3a20bea6f5216c1f59f4987e12c769a0a"
     },
+    "establishing-project-context": {
+      "source": "GanyuanRan/Aegis",
+      "sourceType": "github",
+      "skillPath": "skills/establishing-project-context/SKILL.md",
+      "computedHash": "bddc832f43111beec324c8d7ab9bcdf548663469e8b28bb361ee29ded1ea3d58"
+    },
     "executing-plans": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/executing-plans/SKILL.md",
-      "computedHash": "b41c919caf1bb07fbacb0e29899ac513f9eb11cd4dd695975ad352c2c03cc4d7"
+      "computedHash": "cd43a242515ae0a8067c8624af34c6f53cccb7608d2709d34ecc3cc724bbcee7"
     },
     "finishing-a-development-branch": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/finishing-a-development-branch/SKILL.md",
-      "computedHash": "932d23af11a3eb2b758f5b1d9aec7b6d28ddd26658328414f87f34dff7179d19"
+      "computedHash": "96356c6d710c02aa336e81b2f508dc91570cb4252e3db1dc80fe44283dc68932"
+    },
+    "first-principles-review": {
+      "source": "GanyuanRan/Aegis",
+      "sourceType": "github",
+      "skillPath": "skills/first-principles-review/SKILL.md",
+      "computedHash": "01c8808e4f6a01df93700f8cec680a4e5b49dd284e4313a992cbddc0f2804364"
+    },
+    "goal-framing": {
+      "source": "GanyuanRan/Aegis",
+      "sourceType": "github",
+      "skillPath": "skills/goal-framing/SKILL.md",
+      "computedHash": "b6d85143350a4d4a6638e7e6228f360014982ce8d0617cadc959e833501ad13c"
+    },
+    "long-task-continuation": {
+      "source": "GanyuanRan/Aegis",
+      "sourceType": "github",
+      "skillPath": "skills/long-task-continuation/SKILL.md",
+      "computedHash": "bdacfb1307c658af1361614367fdc415e1a14978f27a653a400bc8b69e34249c"
     },
     "receiving-code-review": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/receiving-code-review/SKILL.md",
-      "computedHash": "2760c85d4f4117b0006e7ba755f4bbd61f8f4c185f347999763c97f507274e30"
+      "computedHash": "fbc9180483ec3f2f09b009e712b58f4617fdcf9cd3b8ca2f4691ea97a7154a5a"
+    },
+    "recording-architecture-decisions": {
+      "source": "GanyuanRan/Aegis",
+      "sourceType": "github",
+      "skillPath": "skills/recording-architecture-decisions/SKILL.md",
+      "computedHash": "f8aa0e7b3aaa44bb16ed6f52ea97903d284357bd1792a3778a7425df8b174eb0"
     },
     "requesting-code-review": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/requesting-code-review/SKILL.md",
-      "computedHash": "874f3786b05007a8b4a60452a4cd89b9917c645d34b6b1e40ea05037d12f0e67"
+      "computedHash": "467412d57d7f71eb1a6681c0d0bde183778e9251e825fec58678180bb5f99d5a"
     },
     "subagent-driven-development": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/subagent-driven-development/SKILL.md",
-      "computedHash": "b38be2f3a092d758127f6d47e77c2493885aebf38aae359e4c786df2c343b837"
+      "computedHash": "b3502851e4ea0448b483de73287632b4f1e5e209e971b14605c16f46f963b914"
     },
     "systematic-debugging": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/systematic-debugging/SKILL.md",
-      "computedHash": "7246fdd3a795fc3daff0af72044ca99bf836e4e6a46844742858786fdfb86488"
+      "computedHash": "93427b147429d48229b518c078900b24031ae9ed7bb320f0856cdbbc2a0e03fd"
     },
     "test-driven-development": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/test-driven-development/SKILL.md",
-      "computedHash": "126f1ebf6ccd414f42544f6e83d8cc5adb089e1108eaffb7c400701e37eecd9f"
+      "computedHash": "02bc8f100563247538cd396aa9ab63eb002c6573cea112658d2ec8764968aea5"
+    },
+    "update-aegis": {
+      "source": "GanyuanRan/Aegis",
+      "sourceType": "github",
+      "skillPath": "skills/update-aegis/SKILL.md",
+      "computedHash": "85d9b4e03a8cd7a01deba4c8395d3310bc28298c018389f8371339a6ac3280d0"
+    },
+    "using-aegis": {
+      "source": "GanyuanRan/Aegis",
+      "sourceType": "github",
+      "skillPath": "skills/using-aegis/SKILL.md",
+      "computedHash": "47df459aa7533491e3b3b9e60e0c384a73a2a27f7b89cbc20d4567fd91148eb4"
     },
     "using-git-worktrees": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/using-git-worktrees/SKILL.md",
-      "computedHash": "bd10bc57c23040630b17c877a9bc7b4be40c35161a2e2f110d770d78e3b0a4ff"
+      "computedHash": "37321c0999f54417dd73d076cba48e3f55c94b4d692035f0aa3b649c10648070"
     },
     "using-superpowers": {
       "source": "obra/superpowers",
@@ -68,16 +116,22 @@
       "computedHash": "de10fd3ff46d797acc92b9df6b3ea456a5cd1d095b73c90bc921e83cce4c5bb9"
     },
     "verification-before-completion": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/verification-before-completion/SKILL.md",
-      "computedHash": "9b446f0c7fe1cfb560b1d34439523b1a76d5f177290007b2c053a1c749a4a8ba"
+      "computedHash": "c60722563b55b47b0c1dc304addcd9686b1eebc7a693a5f6e521e87c6a377fe1"
     },
     "writing-plans": {
-      "source": "obra/superpowers",
+      "source": "GanyuanRan/Aegis",
       "sourceType": "github",
       "skillPath": "skills/writing-plans/SKILL.md",
-      "computedHash": "2b986445454a025ca2c3839f8a2024747e8cce0517948437232cd113d2719060"
+      "computedHash": "ed16667975933d85d48820da282a665b961af03cd6557622bd64e95c739850b2"
+    },
+    "writing-skills": {
+      "source": "GanyuanRan/Aegis",
+      "sourceType": "github",
+      "skillPath": "skills/writing-skills/SKILL.md",
+      "computedHash": "156faab4fd673e7fd699195ff07fdc6bd61f5e00ff227ddcd99acaa414362fec"
     }
   }
 }
