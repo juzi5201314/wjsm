@@ -419,6 +419,8 @@ impl Lowerer {
                 .set_terminator(b, Terminator::Return { value: None });
         }
 
+        // ── 推迟的 save/restore：运行 liveness 分析并插入 save/restore ──
+        self.resolve_pending_suspends();
         let resume_blocks = std::mem::take(&mut self.async_resume_blocks);
         if !resume_blocks.is_empty() {
             let state_val = self.alloc_value();
