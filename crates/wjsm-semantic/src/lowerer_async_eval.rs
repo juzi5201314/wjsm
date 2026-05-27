@@ -4,11 +4,11 @@ use super::*;
 #[derive(Debug, Clone)]
 pub(super) struct PendingSuspend {
     /// Suspend 指令所在的 block
-    suspend_block: BasicBlockId,
+    pub(super) suspend_block: BasicBlockId,
     /// resume 后执行起始 block
-    resume_block: BasicBlockId,
+    pub(super) resume_block: BasicBlockId,
     /// 该 suspend 点可见的所有绑定（async_visible_binding_names 结果）
-    visible_bindings: Vec<String>,
+    pub(super) visible_bindings: Vec<String>,
 }
 
 impl Lowerer {
