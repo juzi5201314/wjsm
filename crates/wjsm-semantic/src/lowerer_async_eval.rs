@@ -66,6 +66,7 @@ fn build_cfg(
 }
 
 /// 计算每个 block 的 use 和 def 集合，只考虑用户变量，排除 async 内部绑定。
+/// 闭包捕获会在 ensure_shared_env 中先降低为 LoadVar，因此 CreateClosure 本身无需额外建模。
 fn compute_use_def(blocks: &[BasicBlock]) -> (Vec<HashSet<String>>, Vec<HashSet<String>>) {
     let mut use_sets: Vec<HashSet<String>> = vec![HashSet::new(); blocks.len()];
     let mut def_sets: Vec<HashSet<String>> = vec![HashSet::new(); blocks.len()];
@@ -916,18 +917,22 @@ impl Lowerer {
             return;
         }
 
-        let Some(suspend_idx) = self
-            .current_function
-            .block(block_id)
-            .and_then(|block| {
-                block
+        let Some((suspend_idx, instruction_count)) =
+            self.current_function.block(block_id).and_then(|block| {
+                let suspend_idx = block
                     .instructions()
                     .iter()
-                    .position(|instr| matches!(instr, Instruction::Suspend { .. }))
+                    .position(|instr| matches!(instr, Instruction::Suspend { .. }))?;
+                Some((suspend_idx, block.instructions().len()))
             })
         else {
             return;
         };
+        assert_eq!(
+            suspend_idx + 1,
+            instruction_count,
+            "suspend block {block_id} must not contain instructions after Suspend"
+        );
 
         let continuation = self.alloc_value();
         let mut save_instrs = Vec::with_capacity(1 + bindings.len() * 3);
