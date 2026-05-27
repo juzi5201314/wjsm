@@ -956,9 +956,13 @@ impl Lowerer {
             let continue_block = self.current_function.new_block();
 
             self.async_resume_blocks.push((next_state, resume_block));
-            let saved_bindings = self.async_visible_binding_names();
-            self.emit_save_async_bindings(block, &saved_bindings);
+            let visible_bindings = self.async_visible_binding_names();
 
+            self.pending_suspends.push(PendingSuspend {
+                suspend_block: block,
+                resume_block,
+                visible_bindings,
+            });
             let promised = self.alloc_value();
             self.current_function.append_instruction(
                 block,
@@ -984,7 +988,6 @@ impl Lowerer {
                 },
             );
 
-            self.emit_restore_async_bindings(resume_block, &saved_bindings);
             let resume_val = self.alloc_value();
             self.current_function.append_instruction(
                 resume_block,
