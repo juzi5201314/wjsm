@@ -856,8 +856,14 @@ impl Lowerer {
         let continue_block = self.current_function.new_block();
 
         self.async_resume_blocks.push((next_state, resume_block));
-        let saved_bindings = self.async_visible_binding_names();
-        self.emit_save_async_bindings(block, &saved_bindings);
+        let visible_bindings = self.async_visible_binding_names();
+
+        // 推迟 save/restore —— 由 resolve_pending_suspends 在函数体 lowering 完成后统一处理
+        self.pending_suspends.push(PendingSuspend {
+            suspend_block: block,
+            resume_block,
+            visible_bindings,
+        });
 
         self.current_function.append_instruction(
             block,
@@ -873,9 +879,6 @@ impl Lowerer {
                 target: continue_block,
             },
         );
-
-        self.emit_restore_async_bindings(resume_block, &saved_bindings);
-
         let resume_val = self.alloc_value();
         self.current_function.append_instruction(
             resume_block,
