@@ -925,6 +925,8 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     typedarray_constructor!(uint32array_constructor_fn, "uint32array_constructor", 4, 1);
     typedarray_constructor!(float32array_constructor_fn, "float32array_constructor", 4, 3);
     typedarray_constructor!(float64array_constructor_fn, "float64array_constructor", 8, 3);
+    typedarray_constructor!(bigint64array_constructor_fn, "bigint64array_constructor", 8, 4);
+    typedarray_constructor!(biguint64array_constructor_fn, "biguint64array_constructor", 8, 5);
     let typedarray_proto_length_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
@@ -1433,6 +1435,8 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                 ("SharedArrayBuffer", NativeCallable::SharedArrayBufferConstructor),
                 ("Atomics", NativeCallable::AtomicsGlobal),
                 ("DataView", NativeCallable::DataViewConstructorGlobal),
+                ("BigInt64Array", NativeCallable::BigInt64ArrayConstructor),
+                ("BigUint64Array", NativeCallable::BigUint64ArrayConstructor),
                 ("Proxy", NativeCallable::ProxyConstructor),
                 ("gc", NativeCallable::GcCollect),
             ];

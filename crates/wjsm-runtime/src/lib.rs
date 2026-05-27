@@ -1276,7 +1276,7 @@ struct TypedArrayEntry {
     byte_offset: u32,
     length: u32,
     element_size: u8,
-    /// 0=Int, 1=Uint, 2=Clamped, 3=Float
+    /// 0=Int, 1=Uint, 2=Clamped, 3=Float, 4=BigInt, 5=BigUint
     element_kind: u8,
     is_shared: bool,
 }
@@ -1381,6 +1381,8 @@ enum NativeCallable {
     ArrayBufferConstructorGlobal,
     DataViewConstructorGlobal,
     TypedArrayConstructor(()),
+    BigInt64ArrayConstructor,
+    BigUint64ArrayConstructor,
     ProxyConstructor,
     ProxyRevoker {
         proxy_handle: u32,

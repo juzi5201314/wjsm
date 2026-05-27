@@ -15,7 +15,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 384] = [
+const HOST_IMPORT_NAMES: [&str; 386] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -331,6 +331,8 @@ const HOST_IMPORT_NAMES: [&str; 384] = [
     "uint32array_constructor",
     "float32array_constructor",
     "float64array_constructor",
+    "bigint64array_constructor",
+    "biguint64array_constructor",
     // ── TypedArray prototype imports ──
     "typedarray_proto_length",
     "typedarray_proto_byte_length",
@@ -386,36 +388,36 @@ const HOST_IMPORT_NAMES: [&str; 384] = [
     "scope_record_set_meta",
     "scope_record_destroy",
     // ── WeakRef / FinalizationRegistry imports ──
-    "weakref_constructor",              // index 356
-    "weakref_proto_deref",              // 357
-    "finalization_registry_constructor", // 358
-    "finalization_registry_proto_register", // 359
-    "finalization_registry_proto_unregister", // 360
+    "weakref_constructor",              // index 358
+    "weakref_proto_deref",              // 359
+    "finalization_registry_constructor", // 360
+    "finalization_registry_proto_register", // 361
+    "finalization_registry_proto_unregister", // 362
     // ── SharedArrayBuffer imports ──
-    "sharedarraybuffer_constructor",           // 361
-    "sharedarraybuffer_proto_byte_length",      // 362
-    "sharedarraybuffer_proto_slice",            // 363
-    "sharedarraybuffer_proto_species",          // 364
+    "sharedarraybuffer_constructor",           // 363
+    "sharedarraybuffer_proto_byte_length",      // 364
+    "sharedarraybuffer_proto_slice",            // 365
+    "sharedarraybuffer_proto_species",          // 366
     // ── Atomics imports ──
-    "atomics_load",                             // 365
-    "atomics_store",                            // 366
-    "atomics_add",                              // 367
-    "atomics_sub",                              // 368
-    "atomics_and",                              // 369
-    "atomics_or",                               // 370
-    "atomics_xor",                              // 371
-    "atomics_exchange",                         // 372
-    "atomics_compare_exchange",                 // 373
-    "atomics_is_lock_free",                     // 374
-    "atomics_wait",                             // 375
-    "atomics_notify",                           // 376
-    "atomics_wait_async",                       // 377
-    "async_iterator_from",                      // 378
-    "object.group_by",                          // 379
-    "map.group_by",                             // 380
-    "symbol_property_key",                      // 381
-    "array.from",                               // 382
-    "obj_get_by_index",                         // 383
+    "atomics_load",                             // 367
+    "atomics_store",                            // 368
+    "atomics_add",                              // 369
+    "atomics_sub",                              // 370
+    "atomics_and",                              // 371
+    "atomics_or",                               // 372
+    "atomics_xor",                              // 373
+    "atomics_exchange",                         // 374
+    "atomics_compare_exchange",                 // 375
+    "atomics_is_lock_free",                     // 376
+    "atomics_wait",                             // 377
+    "atomics_notify",                           // 378
+    "atomics_wait_async",                       // 379
+    "async_iterator_from",                      // 380
+    "object.group_by",                          // 381
+    "map.group_by",                             // 382
+    "symbol_property_key",                      // 383
+    "array.from",                               // 384
+    "obj_get_by_index",                         // 385
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -424,7 +426,7 @@ const HOST_IMPORT_NAMES: [&str; 384] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        384,
+        386,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
