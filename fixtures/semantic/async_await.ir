@@ -28,24 +28,20 @@ module {
     c25 = undefined
     c26 = string("hello")
     c27 = undefined
-    c28 = number(4)
-    c29 = number(5)
-    c30 = number(4)
-    c31 = number(5)
-    c32 = undefined
-    c33 = number(0)
-    c34 = number(1)
-    c35 = number(0)
-    c36 = functionref(@0)
-    c37 = number(6)
-    c38 = number(2)
-    c39 = number(3)
-    c40 = undefined
-    c41 = number(0)
-    c42 = undefined
-    c43 = bool(false)
-    c44 = functionref(@1)
-    c45 = undefined
+    c28 = undefined
+    c29 = number(0)
+    c30 = number(1)
+    c31 = number(0)
+    c32 = functionref(@0)
+    c33 = number(4)
+    c34 = number(2)
+    c35 = number(3)
+    c36 = undefined
+    c37 = number(0)
+    c38 = undefined
+    c39 = bool(false)
+    c40 = functionref(@1)
+    c41 = undefined
 
   fn @greet$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -70,54 +66,40 @@ module {
       store var $1.arguments, %12
       jump bb1
     bb1:
-      %39 = load var $1.$state
-      switch %39 [case c33 -> bb2, case c34 -> bb3], default bb8, exit bb9
+      %29 = load var $1.$state
+      switch %29 [case c29 -> bb2, case c30 -> bb3], default bb8, exit bb9
     bb2:
       %13 = const c25
       %14 = const c26
       %15 = call builtin.promise.resolve_static(%13, %14)
       %17 = const c27
       %16 = call builtin.promise.resolve_static(%17, %15)
-      %18 = load var $1.$env
-      %19 = const c28
-      %20 = load var $1.arguments
-      call builtin.continuation.save_var(%18, %19, %20)
-      %21 = const c29
-      %22 = load var $1.result
-      call builtin.continuation.save_var(%18, %21, %22)
       suspend %16, state=1
       jump bb5
     bb3:
-      %23 = load var $1.$env
-      %24 = const c30
-      %25 = call builtin.continuation.load_var(%23, %24)
-      store var $1.arguments, %25
-      %26 = const c31
-      %27 = call builtin.continuation.load_var(%23, %26)
-      store var $1.result, %27
-      %28 = load var $1.$resume_val
-      %29 = load var $1.$is_rejected
-      branch %29, bb4, bb5
+      %18 = load var $1.$resume_val
+      %19 = load var $1.$is_rejected
+      branch %19, bb4, bb5
     bb4:
-      %30 = load var $1.$promise
-      promise_reject %30, %28
+      %20 = load var $1.$promise
+      promise_reject %20, %18
       return
     bb5:
-      %31 = load var $1.$resume_val
-      store var $1.result, %31
-      %32 = load var $1.result
-      %33 = call builtin.console.log(%32)
-      %34 = is_exception %33
-      branch %34, bb7, bb6
+      %21 = load var $1.$resume_val
+      store var $1.result, %21
+      %22 = load var $1.result
+      %23 = call builtin.console.log(%22)
+      %24 = is_exception %23
+      branch %24, bb7, bb6
     bb6:
-      %37 = const c32
-      %38 = load var $1.$promise
-      promise_resolve %38, %37
+      %27 = const c28
+      %28 = load var $1.$promise
+      promise_resolve %28, %27
       return
     bb7:
-      %35 = call builtin.exception_value(%33)
-      %36 = load var $1.$promise
-      promise_reject %36, %35
+      %25 = call builtin.exception_value(%23)
+      %26 = load var $1.$promise
+      promise_reject %26, %25
       return
     bb8:
       return
@@ -127,21 +109,21 @@ module {
   fn @greet [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c35
+      %1 = const c31
       %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $2.arguments, %2
       %3 = new_promise
-      %4 = const c36
-      %5 = const c37
+      %4 = const c32
+      %5 = const c33
       %6 = call builtin.continuation.create(%4, %3, %5)
-      %7 = const c38
+      %7 = const c34
       call builtin.continuation.save_var(%6, %7, %3)
-      %8 = const c39
-      %9 = const c40
+      %8 = const c35
+      %9 = const c36
       call builtin.continuation.save_var(%6, %8, %9)
-      %10 = const c41
-      %11 = const c42
-      %12 = const c43
+      %10 = const c37
+      %11 = const c38
+      %12 = const c39
       call builtin.async_function.resume(%4, %6, %10, %11, %12)
       return %3
 
@@ -189,9 +171,9 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c44
+      %21 = const c40
       store var $0.greet, %21
-      %22 = const c45
+      %22 = const c41
       %23 = load var $0.greet
       %24 = call %23, this=%22
       %25 = is_exception %24
