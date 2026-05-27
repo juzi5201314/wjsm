@@ -1,5 +1,16 @@
 use super::*;
 
+/// 推迟发射 save/restore 的 suspend 记录
+#[derive(Debug, Clone)]
+pub(super) struct PendingSuspend {
+    /// Suspend 指令所在的 block
+    suspend_block: BasicBlockId,
+    /// resume 后执行起始 block
+    resume_block: BasicBlockId,
+    /// 该 suspend 点可见的所有绑定（async_visible_binding_names 结果）
+    visible_bindings: Vec<String>,
+}
+
 impl Lowerer {
     /// 获取或创建当前外层函数的共享 env 对象，并确保所有捕获变量都已写入。
     /// 同一外层函数中的多个闭包共享同一个 env 对象，保证可变捕获变量的修改对所有闭包可见。

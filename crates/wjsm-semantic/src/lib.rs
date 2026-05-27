@@ -393,6 +393,11 @@ impl FunctionBuilder {
         self.blocks.get(id.0 as usize)
     }
 
+    /// 以只读切片暴露当前函数的 blocks，用于函数级分析阶段。
+    fn blocks(&self) -> &[BasicBlock] {
+        &self.blocks
+    }
+
     /// Ensure control flow from `from` reaches `target`.
     ///
     /// - If `from` is `Terminated`: no-op, returns `Terminated`.
@@ -1288,6 +1293,7 @@ struct Lowerer {
     async_is_rejected_scope_id: usize,
     async_generator_scope_id: usize,
     async_closure_env_ir_name: Option<String>,
+    pending_suspends: Vec<lowerer_async_eval::PendingSuspend>,
     strict_mode: bool,
     script_mode: bool,
     eval_mode: bool,
@@ -1335,6 +1341,7 @@ struct AsyncContextState {
     async_is_rejected_scope_id: usize,
     async_generator_scope_id: usize,
     async_closure_env_ir_name: Option<String>,
+    pending_suspends: Vec<lowerer_async_eval::PendingSuspend>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct HoistedVar {
