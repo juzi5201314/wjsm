@@ -1478,6 +1478,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         }
         NativeCallable::DataViewConstructorGlobal => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
         NativeCallable::TypedArrayConstructor(_) => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
+        NativeCallable::BigInt64ArrayConstructor | NativeCallable::BigUint64ArrayConstructor => {
+            Some(value::encode_undefined())
+        }
         NativeCallable::ProxyConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
         NativeCallable::ProxyRevoker { proxy_handle } => {
             let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");

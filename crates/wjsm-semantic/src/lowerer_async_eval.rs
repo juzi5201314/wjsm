@@ -1371,6 +1371,8 @@ impl Lowerer {
                         | Builtin::Uint32ArrayConstructor
                         | Builtin::Float32ArrayConstructor
                         | Builtin::Float64ArrayConstructor
+                        | Builtin::BigInt64ArrayConstructor
+                        | Builtin::BigUint64ArrayConstructor
                 )
             {
                 let mut arg_vals = Vec::new();
