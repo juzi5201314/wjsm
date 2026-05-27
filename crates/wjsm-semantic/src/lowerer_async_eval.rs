@@ -588,6 +588,8 @@ impl Lowerer {
     /// - 模块体的最后一个 block 已正确终止（open block 需要 emit PromiseResolve + Return）
     /// - async_resume_blocks 已填充
     pub(crate) fn finalize_async_main(&mut self) -> Result<(), LoweringError> {
+        // ── 推迟的 save/restore：运行 liveness 分析并插入 save/restore ──
+        self.resolve_pending_suspends();
         let dispatch_block = self
             .async_dispatch_block
             .expect("async_dispatch_block not set");
