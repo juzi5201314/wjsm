@@ -1,4 +1,5 @@
 use super::*;
+use crate::host_import_registry::SpecialHostImport;
 
 impl Compiler {
     pub(crate) fn compile_object_helpers(&mut self) {
@@ -14,7 +15,7 @@ impl Compiler {
         {
             // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx
             let mut func = Function::new(vec![(3, ValType::I32)]);
-            let gc_collect_idx = self.gc_collect_func_idx;
+            let gc_collect_idx = self.special_host_import_indices[&SpecialHostImport::GcCollect];
 
             // size = 16 + capacity * 32 (4 proto + 1 type + 3 pad + 4 capacity + 4 num_props + cap*32)
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -189,7 +190,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(self.proxy_trap_get_func_idx));
+            func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ProxyTrapGet]));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(3));
@@ -483,7 +484,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::Call(self.proxy_trap_set_func_idx));
+            func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ProxyTrapSet]));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(5));
@@ -844,7 +845,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(self.proxy_trap_delete_func_idx));
+            func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ProxyTrapDelete]));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(3));
