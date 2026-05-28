@@ -1,0 +1,18 @@
+exit_code: 0
+--- stdout ---
+=== Proxy Apply Trap ===
+apply trap called
+args count: 2
+result: 14
+
+=== Proxy Construct Trap ===
+construct trap called
+args: ["Alice",30]
+newTarget === target: true
+name: undefined
+age: undefined
+constructed: undefined
+
+=== Proxy without traps (forwarding) ===
+forward result: 30
+--- stderr ---

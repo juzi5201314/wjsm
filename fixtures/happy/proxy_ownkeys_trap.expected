@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+=== ownKeys filtering ===
+ownKeys trap called
+keys: ["a","c"]
+
+=== ownKeys with non-configurable properties ===
+ownKeys trap called
+keys: ["fixed","normal"]
+--- stderr ---

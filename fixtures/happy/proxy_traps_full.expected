@@ -14,7 +14,7 @@ after delete target: 105
 defineProperty trap: b
 after defineProperty target: 42
 getOwnPropertyDescriptor trap: b
-descriptor: [object Object]
+descriptor: {"value":42,"writable":true,"enumerable":true,"configurable":true}
 === Prototype & Extensibility Traps ===
 getPrototypeOf trap
 getPrototypeOf: true
@@ -30,11 +30,11 @@ isExtensible trap
 after preventExtensions isExtensible: false
 === ownKeys Trap ===
 ownKeys trap
-ownKeys: null
+ownKeys: ["y","z"]
 === apply & construct Traps ===
-deleteProperty trap: 6
-apply call: true
-getOwnPropertyDescriptor trap: undefined
+apply trap: [5,6]
+apply call: 22
+construct trap: ["Alice"]
 constructed name: undefined
 constructed flag: undefined
 instanceof proxyPerson: false

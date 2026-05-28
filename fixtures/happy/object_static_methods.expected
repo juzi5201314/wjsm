@@ -1,0 +1,49 @@
+exit_code: 0
+--- stdout ---
+=== Object.keys ===
+keys: ["a","b","c"]
+
+=== Object.values ===
+values: [1,2,3]
+
+=== Object.entries ===
+entries: [["a",1],["b",2],["c",3]]
+
+=== Object.assign ===
+result: {"a":1,"b":4,"c":6,"d":7}
+same ref: true
+
+=== Object.create ===
+proto method: hello
+has own: 0
+null proto keys: 0
+
+=== Object.is ===
+is(NaN, NaN): true
+is(0, -0): false
+is(0, 0): true
+is(1, 1): true
+is('a', 'a'): true
+is(null, null): true
+is(undefined, undefined): true
+is(true, true): true
+is(1, '1'): false
+
+=== Object.getPrototypeOf ===
+proto is Object.prototype: false
+arr proto is Array.prototype: false
+
+=== Object.setPrototypeOf ===
+inherited: true
+proto check: true
+
+=== Object.getOwnPropertyNames ===
+own names: ["a","b","c"]
+
+=== Object.isExtensible ===
+extensible: true
+
+=== Object.preventExtensions ===
+after prevent, extensible: false
+z after add attempt: 3
+--- stderr ---
