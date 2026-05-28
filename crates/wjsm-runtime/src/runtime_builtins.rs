@@ -1515,9 +1515,24 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
             alloc_host_object(caller, &_wjsm_env, 4)
         }),
-        NativeCallable::BigInt64ArrayConstructor | NativeCallable::BigUint64ArrayConstructor => {
-            Some(value::encode_undefined())
-        }
+        NativeCallable::BigInt64ArrayConstructor => Some(typedarray_construct(
+            caller,
+            argument,
+            args.get(1).copied().unwrap_or_else(value::encode_undefined),
+            args.get(2).copied().unwrap_or_else(value::encode_undefined),
+            8,
+            4,
+            Some(this_val),
+        )),
+        NativeCallable::BigUint64ArrayConstructor => Some(typedarray_construct(
+            caller,
+            argument,
+            args.get(1).copied().unwrap_or_else(value::encode_undefined),
+            args.get(2).copied().unwrap_or_else(value::encode_undefined),
+            8,
+            5,
+            Some(this_val),
+        )),
         NativeCallable::ProxyConstructor => Some({
             let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
             alloc_host_object(caller, &_wjsm_env, 4)

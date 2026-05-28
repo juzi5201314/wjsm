@@ -1490,6 +1490,80 @@ fn to_uint8_clamp(number: f64) -> u8 {
     value + (value & 1)
 }
 
+fn set_typedarray_runtime_error(caller: &mut Caller<'_, RuntimeState>, message: &'static str) {
+    set_runtime_error(caller.data(), message.to_string());
+}
+
+fn typedarray_to_number(caller: &mut Caller<'_, RuntimeState>, value_raw: i64) -> Option<f64> {
+    if value::is_bigint(value_raw) {
+        set_typedarray_runtime_error(
+            caller,
+            "TypeError: Cannot convert a BigInt value to a number",
+        );
+        return None;
+    }
+    let number_raw = to_number(caller, value_raw);
+    if caller
+        .data()
+        .runtime_error
+        .lock()
+        .expect("runtime_error mutex")
+        .is_some()
+    {
+        return None;
+    }
+    Some(value::decode_f64(number_raw))
+}
+
+fn to_uint_n(number: f64, bits: u32) -> u32 {
+    if number == 0.0 || !number.is_finite() {
+        return 0;
+    }
+    let modulo = 2.0_f64.powi(bits as i32);
+    number.trunc().rem_euclid(modulo) as u32
+}
+
+fn to_int_n(number: f64, bits: u32) -> i32 {
+    let unsigned = to_uint_n(number, bits);
+    let sign_bit = 1u32 << (bits - 1);
+    if (unsigned & sign_bit) == 0 {
+        unsigned as i32
+    } else {
+        (unsigned as i64 - (1i64 << bits)) as i32
+    }
+}
+
+fn typedarray_to_index(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: i64,
+    range_error: &'static str,
+) -> Option<u32> {
+    if value::is_undefined(value_raw) {
+        return Some(0);
+    }
+    let number = typedarray_to_number(caller, value_raw)?;
+    if number.is_nan() || number == 0.0 {
+        return Some(0);
+    }
+    if !number.is_finite() || number < 0.0 || number.trunc() > u32::MAX as f64 {
+        set_typedarray_runtime_error(caller, range_error);
+        return None;
+    }
+    Some(number.trunc() as u32)
+}
+
+fn typedarray_byte_len(
+    caller: &mut Caller<'_, RuntimeState>,
+    len: u32,
+    elem_size: u32,
+) -> Option<usize> {
+    let Some(byte_len) = len.checked_mul(elem_size) else {
+        set_typedarray_runtime_error(caller, "RangeError: Invalid typed array length");
+        return None;
+    };
+    Some(byte_len as usize)
+}
+
 pub(crate) fn encode_typedarray_element(
     caller: &mut Caller<'_, RuntimeState>,
     elem_size: u8,
@@ -1498,17 +1572,26 @@ pub(crate) fn encode_typedarray_element(
 ) -> Option<[u8; 8]> {
     let mut out = [0u8; 8];
     match (elem_size, element_kind) {
-        (1, 0) => out[0] = value::decode_f64(value_raw) as i8 as u8,
-        (1, 1) => out[0] = value::decode_f64(value_raw) as u8,
-        (1, 2) => out[0] = to_uint8_clamp(value::decode_f64(value_raw)),
-        (2, 0) => out[..2].copy_from_slice(&(value::decode_f64(value_raw) as i16).to_le_bytes()),
-        (2, 1) => out[..2].copy_from_slice(&(value::decode_f64(value_raw) as u16).to_le_bytes()),
-        (4, 0) => out[..4].copy_from_slice(&(value::decode_f64(value_raw) as i32).to_le_bytes()),
-        (4, 1) => out[..4].copy_from_slice(&(value::decode_f64(value_raw) as u32).to_le_bytes()),
-        (4, 3) => out[..4].copy_from_slice(&(value::decode_f64(value_raw) as f32).to_le_bytes()),
-        (8, 3) => out.copy_from_slice(&value::decode_f64(value_raw).to_le_bytes()),
+        (1, 0) => out[0] = to_int_n(typedarray_to_number(caller, value_raw)?, 8) as i8 as u8,
+        (1, 1) => out[0] = to_uint_n(typedarray_to_number(caller, value_raw)?, 8) as u8,
+        (1, 2) => out[0] = to_uint8_clamp(typedarray_to_number(caller, value_raw)?),
+        (2, 0) => out[..2].copy_from_slice(
+            &(to_int_n(typedarray_to_number(caller, value_raw)?, 16) as i16).to_le_bytes(),
+        ),
+        (2, 1) => out[..2].copy_from_slice(
+            &(to_uint_n(typedarray_to_number(caller, value_raw)?, 16) as u16).to_le_bytes(),
+        ),
+        (4, 0) => out[..4]
+            .copy_from_slice(&to_int_n(typedarray_to_number(caller, value_raw)?, 32).to_le_bytes()),
+        (4, 1) => out[..4].copy_from_slice(
+            &to_uint_n(typedarray_to_number(caller, value_raw)?, 32).to_le_bytes(),
+        ),
+        (4, 3) => out[..4]
+            .copy_from_slice(&(typedarray_to_number(caller, value_raw)? as f32).to_le_bytes()),
+        (8, 3) => out.copy_from_slice(&typedarray_to_number(caller, value_raw)?.to_le_bytes()),
         (8, 4) | (8, 5) => {
             if !value::is_bigint(value_raw) {
+                set_typedarray_runtime_error(caller, "TypeError: Cannot convert value to a BigInt");
                 return None;
             }
             let handle = value::decode_bigint_handle(value_raw) as usize;
@@ -1607,6 +1690,210 @@ pub(crate) fn typedarray_element_write(
         buffer.data[off..off + elem_size].copy_from_slice(&bytes[..elem_size]);
         true
     }
+}
+
+pub(crate) fn typedarray_construct(
+    caller: &mut Caller<'_, RuntimeState>,
+    buffer: i64,
+    byte_offset: i64,
+    length: i64,
+    elem_size: u8,
+    element_kind: u8,
+    target_obj: Option<i64>,
+) -> i64 {
+    let elem_size_u32 = elem_size as u32;
+    let mut initial_values: Option<Vec<i64>> = None;
+
+    let (buf_handle, offset, len, byte_len) = if value::is_array(buffer) {
+        let Some(arr_ptr) = resolve_array_ptr(caller, buffer) else {
+            return value::encode_undefined();
+        };
+        let len = read_array_length(caller, arr_ptr).unwrap_or(0);
+        let Some(byte_len) = typedarray_byte_len(caller, len, elem_size_u32) else {
+            return value::encode_undefined();
+        };
+        let mut values = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            values
+                .push(read_array_elem(caller, arr_ptr, i).unwrap_or_else(value::encode_undefined));
+        }
+        let handle = {
+            let mut table = caller
+                .data()
+                .arraybuffer_table
+                .lock()
+                .expect("arraybuffer_table mutex");
+            let handle = table.len() as u32;
+            table.push(ArrayBufferEntry {
+                data: vec![0; byte_len],
+            });
+            handle
+        };
+        initial_values = Some(values);
+        (handle, 0, len, byte_len)
+    } else if let Some(src_entry) = typedarray_entry_from_value(caller, buffer) {
+        let len = src_entry.length;
+        let Some(byte_len) = typedarray_byte_len(caller, len, elem_size_u32) else {
+            return value::encode_undefined();
+        };
+        let mut values = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            values.push(
+                typedarray_element_read(caller, buffer, i).unwrap_or_else(value::encode_undefined),
+            );
+        }
+        let handle = {
+            let mut table = caller
+                .data()
+                .arraybuffer_table
+                .lock()
+                .expect("arraybuffer_table mutex");
+            let handle = table.len() as u32;
+            table.push(ArrayBufferEntry {
+                data: vec![0; byte_len],
+            });
+            handle
+        };
+        initial_values = Some(values);
+        (handle, 0, len, byte_len)
+    } else if value::is_object(buffer) {
+        let Some(offset) = typedarray_to_index(
+            caller,
+            byte_offset,
+            "RangeError: Invalid typed array byteOffset",
+        ) else {
+            return value::encode_undefined();
+        };
+        let Some(obj_ptr) = resolve_handle(caller, buffer) else {
+            return value::encode_undefined();
+        };
+        let handle_val = read_object_property_by_name(caller, obj_ptr, "__arraybuffer_handle__");
+        let byte_len_val = read_object_property_by_name(caller, obj_ptr, "byteLength");
+        let (Some(handle_val), Some(byte_len_val)) = (handle_val, byte_len_val) else {
+            return value::encode_undefined();
+        };
+        let byte_len = value::decode_f64(byte_len_val) as u32;
+        if offset > byte_len || offset % elem_size_u32 != 0 {
+            set_typedarray_runtime_error(caller, "RangeError: Invalid typed array byteOffset");
+            return value::encode_undefined();
+        }
+        let remaining = byte_len - offset;
+        let len = if value::is_undefined(length) {
+            if remaining % elem_size_u32 != 0 {
+                set_typedarray_runtime_error(caller, "RangeError: Invalid typed array length");
+                return value::encode_undefined();
+            }
+            remaining / elem_size_u32
+        } else {
+            let Some(len) =
+                typedarray_to_index(caller, length, "RangeError: Invalid typed array length")
+            else {
+                return value::encode_undefined();
+            };
+            let Some(byte_count) = len.checked_mul(elem_size_u32) else {
+                set_typedarray_runtime_error(caller, "RangeError: Invalid typed array length");
+                return value::encode_undefined();
+            };
+            if byte_count > remaining {
+                set_typedarray_runtime_error(caller, "RangeError: Invalid typed array length");
+                return value::encode_undefined();
+            }
+            len
+        };
+        let Some(view_byte_len) = typedarray_byte_len(caller, len, elem_size_u32) else {
+            return value::encode_undefined();
+        };
+        (
+            value::decode_f64(handle_val) as u32,
+            offset,
+            len,
+            view_byte_len,
+        )
+    } else {
+        let Some(len) =
+            typedarray_to_index(caller, buffer, "RangeError: Invalid typed array length")
+        else {
+            return value::encode_undefined();
+        };
+        let Some(byte_len) = typedarray_byte_len(caller, len, elem_size_u32) else {
+            return value::encode_undefined();
+        };
+        let handle = {
+            let mut table = caller
+                .data()
+                .arraybuffer_table
+                .lock()
+                .expect("arraybuffer_table mutex");
+            let handle = table.len() as u32;
+            table.push(ArrayBufferEntry {
+                data: vec![0; byte_len],
+            });
+            handle
+        };
+        (handle, 0, len, byte_len)
+    };
+
+    let handle = {
+        let mut table = caller
+            .data()
+            .typedarray_table
+            .lock()
+            .expect("typedarray_table mutex");
+        let handle = table.len() as u32;
+        table.push(TypedArrayEntry {
+            buffer_handle: buf_handle,
+            byte_offset: offset,
+            length: len,
+            element_size: elem_size,
+            element_kind,
+            is_shared: false,
+        });
+        handle
+    };
+
+    let obj = if let Some(target) = target_obj.filter(|target| value::is_object(*target)) {
+        target
+    } else {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        alloc_host_object(caller, &env, 4)
+    };
+    let _ = define_host_data_property_from_caller(
+        caller,
+        obj,
+        "__typedarray_handle__",
+        value::encode_f64(handle as f64),
+    );
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "length", value::encode_f64(len as f64));
+    let _ = define_host_data_property_from_caller(
+        caller,
+        obj,
+        "byteLength",
+        value::encode_f64(byte_len as f64),
+    );
+    let _ = define_host_data_property_from_caller(
+        caller,
+        obj,
+        "byteOffset",
+        value::encode_f64(offset as f64),
+    );
+
+    if let Some(values) = initial_values {
+        for (i, value) in values.into_iter().enumerate() {
+            if !typedarray_element_write(caller, obj, i as u32, value)
+                && caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime_error mutex")
+                    .is_some()
+            {
+                return value::encode_undefined();
+            }
+        }
+    }
+
+    obj
 }
 
 pub(crate) fn typedarray_same_value_zero(
