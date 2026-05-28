@@ -12,6 +12,9 @@ CONTEXT.md
 artifacts/
 .worktrees/
 
+# AtomCode skills symlink
+.atomcode/
+
 # Editor local config
 .opencode/
 .claude/
