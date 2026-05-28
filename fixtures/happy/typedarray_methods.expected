@@ -1,0 +1,32 @@
+exit_code: 0
+--- stdout ---
+fill: 5,5,5,5
+reverse: 3,2,1
+indexOf: 1
+includes: true
+join: 1-2-3
+at: 3
+forEach: 2,4,6
+map type: Array
+map: 11,12,13
+reduce: 6
+sort: 1,2,3
+lastIndexOf: 1
+copyWithin: 3,4,3,4
+filter type: Array
+filter: 2,3
+reduceRight: -6
+find: 3
+findIndex: 2
+some: true
+every: true
+entries: 0:1,1:2
+keys: 0,1,2
+values: 1,2,3
+toString: 1,2,3
+values live: 1,8,3
+entries live: 2:7
+sort compare: 3,2,1
+clamped: 2,4,0,255
+clamped fill: 2,2,2,2
+--- stderr ---

@@ -305,11 +305,22 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
 
             func.instruction(&WasmInstruction::Else);
-            // 不是 TAG_ARRAY → 委托给 $obj_set 进行属性设置
+            // 不是 TAG_ARRAY → TypedArray 数字索引由宿主处理；未处理才回退到普通属性设置。
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::Call(
+                self.typedarray_set_by_index_func_idx,
+            ));
+            func.instruction(&WasmInstruction::I64Const(value::encode_bool(true)));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::Else);
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::Call(self.obj_set_func_idx));
+            func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);

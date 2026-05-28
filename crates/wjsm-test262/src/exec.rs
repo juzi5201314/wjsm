@@ -217,6 +217,7 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
     source.push_str("var Infinity = 1 / 0;\n");
     // print() 是 test262 harness 使用的全局函数，wjsm 没有原生支持
     source.push_str("function print(msg) { console.log(msg); }\n");
+    source.push_str("function gc() { return undefined; }\n");
     source.push('\n');
     // 设置 $262 对象（host-defined test262 API）
     source.push_str("var $262 = { gc: gc };\n");

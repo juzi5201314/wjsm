@@ -7,42 +7,42 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use swc_core::ecma::ast as swc_ast;
-use wasmtime::*;
 use wasmtime::Func;
+use wasmtime::*;
 /// 影子栈大小（必须与后端保持一致）
 const SHADOW_STACK_SIZE: u32 = 65536;
 
 use wjsm_ir::{constants, value};
+mod runtime_arguments;
+mod runtime_async_fn;
 mod runtime_builtins;
+mod runtime_combinators;
 mod runtime_eval;
 mod runtime_heap;
 mod runtime_host_helpers;
-mod runtime_arguments;
-mod runtime_promises;
 mod runtime_microtask;
-mod runtime_combinators;
-mod runtime_async_fn;
+mod runtime_promises;
 
+mod host_imports;
 mod runtime_render;
 mod runtime_values;
 mod wasm_env;
-mod host_imports;
 use host_imports::*;
 pub(crate) use wasm_env::WasmEnv;
 
-use runtime_builtins::*;
 use runtime_arguments::*;
+use runtime_async_fn::*;
+use runtime_builtins::*;
+use runtime_combinators::*;
 use runtime_eval::*;
 use runtime_heap::*;
 use runtime_host_helpers::*;
-use runtime_promises::*;
 use runtime_microtask::*;
-use runtime_combinators::*;
-use runtime_async_fn::*;
+use runtime_promises::*;
 use runtime_render::*;
 use runtime_values::*;
 
@@ -148,8 +148,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let alloc_counter: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
     const GC_THRESHOLD: u64 = 1000; // 每 1000 次分配触发一次 GC 检查
     let weakref_table: Arc<Mutex<Vec<WeakRefEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let finalization_registry_table: Arc<Mutex<Vec<FinalizationRegistryEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let pending_cleanup_callbacks: Arc<Mutex<Vec<(i64, Vec<i64>)>>> = Arc::new(Mutex::new(Vec::new()));
+    let finalization_registry_table: Arc<Mutex<Vec<FinalizationRegistryEntry>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let pending_cleanup_callbacks: Arc<Mutex<Vec<(i64, Vec<i64>)>>> =
+        Arc::new(Mutex::new(Vec::new()));
     let mut store = Store::new(
         &engine,
         RuntimeState {
@@ -256,7 +258,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // Import 325: create_mapped_arguments_object: (i64, i64, i64) -> i64
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, args_array: i64, param_count: i64, func_ref: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>,
+         args_array: i64,
+         param_count: i64,
+         func_ref: i64|
+         -> i64 {
             create_mapped_arguments_object(&mut caller, args_array, param_count, func_ref)
         },
     );
@@ -273,7 +279,12 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     linker.define(&mut store, "env", "scope_record_create", f)?;
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64, is_tdz: i64, is_const: i64| {
+        |mut caller: Caller<'_, RuntimeState>,
+         record: i64,
+         name: i64,
+         val: i64,
+         is_tdz: i64,
+         is_const: i64| {
             scope_record_add_binding(caller, record, name, val, is_tdz, is_const)
         },
     );
@@ -315,9 +326,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     linker.define(&mut store, "env", "scope_record_set_meta", f)?;
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64| {
-            scope_record_destroy(caller, record)
-        },
+        |mut caller: Caller<'_, RuntimeState>, record: i64| scope_record_destroy(caller, record),
     );
     linker.define(&mut store, "env", "scope_record_destroy", f)?;
     // ── WeakRef / FinalizationRegistry (imports 356-360) ──
@@ -328,6 +337,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, iterable: i64| -> i64 {
+            if value::is_iterator(iterable) {
+                return create_async_from_sync_iterator(&mut caller, iterable);
+            }
             if !(value::is_object(iterable)
                 || value::is_array(iterable)
                 || value::is_function(iterable)
@@ -350,8 +362,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 if let Some(arr_ptr) = resolve_handle(&mut caller, iterable) {
                     let length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
                     let sync_iter_handle = {
-                        let mut iters = caller.data().iterators.lock()
-                            .expect("iterators mutex");
+                        let mut iters = caller.data().iterators.lock().expect("iterators mutex");
                         let sync_handle = iters.len() as u32;
                         iters.push(IteratorState::ArrayIter {
                             ptr: arr_ptr,
@@ -369,8 +380,13 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             {
                 if value::is_callable(method) {
                     let iterator = if value::is_native_callable(method) {
-                        call_native_callable_with_args_from_caller(&mut caller, method, iterable, vec![])
-                            .unwrap_or_else(value::encode_undefined)
+                        call_native_callable_with_args_from_caller(
+                            &mut caller,
+                            method,
+                            iterable,
+                            vec![],
+                        )
+                        .unwrap_or_else(value::encode_undefined)
                     } else if let Ok(result) =
                         call_wasm_callback(&mut caller, method, iterable, &[])
                     {
@@ -380,22 +396,14 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     };
                     if value::is_object(iterator) {
                         if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
-                            let next =
-                                read_object_property_by_name(&mut caller, iter_ptr, "next")
-                                    .filter(|n| value::is_callable(*n));
+                            let next = read_object_property_by_name(&mut caller, iter_ptr, "next")
+                                .filter(|n| value::is_callable(*n));
                             if let Some(next_fn) = next {
                                 let return_method =
-                                    read_object_property_by_name(
-                                        &mut caller,
-                                        iter_ptr,
-                                        "return",
-                                    )
-                                    .filter(|c| value::is_callable(*c));
-                                let mut iters = caller
-                                    .data()
-                                    .iterators
-                                    .lock()
-                                    .expect("iterators mutex");
+                                    read_object_property_by_name(&mut caller, iter_ptr, "return")
+                                        .filter(|c| value::is_callable(*c));
+                                let mut iters =
+                                    caller.data().iterators.lock().expect("iterators mutex");
                                 let handle = iters.len() as u32;
                                 iters.push(IteratorState::ObjectIter {
                                     next: next_fn,
@@ -404,10 +412,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                                     has_current: false,
                                     done: false,
                                 });
-                                return value::encode_handle(
-                                    value::TAG_ITERATOR,
-                                    handle,
-                                );
+                                return value::encode_handle(value::TAG_ITERATOR, handle);
                             }
                         }
                     }
@@ -422,13 +427,17 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             }
 
             // 回退到 @@iterator
-            if let Some(method) =
-                read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
+            if let Some(method) = read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
             {
                 if value::is_callable(method) {
                     let sync_iter = if value::is_native_callable(method) {
-                        call_native_callable_with_args_from_caller(&mut caller, method, iterable, vec![])
-                            .unwrap_or_else(value::encode_undefined)
+                        call_native_callable_with_args_from_caller(
+                            &mut caller,
+                            method,
+                            iterable,
+                            vec![],
+                        )
+                        .unwrap_or_else(value::encode_undefined)
                     } else if let Ok(result) =
                         call_wasm_callback(&mut caller, method, iterable, &[])
                     {
@@ -443,18 +452,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                                     .filter(|n| value::is_callable(*n));
                             if let Some(next_fn) = next_fn {
                                 let return_method =
-                                    read_object_property_by_name(
-                                        &mut caller,
-                                        sync_ptr,
-                                        "return",
-                                    )
-                                    .filter(|c| value::is_callable(*c));
+                                    read_object_property_by_name(&mut caller, sync_ptr, "return")
+                                        .filter(|c| value::is_callable(*c));
                                 let sync_iter_handle = {
-                                    let mut iters = caller
-                                        .data()
-                                        .iterators
-                                        .lock()
-                                        .expect("iterators mutex");
+                                    let mut iters =
+                                        caller.data().iterators.lock().expect("iterators mutex");
                                     let sync_handle = iters.len() as u32;
                                     iters.push(IteratorState::ObjectIter {
                                         next: next_fn,
@@ -463,10 +465,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                                         has_current: false,
                                         done: false,
                                     });
-                                    value::encode_handle(
-                                        value::TAG_ITERATOR,
-                                        sync_handle,
-                                    )
+                                    value::encode_handle(value::TAG_ITERATOR, sync_handle)
                                 };
                                 return create_async_from_sync_iterator(
                                     &mut caller,
@@ -698,11 +697,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                             }
                             write_array_length(&mut caller, arr_ptr, elements.len() as u32);
                         }
-                        let mut table = caller
-                            .data()
-                            .map_table
-                            .lock()
-                            .expect("map table mutex");
+                        let mut table = caller.data().map_table.lock().expect("map table mutex");
                         table[map_handle].keys.push(*group_key);
                         table[map_handle].values.push(arr);
                     }
@@ -743,31 +738,123 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64, _this_val: i64, args_base: i32, args_count: i32|
+         _env_obj: i64,
+         _this_val: i64,
+         args_base: i32,
+         args_count: i32|
          -> i64 {
-            if args_count < 1 { return value::encode_undefined(); }
-            let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
+            if args_count < 1 {
+                return value::encode_undefined();
+            }
+            let memory = caller
+                .get_export("memory")
+                .and_then(|e| e.into_memory())
+                .unwrap();
             let mut buf = [0u8; 8];
             let _ = memory.read(&mut caller, args_base as usize, &mut buf);
             let source = i64::from_le_bytes(buf);
             if value::is_iterator(source) {
                 let handle_idx = value::decode_handle(source) as usize;
+                enum PendingIteratorValue {
+                    Value(i64),
+                    TypedArrayValue { entry: TypedArrayEntry, index: u32 },
+                    TypedArrayEntry { entry: TypedArrayEntry, index: u32 },
+                }
                 let mut values = Vec::new();
                 loop {
-                    let mut done = true;
-                    { let mut iters = caller.data().iterators.lock().expect("iters");
-                      if let Some(iter) = iters.get_mut(handle_idx) {
-                        match iter {
-                            IteratorState::MapKeyIter { keys, index } => {
-                                if (*index as usize) < keys.len() { values.push(keys[*index as usize]); *index += 1; done = false; }
+                    let pending = {
+                        let mut iters = caller.data().iterators.lock().expect("iters");
+                        match iters.get_mut(handle_idx) {
+                            Some(IteratorState::MapKeyIter { keys, index }) => {
+                                if (*index as usize) < keys.len() {
+                                    let value = keys[*index as usize];
+                                    *index += 1;
+                                    Some(PendingIteratorValue::Value(value))
+                                } else {
+                                    None
+                                }
                             }
-                            IteratorState::MapValueIter { values: v, index } => {
-                                if (*index as usize) < v.len() { values.push(v[*index as usize]); *index += 1; done = false; }
+                            Some(IteratorState::MapValueIter { values, index }) => {
+                                if (*index as usize) < values.len() {
+                                    let value = values[*index as usize];
+                                    *index += 1;
+                                    Some(PendingIteratorValue::Value(value))
+                                } else {
+                                    None
+                                }
                             }
-                            _ => {}
+                            Some(IteratorState::TypedArrayValueIter {
+                                entry,
+                                index,
+                                length,
+                            }) => {
+                                if *index < *length {
+                                    let entry = entry.clone();
+                                    let current = *index;
+                                    *index += 1;
+                                    Some(PendingIteratorValue::TypedArrayValue {
+                                        entry,
+                                        index: current,
+                                    })
+                                } else {
+                                    None
+                                }
+                            }
+                            Some(IteratorState::TypedArrayEntryIter {
+                                entry,
+                                index,
+                                length,
+                            }) => {
+                                if *index < *length {
+                                    let entry = entry.clone();
+                                    let current = *index;
+                                    *index += 1;
+                                    Some(PendingIteratorValue::TypedArrayEntry {
+                                        entry,
+                                        index: current,
+                                    })
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => None,
                         }
-                    } }
-                    if done { break; }
+                    };
+                    let Some(pending) = pending else {
+                        break;
+                    };
+                    match pending {
+                        PendingIteratorValue::Value(value) => values.push(value),
+                        PendingIteratorValue::TypedArrayValue { entry, index } => {
+                            values.push(
+                                typedarray_element_read_entry(&mut caller, &entry, index)
+                                    .unwrap_or_else(value::encode_undefined),
+                            );
+                        }
+                        PendingIteratorValue::TypedArrayEntry {
+                            entry: typedarray_entry,
+                            index,
+                        } => {
+                            let entry = alloc_array(&mut caller, 2);
+                            if let Some(entry_ptr) = resolve_array_ptr(&mut caller, entry) {
+                                let elem = typedarray_element_read_entry(
+                                    &mut caller,
+                                    &typedarray_entry,
+                                    index,
+                                )
+                                .unwrap_or_else(value::encode_undefined);
+                                write_array_elem(
+                                    &mut caller,
+                                    entry_ptr,
+                                    0,
+                                    value::encode_f64(index as f64),
+                                );
+                                write_array_elem(&mut caller, entry_ptr, 1, elem);
+                                write_array_length(&mut caller, entry_ptr, 2);
+                            }
+                            values.push(entry);
+                        }
+                    }
                 }
                 let arr = alloc_array(&mut caller, values.len() as u32);
                 if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
@@ -778,7 +865,21 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 }
                 return arr;
             }
-            if value::is_array(source) { return source; }
+            if let Some(entry) = typedarray_entry_from_value(&mut caller, source) {
+                let arr = alloc_array(&mut caller, entry.length);
+                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
+                    for i in 0..entry.length {
+                        let val = typedarray_element_read(&mut caller, source, i)
+                            .unwrap_or_else(value::encode_undefined);
+                        write_array_elem(&mut caller, arr_ptr, i, val);
+                    }
+                    write_array_length(&mut caller, arr_ptr, entry.length);
+                }
+                return arr;
+            }
+            if value::is_array(source) {
+                return source;
+            }
             value::encode_undefined()
         },
     );
@@ -787,6 +888,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, index: i32| -> i64 {
+            if index >= 0 {
+                if let Some(value) = typedarray_element_read(&mut caller, boxed, index as u32) {
+                    return value;
+                }
+            }
             if !value::is_object(boxed) && !value::is_array(boxed) && !value::is_function(boxed) {
                 return value::encode_undefined();
             }
@@ -800,6 +906,19 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     linker.define(&mut store, "env", "obj_get_by_index", f)?;
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, boxed: i64, index: i32, value_raw: i64| -> i64 {
+            if typedarray_entry_from_value(&mut caller, boxed).is_some() {
+                if index >= 0 {
+                    let _ = typedarray_element_write(&mut caller, boxed, index as u32, value_raw);
+                }
+                return value::encode_bool(true);
+            }
+            value::encode_bool(false)
+        },
+    );
+    linker.define(&mut store, "env", "typedarray_set_by_index", f)?;
     let instance = linker.instantiate(&mut store, &module)?;
     // ── Create %AsyncIteratorPrototype% and AsyncGenerator.prototype ──
     let memory = instance
@@ -826,6 +945,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         .get_export(&mut store, "__shadow_sp")
         .and_then(|e| e.into_global())
         .expect("__shadow_sp export");
+    let array_proto_handle_global = instance
+        .get_export(&mut store, "__array_proto_handle")
+        .and_then(|e| e.into_global())
+        .expect("__array_proto_handle export");
     let object_proto_handle_global = instance
         .get_export(&mut store, "__object_proto_handle")
         .and_then(|e| e.into_global())
@@ -838,6 +961,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         obj_table_ptr: obj_table_ptr_global,
         obj_table_count: obj_table_count_global,
         object_proto_handle: object_proto_handle_global,
+        array_proto_handle: array_proto_handle_global,
     };
 
     // 创建 %AsyncIteratorPrototype%
@@ -881,12 +1005,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // 设置 AsyncGenerator.prototype.[[Prototype]] = %AsyncIteratorPrototype%
     let async_gen_handle = value::decode_object_handle(async_gen_proto);
     let async_iterator_handle = value::decode_object_handle(async_iterator_proto);
-    let obj_ptr = resolve_handle_idx_with_env(
-        &mut store,
-        &wasm_env,
-        async_gen_handle as usize,
-    )
-    .expect("async_gen_proto object ptr");
+    let obj_ptr = resolve_handle_idx_with_env(&mut store, &wasm_env, async_gen_handle as usize)
+        .expect("async_gen_proto object ptr");
     let data = memory.data_mut(&mut store);
     data[obj_ptr..obj_ptr + 4].copy_from_slice(&async_iterator_handle.to_le_bytes());
 
@@ -903,7 +1023,6 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // 设置 RuntimeState 中的原型字段
     store.data_mut().async_iterator_prototype = async_iterator_proto;
     store.data_mut().async_gen_prototype = async_gen_proto;
-
 
     // ── Run main ──
     let main = instance.get_typed_func::<(), i64>(&mut store, "main")?;
@@ -925,11 +1044,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                     } else {
                         format!("Uncaught exception: {}", entry.message)
                     };
-                    let mut buffer = store
-                        .data()
-                        .output
-                        .lock()
-                        .expect("output mutex");
+                    let mut buffer = store.data().output.lock().expect("output mutex");
                     writeln!(&mut *buffer, "{msg}").ok();
                     *store
                         .data()
@@ -975,7 +1090,8 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 writeln!(
                     store.data().output.lock().expect("output mutex"),
                     "Internal error: timer event loop exceeded max iterations"
-                ).ok();
+                )
+                .ok();
                 break;
             }
             let now = Instant::now();
@@ -1271,7 +1387,7 @@ struct DataViewEntry {
 
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
-struct TypedArrayEntry {
+pub(crate) struct TypedArrayEntry {
     buffer_handle: u32,
     byte_offset: u32,
     length: u32,
@@ -1279,6 +1395,237 @@ struct TypedArrayEntry {
     /// 0=Int, 1=Uint, 2=Clamped, 3=Float, 4=BigInt, 5=BigUint
     element_kind: u8,
     is_shared: bool,
+}
+
+fn bigint_low_64_bytes(value: &num_bigint::BigInt) -> [u8; 8] {
+    let fill = if value.sign() == num_bigint::Sign::Minus {
+        0xff
+    } else {
+        0
+    };
+    let mut out = [fill; 8];
+    let bytes = value.to_signed_bytes_le();
+    let len = bytes.len().min(8);
+    out[..len].copy_from_slice(&bytes[..len]);
+    out
+}
+
+pub(crate) fn typedarray_entry_from_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    value_raw: i64,
+) -> Option<TypedArrayEntry> {
+    if !value::is_object(value_raw) {
+        return None;
+    }
+    let ptr = resolve_handle(caller, value_raw)?;
+    let handle_raw = read_object_property_by_name(caller, ptr, "__typedarray_handle__")?;
+    let handle = value::decode_f64(handle_raw) as usize;
+    let table = caller.data().typedarray_table.lock().ok()?;
+    table.get(handle).cloned()
+}
+
+fn typedarray_element_offset(entry: &TypedArrayEntry, index: u32) -> Option<usize> {
+    if index >= entry.length {
+        return None;
+    }
+    Some(entry.byte_offset as usize + index as usize * entry.element_size as usize)
+}
+
+fn decode_typedarray_element(
+    caller: &mut Caller<'_, RuntimeState>,
+    bytes: &[u8; 8],
+    elem_size: u8,
+    element_kind: u8,
+) -> Option<i64> {
+    let value = match (elem_size, element_kind) {
+        (1, 0) => value::encode_f64(bytes[0] as i8 as f64),
+        (1, 1) | (1, 2) => value::encode_f64(bytes[0] as f64),
+        (2, 0) => value::encode_f64(i16::from_le_bytes([bytes[0], bytes[1]]) as f64),
+        (2, 1) => value::encode_f64(u16::from_le_bytes([bytes[0], bytes[1]]) as f64),
+        (4, 0) => {
+            value::encode_f64(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64)
+        }
+        (4, 1) => {
+            value::encode_f64(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64)
+        }
+        (4, 3) => {
+            value::encode_f64(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64)
+        }
+        (8, 3) => value::encode_f64(f64::from_le_bytes(*bytes)),
+        (8, 4) => {
+            let raw = i64::from_le_bytes(*bytes);
+            let mut table = caller.data().bigint_table.lock().ok()?;
+            let handle = table.len() as u32;
+            table.push(num_bigint::BigInt::from(raw));
+            value::encode_bigint_handle(handle)
+        }
+        (8, 5) => {
+            let raw = u64::from_le_bytes(*bytes);
+            let mut table = caller.data().bigint_table.lock().ok()?;
+            let handle = table.len() as u32;
+            table.push(num_bigint::BigInt::from(raw));
+            value::encode_bigint_handle(handle)
+        }
+        _ => return None,
+    };
+    Some(value)
+}
+
+fn to_uint8_clamp(number: f64) -> u8 {
+    if number.is_nan() || number <= 0.0 {
+        return 0;
+    }
+    if number >= 255.0 {
+        return 255;
+    }
+    let floor = number.floor();
+    let delta = number - floor;
+    if delta > 0.5 {
+        return floor as u8 + 1;
+    }
+    if delta < 0.5 {
+        return floor as u8;
+    }
+    let value = floor as u8;
+    value + (value & 1)
+}
+
+pub(crate) fn encode_typedarray_element(
+    caller: &mut Caller<'_, RuntimeState>,
+    elem_size: u8,
+    element_kind: u8,
+    value_raw: i64,
+) -> Option<[u8; 8]> {
+    let mut out = [0u8; 8];
+    match (elem_size, element_kind) {
+        (1, 0) => out[0] = value::decode_f64(value_raw) as i8 as u8,
+        (1, 1) => out[0] = value::decode_f64(value_raw) as u8,
+        (1, 2) => out[0] = to_uint8_clamp(value::decode_f64(value_raw)),
+        (2, 0) => out[..2].copy_from_slice(&(value::decode_f64(value_raw) as i16).to_le_bytes()),
+        (2, 1) => out[..2].copy_from_slice(&(value::decode_f64(value_raw) as u16).to_le_bytes()),
+        (4, 0) => out[..4].copy_from_slice(&(value::decode_f64(value_raw) as i32).to_le_bytes()),
+        (4, 1) => out[..4].copy_from_slice(&(value::decode_f64(value_raw) as u32).to_le_bytes()),
+        (4, 3) => out[..4].copy_from_slice(&(value::decode_f64(value_raw) as f32).to_le_bytes()),
+        (8, 3) => out.copy_from_slice(&value::decode_f64(value_raw).to_le_bytes()),
+        (8, 4) | (8, 5) => {
+            if !value::is_bigint(value_raw) {
+                return None;
+            }
+            let handle = value::decode_bigint_handle(value_raw) as usize;
+            let table = caller.data().bigint_table.lock().ok()?;
+            let bigint = table.get(handle)?;
+            out = bigint_low_64_bytes(bigint);
+        }
+        _ => return None,
+    }
+    Some(out)
+}
+
+pub(crate) fn typedarray_element_read(
+    caller: &mut Caller<'_, RuntimeState>,
+    typedarray: i64,
+    index: u32,
+) -> Option<i64> {
+    let entry = typedarray_entry_from_value(caller, typedarray)?;
+    typedarray_element_read_entry(caller, &entry, index)
+}
+
+pub(crate) fn typedarray_element_read_entry(
+    caller: &mut Caller<'_, RuntimeState>,
+    entry: &TypedArrayEntry,
+    index: u32,
+) -> Option<i64> {
+    let off = typedarray_element_offset(entry, index)?;
+    let mut bytes = [0u8; 8];
+    let elem_size = entry.element_size as usize;
+    if entry.is_shared {
+        let shared = caller.data().shared_state.as_ref()?.clone();
+        let sab_table = shared.sab_table.lock().ok()?;
+        let buffer = sab_table.get(entry.buffer_handle as usize)?;
+        let data = buffer.data.read().ok()?;
+        if off + elem_size > data.len() {
+            return None;
+        }
+        bytes[..elem_size].copy_from_slice(&data[off..off + elem_size]);
+    } else {
+        let ab_table = caller.data().arraybuffer_table.lock().ok()?;
+        let buffer = ab_table.get(entry.buffer_handle as usize)?;
+        if off + elem_size > buffer.data.len() {
+            return None;
+        }
+        bytes[..elem_size].copy_from_slice(&buffer.data[off..off + elem_size]);
+    }
+    decode_typedarray_element(caller, &bytes, entry.element_size, entry.element_kind)
+}
+
+pub(crate) fn typedarray_element_write(
+    caller: &mut Caller<'_, RuntimeState>,
+    typedarray: i64,
+    index: u32,
+    value_raw: i64,
+) -> bool {
+    let Some(entry) = typedarray_entry_from_value(caller, typedarray) else {
+        return false;
+    };
+    let Some(off) = typedarray_element_offset(&entry, index) else {
+        return false;
+    };
+    let Some(bytes) =
+        encode_typedarray_element(caller, entry.element_size, entry.element_kind, value_raw)
+    else {
+        return false;
+    };
+    let elem_size = entry.element_size as usize;
+    if entry.is_shared {
+        let Some(shared) = caller.data().shared_state.as_ref().cloned() else {
+            return false;
+        };
+        let Ok(sab_table) = shared.sab_table.lock() else {
+            return false;
+        };
+        let Some(buffer) = sab_table.get(entry.buffer_handle as usize) else {
+            return false;
+        };
+        let Ok(mut data) = buffer.data.write() else {
+            return false;
+        };
+        if off + elem_size > data.len() {
+            return false;
+        }
+        data[off..off + elem_size].copy_from_slice(&bytes[..elem_size]);
+        true
+    } else {
+        let Ok(mut ab_table) = caller.data().arraybuffer_table.lock() else {
+            return false;
+        };
+        let Some(buffer) = ab_table.get_mut(entry.buffer_handle as usize) else {
+            return false;
+        };
+        if off + elem_size > buffer.data.len() {
+            return false;
+        }
+        buffer.data[off..off + elem_size].copy_from_slice(&bytes[..elem_size]);
+        true
+    }
+}
+
+pub(crate) fn typedarray_same_value_zero(
+    caller: &mut Caller<'_, RuntimeState>,
+    left: i64,
+    right: i64,
+) -> bool {
+    if value::is_bigint(left) && value::is_bigint(right) {
+        let left_handle = value::decode_bigint_handle(left) as usize;
+        let right_handle = value::decode_bigint_handle(right) as usize;
+        let Ok(table) = caller.data().bigint_table.lock() else {
+            return false;
+        };
+        return match (table.get(left_handle), table.get(right_handle)) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        };
+    }
+    same_value_zero(left, right)
 }
 
 #[derive(Clone, Debug)]
@@ -1549,6 +1896,16 @@ enum IteratorState {
     MapValueIter {
         values: Vec<i64>,
         index: u32,
+    },
+    TypedArrayValueIter {
+        entry: TypedArrayEntry,
+        index: u32,
+        length: u32,
+    },
+    TypedArrayEntryIter {
+        entry: TypedArrayEntry,
+        index: u32,
+        length: u32,
     },
     ObjectIter {
         next: i64,
