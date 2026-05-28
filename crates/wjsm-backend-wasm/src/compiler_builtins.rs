@@ -1121,6 +1121,8 @@ impl Compiler {
             | Builtin::ObjectEntries
             | Builtin::ObjectGetPrototypeOf
             | Builtin::ObjectGetOwnPropertyNames
+            | Builtin::ObjectIsExtensible
+            | Builtin::ObjectPreventExtensions
             | Builtin::ObjectProtoToString
             | Builtin::ObjectProtoValueOf => {
                 let val = args.first().context("Object method expects 1 arg")?;

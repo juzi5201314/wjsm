@@ -703,6 +703,8 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ObjectGetOwnPropertyNames => ("object.get_own_property_names", 1),
         Builtin::ObjectIs => ("object.is", 2),
         Builtin::ObjectGroupBy => ("object.group_by", 2),
+        Builtin::ObjectIsExtensible => ("object.is_extensible", 1),
+        Builtin::ObjectPreventExtensions => ("object.prevent_extensions", 1),
         Builtin::MapGroupBy => ("map.group_by", 2),
         Builtin::BigIntFromLiteral => ("bigint.from_literal", 2),
         Builtin::BigIntAdd => ("bigint.add", 2),

@@ -20,6 +20,8 @@ pub enum SpecialHostImport {
     NewTargetSet,
     ObjGetByIndex,
     ObjSpread,
+    ProxyApply,
+    ProxyConstruct,
     ProxyTrapDelete,
     ProxyTrapGet,
     ProxyTrapSet,
@@ -2388,6 +2390,32 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         type_idx: 32,
         key: Some(HostImportKey::Special(
             SpecialHostImport::TypedArraySetByIndex,
+        )),
+        group: None,
+    },
+    HostImportSpec {
+        name: "object.is_extensible",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::ObjectIsExtensible)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "object.prevent_extensions",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::ObjectPreventExtensions)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "proxy.apply",
+        type_idx: 12,
+        key: Some(HostImportKey::Special(SpecialHostImport::ProxyApply)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "proxy.construct",
+        type_idx: 12,
+        key: Some(HostImportKey::Special(
+            SpecialHostImport::ProxyConstruct,
         )),
         group: None,
     },
