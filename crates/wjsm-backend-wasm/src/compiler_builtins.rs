@@ -1753,8 +1753,6 @@ impl Compiler {
             // ── Proxy / Reflect builtins ──────────────────────────────────────────
             Builtin::ProxyCreate
             | Builtin::ProxyRevocable
-            | Builtin::ReflectGet
-            | Builtin::ReflectSet
             | Builtin::ReflectHas
             | Builtin::ReflectDeleteProperty
             | Builtin::ReflectApply
@@ -1767,6 +1765,44 @@ impl Compiler {
             | Builtin::ReflectOwnKeys => {
                 for arg in args {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // Reflect.get(target, prop[, receiver]) — 签名需要 3 个参数，缺 receiver 时补 undefined
+            Builtin::ReflectGet => {
+                for arg in args {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                if args.len() < 3 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // Reflect.set(target, prop, val[, receiver]) — 签名需要 4 个参数，缺 receiver 时补 undefined
+            Builtin::ReflectSet => {
+                for arg in args {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                if args.len() < 4 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
                 let func_idx = self
                     .builtin_func_indices
