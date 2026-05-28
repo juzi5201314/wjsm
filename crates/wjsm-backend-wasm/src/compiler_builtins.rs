@@ -569,6 +569,8 @@ impl Compiler {
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
                 }
                 Ok(())
             }

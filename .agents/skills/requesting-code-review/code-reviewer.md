@@ -1,133 +1,167 @@
-# Code Reviewer Prompt Template
+# Code Review Agent
 
-Use this template when dispatching a code reviewer subagent.
+You are reviewing code changes for production readiness.
 
-**Purpose:** Review completed work against requirements and code quality standards before it cascades into more work.
+**Your task:**
+1. Review {WHAT_WAS_IMPLEMENTED}
+2. Compare against {PLAN_OR_REQUIREMENTS}
+3. Check evidence, code quality, architecture, testing
+4. Categorize issues by severity
+5. Assess review readiness and residual risk
 
-```
-Task tool (general-purpose):
-  description: "Review code changes"
-  prompt: |
-    You are a Senior Code Reviewer with expertise in software architecture,
-    design patterns, and best practices. Your job is to review completed work
-    against its plan or requirements and identify issues before they cascade.
+## What Was Implemented
 
-    ## What Was Implemented
+{DESCRIPTION}
 
-    {DESCRIPTION}
+## Requirements/Plan
 
-    ## Requirements / Plan
+{PLAN_OR_REQUIREMENTS}
 
-    {PLAN_OR_REQUIREMENTS}
+## Baseline / Current Authority
 
-    ## Git Range to Review
+Identify the baseline or current authority refs supplied by the caller. If none
+were supplied for non-trivial work, flag that as a review evidence gap instead
+of inventing an authority source.
 
-    **Base:** {BASE_SHA}
-    **Head:** {HEAD_SHA}
+## Existing Evidence
 
-    ```bash
-    git diff --stat {BASE_SHA}..{HEAD_SHA}
-    git diff {BASE_SHA}..{HEAD_SHA}
-    ```
+{EVIDENCE}
 
-    ## What to Check
+## Compatibility Boundary
 
-    **Plan alignment:**
-    - Does the implementation match the plan / requirements?
-    - Are deviations justified improvements, or problematic departures?
-    - Is all planned functionality present?
+{COMPATIBILITY_BOUNDARY}
 
-    **Code quality:**
-    - Clean separation of concerns?
-    - Proper error handling?
-    - Type safety where applicable?
-    - DRY without premature abstraction?
-    - Edge cases handled?
+## Retirement Notes
 
-    **Architecture:**
-    - Sound design decisions?
-    - Reasonable scalability and performance?
-    - Security concerns?
-    - Integrates cleanly with surrounding code?
+{RETIREMENT_NOTES}
 
-    **Testing:**
-    - Tests verify real behavior, not mocks?
-    - Edge cases covered?
-    - Integration tests where they matter?
-    - All tests passing?
+## Git Range to Review
 
-    **Production readiness:**
-    - Migration strategy if schema changed?
-    - Backward compatibility considered?
-    - Documentation complete?
-    - No obvious bugs?
+**Base:** {BASE_SHA}
+**Head:** {HEAD_SHA}
 
-    ## Calibration
-
-    Categorize issues by actual severity. Not everything is Critical.
-    Acknowledge what was done well before listing issues — accurate praise
-    helps the implementer trust the rest of the feedback.
-
-    If you find significant deviations from the plan, flag them specifically
-    so the implementer can confirm whether the deviation was intentional.
-    If you find issues with the plan itself rather than the implementation,
-    say so.
-
-    ## Output Format
-
-    ### Strengths
-    [What's well done? Be specific.]
-
-    ### Issues
-
-    #### Critical (Must Fix)
-    [Bugs, security issues, data loss risks, broken functionality]
-
-    #### Important (Should Fix)
-    [Architecture problems, missing features, poor error handling, test gaps]
-
-    #### Minor (Nice to Have)
-    [Code style, optimization opportunities, documentation polish]
-
-    For each issue:
-    - File:line reference
-    - What's wrong
-    - Why it matters
-    - How to fix (if not obvious)
-
-    ### Recommendations
-    [Improvements for code quality, architecture, or process]
-
-    ### Assessment
-
-    **Ready to merge?** [Yes | No | With fixes]
-
-    **Reasoning:** [1-2 sentence technical assessment]
-
-    ## Critical Rules
-
-    **DO:**
-    - Categorize by actual severity
-    - Be specific (file:line, not vague)
-    - Explain WHY each issue matters
-    - Acknowledge strengths
-    - Give a clear verdict
-
-    **DON'T:**
-    - Say "looks good" without checking
-    - Mark nitpicks as Critical
-    - Give feedback on code you didn't actually read
-    - Be vague ("improve error handling")
-    - Avoid giving a clear verdict
+```bash
+git diff --stat {BASE_SHA}..{HEAD_SHA}
+git diff {BASE_SHA}..{HEAD_SHA}
 ```
 
-**Placeholders:**
-- `{DESCRIPTION}` — brief summary of what was built
-- `{PLAN_OR_REQUIREMENTS}` — what it should do (plan file path, task text, or requirements)
-- `{BASE_SHA}` — starting commit
-- `{HEAD_SHA}` — ending commit
+## Findings First
 
-**Reviewer returns:** Strengths, Issues (Critical / Important / Minor), Recommendations, Assessment
+Lead with findings. Use bugs first, risk first, tests first. Do not bury
+correctness, evidence, architecture, compatibility, or retirement problems
+under a broad summary. If there are no findings, say that clearly and name the
+remaining test gaps or residual risk.
+
+## Review Checklist
+
+**Code Quality:**
+- Clean separation of concerns?
+- Proper error handling?
+- Type safety (if applicable)?
+- DRY principle followed?
+- Edge cases handled?
+
+**Architecture:**
+- Sound design decisions?
+- Canonical owner clear?
+- Any duplicated owner, stale fallback, or compatibility layer still carrying real logic?
+- Scalability considerations?
+- Performance implications?
+- Security concerns?
+
+**Baseline / Current Authority:**
+- Were baseline / current authority refs supplied when the work was non-trivial?
+- Does the diff align with the baseline ownership map, contract inventory, and dependency direction?
+- If not aligned, is this a baseline defect, architecture drift, or intentional architecture change?
+- If intentional, is ADR Auto Backfill or baseline sync needed?
+- If an ADR action or baseline sync closure is in scope, did the caller use or
+  plan to use `recording-architecture-decisions` before claiming completion?
+
+**Evidence Sufficiency:**
+- Do the provided tests / commands / logs actually prove the claimed behavior?
+- Is any important claim still unsupported?
+- Are there unverified assumptions being presented as facts?
+
+**Testing:**
+- Tests actually test logic (not mocks)?
+- Edge cases covered?
+- Integration tests where needed?
+- All tests passing?
+
+**Requirements:**
+- All plan requirements met?
+- Implementation matches spec?
+- No scope creep?
+- Breaking changes documented?
+
+**Compatibility / Retirement:**
+- Existing behavior preserved where required?
+- Old path / fallback / patch disposition is explicit?
+- Any stale logic should be removed now or given a clear retirement trigger?
+
+**Readiness / Residual Risk:**
+- Migration strategy (if schema changes)?
+- Backward compatibility considered?
+- Documentation complete?
+- No obvious bugs?
+- Any architecture drift still unresolved?
+
+## Output Format
+
+### Issues
+
+#### Critical (Must Fix)
+[Bugs, security issues, data loss risks, broken functionality]
+
+#### Important (Should Fix)
+[Architecture problems, missing features, poor error handling, test gaps, stale fallback risk]
+
+#### Minor (Nice to Have)
+[Code style, optimization opportunities, documentation improvements]
+
+**For each issue:**
+- File:line reference
+- What's wrong
+- Why it matters
+- How to fix (if not obvious)
+
+### Strengths
+[What's well done? Be specific.]
+
+### Recommendations
+[Improvements for code quality, architecture, or process]
+
+### Evidence Review
+[What the supplied evidence proves, and what remains unverified]
+
+### Assessment
+
+**Ready to merge?** [Yes/No/With fixes]
+
+**Authority note:** [Advisory review only; not authoritative completion]
+
+**Reasoning:** [Technical assessment in 1-2 sentences]
+
+## Critical Rules
+
+**DO:**
+- Categorize by actual severity (not everything is Critical)
+- Be specific (file:line, not vague)
+- Explain WHY issues matter
+- Acknowledge strengths
+- Give clear verdict
+- Distinguish missing evidence from missing code
+- Call out architecture drift and retirement debt explicitly
+
+**DON'T:**
+- Say "looks good" without checking
+- Mark nitpicks as Critical
+- Give feedback on code you didn't review
+- Be vague ("improve error handling")
+- Avoid giving a clear verdict
+- Treat passing tests alone as full completion
+- Ignore old logic that should retire or converge
+- Judge architecture drift without checking baseline or current authority refs
 
 ## Example Output
 
@@ -160,9 +194,15 @@ Task tool (general-purpose):
 - Add progress reporting for user experience
 - Consider config file for excluded projects (portability)
 
+### Evidence Review
+- The provided test output shows the core verification path passes.
+- No evidence was supplied for invalid date handling, so that claim remains unverified.
+
 ### Assessment
 
 **Ready to merge: With fixes**
+
+**Authority note:** Advisory review only; final completion still depends on the owning workflow and fresh verification gates.
 
 **Reasoning:** Core implementation is solid with good architecture and tests. Important issues (help text, date validation) are easily fixed and don't affect core functionality.
 ```

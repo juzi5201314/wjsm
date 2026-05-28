@@ -291,7 +291,9 @@ pub(crate) fn merge_sort_by<T: Copy>(
 }
 
 /// 沿原型链递归查找属性（带 visited set 防环路）
-pub(crate) fn read_object_property_by_name_proto_walk_with_env<C: AsContextMut<Data = RuntimeState>>(
+pub(crate) fn read_object_property_by_name_proto_walk_with_env<
+    C: AsContextMut<Data = RuntimeState>,
+>(
     ctx: &mut C,
     env: &WasmEnv,
     obj_ptr: usize,
@@ -1172,8 +1174,13 @@ pub(crate) fn resolve_callable_and_call(
             let _ = memory.read(&mut *caller, (args_base + i * 8) as usize, &mut buf);
             collected_args.push(i64::from_le_bytes(buf));
         }
-        return call_native_callable_with_args_from_caller(caller, callee, this_val, collected_args)
-            .unwrap_or_else(value::encode_undefined);
+        return call_native_callable_with_args_from_caller(
+            caller,
+            callee,
+            this_val,
+            collected_args,
+        )
+        .unwrap_or_else(value::encode_undefined);
     } else {
         return value::encode_undefined();
     };
@@ -1243,18 +1250,259 @@ pub(crate) fn func_bind_impl(
 }
 
 pub(crate) fn object_rest_impl(
-    _caller: &mut Caller<'_, RuntimeState>,
-    _obj: i64,
-    _excluded_keys: i64,
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    excluded_keys: i64,
 ) -> i64 {
-    // 简化实现：返回一个新的空对象
-    // 完整实现需要遍历 obj 的属性并排除指定键
-    value::encode_undefined()
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let Some(source_ptr) = resolve_handle(caller, obj) else {
+        return alloc_host_object(caller, &env, 0);
+    };
+
+    let excluded_key_bytes = if value::is_array(excluded_keys) {
+        let mut excluded = Vec::new();
+        if let Some(arr_ptr) = resolve_array_ptr(caller, excluded_keys) {
+            let len = read_array_length(caller, arr_ptr).unwrap_or(0);
+            for i in 0..len {
+                let key =
+                    read_array_elem(caller, arr_ptr, i).unwrap_or_else(value::encode_undefined);
+                if let Some(bytes) = read_value_string_bytes(caller, key) {
+                    excluded.push(bytes);
+                }
+            }
+        }
+        excluded
+    } else {
+        Vec::new()
+    };
+
+    let source_props: Vec<(u32, i64)> = {
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+            return alloc_host_object(caller, &env, 0);
+        };
+        let num_props = {
+            let data = mem.data(&*caller);
+            if source_ptr + 16 > data.len() {
+                return alloc_host_object(caller, &env, 0);
+            }
+            u32::from_le_bytes([
+                data[source_ptr + 12],
+                data[source_ptr + 13],
+                data[source_ptr + 14],
+                data[source_ptr + 15],
+            ]) as usize
+        };
+        let mut props = Vec::new();
+        for i in 0..num_props {
+            let slot_offset = source_ptr + 16 + i * 32;
+            let (name_id, flags, val) = {
+                let data = mem.data(&*caller);
+                if slot_offset + 32 > data.len() {
+                    break;
+                }
+                let name_id = u32::from_le_bytes([
+                    data[slot_offset],
+                    data[slot_offset + 1],
+                    data[slot_offset + 2],
+                    data[slot_offset + 3],
+                ]);
+                let flags = i32::from_le_bytes([
+                    data[slot_offset + 4],
+                    data[slot_offset + 5],
+                    data[slot_offset + 6],
+                    data[slot_offset + 7],
+                ]);
+                let val = i64::from_le_bytes([
+                    data[slot_offset + 8],
+                    data[slot_offset + 9],
+                    data[slot_offset + 10],
+                    data[slot_offset + 11],
+                    data[slot_offset + 12],
+                    data[slot_offset + 13],
+                    data[slot_offset + 14],
+                    data[slot_offset + 15],
+                ]);
+                (name_id, flags, val)
+            };
+            if (flags & constants::FLAG_ENUMERABLE) == 0 {
+                continue;
+            }
+            if !excluded_key_bytes.is_empty() {
+                let name_bytes = read_string_bytes_mem(caller, &mem, name_id);
+                if excluded_key_bytes
+                    .iter()
+                    .any(|excluded| excluded == &name_bytes)
+                {
+                    continue;
+                }
+            }
+            props.push((name_id, val));
+        }
+        props
+    };
+
+    let result = alloc_host_object(caller, &env, source_props.len() as u32);
+    let Some(result_ptr) = resolve_handle(caller, result) else {
+        return result;
+    };
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return result;
+    };
+    let data = mem.data_mut(&mut *caller);
+    if result_ptr + 16 + source_props.len() * 32 > data.len() {
+        return result;
+    }
+    let flags =
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
+    let undef = value::encode_undefined();
+    for (i, (name_id, val)) in source_props.into_iter().enumerate() {
+        let slot_offset = result_ptr + 16 + i * 32;
+        data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+        data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+        data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+        data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
+        data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
+        data[result_ptr + 12..result_ptr + 16].copy_from_slice(&((i + 1) as u32).to_le_bytes());
+    }
+    result
 }
 
-pub(crate) fn obj_spread_impl(_caller: &mut Caller<'_, RuntimeState>, _dest: i64, _source: i64) {
-    // 简化实现：不做任何复制
-    // 完整实现需要遍历 source 的 own properties 并复制到 dest
+pub(crate) fn obj_spread_impl(caller: &mut Caller<'_, RuntimeState>, dest: i64, source: i64) {
+    let Some(mut dest_ptr) = resolve_handle(caller, dest) else {
+        return;
+    };
+    let Some(source_ptr) = resolve_handle(caller, source) else {
+        return;
+    };
+
+    let source_props: Vec<(u32, i64)> = {
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+            return;
+        };
+        let data = mem.data(&*caller);
+        if source_ptr + 16 > data.len() {
+            return;
+        }
+        let num_props = u32::from_le_bytes([
+            data[source_ptr + 12],
+            data[source_ptr + 13],
+            data[source_ptr + 14],
+            data[source_ptr + 15],
+        ]) as usize;
+        let mut props = Vec::new();
+        for i in 0..num_props {
+            let slot_offset = source_ptr + 16 + i * 32;
+            if slot_offset + 32 > data.len() {
+                break;
+            }
+            let flags = i32::from_le_bytes([
+                data[slot_offset + 4],
+                data[slot_offset + 5],
+                data[slot_offset + 6],
+                data[slot_offset + 7],
+            ]);
+            if (flags & constants::FLAG_ENUMERABLE) == 0 {
+                continue;
+            }
+            let name_id = u32::from_le_bytes([
+                data[slot_offset],
+                data[slot_offset + 1],
+                data[slot_offset + 2],
+                data[slot_offset + 3],
+            ]);
+            let val = i64::from_le_bytes([
+                data[slot_offset + 8],
+                data[slot_offset + 9],
+                data[slot_offset + 10],
+                data[slot_offset + 11],
+                data[slot_offset + 12],
+                data[slot_offset + 13],
+                data[slot_offset + 14],
+                data[slot_offset + 15],
+            ]);
+            props.push((name_id, val));
+        }
+        props
+    };
+
+    let mut new_count = 0usize;
+    for (name_id, _) in &source_props {
+        if find_property_slot_by_name_id(caller, dest_ptr, *name_id).is_none() {
+            new_count += 1;
+        }
+    }
+
+    if new_count > 0 {
+        let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+            return;
+        };
+        let data = mem.data(&*caller);
+        if dest_ptr + 16 > data.len() {
+            return;
+        }
+        let capacity = u32::from_le_bytes([
+            data[dest_ptr + 8],
+            data[dest_ptr + 9],
+            data[dest_ptr + 10],
+            data[dest_ptr + 11],
+        ]) as usize;
+        let num_props = u32::from_le_bytes([
+            data[dest_ptr + 12],
+            data[dest_ptr + 13],
+            data[dest_ptr + 14],
+            data[dest_ptr + 15],
+        ]) as usize;
+        if num_props + new_count > capacity {
+            let new_cap = (capacity * 2).max(num_props + new_count).max(1) as u32;
+            let Some(new_ptr) = grow_object(caller, dest_ptr, dest, new_cap) else {
+                return;
+            };
+            dest_ptr = new_ptr;
+        }
+    }
+
+    let flags =
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
+    for (name_id, val) in source_props {
+        if let Some((slot_offset, _, _)) = find_property_slot_by_name_id(caller, dest_ptr, name_id)
+        {
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                return;
+            };
+            let data = mem.data_mut(&mut *caller);
+            if slot_offset + 16 > data.len() {
+                return;
+            }
+            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+            data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+        } else {
+            let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+                return;
+            };
+            let data = mem.data_mut(&mut *caller);
+            if dest_ptr + 16 > data.len() {
+                return;
+            }
+            let num_props = u32::from_le_bytes([
+                data[dest_ptr + 12],
+                data[dest_ptr + 13],
+                data[dest_ptr + 14],
+                data[dest_ptr + 15],
+            ]) as usize;
+            let slot_offset = dest_ptr + 16 + num_props * 32;
+            if slot_offset + 32 > data.len() {
+                return;
+            }
+            let undef = value::encode_undefined();
+            data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+            data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+            data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
+            data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
+            data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
+            data[dest_ptr + 12..dest_ptr + 16]
+                .copy_from_slice(&((num_props + 1) as u32).to_le_bytes());
+        }
+    }
 }
 
 // ── Caller 双参数便捷入口（委托 WasmEnv 泛型实现）────────────────────

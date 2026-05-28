@@ -1,16 +1,23 @@
 use anyhow::Result;
-use wasmtime::{Caller, Linker, Func};
 use wasmtime::Store;
+use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
-pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
-    let map_constructor_fn = Func::wrap(&mut store,
+pub(crate) fn define_collections_buffers(
+    linker: &mut Linker<RuntimeState>,
+    mut store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    let map_constructor_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let handle;
             {
                 let mut table = caller.data().map_table.lock().expect("map table mutex");
-                table.push(MapEntry { keys: Vec::new(), values: Vec::new() });
+                table.push(MapEntry {
+                    keys: Vec::new(),
+                    values: Vec::new(),
+                });
                 handle = table.len() as u32 - 1;
             }
             // 处理可迭代参数：数组快速路径
@@ -23,8 +30,10 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                         for i in 0..len {
                             if let Some(entry_val) = read_array_elem(&mut caller, arr_ptr, i) {
                                 if value::is_array(entry_val) {
-                                    if let Some(entry_ptr) = resolve_handle(&mut caller, entry_val) {
-                                        let entry_len = read_array_length(&mut caller, entry_ptr).unwrap_or(0);
+                                    if let Some(entry_ptr) = resolve_handle(&mut caller, entry_val)
+                                    {
+                                        let entry_len =
+                                            read_array_length(&mut caller, entry_ptr).unwrap_or(0);
                                         if entry_len >= 2 {
                                             let key = read_array_elem(&mut caller, entry_ptr, 0)
                                                 .unwrap_or_else(value::encode_undefined);
@@ -58,7 +67,18 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                     }
                 }
             }
-            let (set_fn, get_fn, has_fn, delete_fn, clear_fn, size_fn, for_each_fn, keys_fn, values_fn, entries_fn) = {
+            let (
+                set_fn,
+                get_fn,
+                has_fn,
+                delete_fn,
+                clear_fn,
+                size_fn,
+                for_each_fn,
+                keys_fn,
+                values_fn,
+                entries_fn,
+            ) = {
                 let state = caller.data();
                 (
                     create_map_set_method(state, MapSetMethodKind::MapSet),
@@ -73,9 +93,17 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                     create_map_set_method(state, MapSetMethodKind::Entries),
                 )
             };
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 11) };
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 11)
+            };
             let handle_val = value::encode_f64(handle as f64);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "__map_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "__map_handle__",
+                handle_val,
+            );
             let _ = define_host_data_property_from_caller(&mut caller, obj, "set", set_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "get", get_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
@@ -94,17 +122,19 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "map_constructor", map_constructor_fn)?;
 
-    let map_proto_set_fn = Func::wrap(&mut store,
+    let map_proto_set_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64, val: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_undefined();
             }
-            let obj_ptr = resolve_handle_idx(
-                &mut caller,
-                value::decode_object_handle(this_val) as usize,
-            );
-            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
-            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
+            let handle = handle_val
+                .map(|v| value::decode_f64(v) as usize)
+                .unwrap_or(0);
             let mut table = caller.data().map_table.lock().expect("map table mutex");
             if handle >= table.len() {
                 return value::encode_undefined();
@@ -123,17 +153,19 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "map_proto_set", map_proto_set_fn)?;
 
-    let map_proto_get_fn = Func::wrap(&mut store,
+    let map_proto_get_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_undefined();
             }
-            let obj_ptr = resolve_handle_idx(
-                &mut caller,
-                value::decode_object_handle(this_val) as usize,
-            );
-            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
-            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "__map_handle__"));
+            let handle = handle_val
+                .map(|v| value::decode_f64(v) as usize)
+                .unwrap_or(0);
             let table = caller.data().map_table.lock().expect("map table mutex");
             if handle >= table.len() {
                 return value::encode_undefined();
@@ -150,7 +182,8 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     linker.define(&mut store, "env", "map_proto_get", map_proto_get_fn)?;
 
     // ── Set host functions ────────────────────────────────────────────
-    let set_constructor_fn = Func::wrap(&mut store,
+    let set_constructor_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let handle;
             {
@@ -199,7 +232,17 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                     }
                 }
             }
-            let (add_fn, has_fn, delete_fn, clear_fn, size_fn, for_each_fn, keys_fn, values_fn, entries_fn) = {
+            let (
+                add_fn,
+                has_fn,
+                delete_fn,
+                clear_fn,
+                size_fn,
+                for_each_fn,
+                keys_fn,
+                values_fn,
+                entries_fn,
+            ) = {
                 let state = caller.data();
                 (
                     create_map_set_method(state, MapSetMethodKind::SetAdd),
@@ -213,9 +256,17 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                     create_map_set_method(state, MapSetMethodKind::Entries),
                 )
             };
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 10) };
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 10)
+            };
             let handle_val = value::encode_f64(handle as f64);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "__set_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "__set_handle__",
+                handle_val,
+            );
             let _ = define_host_data_property_from_caller(&mut caller, obj, "add", add_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
@@ -233,17 +284,19 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "set_constructor", set_constructor_fn)?;
 
-    let set_proto_add_fn = Func::wrap(&mut store,
+    let set_proto_add_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, val: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_undefined();
             }
-            let obj_ptr = resolve_handle_idx(
-                &mut caller,
-                value::decode_object_handle(this_val) as usize,
-            );
-            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__set_handle__"));
-            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "__set_handle__"));
+            let handle = handle_val
+                .map(|v| value::decode_f64(v) as usize)
+                .unwrap_or(0);
             let mut table = caller.data().set_table.lock().expect("set table mutex");
             if handle >= table.len() {
                 return value::encode_undefined();
@@ -261,15 +314,14 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     linker.define(&mut store, "env", "set_proto_add", set_proto_add_fn)?;
 
     // ── Map/Set shared host functions (dispatch at runtime) ──────────
-    let map_set_has_fn = Func::wrap(&mut store,
+    let map_set_has_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_bool(false);
             }
-            let obj_ptr = resolve_handle_idx(
-                &mut caller,
-                value::decode_object_handle(this_val) as usize,
-            );
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             if let Some(op) = obj_ptr {
                 let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
                 if let Some(mh) = map_handle {
@@ -305,15 +357,14 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "map_set_has", map_set_has_fn)?;
 
-    let map_set_delete_fn = Func::wrap(&mut store,
+    let map_set_delete_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_bool(false);
             }
-            let obj_ptr = resolve_handle_idx(
-                &mut caller,
-                value::decode_object_handle(this_val) as usize,
-            );
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             if let Some(op) = obj_ptr {
                 let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
                 if let Some(mh) = map_handle {
@@ -352,15 +403,14 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "map_set_delete", map_set_delete_fn)?;
 
-    let map_set_clear_fn = Func::wrap(&mut store,
+    let map_set_clear_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_undefined();
             }
-            let obj_ptr = resolve_handle_idx(
-                &mut caller,
-                value::decode_object_handle(this_val) as usize,
-            );
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             if let Some(op) = obj_ptr {
                 let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
                 if let Some(mh) = map_handle {
@@ -387,15 +437,14 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "map_set_clear", map_set_clear_fn)?;
 
-    let map_set_get_size_fn = Func::wrap(&mut store,
+    let map_set_get_size_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             if !value::is_object(this_val) {
                 return value::encode_f64(0.0);
             }
-            let obj_ptr = resolve_handle_idx(
-                &mut caller,
-                value::decode_object_handle(this_val) as usize,
-            );
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             if let Some(op) = obj_ptr {
                 let map_handle = read_object_property_by_name(&mut caller, op, "__map_handle__");
                 if let Some(mh) = map_handle {
@@ -421,14 +470,14 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "map_set_get_size", map_set_get_size_fn)?;
 
-    let map_set_for_each_fn = Func::wrap(&mut store,
-        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
-            value::encode_undefined()
-        },
+    let map_set_for_each_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 { value::encode_undefined() },
     );
     linker.define(&mut store, "env", "map_set_for_each", map_set_for_each_fn)?;
 
-    let map_set_keys_fn = Func::wrap(&mut store,
+    let map_set_keys_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             let map_handle = if let Some(ptr) = resolve_handle(&mut caller, this_val) {
                 read_object_property_by_name(&mut caller, ptr, "__map_handle__")
@@ -447,37 +496,39 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
             };
             let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             let iter_handle = iters.len() as u32;
-            iters.push(IteratorState::MapKeyIter {
-                keys,
-                index: 0,
-            });
+            iters.push(IteratorState::MapKeyIter { keys, index: 0 });
             value::encode_handle(value::TAG_ITERATOR, iter_handle)
         },
     );
     linker.define(&mut store, "env", "map_set_keys", map_set_keys_fn)?;
 
-    let map_set_values_fn = Func::wrap(&mut store,
-        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
-            value::encode_undefined()
-        },
+    let map_set_values_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 { value::encode_undefined() },
     );
     linker.define(&mut store, "env", "map_set_values", map_set_values_fn)?;
 
-    let map_set_entries_fn = Func::wrap(&mut store,
-        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 {
-            value::encode_undefined()
-        },
+    let map_set_entries_fn = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 { value::encode_undefined() },
     );
     linker.define(&mut store, "env", "map_set_entries", map_set_entries_fn)?;
 
     // ── WeakMap host functions ───────────────────────────────────────────
-    let weakmap_constructor_fn = Func::wrap(&mut store,
+    let weakmap_constructor_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
             let handle;
             {
-                let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+                let mut table = caller
+                    .data()
+                    .weakmap_table
+                    .lock()
+                    .expect("weakmap_table mutex");
                 handle = table.len() as u32;
-                table.push(WeakMapEntry { map: HashMap::new() });
+                table.push(WeakMapEntry {
+                    map: HashMap::new(),
+                });
             }
             let (set_fn, get_fn, has_fn, delete_fn) = {
                 let state = caller.data();
@@ -488,9 +539,17 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                     create_weakmap_method(state, WeakMapMethodKind::Delete),
                 )
             };
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 5) };
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 5)
+            };
             let handle_val = value::encode_f64(handle as f64);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "__weakmap_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "__weakmap_handle__",
+                handle_val,
+            );
             let _ = define_host_data_property_from_caller(&mut caller, obj, "set", set_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "get", get_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
@@ -498,21 +557,35 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
             obj
         },
     );
-    linker.define(&mut store, "env", "weakmap_constructor", weakmap_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "weakmap_constructor",
+        weakmap_constructor_fn,
+    )?;
 
-    let weakmap_proto_set_fn = Func::wrap(&mut store,
+    let weakmap_proto_set_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64, val: i64| -> i64 {
             if !is_object_key(key) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
                     Some("TypeError: Invalid value used as weak map key".to_string());
                 return this_val;
             }
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
-            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val
+                .map(|v| value::decode_f64(v) as usize)
+                .unwrap_or(0);
             let key_handle = value::decode_object_handle(key);
             {
-                let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+                let mut table = caller
+                    .data()
+                    .weakmap_table
+                    .lock()
+                    .expect("weakmap_table mutex");
                 if handle < table.len() {
                     table[handle].map.insert(key_handle, val);
                 }
@@ -522,35 +595,54 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "weakmap_proto_set", weakmap_proto_set_fn)?;
 
-    let weakmap_proto_get_fn = Func::wrap(&mut store,
+    let weakmap_proto_get_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 return value::encode_undefined();
             }
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
-            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val
+                .map(|v| value::decode_f64(v) as usize)
+                .unwrap_or(0);
             let key_handle = value::decode_object_handle(key);
-            let table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            let table = caller
+                .data()
+                .weakmap_table
+                .lock()
+                .expect("weakmap_table mutex");
             if handle < table.len()
-                && let Some(&val) = table[handle].map.get(&key_handle) {
-                    return val;
-                }
+                && let Some(&val) = table[handle].map.get(&key_handle)
+            {
+                return val;
+            }
             value::encode_undefined()
         },
     );
     linker.define(&mut store, "env", "weakmap_proto_get", weakmap_proto_get_fn)?;
 
-    let weakmap_proto_has_fn = Func::wrap(&mut store,
+    let weakmap_proto_has_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 return value::encode_bool(false);
             }
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
-            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val
+                .map(|v| value::decode_f64(v) as usize)
+                .unwrap_or(0);
             let key_handle = value::decode_object_handle(key);
-            let table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            let table = caller
+                .data()
+                .weakmap_table
+                .lock()
+                .expect("weakmap_table mutex");
             if handle < table.len() {
                 return value::encode_bool(table[handle].map.contains_key(&key_handle));
             }
@@ -559,32 +651,53 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "weakmap_proto_has", weakmap_proto_has_fn)?;
 
-    let weakmap_proto_delete_fn = Func::wrap(&mut store,
+    let weakmap_proto_delete_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 return value::encode_bool(false);
             }
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
-            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakmap_handle__"));
+            let handle = handle_val
+                .map(|v| value::decode_f64(v) as usize)
+                .unwrap_or(0);
             let key_handle = value::decode_object_handle(key);
-            let mut table = caller.data().weakmap_table.lock().expect("weakmap_table mutex");
+            let mut table = caller
+                .data()
+                .weakmap_table
+                .lock()
+                .expect("weakmap_table mutex");
             if handle < table.len() {
                 return value::encode_bool(table[handle].map.remove(&key_handle).is_some());
             }
             value::encode_bool(false)
         },
     );
-    linker.define(&mut store, "env", "weakmap_proto_delete", weakmap_proto_delete_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "weakmap_proto_delete",
+        weakmap_proto_delete_fn,
+    )?;
 
     // ── WeakSet host functions ───────────────────────────────────────────
-    let weakset_constructor_fn = Func::wrap(&mut store,
+    let weakset_constructor_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
             let handle;
             {
-                let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+                let mut table = caller
+                    .data()
+                    .weakset_table
+                    .lock()
+                    .expect("weakset_table mutex");
                 handle = table.len() as u32;
-                table.push(WeakSetEntry { set: HashSet::new() });
+                table.push(WeakSetEntry {
+                    set: HashSet::new(),
+                });
             }
             let (add_fn, has_fn, delete_fn) = {
                 let state = caller.data();
@@ -594,30 +707,52 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                     create_weakset_method(state, WeakSetMethodKind::Delete),
                 )
             };
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 4)
+            };
             let handle_val = value::encode_f64(handle as f64);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "__weakset_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "__weakset_handle__",
+                handle_val,
+            );
             let _ = define_host_data_property_from_caller(&mut caller, obj, "add", add_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
             obj
         },
     );
-    linker.define(&mut store, "env", "weakset_constructor", weakset_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "weakset_constructor",
+        weakset_constructor_fn,
+    )?;
 
-    let weakset_proto_add_fn = Func::wrap(&mut store,
+    let weakset_proto_add_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 *caller.data().runtime_error.lock().expect("error mutex") =
                     Some("TypeError: Invalid value used in weak set".to_string());
                 return this_val;
             }
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
-            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
+            let handle = handle_val
+                .map(|v| value::decode_f64(v) as usize)
+                .unwrap_or(0);
             let key_handle = value::decode_object_handle(key);
             {
-                let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+                let mut table = caller
+                    .data()
+                    .weakset_table
+                    .lock()
+                    .expect("weakset_table mutex");
                 if handle < table.len() {
                     table[handle].set.insert(key_handle);
                 }
@@ -627,16 +762,25 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "weakset_proto_add", weakset_proto_add_fn)?;
 
-    let weakset_proto_has_fn = Func::wrap(&mut store,
+    let weakset_proto_has_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 return value::encode_bool(false);
             }
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
-            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
+            let handle = handle_val
+                .map(|v| value::decode_f64(v) as usize)
+                .unwrap_or(0);
             let key_handle = value::decode_object_handle(key);
-            let table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+            let table = caller
+                .data()
+                .weakset_table
+                .lock()
+                .expect("weakset_table mutex");
             if handle < table.len() {
                 return value::encode_bool(table[handle].set.contains(&key_handle));
             }
@@ -645,26 +789,40 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "weakset_proto_has", weakset_proto_has_fn)?;
 
-    let weakset_proto_delete_fn = Func::wrap(&mut store,
+    let weakset_proto_delete_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, key: i64| -> i64 {
             if !is_object_key(key) {
                 return value::encode_bool(false);
             }
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let handle_val = obj_ptr.and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
-            let handle = handle_val.map(|v| value::decode_f64(v) as usize).unwrap_or(0);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let handle_val = obj_ptr
+                .and_then(|p| read_object_property_by_name(&mut caller, p, "__weakset_handle__"));
+            let handle = handle_val
+                .map(|v| value::decode_f64(v) as usize)
+                .unwrap_or(0);
             let key_handle = value::decode_object_handle(key);
-            let mut table = caller.data().weakset_table.lock().expect("weakset_table mutex");
+            let mut table = caller
+                .data()
+                .weakset_table
+                .lock()
+                .expect("weakset_table mutex");
             if handle < table.len() {
                 return value::encode_bool(table[handle].set.remove(&key_handle));
             }
             value::encode_bool(false)
         },
     );
-    linker.define(&mut store, "env", "weakset_proto_delete", weakset_proto_delete_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "weakset_proto_delete",
+        weakset_proto_delete_fn,
+    )?;
 
-
-    let arraybuffer_constructor_fn = Func::wrap(&mut store,
+    let arraybuffer_constructor_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, byte_length: i64| -> i64 {
             let len_f64 = value::decode_f64(byte_length);
             if len_f64 < 0.0 {
@@ -675,47 +833,76 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
             let len = len_f64 as u32;
             let handle;
             {
-                let mut table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                let mut table = caller
+                    .data()
+                    .arraybuffer_table
+                    .lock()
+                    .expect("arraybuffer_table mutex");
                 handle = table.len() as u32;
-                table.push(ArrayBufferEntry { data: vec![0; len as usize] });
+                table.push(ArrayBufferEntry {
+                    data: vec![0; len as usize],
+                });
             }
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 4)
+            };
             let handle_val = value::encode_f64(handle as f64);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "__arraybuffer_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "__arraybuffer_handle__",
+                handle_val,
+            );
             let bl_val = value::encode_f64(len as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", bl_val);
             obj
         },
     );
-    linker.define(&mut store, "env", "arraybuffer_constructor", arraybuffer_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "arraybuffer_constructor",
+        arraybuffer_constructor_fn,
+    )?;
 
-    let arraybuffer_proto_byte_length_fn = Func::wrap(&mut store,
+    let arraybuffer_proto_byte_length_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             match obj_ptr {
-                Some(ptr) => {
-                    match read_object_property_by_name(&mut caller, ptr, "byteLength") {
-                        Some(v) => v,
-                        None => value::encode_f64(0.0),
-                    }
-                }
+                Some(ptr) => match read_object_property_by_name(&mut caller, ptr, "byteLength") {
+                    Some(v) => v,
+                    None => value::encode_f64(0.0),
+                },
                 None => value::encode_f64(0.0),
             }
         },
     );
-    linker.define(&mut store, "env", "arraybuffer_proto_byte_length", arraybuffer_proto_byte_length_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "arraybuffer_proto_byte_length",
+        arraybuffer_proto_byte_length_fn,
+    )?;
 
-    let arraybuffer_proto_slice_fn = Func::wrap(&mut store,
+    let arraybuffer_proto_slice_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, begin: i64, end: i64| -> i64 {
             let begin_idx = value::decode_f64(begin) as u32;
             let end_idx = value::decode_f64(end) as u32;
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             let (buf_handle, buf_len) = match obj_ptr {
                 Some(ptr) => {
-                    let h = read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
+                    let h =
+                        read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
                     let bl = read_object_property_by_name(&mut caller, ptr, "byteLength");
                     match (h, bl) {
-                        (Some(hv), Some(lv)) => (value::decode_f64(hv) as u32, value::decode_f64(lv) as u32),
+                        (Some(hv), Some(lv)) => {
+                            (value::decode_f64(hv) as u32, value::decode_f64(lv) as u32)
+                        }
                         _ => return value::encode_undefined(),
                     }
                 }
@@ -726,7 +913,11 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
             let new_len = stop.saturating_sub(start);
             let new_buf_handle;
             {
-                let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                let mut ab_table = caller
+                    .data()
+                    .arraybuffer_table
+                    .lock()
+                    .expect("arraybuffer_table mutex");
                 new_buf_handle = ab_table.len() as u32;
                 let mut new_data = vec![0u8; new_len as usize];
                 if let Some(buf_entry) = ab_table.get(buf_handle as usize) {
@@ -734,27 +925,55 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                 }
                 ab_table.push(ArrayBufferEntry { data: new_data });
             }
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 4)
+            };
             let handle_val = value::encode_f64(new_buf_handle as f64);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "__arraybuffer_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "__arraybuffer_handle__",
+                handle_val,
+            );
             let bl_val = value::encode_f64(new_len as f64);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", bl_val);
             obj
         },
     );
-    linker.define(&mut store, "env", "arraybuffer_proto_slice", arraybuffer_proto_slice_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "arraybuffer_proto_slice",
+        arraybuffer_proto_slice_fn,
+    )?;
 
-    let dataview_constructor_fn = Func::wrap(&mut store,
-        |mut caller: Caller<'_, RuntimeState>, buffer: i64, byte_offset: i64, byte_length: i64| -> i64 {
-            let offset = if value::is_undefined(byte_offset) { 0 } else { value::decode_f64(byte_offset) as u32 };
+    let dataview_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         buffer: i64,
+         byte_offset: i64,
+         byte_length: i64|
+         -> i64 {
+            let offset = if value::is_undefined(byte_offset) {
+                0
+            } else {
+                value::decode_f64(byte_offset) as u32
+            };
             let (buf_handle, buf_byte_length) = {
                 let obj_ptr = resolve_handle(&mut caller, buffer);
                 match obj_ptr {
                     Some(ptr) => {
-                        let h = read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
+                        let h = read_object_property_by_name(
+                            &mut caller,
+                            ptr,
+                            "__arraybuffer_handle__",
+                        );
                         let bl = read_object_property_by_name(&mut caller, ptr, "byteLength");
                         match (h, bl) {
-                            (Some(hv), Some(lv)) => (value::decode_f64(hv) as u32, value::decode_f64(lv) as u32),
+                            (Some(hv), Some(lv)) => {
+                                (value::decode_f64(hv) as u32, value::decode_f64(lv) as u32)
+                            }
                             _ => return value::encode_undefined(),
                         }
                     }
@@ -768,27 +987,56 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
             };
             let handle;
             {
-                let mut table = caller.data().dataview_table.lock().expect("dataview_table mutex");
+                let mut table = caller
+                    .data()
+                    .dataview_table
+                    .lock()
+                    .expect("dataview_table mutex");
                 handle = table.len() as u32;
-                table.push(DataViewEntry { buffer_handle: buf_handle, byte_offset: offset, byte_length: length });
+                table.push(DataViewEntry {
+                    buffer_handle: buf_handle,
+                    byte_offset: offset,
+                    byte_length: length,
+                });
             }
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 4)
+            };
             let handle_val = value::encode_f64(handle as f64);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "__dataview_handle__", handle_val);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "__dataview_handle__",
+                handle_val,
+            );
             obj
         },
     );
-    linker.define(&mut store, "env", "dataview_constructor", dataview_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "dataview_constructor",
+        dataview_constructor_fn,
+    )?;
 
     macro_rules! dataview_get_fn {
         ($name:ident, $import:literal, $size:expr, $conv:expr) => {
-            let $name = Func::wrap(&mut store,
+            let $name = Func::wrap(
+                &mut store,
                 |mut caller: Caller<'_, RuntimeState>, this_val: i64, byte_offset: i64| -> i64 {
                     let offset = value::decode_f64(byte_offset) as u32;
-                    let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+                    let obj_ptr = resolve_handle_idx(
+                        &mut caller,
+                        value::decode_object_handle(this_val) as usize,
+                    );
                     let dv_handle = match obj_ptr {
                         Some(ptr) => {
-                            match read_object_property_by_name(&mut caller, ptr, "__dataview_handle__") {
+                            match read_object_property_by_name(
+                                &mut caller,
+                                ptr,
+                                "__dataview_handle__",
+                            ) {
                                 Some(v) => value::decode_f64(v) as usize,
                                 None => return value::encode_undefined(),
                             }
@@ -796,18 +1044,32 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                         None => return value::encode_undefined(),
                     };
                     let (buf_handle, dv_offset, dv_length) = {
-                        let dv_table = caller.data().dataview_table.lock().expect("dataview_table mutex");
+                        let dv_table = caller
+                            .data()
+                            .dataview_table
+                            .lock()
+                            .expect("dataview_table mutex");
                         if dv_handle < dv_table.len() {
                             let e = &dv_table[dv_handle];
                             (e.buffer_handle, e.byte_offset, e.byte_length)
-                        } else { return value::encode_undefined(); }
+                        } else {
+                            return value::encode_undefined();
+                        }
                     };
                     let abs_offset = dv_offset as usize + offset as usize;
-                    let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                    let ab_table = caller
+                        .data()
+                        .arraybuffer_table
+                        .lock()
+                        .expect("arraybuffer_table mutex");
                     if let Some(buf_entry) = ab_table.get(buf_handle as usize) {
-                        if offset + $size as u32 > dv_length || abs_offset + $size > buf_entry.data.len() {
-                            *caller.data().runtime_error.lock().expect("error mutex") =
-                                Some("RangeError: Offset is outside the bounds of the DataView".to_string());
+                        if offset + $size as u32 > dv_length
+                            || abs_offset + $size > buf_entry.data.len()
+                        {
+                            *caller.data().runtime_error.lock().expect("error mutex") = Some(
+                                "RangeError: Offset is outside the bounds of the DataView"
+                                    .to_string(),
+                            );
                             return value::encode_undefined();
                         }
                         let bytes = &buf_entry.data[abs_offset..abs_offset + $size];
@@ -820,24 +1082,85 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
         };
     }
 
-    dataview_get_fn!(dataview_proto_get_int8_fn, "dataview_proto_get_int8", 1, |bytes: &[u8]| value::encode_f64(bytes[0] as i8 as f64));
-    dataview_get_fn!(dataview_proto_get_uint8_fn, "dataview_proto_get_uint8", 1, |bytes: &[u8]| value::encode_f64(bytes[0] as f64));
-    dataview_get_fn!(dataview_proto_get_int16_fn, "dataview_proto_get_int16", 2, |bytes: &[u8]| value::encode_f64(i16::from_le_bytes([bytes[0], bytes[1]]) as f64));
-    dataview_get_fn!(dataview_proto_get_uint16_fn, "dataview_proto_get_uint16", 2, |bytes: &[u8]| value::encode_f64(u16::from_le_bytes([bytes[0], bytes[1]]) as f64));
-    dataview_get_fn!(dataview_proto_get_int32_fn, "dataview_proto_get_int32", 4, |bytes: &[u8]| value::encode_f64(i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
-    dataview_get_fn!(dataview_proto_get_uint32_fn, "dataview_proto_get_uint32", 4, |bytes: &[u8]| value::encode_f64(u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
-    dataview_get_fn!(dataview_proto_get_float32_fn, "dataview_proto_get_float32", 4, |bytes: &[u8]| value::encode_f64(f32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as f64));
-    dataview_get_fn!(dataview_proto_get_float64_fn, "dataview_proto_get_float64", 8, |bytes: &[u8]| f64::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]]).to_bits() as i64);
+    dataview_get_fn!(
+        dataview_proto_get_int8_fn,
+        "dataview_proto_get_int8",
+        1,
+        |bytes: &[u8]| value::encode_f64(bytes[0] as i8 as f64)
+    );
+    dataview_get_fn!(
+        dataview_proto_get_uint8_fn,
+        "dataview_proto_get_uint8",
+        1,
+        |bytes: &[u8]| value::encode_f64(bytes[0] as f64)
+    );
+    dataview_get_fn!(
+        dataview_proto_get_int16_fn,
+        "dataview_proto_get_int16",
+        2,
+        |bytes: &[u8]| value::encode_f64(i16::from_le_bytes([bytes[0], bytes[1]]) as f64)
+    );
+    dataview_get_fn!(
+        dataview_proto_get_uint16_fn,
+        "dataview_proto_get_uint16",
+        2,
+        |bytes: &[u8]| value::encode_f64(u16::from_le_bytes([bytes[0], bytes[1]]) as f64)
+    );
+    dataview_get_fn!(
+        dataview_proto_get_int32_fn,
+        "dataview_proto_get_int32",
+        4,
+        |bytes: &[u8]| value::encode_f64(i32::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3]
+        ]) as f64)
+    );
+    dataview_get_fn!(
+        dataview_proto_get_uint32_fn,
+        "dataview_proto_get_uint32",
+        4,
+        |bytes: &[u8]| value::encode_f64(u32::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3]
+        ]) as f64)
+    );
+    dataview_get_fn!(
+        dataview_proto_get_float32_fn,
+        "dataview_proto_get_float32",
+        4,
+        |bytes: &[u8]| value::encode_f64(f32::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3]
+        ]) as f64)
+    );
+    dataview_get_fn!(
+        dataview_proto_get_float64_fn,
+        "dataview_proto_get_float64",
+        8,
+        |bytes: &[u8]| f64::from_le_bytes([
+            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7]
+        ])
+        .to_bits() as i64
+    );
 
     macro_rules! dataview_set_fn {
         ($name:ident, $import:literal, $size:expr, $write:expr) => {
-            let $name = Func::wrap(&mut store,
-                |mut caller: Caller<'_, RuntimeState>, this_val: i64, byte_offset: i64, value_arg: i64| -> i64 {
+            let $name = Func::wrap(
+                &mut store,
+                |mut caller: Caller<'_, RuntimeState>,
+                 this_val: i64,
+                 byte_offset: i64,
+                 value_arg: i64|
+                 -> i64 {
                     let offset = value::decode_f64(byte_offset) as u32;
-                    let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+                    let obj_ptr = resolve_handle_idx(
+                        &mut caller,
+                        value::decode_object_handle(this_val) as usize,
+                    );
                     let dv_handle = match obj_ptr {
                         Some(ptr) => {
-                            match read_object_property_by_name(&mut caller, ptr, "__dataview_handle__") {
+                            match read_object_property_by_name(
+                                &mut caller,
+                                ptr,
+                                "__dataview_handle__",
+                            ) {
                                 Some(v) => value::decode_f64(v) as usize,
                                 None => return value::encode_undefined(),
                             }
@@ -845,22 +1168,37 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                         None => return value::encode_undefined(),
                     };
                     let (buf_handle, dv_offset, dv_length) = {
-                        let dv_table = caller.data().dataview_table.lock().expect("dataview_table mutex");
+                        let dv_table = caller
+                            .data()
+                            .dataview_table
+                            .lock()
+                            .expect("dataview_table mutex");
                         if dv_handle < dv_table.len() {
                             let e = &dv_table[dv_handle];
                             (e.buffer_handle, e.byte_offset, e.byte_length)
-                        } else { return value::encode_undefined(); }
+                        } else {
+                            return value::encode_undefined();
+                        }
                     };
                     let abs_offset = dv_offset as usize + offset as usize;
-                    let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                    let mut ab_table = caller
+                        .data()
+                        .arraybuffer_table
+                        .lock()
+                        .expect("arraybuffer_table mutex");
                     if let Some(buf_entry) = ab_table.get_mut(buf_handle as usize) {
-                        if offset + $size as u32 > dv_length || abs_offset + $size > buf_entry.data.len() {
-                            *caller.data().runtime_error.lock().expect("error mutex") =
-                                Some("RangeError: Offset is outside the bounds of the DataView".to_string());
+                        if offset + $size as u32 > dv_length
+                            || abs_offset + $size > buf_entry.data.len()
+                        {
+                            *caller.data().runtime_error.lock().expect("error mutex") = Some(
+                                "RangeError: Offset is outside the bounds of the DataView"
+                                    .to_string(),
+                            );
                             return value::encode_undefined();
                         }
                         let bytes = $write(value_arg);
-                        buf_entry.data[abs_offset..abs_offset + $size].copy_from_slice(&bytes[..$size]);
+                        buf_entry.data[abs_offset..abs_offset + $size]
+                            .copy_from_slice(&bytes[..$size]);
                     }
                     value::encode_undefined()
                 },
@@ -869,47 +1207,73 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
         };
     }
 
-    dataview_set_fn!(dataview_proto_set_int8_fn, "dataview_proto_set_int8", 1, |v: i64| (value::decode_f64(v) as i8).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_uint8_fn, "dataview_proto_set_uint8", 1, |v: i64| (value::decode_f64(v) as u8).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_int16_fn, "dataview_proto_set_int16", 2, |v: i64| (value::decode_f64(v) as i16).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_uint16_fn, "dataview_proto_set_uint16", 2, |v: i64| (value::decode_f64(v) as u16).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_int32_fn, "dataview_proto_set_int32", 4, |v: i64| (value::decode_f64(v) as i32).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_uint32_fn, "dataview_proto_set_uint32", 4, |v: i64| (value::decode_f64(v) as u32).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_float32_fn, "dataview_proto_set_float32", 4, |v: i64| (value::decode_f64(v) as f32).to_le_bytes().to_vec());
-    dataview_set_fn!(dataview_proto_set_float64_fn, "dataview_proto_set_float64", 8, |v: i64| value::decode_f64(v).to_le_bytes().to_vec());
+    dataview_set_fn!(
+        dataview_proto_set_int8_fn,
+        "dataview_proto_set_int8",
+        1,
+        |v: i64| (value::decode_f64(v) as i8).to_le_bytes().to_vec()
+    );
+    dataview_set_fn!(
+        dataview_proto_set_uint8_fn,
+        "dataview_proto_set_uint8",
+        1,
+        |v: i64| (value::decode_f64(v) as u8).to_le_bytes().to_vec()
+    );
+    dataview_set_fn!(
+        dataview_proto_set_int16_fn,
+        "dataview_proto_set_int16",
+        2,
+        |v: i64| (value::decode_f64(v) as i16).to_le_bytes().to_vec()
+    );
+    dataview_set_fn!(
+        dataview_proto_set_uint16_fn,
+        "dataview_proto_set_uint16",
+        2,
+        |v: i64| (value::decode_f64(v) as u16).to_le_bytes().to_vec()
+    );
+    dataview_set_fn!(
+        dataview_proto_set_int32_fn,
+        "dataview_proto_set_int32",
+        4,
+        |v: i64| (value::decode_f64(v) as i32).to_le_bytes().to_vec()
+    );
+    dataview_set_fn!(
+        dataview_proto_set_uint32_fn,
+        "dataview_proto_set_uint32",
+        4,
+        |v: i64| (value::decode_f64(v) as u32).to_le_bytes().to_vec()
+    );
+    dataview_set_fn!(
+        dataview_proto_set_float32_fn,
+        "dataview_proto_set_float32",
+        4,
+        |v: i64| (value::decode_f64(v) as f32).to_le_bytes().to_vec()
+    );
+    dataview_set_fn!(
+        dataview_proto_set_float64_fn,
+        "dataview_proto_set_float64",
+        8,
+        |v: i64| value::decode_f64(v).to_le_bytes().to_vec()
+    );
 
     macro_rules! typedarray_constructor {
         ($name:ident, $import:literal, $size:expr, $kind:expr) => {
-            let $name = Func::wrap(&mut store,
-                |mut caller: Caller<'_, RuntimeState>, buffer: i64, byte_offset: i64, length: i64| -> i64 {
-                    let offset = value::decode_f64(byte_offset) as u32;
-                    let len = value::decode_f64(length) as u32;
-                    let buf_handle = {
-                        let obj_ptr = resolve_handle(&mut caller, buffer);
-                        match obj_ptr {
-                            Some(ptr) => {
-                                let h = read_object_property_by_name(&mut caller, ptr, "__arraybuffer_handle__");
-                                match h { Some(v) => value::decode_f64(v) as u32, None => return value::encode_undefined() }
-                            }
-                            None => return value::encode_undefined(),
-                        }
-                    };
-                    let handle;
-                    {
-                        let mut table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
-                        handle = table.len() as u32;
-                        table.push(TypedArrayEntry { buffer_handle: buf_handle, byte_offset: offset, length: len, element_size: $size, element_kind: $kind, is_shared: false });
-                    }
-                    let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
-                    let handle_val = value::encode_f64(handle as f64);
-                    let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", handle_val);
-                    let len_val = value::encode_f64(len as f64);
-                    let _ = define_host_data_property_from_caller(&mut caller, obj, "length", len_val);
-                    let bl_val = value::encode_f64((len * $size as u32) as f64);
-                    let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", bl_val);
-                    let bo_val = value::encode_f64(offset as f64);
-                    let _ = define_host_data_property_from_caller(&mut caller, obj, "byteOffset", bo_val);
-                    obj
+            let $name = Func::wrap(
+                &mut store,
+                |mut caller: Caller<'_, RuntimeState>,
+                 buffer: i64,
+                 byte_offset: i64,
+                 length: i64|
+                 -> i64 {
+                    typedarray_construct(
+                        &mut caller,
+                        buffer,
+                        byte_offset,
+                        length,
+                        $size,
+                        $kind,
+                        None,
+                    )
                 },
             );
             linker.define(&mut store, "env", $import, $name)?;
@@ -918,285 +1282,194 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
 
     typedarray_constructor!(int8array_constructor_fn, "int8array_constructor", 1, 0);
     typedarray_constructor!(uint8array_constructor_fn, "uint8array_constructor", 1, 1);
-    typedarray_constructor!(uint8clampedarray_constructor_fn, "uint8clampedarray_constructor", 1, 2);
+    typedarray_constructor!(
+        uint8clampedarray_constructor_fn,
+        "uint8clampedarray_constructor",
+        1,
+        2
+    );
     typedarray_constructor!(int16array_constructor_fn, "int16array_constructor", 2, 0);
     typedarray_constructor!(uint16array_constructor_fn, "uint16array_constructor", 2, 1);
     typedarray_constructor!(int32array_constructor_fn, "int32array_constructor", 4, 0);
     typedarray_constructor!(uint32array_constructor_fn, "uint32array_constructor", 4, 1);
-    typedarray_constructor!(float32array_constructor_fn, "float32array_constructor", 4, 3);
-    typedarray_constructor!(float64array_constructor_fn, "float64array_constructor", 8, 3);
-    let typedarray_proto_length_fn = Func::wrap(&mut store,
+    typedarray_constructor!(
+        float32array_constructor_fn,
+        "float32array_constructor",
+        4,
+        3
+    );
+    typedarray_constructor!(
+        float64array_constructor_fn,
+        "float64array_constructor",
+        8,
+        3
+    );
+    typedarray_constructor!(
+        bigint64array_constructor_fn,
+        "bigint64array_constructor",
+        8,
+        4
+    );
+    typedarray_constructor!(
+        biguint64array_constructor_fn,
+        "biguint64array_constructor",
+        8,
+        5
+    );
+    let typedarray_proto_length_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             match obj_ptr {
-                Some(ptr) => {
-                    match read_object_property_by_name(&mut caller, ptr, "length") {
-                        Some(v) => v,
-                        None => value::encode_f64(0.0),
-                    }
-                }
+                Some(ptr) => match read_object_property_by_name(&mut caller, ptr, "length") {
+                    Some(v) => v,
+                    None => value::encode_f64(0.0),
+                },
                 None => value::encode_f64(0.0),
             }
         },
     );
-    linker.define(&mut store, "env", "typedarray_proto_length", typedarray_proto_length_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "typedarray_proto_length",
+        typedarray_proto_length_fn,
+    )?;
 
-    let typedarray_proto_byte_length_fn = Func::wrap(&mut store,
+    let typedarray_proto_byte_length_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             match obj_ptr {
-                Some(ptr) => {
-                    match read_object_property_by_name(&mut caller, ptr, "byteLength") {
-                        Some(v) => v,
-                        None => value::encode_f64(0.0),
-                    }
-                }
+                Some(ptr) => match read_object_property_by_name(&mut caller, ptr, "byteLength") {
+                    Some(v) => v,
+                    None => value::encode_f64(0.0),
+                },
                 None => value::encode_f64(0.0),
             }
         },
     );
-    linker.define(&mut store, "env", "typedarray_proto_byte_length", typedarray_proto_byte_length_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "typedarray_proto_byte_length",
+        typedarray_proto_byte_length_fn,
+    )?;
 
-    let typedarray_proto_byte_offset_fn = Func::wrap(&mut store,
+    let typedarray_proto_byte_offset_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let obj_ptr = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             match obj_ptr {
-                Some(ptr) => {
-                    match read_object_property_by_name(&mut caller, ptr, "byteOffset") {
-                        Some(v) => v,
-                        None => value::encode_f64(0.0),
-                    }
-                }
+                Some(ptr) => match read_object_property_by_name(&mut caller, ptr, "byteOffset") {
+                    Some(v) => v,
+                    None => value::encode_f64(0.0),
+                },
                 None => value::encode_f64(0.0),
             }
         },
     );
-    linker.define(&mut store, "env", "typedarray_proto_byte_offset", typedarray_proto_byte_offset_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "typedarray_proto_byte_offset",
+        typedarray_proto_byte_offset_fn,
+    )?;
 
-    let typedarray_proto_set_fn = Func::wrap(&mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, source: i64, offset_val: i64| -> i64 {
-            // Resolve target TypedArray
-            if !value::is_object(this_val) {
-                return value::encode_undefined();
-            }
-            let Some(ptr) = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize) else {
-                return value::encode_undefined();
-            };
-            let Some(h) = read_object_property_by_name(&mut caller, ptr, "__typedarray_handle__") else {
+    let typedarray_proto_set_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         this_val: i64,
+         source: i64,
+         offset_val: i64|
+         -> i64 {
+            let Some(target_entry) = typedarray_entry_from_value(&mut caller, this_val) else {
                 return value::encode_undefined();
             };
-            let handle = value::decode_f64(h) as usize;
-            let ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
-            let Some(target_entry) = ta_table.get(handle) else {
-                return value::encode_undefined();
-            };
-            let target_buf_handle = target_entry.buffer_handle;
-            let target_byte_offset = target_entry.byte_offset;
-            let target_length = target_entry.length;
-            let target_elem_size = target_entry.element_size;
-            let target_elem_kind = target_entry.element_kind;
-            let target_is_shared = target_entry.is_shared;
-            drop(ta_table);
-
             let offset = if value::is_undefined(offset_val) {
                 0u32
             } else {
                 value::decode_f64(offset_val) as u32
             };
-
-            if offset > target_length {
-                // RangeError would be appropriate per spec
+            if offset > target_entry.length {
                 return value::encode_undefined();
             }
 
-            // Collect source values as f64, then write to target buffer.
-            // This handles overlapping-buffer copy correctly (ECMA-262 §23.2.3.28 step 15g).
-            let values: Vec<f64> = if value::is_object(source) {
-                // Check if source is a TypedArray
-                let Some(src_ptr) = resolve_handle_idx(&mut caller, value::decode_object_handle(source) as usize) else {
-                    return value::encode_undefined();
-                };
-                let Some(src_h) = read_object_property_by_name(&mut caller, src_ptr, "__typedarray_handle__") else {
-                    return value::encode_undefined();
-                };
-                let src_handle = value::decode_f64(src_h) as usize;
-                let src_ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
-                let Some(src_entry) = src_ta_table.get(src_handle) else {
-                    return value::encode_undefined();
-                };
-                let src_buf_handle = src_entry.buffer_handle;
-                let src_byte_offset = src_entry.byte_offset;
-                let src_length = src_entry.length;
-            let src_elem_size = src_entry.element_size;
-            let src_elem_kind = src_entry.element_kind;
-            let src_is_shared = src_entry.is_shared;
-            drop(src_ta_table);
-                if offset + src_length > target_length {
-                    return value::encode_undefined();
-                }
-                let vals = if src_is_shared {
-                    let shared = caller.data().shared_state.clone()
-                        .expect("SharedArrayBuffer requires shared_state");
-                    let sab_table = shared.sab_table.lock().expect("sab_table mutex");
-                    let Some(src_buf) = sab_table.get(src_buf_handle as usize) else {
-                        return value::encode_undefined();
-                    };
-                    let guard = src_buf.data.read().expect("sab read lock");
-                    let mut vals = Vec::with_capacity(src_length as usize);
-                    for i in 0..src_length {
-                        let off = src_byte_offset as usize + (i as usize) * (src_elem_size as usize);
-                        if off + (src_elem_size as usize) > guard.len() {
-                            return value::encode_undefined();
-                        }
-                        let v = match (src_elem_size, src_elem_kind) {
-                            (1, 0) => guard[off] as i8 as f64,
-                            (1, 1) | (1, 2) => guard[off] as f64,
-                            (2, 0) => i16::from_le_bytes([guard[off], guard[off + 1]]) as f64,
-                            (2, 1) => u16::from_le_bytes([guard[off], guard[off + 1]]) as f64,
-                            (4, 0) => i32::from_le_bytes([
-                                guard[off], guard[off + 1], guard[off + 2], guard[off + 3],
-                            ]) as f64,
-                            (4, 1) => u32::from_le_bytes([
-                                guard[off], guard[off + 1], guard[off + 2], guard[off + 3],
-                            ]) as f64,
-                            (4, 3) => f32::from_le_bytes([
-                                guard[off], guard[off + 1], guard[off + 2], guard[off + 3],
-                            ]) as f64,
-                            (8, 3) => f64::from_le_bytes([
-                                guard[off], guard[off + 1], guard[off + 2], guard[off + 3],
-                                guard[off + 4], guard[off + 5], guard[off + 6], guard[off + 7],
-                            ]),
-                            _ => return value::encode_undefined(),
-                        };
-                        vals.push(v);
-                    }
-                    drop(guard);
-                    drop(sab_table);
-                    vals
-                } else {
-                    let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
-                    let Some(src_buf) = ab_table.get(src_buf_handle as usize) else {
-                        return value::encode_undefined();
-                    };
-                    let mut vals = Vec::with_capacity(src_length as usize);
-                    for i in 0..src_length {
-                        let off = src_byte_offset as usize + (i as usize) * (src_elem_size as usize);
-                        if off + (src_elem_size as usize) > src_buf.data.len() {
-                            return value::encode_undefined();
-                        }
-                        let v = match (src_elem_size, src_elem_kind) {
-                            (1, 0) => src_buf.data[off] as i8 as f64,
-                            (1, 1) | (1, 2) => src_buf.data[off] as f64,
-                            (2, 0) => i16::from_le_bytes([src_buf.data[off], src_buf.data[off + 1]]) as f64,
-                            (2, 1) => u16::from_le_bytes([src_buf.data[off], src_buf.data[off + 1]]) as f64,
-                            (4, 0) => i32::from_le_bytes([
-                                src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
-                            ]) as f64,
-                            (4, 1) => u32::from_le_bytes([
-                                src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
-                            ]) as f64,
-                            (4, 3) => f32::from_le_bytes([
-                                src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
-                            ]) as f64,
-                            (8, 3) => f64::from_le_bytes([
-                                src_buf.data[off], src_buf.data[off + 1], src_buf.data[off + 2], src_buf.data[off + 3],
-                                src_buf.data[off + 4], src_buf.data[off + 5], src_buf.data[off + 6], src_buf.data[off + 7],
-                            ]),
-                            _ => return value::encode_undefined(),
-                        };
-                        vals.push(v);
-                    }
-                    drop(ab_table);
-                    vals
-                };
-                vals
-            } else if value::is_array(source) {
-                let Some(arr_ptr) = resolve_handle(&mut caller, source) else {
+            // 先收集源值，保证同一底层缓冲区重叠复制时不会边读边覆盖。
+            let values: Vec<i64> = if value::is_array(source) {
+                let Some(arr_ptr) = resolve_array_ptr(&mut caller, source) else {
                     return value::encode_undefined();
                 };
                 let src_length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
-                if offset + src_length > target_length {
+                if offset + src_length > target_entry.length {
                     return value::encode_undefined();
                 }
-                let mut vals = Vec::with_capacity(src_length as usize);
+                let mut values = Vec::with_capacity(src_length as usize);
                 for i in 0..src_length {
-                    let elem = read_array_elem(&mut caller, arr_ptr, i).unwrap_or(value::encode_undefined());
-                    vals.push(value::decode_f64(elem));
+                    values.push(
+                        read_array_elem(&mut caller, arr_ptr, i)
+                            .unwrap_or_else(value::encode_undefined),
+                    );
                 }
-                vals
+                values
+            } else if let Some(src_entry) = typedarray_entry_from_value(&mut caller, source) {
+                if offset + src_entry.length > target_entry.length {
+                    return value::encode_undefined();
+                }
+                let mut values = Vec::with_capacity(src_entry.length as usize);
+                for i in 0..src_entry.length {
+                    values.push(
+                        typedarray_element_read(&mut caller, source, i)
+                            .unwrap_or_else(value::encode_undefined),
+                    );
+                }
+                values
             } else {
                 return value::encode_undefined();
             };
-            // Write collected values to target buffer
-            if target_is_shared {
-                let shared = caller.data().shared_state.clone()
-                    .expect("SharedArrayBuffer requires shared_state");
-                let sab_table = shared.sab_table.lock().expect("sab_table mutex");
-                let Some(target_buf) = sab_table.get(target_buf_handle as usize) else {
-                    return value::encode_undefined();
-                };
-                let mut guard = target_buf.data.write().expect("sab write lock");
-                for (i, val) in values.iter().enumerate() {
-                    let off = target_byte_offset as usize + ((offset as usize) + i) * (target_elem_size as usize);
-                    if off + (target_elem_size as usize) > guard.len() {
-                        return value::encode_undefined();
-                    }
-                    match (target_elem_size, target_elem_kind) {
-                        (1, 0) => { guard[off] = *val as i8 as u8; }
-                        (1, 1) | (1, 2) => { guard[off] = *val as u8; }
-                        (2, 0) => { guard[off..off + 2].copy_from_slice(&(*val as i16).to_le_bytes()); }
-                        (2, 1) => { guard[off..off + 2].copy_from_slice(&(*val as u16).to_le_bytes()); }
-                        (4, 0) => { guard[off..off + 4].copy_from_slice(&(*val as i32).to_le_bytes()); }
-                        (4, 1) => { guard[off..off + 4].copy_from_slice(&(*val as u32).to_le_bytes()); }
-                        (4, 3) => { guard[off..off + 4].copy_from_slice(&(*val as f32).to_le_bytes()); }
-                        (8, 3) => { guard[off..off + 8].copy_from_slice(&val.to_le_bytes()); }
-                        _ => return value::encode_undefined(),
-                    }
-                }
-                drop(guard);
-                drop(sab_table);
-            } else {
-                let mut target_ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
-                let Some(target_buf) = target_ab_table.get_mut(target_buf_handle as usize) else {
-                    return value::encode_undefined();
-                };
-                for (i, val) in values.iter().enumerate() {
-                    let off = target_byte_offset as usize + ((offset as usize) + i) * (target_elem_size as usize);
-                    if off + (target_elem_size as usize) > target_buf.data.len() {
-                        return value::encode_undefined();
-                    }
-                    match (target_elem_size, target_elem_kind) {
-                        (1, 0) => { target_buf.data[off] = *val as i8 as u8; }
-                        (1, 1) | (1, 2) => { target_buf.data[off] = *val as u8; }
-                        (2, 0) => { target_buf.data[off..off + 2].copy_from_slice(&(*val as i16).to_le_bytes()); }
-                        (2, 1) => { target_buf.data[off..off + 2].copy_from_slice(&(*val as u16).to_le_bytes()); }
-                        (4, 0) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as i32).to_le_bytes()); }
-                        (4, 1) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as u32).to_le_bytes()); }
-                        (4, 3) => { target_buf.data[off..off + 4].copy_from_slice(&(*val as f32).to_le_bytes()); }
-                        (8, 3) => { target_buf.data[off..off + 8].copy_from_slice(&val.to_le_bytes()); }
-                        _ => return value::encode_undefined(),
-                    }
-                }
+
+            for (i, value) in values.into_iter().enumerate() {
+                let _ = typedarray_element_write(&mut caller, this_val, offset + i as u32, value);
             }
             value::encode_undefined()
         },
     );
-    linker.define(&mut store, "env", "typedarray_proto_set", typedarray_proto_set_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "typedarray_proto_set",
+        typedarray_proto_set_fn,
+    )?;
 
-    let typedarray_proto_slice_fn = Func::wrap(&mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, begin_val: i64, end_val: i64| -> i64 {
+    let typedarray_proto_slice_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         this_val: i64,
+         begin_val: i64,
+         end_val: i64|
+         -> i64 {
             // Resolve TypedArray
             if !value::is_object(this_val) {
                 return value::encode_undefined();
             }
-            let Some(ptr) = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize) else {
+            let Some(ptr) =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize)
+            else {
                 return value::encode_undefined();
             };
-            let Some(h) = read_object_property_by_name(&mut caller, ptr, "__typedarray_handle__") else {
+            let Some(h) = read_object_property_by_name(&mut caller, ptr, "__typedarray_handle__")
+            else {
                 return value::encode_undefined();
             };
             let handle = value::decode_f64(h) as usize;
-            let ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+            let ta_table = caller
+                .data()
+                .typedarray_table
+                .lock()
+                .expect("typedarray_table mutex");
             let Some(entry) = ta_table.get(handle) else {
                 return value::encode_undefined();
             };
@@ -1235,13 +1508,21 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                 // Create empty TypedArray
                 let new_buf_handle;
                 {
-                    let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                    let mut ab_table = caller
+                        .data()
+                        .arraybuffer_table
+                        .lock()
+                        .expect("arraybuffer_table mutex");
                     new_buf_handle = ab_table.len() as u32;
                     ab_table.push(ArrayBufferEntry { data: Vec::new() });
                 }
                 let new_ta_handle;
                 {
-                    let mut ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+                    let mut ta_table = caller
+                        .data()
+                        .typedarray_table
+                        .lock()
+                        .expect("typedarray_table mutex");
                     new_ta_handle = ta_table.len() as u32;
                     ta_table.push(TypedArrayEntry {
                         buffer_handle: new_buf_handle,
@@ -1252,11 +1533,34 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                         is_shared: false,
                     });
                 }
-                let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", value::encode_f64(new_ta_handle as f64));
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "length", value::encode_f64(0.0));
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", value::encode_f64(0.0));
-                let _ = define_host_data_property_from_caller(&mut caller, obj, "byteOffset", value::encode_f64(0.0));
+                let obj = {
+                    let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                    alloc_host_object(&mut caller, &_wjsm_env, 4)
+                };
+                let _ = define_host_data_property_from_caller(
+                    &mut caller,
+                    obj,
+                    "__typedarray_handle__",
+                    value::encode_f64(new_ta_handle as f64),
+                );
+                let _ = define_host_data_property_from_caller(
+                    &mut caller,
+                    obj,
+                    "length",
+                    value::encode_f64(0.0),
+                );
+                let _ = define_host_data_property_from_caller(
+                    &mut caller,
+                    obj,
+                    "byteLength",
+                    value::encode_f64(0.0),
+                );
+                let _ = define_host_data_property_from_caller(
+                    &mut caller,
+                    obj,
+                    "byteOffset",
+                    value::encode_f64(0.0),
+                );
                 return obj;
             }
 
@@ -1264,7 +1568,10 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
             let src_byte_start = byte_offset as usize + (begin as usize) * (elem_size as usize);
             let slice_byte_len = slice_len as usize * elem_size as usize;
             let sliced_data: Vec<u8> = if is_shared {
-                let shared = caller.data().shared_state.clone()
+                let shared = caller
+                    .data()
+                    .shared_state
+                    .clone()
                     .expect("SharedArrayBuffer requires shared_state");
                 let sab_table = shared.sab_table.lock().expect("sab_table mutex");
                 let Some(buf_entry) = sab_table.get(buf_handle as usize) else {
@@ -1280,7 +1587,11 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                 drop(sab_table);
                 data
             } else {
-                let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                let ab_table = caller
+                    .data()
+                    .arraybuffer_table
+                    .lock()
+                    .expect("arraybuffer_table mutex");
                 let Some(buf_entry) = ab_table.get(buf_handle as usize) else {
                     return value::encode_undefined();
                 };
@@ -1294,7 +1605,11 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
             };
             let new_buf_handle;
             {
-                let mut ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
+                let mut ab_table = caller
+                    .data()
+                    .arraybuffer_table
+                    .lock()
+                    .expect("arraybuffer_table mutex");
                 new_buf_handle = ab_table.len() as u32;
                 ab_table.push(ArrayBufferEntry { data: sliced_data });
             }
@@ -1302,7 +1617,11 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
             // Create new TypedArray entry pointing to the new buffer
             let new_ta_handle;
             {
-                let mut ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+                let mut ta_table = caller
+                    .data()
+                    .typedarray_table
+                    .lock()
+                    .expect("typedarray_table mutex");
                 new_ta_handle = ta_table.len() as u32;
                 ta_table.push(TypedArrayEntry {
                     buffer_handle: new_buf_handle,
@@ -1314,30 +1633,70 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                 });
             }
 
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", value::encode_f64(new_ta_handle as f64));
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "length", value::encode_f64(slice_len as f64));
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", value::encode_f64((slice_len * elem_size as u32) as f64));
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteOffset", value::encode_f64(0.0));
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 4)
+            };
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "__typedarray_handle__",
+                value::encode_f64(new_ta_handle as f64),
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "length",
+                value::encode_f64(slice_len as f64),
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "byteLength",
+                value::encode_f64((slice_len * elem_size as u32) as f64),
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "byteOffset",
+                value::encode_f64(0.0),
+            );
             obj
         },
     );
-    linker.define(&mut store, "env", "typedarray_proto_slice", typedarray_proto_slice_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "typedarray_proto_slice",
+        typedarray_proto_slice_fn,
+    )?;
 
-    let typedarray_proto_subarray_fn = Func::wrap(&mut store,
-        |mut caller: Caller<'_, RuntimeState>, this_val: i64, begin_val: i64, end_val: i64| -> i64 {
+    let typedarray_proto_subarray_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         this_val: i64,
+         begin_val: i64,
+         end_val: i64|
+         -> i64 {
             // Resolve TypedArray
             if !value::is_object(this_val) {
                 return value::encode_undefined();
             }
-            let Some(ptr) = resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize) else {
+            let Some(ptr) =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize)
+            else {
                 return value::encode_undefined();
             };
-            let Some(h) = read_object_property_by_name(&mut caller, ptr, "__typedarray_handle__") else {
+            let Some(h) = read_object_property_by_name(&mut caller, ptr, "__typedarray_handle__")
+            else {
                 return value::encode_undefined();
             };
             let handle = value::decode_f64(h) as usize;
-            let ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+            let ta_table = caller
+                .data()
+                .typedarray_table
+                .lock()
+                .expect("typedarray_table mutex");
             let Some(entry) = ta_table.get(handle) else {
                 return value::encode_undefined();
             };
@@ -1377,7 +1736,11 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
             // Create new TypedArray entry sharing the same ArrayBuffer
             let new_ta_handle;
             {
-                let mut ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+                let mut ta_table = caller
+                    .data()
+                    .typedarray_table
+                    .lock()
+                    .expect("typedarray_table mutex");
                 new_ta_handle = ta_table.len() as u32;
                 ta_table.push(TypedArrayEntry {
                     buffer_handle: buf_handle,
@@ -1389,20 +1752,50 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                 });
             }
 
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "__typedarray_handle__", value::encode_f64(new_ta_handle as f64));
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "length", value::encode_f64(sub_len as f64));
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteLength", value::encode_f64((sub_len * elem_size as u32) as f64));
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "byteOffset", value::encode_f64(new_byte_offset as f64));
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 4)
+            };
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "__typedarray_handle__",
+                value::encode_f64(new_ta_handle as f64),
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "length",
+                value::encode_f64(sub_len as f64),
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "byteLength",
+                value::encode_f64((sub_len * elem_size as u32) as f64),
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "byteOffset",
+                value::encode_f64(new_byte_offset as f64),
+            );
             obj
         },
     );
-    linker.define(&mut store, "env", "typedarray_proto_subarray", typedarray_proto_subarray_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "typedarray_proto_subarray",
+        typedarray_proto_subarray_fn,
+    )?;
 
-
-    let create_global_object_fn = Func::wrap(&mut store,
-        |mut caller: Caller<'_, RuntimeState>| -> i64 {
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 60) };
+    let create_global_object_fn =
+        Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| -> i64 {
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 60)
+            };
             let builtin_pairs: &[(&str, NativeCallable)] = &[
                 ("Array", NativeCallable::ArrayConstructor),
                 ("Object", NativeCallable::ObjectConstructor),
@@ -1426,17 +1819,25 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                 ("WeakMap", NativeCallable::WeakMapConstructor),
                 ("WeakSet", NativeCallable::WeakSetConstructor),
                 ("WeakRef", NativeCallable::WeakRefConstructor),
-                ("FinalizationRegistry", NativeCallable::FinalizationRegistryConstructor),
+                (
+                    "FinalizationRegistry",
+                    NativeCallable::FinalizationRegistryConstructor,
+                ),
                 ("Date", NativeCallable::DateConstructorGlobal),
                 ("Promise", NativeCallable::PromiseConstructor),
                 ("ArrayBuffer", NativeCallable::ArrayBufferConstructorGlobal),
-                ("SharedArrayBuffer", NativeCallable::SharedArrayBufferConstructor),
+                (
+                    "SharedArrayBuffer",
+                    NativeCallable::SharedArrayBufferConstructor,
+                ),
                 ("Atomics", NativeCallable::AtomicsGlobal),
                 ("DataView", NativeCallable::DataViewConstructorGlobal),
+                ("BigInt64Array", NativeCallable::BigInt64ArrayConstructor),
+                ("BigUint64Array", NativeCallable::BigUint64ArrayConstructor),
                 ("Proxy", NativeCallable::ProxyConstructor),
                 ("gc", NativeCallable::GcCollect),
             ];
-            
+
             for (name, callable) in builtin_pairs {
                 let mut native_callables = caller.data().native_callables.lock().unwrap();
                 let idx = native_callables.len() as u32;
@@ -1445,11 +1846,14 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                 drop(native_callables);
                 let _ = define_host_data_property_from_caller(&mut caller, obj, name, val);
             }
-            
+
             let _ = define_host_data_property_from_caller(&mut caller, obj, "globalThis", obj);
 
             // Create $262.agent for test262 multi-agent testing
-            let sub_agent_obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 6) };
+            let sub_agent_obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 6)
+            };
             let agent_methods: &[(&str, NativeCallable)] = &[
                 ("start", NativeCallable::AgentStart),
                 ("broadcast", NativeCallable::AgentBroadcast),
@@ -1464,19 +1868,25 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                 nc.push(callable.clone());
                 let val = value::encode_native_callable_idx(idx);
                 drop(nc);
-                let _ = define_host_data_property_from_caller(&mut caller, sub_agent_obj, name, val);
+                let _ =
+                    define_host_data_property_from_caller(&mut caller, sub_agent_obj, name, val);
             }
             let _ = define_host_data_property_from_caller(&mut caller, obj, "$262", sub_agent_obj);
 
             obj
-        },
-    );
-    linker.define(&mut store, "env", "create_global_object", create_global_object_fn)?;
+        });
+    linker.define(
+        &mut store,
+        "env",
+        "create_global_object",
+        create_global_object_fn,
+    )?;
 
-    let create_exception_fn = Func::wrap(&mut store,
+    let create_exception_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, thrown_value: i64| -> i64 {
-            let rendered = render_value(&mut caller, thrown_value)
-                .unwrap_or_else(|_| "unknown".to_string());
+            let rendered =
+                render_value(&mut caller, thrown_value).unwrap_or_else(|_| "unknown".to_string());
             let mut errors = caller.data().error_table.lock().unwrap();
             let idx = errors.len() as u32;
             errors.push(ErrorEntry {
@@ -1489,17 +1899,27 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "create_exception", create_exception_fn)?;
 
-    let exception_value_fn = Func::wrap(&mut store,
+    let exception_value_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, exception_handle: i64| -> i64 {
             let idx = value::decode_handle(exception_handle) as usize;
             let errors = caller.data().error_table.lock().unwrap();
-            errors.get(idx).map(|e| e.value).unwrap_or(value::encode_undefined())
+            errors
+                .get(idx)
+                .map(|e| e.value)
+                .unwrap_or(value::encode_undefined())
         },
     );
     linker.define(&mut store, "env", "exception_value", exception_value_fn)?;
 
-    let date_constructor_fn = Func::wrap(&mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, _this_val: i64, args_base: i32, args_count: i32| -> i64 {
+    let date_constructor_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         _this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
             let args: Vec<i64> = if args_count > 0 {
                 let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
                     return value::encode_undefined();
@@ -1546,13 +1966,23 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                     } else {
                         match DateTime::parse_from_rfc3339(&s) {
                             Ok(dt) => dt.timestamp_millis() as f64,
-                            Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S") {
-                                Ok(ndt) => ndt.and_utc().timestamp_millis() as f64,
-                                Err(_) => match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                                    Ok(nd) => nd.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis() as f64,
-                                    Err(_) => f64::NAN,
-                                },
-                            },
+                            Err(_) => {
+                                match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S")
+                                {
+                                    Ok(ndt) => ndt.and_utc().timestamp_millis() as f64,
+                                    Err(_) => {
+                                        match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                            Ok(nd) => nd
+                                                .and_hms_opt(0, 0, 0)
+                                                .unwrap()
+                                                .and_utc()
+                                                .timestamp_millis()
+                                                as f64,
+                                            Err(_) => f64::NAN,
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 } else {
@@ -1563,16 +1993,48 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
             };
 
             let state = caller.data();
-            let (get_date_fn, get_day_fn, get_full_year_fn, get_hours_fn, get_milliseconds_fn,
-                 get_minutes_fn, get_month_fn, get_seconds_fn, get_time_fn, get_timezone_offset_fn,
-                 get_utc_date_fn, get_utc_day_fn, get_utc_full_year_fn, get_utc_hours_fn,
-                 get_utc_milliseconds_fn, get_utc_minutes_fn, get_utc_month_fn, get_utc_seconds_fn,
-                 set_date_fn, set_full_year_fn, set_hours_fn, set_milliseconds_fn,
-                 set_minutes_fn, set_month_fn, set_seconds_fn, set_time_fn,
-                 set_utc_date_fn, set_utc_full_year_fn, set_utc_hours_fn, set_utc_milliseconds_fn,
-                 set_utc_minutes_fn, set_utc_month_fn, set_utc_seconds_fn,
-                 to_string_fn, to_date_string_fn, to_time_string_fn, to_iso_string_fn,
-                 to_utc_string_fn, to_json_fn, value_of_fn) = {
+            let (
+                get_date_fn,
+                get_day_fn,
+                get_full_year_fn,
+                get_hours_fn,
+                get_milliseconds_fn,
+                get_minutes_fn,
+                get_month_fn,
+                get_seconds_fn,
+                get_time_fn,
+                get_timezone_offset_fn,
+                get_utc_date_fn,
+                get_utc_day_fn,
+                get_utc_full_year_fn,
+                get_utc_hours_fn,
+                get_utc_milliseconds_fn,
+                get_utc_minutes_fn,
+                get_utc_month_fn,
+                get_utc_seconds_fn,
+                set_date_fn,
+                set_full_year_fn,
+                set_hours_fn,
+                set_milliseconds_fn,
+                set_minutes_fn,
+                set_month_fn,
+                set_seconds_fn,
+                set_time_fn,
+                set_utc_date_fn,
+                set_utc_full_year_fn,
+                set_utc_hours_fn,
+                set_utc_milliseconds_fn,
+                set_utc_minutes_fn,
+                set_utc_month_fn,
+                set_utc_seconds_fn,
+                to_string_fn,
+                to_date_string_fn,
+                to_time_string_fn,
+                to_iso_string_fn,
+                to_utc_string_fn,
+                to_json_fn,
+                value_of_fn,
+            ) = {
                 (
                     create_date_method(state, DateMethodKind::GetDate),
                     create_date_method(state, DateMethodKind::GetDay),
@@ -1617,47 +2079,195 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                 )
             };
 
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 40) };
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 40)
+            };
             let ms_val = value::encode_f64(ms);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__date_ms__", ms_val);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "getDate", get_date_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "getDay", get_day_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getFullYear", get_full_year_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getHours", get_hours_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getMilliseconds", get_milliseconds_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getMinutes", get_minutes_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getMonth", get_month_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getSeconds", get_seconds_fn);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getFullYear",
+                get_full_year_fn,
+            );
+            let _ =
+                define_host_data_property_from_caller(&mut caller, obj, "getHours", get_hours_fn);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getMilliseconds",
+                get_milliseconds_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getMinutes",
+                get_minutes_fn,
+            );
+            let _ =
+                define_host_data_property_from_caller(&mut caller, obj, "getMonth", get_month_fn);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getSeconds",
+                get_seconds_fn,
+            );
             let _ = define_host_data_property_from_caller(&mut caller, obj, "getTime", get_time_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getTimezoneOffset", get_timezone_offset_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCDate", get_utc_date_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCDay", get_utc_day_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCFullYear", get_utc_full_year_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCHours", get_utc_hours_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCMilliseconds", get_utc_milliseconds_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCMinutes", get_utc_minutes_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCMonth", get_utc_month_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "getUTCSeconds", get_utc_seconds_fn);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getTimezoneOffset",
+                get_timezone_offset_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getUTCDate",
+                get_utc_date_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getUTCDay",
+                get_utc_day_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getUTCFullYear",
+                get_utc_full_year_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getUTCHours",
+                get_utc_hours_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getUTCMilliseconds",
+                get_utc_milliseconds_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getUTCMinutes",
+                get_utc_minutes_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getUTCMonth",
+                get_utc_month_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "getUTCSeconds",
+                get_utc_seconds_fn,
+            );
             let _ = define_host_data_property_from_caller(&mut caller, obj, "setDate", set_date_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setFullYear", set_full_year_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setHours", set_hours_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setMilliseconds", set_milliseconds_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setMinutes", set_minutes_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setMonth", set_month_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setSeconds", set_seconds_fn);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "setFullYear",
+                set_full_year_fn,
+            );
+            let _ =
+                define_host_data_property_from_caller(&mut caller, obj, "setHours", set_hours_fn);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "setMilliseconds",
+                set_milliseconds_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "setMinutes",
+                set_minutes_fn,
+            );
+            let _ =
+                define_host_data_property_from_caller(&mut caller, obj, "setMonth", set_month_fn);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "setSeconds",
+                set_seconds_fn,
+            );
             let _ = define_host_data_property_from_caller(&mut caller, obj, "setTime", set_time_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCDate", set_utc_date_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCFullYear", set_utc_full_year_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCHours", set_utc_hours_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCMilliseconds", set_utc_milliseconds_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCMinutes", set_utc_minutes_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCMonth", set_utc_month_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "setUTCSeconds", set_utc_seconds_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "toString", to_string_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "toDateString", to_date_string_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "toTimeString", to_time_string_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "toISOString", to_iso_string_fn);
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "toUTCString", to_utc_string_fn);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "setUTCDate",
+                set_utc_date_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "setUTCFullYear",
+                set_utc_full_year_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "setUTCHours",
+                set_utc_hours_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "setUTCMilliseconds",
+                set_utc_milliseconds_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "setUTCMinutes",
+                set_utc_minutes_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "setUTCMonth",
+                set_utc_month_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "setUTCSeconds",
+                set_utc_seconds_fn,
+            );
+            let _ =
+                define_host_data_property_from_caller(&mut caller, obj, "toString", to_string_fn);
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "toDateString",
+                to_date_string_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "toTimeString",
+                to_time_string_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "toISOString",
+                to_iso_string_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "toUTCString",
+                to_utc_string_fn,
+            );
             let _ = define_host_data_property_from_caller(&mut caller, obj, "toJSON", to_json_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "valueOf", value_of_fn);
             obj
@@ -1665,15 +2275,14 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "date_constructor", date_constructor_fn)?;
 
-    let date_now_fn = Func::wrap(&mut store,
-        |_caller: Caller<'_, RuntimeState>| -> i64 {
-            let now = chrono::Utc::now();
-            value::encode_f64(now.timestamp_millis() as f64)
-        },
-    );
+    let date_now_fn = Func::wrap(&mut store, |_caller: Caller<'_, RuntimeState>| -> i64 {
+        let now = chrono::Utc::now();
+        value::encode_f64(now.timestamp_millis() as f64)
+    });
     linker.define(&mut store, "env", "date_now", date_now_fn)?;
 
-    let date_parse_fn = Func::wrap(&mut store,
+    let date_parse_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let s = if value::is_string(arg) {
                 read_value_string_bytes(&mut caller, arg)
@@ -1689,29 +2298,52 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
                 Ok(dt) => value::encode_f64(dt.timestamp_millis() as f64),
                 Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S") {
                     Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
-                    Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f") {
-                        Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
-                        Err(_) => match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                            Ok(nd) => value::encode_f64(nd.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp_millis() as f64),
-                            Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%b %d, %Y") {
-                                Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
-                                Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%B %d, %Y") {
-                                    Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
-                                    Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%d %b %Y %H:%M:%S") {
-                                        Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
-                                        Err(_) => value::encode_f64(f64::NAN),
-                                    },
-                                },
+                    Err(_) => {
+                        match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f") {
+                            Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
+                            Err(_) => match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                Ok(nd) => value::encode_f64(
+                                    nd.and_hms_opt(0, 0, 0)
+                                        .unwrap()
+                                        .and_utc()
+                                        .timestamp_millis()
+                                        as f64,
+                                ),
+                                Err(_) => {
+                                    match chrono::NaiveDateTime::parse_from_str(&s, "%b %d, %Y") {
+                                        Ok(ndt) => value::encode_f64(
+                                            ndt.and_utc().timestamp_millis() as f64,
+                                        ),
+                                        Err(_) => match chrono::NaiveDateTime::parse_from_str(
+                                            &s,
+                                            "%B %d, %Y",
+                                        ) {
+                                            Ok(ndt) => value::encode_f64(
+                                                ndt.and_utc().timestamp_millis() as f64,
+                                            ),
+                                            Err(_) => match chrono::NaiveDateTime::parse_from_str(
+                                                &s,
+                                                "%d %b %Y %H:%M:%S",
+                                            ) {
+                                                Ok(ndt) => value::encode_f64(
+                                                    ndt.and_utc().timestamp_millis() as f64,
+                                                ),
+                                                Err(_) => value::encode_f64(f64::NAN),
+                                            },
+                                        },
+                                    }
+                                }
                             },
-                        },
-                    },
+                        }
+                    }
                 },
             }
         },
     );
     linker.define(&mut store, "env", "date_parse", date_parse_fn)?;
 
-    let date_utc_fn = Func::wrap(&mut store,
+    let date_utc_fn = Func::wrap(
+        &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let args = vec![arg];
             let ms = date_args_to_ms(&args, true);
@@ -1723,10 +2355,15 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     // TODO: 当前私有字段实现仅通过 "#fieldName" 字符串作为属性键存储在对象的普通属性槽中，
     // 不符合 ECMAScript 规范的 [[PrivateElements]] 语义。任何代码都可以通过 obj["#x"] 访问，
     // 且没有基于类身份的访问控制。未来需要重构为基于类身份的私有槽机制。
-    let private_get_fn = Func::wrap(&mut store,
+    let private_get_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
             if !value::is_object(obj) && !value::is_function(obj) {
-                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
                     Some("TypeError: cannot read private member from non-object".to_string());
                 return value::encode_undefined();
             }
@@ -1745,10 +2382,15 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "private_get", private_get_fn)?;
 
-    let private_set_fn = Func::wrap(&mut store,
+    let private_set_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32, val: i64| -> i64 {
             if !value::is_object(obj) && !value::is_function(obj) {
-                *caller.data().runtime_error.lock().expect("runtime error mutex") =
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
                     Some("TypeError: cannot write private member to non-object".to_string());
                 return value::encode_undefined();
             }
@@ -1771,7 +2413,8 @@ pub(crate) fn define_collections_buffers(linker: &mut Linker<RuntimeState>, mut 
     );
     linker.define(&mut store, "env", "private_set", private_set_fn)?;
 
-    let private_has_fn = Func::wrap(&mut store,
+    let private_has_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
             if !value::is_object(obj) && !value::is_function(obj) {
                 return value::encode_bool(false);

@@ -142,8 +142,11 @@ impl Compiler {
         self.functions.function(9); // Type 9: (i64, i32, i64) -> ()
         self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
-        // 设置 obj_spread_func_idx 为 import index 82
-        self.obj_spread_func_idx = 82;
+        self.obj_spread_func_idx = HOST_IMPORT_NAMES
+            .iter()
+            .position(|name| *name == "obj_spread")
+            .expect("obj_spread host import must be present")
+            as u32;
 
         self.get_proto_from_ctor_func_idx = self._next_import_func;
         self.functions.function(3); // Type 3: (i64) -> (i64)

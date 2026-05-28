@@ -399,8 +399,13 @@ impl Lowerer {
 
         // 1) Collect all arguments into an array
         let args_array = self.alloc_value();
-        self.current_function
-            .append_instruction(block, Instruction::CollectRestArgs { dest: args_array, skip: 0 });
+        self.current_function.append_instruction(
+            block,
+            Instruction::CollectRestArgs {
+                dest: args_array,
+                skip: 0,
+            },
+        );
 
         // 2) Build param_count constant (0 = unused for unmapped mode, needed for future mapped mode)
         let param_count = 0.0;
@@ -600,11 +605,13 @@ impl Lowerer {
         mut block: BasicBlockId,
         kind: VarKind,
     ) -> Result<(), LoweringError> {
+        let mut excluded_keys = Vec::new();
         for prop in &object_pat.props {
             match prop {
                 swc_ast::ObjectPatProp::KeyValue(kv) => {
                     // { key: pattern } 或 { [computed]: pattern }
                     let key_val = self.lower_prop_name(&kv.key, block)?;
+                    excluded_keys.push(key_val);
                     let dest = self.alloc_value();
                     self.current_function.append_instruction(
                         block,
@@ -628,6 +635,7 @@ impl Lowerer {
                             constant: key_const,
                         },
                     );
+                    excluded_keys.push(key_val);
                     let dest = self.alloc_value();
                     self.current_function.append_instruction(
                         block,
@@ -668,17 +676,26 @@ impl Lowerer {
                     }
                 }
                 swc_ast::ObjectPatProp::Rest(rest) => {
-                    // { ...rest } — 使用 ObjectRest builtin
+                    // { ...rest } — 使用 ObjectRest builtin，并排除前面已绑定的属性键。
                     let rest_dest = self.alloc_value();
-                    let excluded_cid = self.module.add_constant(Constant::Undefined);
                     let excluded_val = self.alloc_value();
                     self.current_function.append_instruction(
                         block,
-                        Instruction::Const {
+                        Instruction::NewArray {
                             dest: excluded_val,
-                            constant: excluded_cid,
+                            capacity: excluded_keys.len() as u32,
                         },
                     );
+                    for key_val in &excluded_keys {
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: None,
+                                builtin: Builtin::ArrayPush,
+                                args: vec![excluded_val, *key_val],
+                            },
+                        );
+                    }
                     self.current_function.append_instruction(
                         block,
                         Instruction::CallBuiltin {
