@@ -224,6 +224,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     define_async_fn(&mut linker, &mut store)?;
     define_async_generator(&mut linker, &mut store)?;
     define_proxy_reflect(&mut linker, &mut store)?;
+    define_object_builtins(&mut linker, &mut store)?;
     define_string_methods(&mut linker, &mut store)?;
     define_math_number_error(&mut linker, &mut store)?;
     define_collections_buffers(&mut linker, &mut store)?;
