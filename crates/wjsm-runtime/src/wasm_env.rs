@@ -12,6 +12,7 @@ pub(crate) struct WasmEnv {
     pub obj_table_ptr: Global,
     pub obj_table_count: Global,
     pub object_proto_handle: Global,
+    pub array_proto_handle: Global,
 }
 
 impl WasmEnv {
@@ -25,6 +26,7 @@ impl WasmEnv {
             obj_table_ptr: caller.get_export("__obj_table_ptr")?.into_global()?,
             obj_table_count: caller.get_export("__obj_table_count")?.into_global()?,
             object_proto_handle: caller.get_export("__object_proto_handle")?.into_global()?,
+            array_proto_handle: caller.get_export("__array_proto_handle")?.into_global()?,
         })
     }
 }

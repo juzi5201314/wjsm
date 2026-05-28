@@ -3,6 +3,16 @@ name: writing-plans
 description: Use when you have a spec or requirements for a multi-step task, before touching code
 ---
 
+# Execute
+
+→ Have approved spec/requirements? → **Write implementation plan. Assume engineer has zero context.**
+  1. Scope check: fact/assumption/unknown, baseline, Ripple Signal Triage, compatibility boundary, dual-track needs
+  2. File map: what files created/modified, clear boundaries, follow existing patterns
+  3. Bite-sized tasks (2-5 min each): exact file paths, complete code, exact commands, expected output
+  4. Self-review: spec coverage, placeholders, type consistency, compatibility, verification, dual-track
+  5. Save → offer execution choice (subagent-driven or inline)
+→ Plan must answer: problem, baseline, files, compat, verification, risks, retirement.
+
 # Writing Plans
 
 ## Overview
@@ -11,27 +21,113 @@ Write comprehensive implementation plans assuming the engineer has zero context 
 
 Assume they are a skilled developer, but know almost nothing about our toolset or problem domain. Assume they don't know good test design very well.
 
+This skill is the canonical planning workflow for multi-step implementation work. Use it to convert approved specs or requirements into plans that are executable, testable, impact-aware, and bounded by compatibility and authority constraints.
+
 **Announce at start:** "I'm using the writing-plans skill to create the implementation plan."
 
-**Context:** If working in an isolated worktree, it should have been created via the `superpowers:using-git-worktrees` skill at execution time.
+**Context:** This should be run in a dedicated worktree (created by brainstorming skill).
 
-**Save plans to:** `docs/superpowers/plans/YYYY-MM-DD-<feature-name>.md`
-- (User preferences for plan location override this default)
+**Input:** approved requirements, a Spec Brief, or a Design Spec.
+
+**Save plans to:** `docs/aegis/plans/YYYY-MM-DD-<feature-name>.md`
+Plan always goes to `plans/` — never to `work/`.
+(User preferences for plan location override this default.)
+
+If `docs/aegis/` does not exist and configured Aegis workspace support is
+available, initialize the target project first:
+
+```bash
+python <aegis-workspace-helper> init --root <target-project-root>
+```
+
+If installed Aegis workspace support is unavailable, initialize the workspace manually:
+  1. Create `docs/aegis/README.md` and `docs/aegis/INDEX.md`
+  2. Create `docs/aegis/BASELINE-GOVERNANCE.md` from template
+  3. If the project has code, create `docs/aegis/baseline/YYYY-MM-DD-initial-baseline.md`
+Then save the plan and append to `docs/aegis/INDEX.md`. Prefer:
+
+```bash
+python <aegis-workspace-helper> append-index --root <target-project-root> --path docs/aegis/plans/<filename>.md --kind plan --title "<title>"
+python <aegis-workspace-helper> check --root <target-project-root>
+```
 
 ## Scope Check
 
-If the spec covers multiple independent subsystems, it should have been broken into sub-project specs during brainstorming. If it wasn't, suggest breaking this into separate plans — one per subsystem. Each plan should produce working, testable software on its own.
+If the input is a Spec Brief, keep the plan scoped to the pinned
+what/why/acceptance and do not expand into a formal design unless new
+architecture, contract, migration, or cross-module uncertainty appears.
+
+Compact output contract before writing the plan: `Plan Basis`, `Files`,
+`Compatibility`, `Plan Pressure Test`, `Plan-Time Complexity Check`, `Tasks`,
+`Risks`, and `Retirement`. Expand only where the approved scope, risk, or
+verification surface requires it.
+
+Use a compact `Plan Pressure Test` before task decomposition:
+
+```text
+Plan Pressure Test:
+- Owner / contract / retirement:
+- Verification scope:
+- Task executability:
+- Pressure result: proceed | revise plan | return to design
+```
+
+The pressure test is not an approval gate and should not redesign an approved
+spec without cause. It exists to catch owner / contract / retirement risk,
+missing verification, and tasks that are too vague to execute safely.
+
+Use a compact `Plan-Time Complexity Check` before writing task steps when the
+plan changes maintained source files, core owners, handlers, routers, managers,
+shared utilities, adapters, or fallback paths:
+
+```text
+Plan-Time Complexity Check:
+- Target files:
+- Existing size / shape signals:
+- Owner fit:
+- Add-in-place risk:
+- Better file boundary:
+- Recommendation: edit-in-place | extract helper | add owner file | split task | defer refactor
+```
+
+Signals: 800+ line files, 80+ line blocks, deep nesting, mixed reasons to
+change, owner mismatch, or new branches/fallbacks/adapters. Advisory only. If
+the best answer is a new file, define its owner and contract; do not merely move
+complexity sideways.
+
+If the spec covers multiple independent subsystems, suggest breaking into
+separate plans. Before writing tasks, check: fact/assumption/unknown, baseline
+docs, compatibility boundary, whether dual-track (repair + retirement) applies.
+If approved requirements or the design carried an ADR signal, preserve the ADR
+signal, source refs, real alternatives, compatibility boundary, and expected
+baseline-sync questions for completion so ADR Auto Backfill can run without
+rediscovering the decision from scratch.
+
+If task decomposition would encode a new owner, duplicate owner, fallback,
+adapter, compat-only carrier, delete-first question, unverified assumption, or
+long-term stability claim that the spec did not already settle, use
+`first-principles-review` and its `Decision Hygiene Review` before task
+decomposition.
+
+## Aegis Project Workspace
+
+Workspace creation is triggered by the plan save step. See `using-aegis/SKILL.md` Rule 3 for the hard binary rule. If the project already has docs/adr/ or architecture docs, reference them — do not duplicate authority.
 
 ## File Structure
 
-Before defining tasks, map out which files will be created or modified and what each one is responsible for. This is where decomposition decisions get locked in.
+Map files before defining tasks. Design units with clear boundaries and single responsibilities. Files that change together should live together. Follow existing codebase patterns. Each task should produce self-contained, independently reviewable changes.
 
-- Design units with clear boundaries and well-defined interfaces. Each file should have one clear responsibility.
-- You reason best about code you can hold in context at once, and your edits are more reliable when files are focused. Prefer smaller, focused files over large ones that do too much.
-- Files that change together should live together. Split by responsibility, not by technical layer.
-- In existing codebases, follow established patterns. If the codebase uses large files, don't unilaterally restructure - but if a file you're modifying has grown unwieldy, including a split in the plan is reasonable.
+## Required Planning Outputs
 
-This structure informs the task decomposition. Each task should produce self-contained changes that make sense independently.
+Before you leave this workflow, the written plan must make these items answerable:
+
+1. **What problem or approved scope this plan is implementing**
+2. **Which baseline docs, ADRs, or requirements shaped the plan**
+3. **What files own the change**
+4. **What compatibility boundary must hold**
+5. **What plan-time complexity pressure exists and which edit boundary is safer**
+6. **What verification proves each major slice**
+7. **What risks, rollback surface, old owner/fallback handling, ADR signal preservation, and baseline-sync signals remain**
 
 ## Bite-Sized Task Granularity
 
@@ -44,98 +140,40 @@ This structure informs the task decomposition. Each task should produce self-con
 
 ## Plan Document Header
 
-**Every plan MUST start with this header:**
-
-```markdown
-# [Feature Name] Implementation Plan
-
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
-**Goal:** [One sentence describing what this builds]
-
-**Architecture:** [2-3 sentences about approach]
-
-**Tech Stack:** [Key technologies/libraries]
-
----
-```
+Every plan MUST start with: Goal, Architecture, Tech Stack, Baseline/Authority Refs, Compatibility Boundary, Verification. See template in this directory.
 
 ## Task Structure
 
-````markdown
-### Task N: [Component Name]
+Each task: Files (create/modify/test paths), Why (user/business value), Impact/Compatibility, Verification (exact commands), then 5 checkbox steps: Write test → Verify RED → Minimal code → Verify GREEN → Commit. Every step must include complete code and exact commands.
 
-**Files:**
-- Create: `exact/path/to/file.py`
-- Modify: `exact/path/to/existing.py:123-145`
-- Test: `tests/exact/path/to/test.py`
-
-- [ ] **Step 1: Write the failing test**
-
-```python
-def test_specific_behavior():
-    result = function(input)
-    assert result == expected
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `pytest tests/path/test.py::test_name -v`
-Expected: FAIL with "function not defined"
-
-- [ ] **Step 3: Write minimal implementation**
-
-```python
-def function(input):
-    return expected
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `pytest tests/path/test.py::test_name -v`
-Expected: PASS
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add tests/path/test.py src/path/file.py
-git commit -m "feat: add specific feature"
-```
-````
+For bug fixes, refactors, contract changes, or governance cleanup, add Repair
+Track (root cause, canonical owner, minimal sufficient stable repair, compat
+boundary, verification) and Retirement Track (old owner/fallback, active status,
+keep reason or deletion trigger) inside the relevant task. If Ripple Signal
+Triage fired, include the affected downstream consumers and expanded
+verification path in the same task.
 
 ## No Placeholders
 
-Every step must contain the actual content an engineer needs. These are **plan failures** — never write them:
-- "TBD", "TODO", "implement later", "fill in details"
-- "Add appropriate error handling" / "add validation" / "handle edge cases"
-- "Write tests for the above" (without actual test code)
-- "Similar to Task N" (repeat the code — the engineer may be reading tasks out of order)
-- Steps that describe what to do without showing how (code blocks required for code steps)
-- References to types, functions, or methods not defined in any task
-
-## Remember
-- Exact file paths always
-- Complete code in every step — if a step changes code, show the code
-- Exact commands with expected output
-- DRY, YAGNI, TDD, frequent commits
+Never write: "TBD", "TODO", "implement later", "fill in details", "Add appropriate error handling", "Write tests for the above" without actual test code, "Similar to Task N" without repeating code. Every step must contain complete, copy-paste-ready content.
 
 ## Self-Review
 
-After writing the complete plan, look at the spec with fresh eyes and check the plan against it. This is a checklist you run yourself — not a subagent dispatch.
+Check plan against spec: 1) Spec coverage — can you point to a task for each
+requirement? 2) Placeholder scan — any TBD/TODO/vague instructions? 3) Type
+consistency — do signatures match across tasks? 4) Compatibility — invariants,
+non-goals, stable interfaces marked? 5) Plan-time complexity and minimality —
+lowest-entropy owner/file boundary that fixes the bug class, not just the
+smallest textual diff? 6) Verification — exact commands? 7) Dual-track,
+decision hygiene, and ADR/baseline-sync signals preserved where needed?
 
-**1. Spec coverage:** Skim each section/requirement in the spec. Can you point to a task that implements it? List any gaps.
-
-**2. Placeholder scan:** Search your plan for red flags — any of the patterns from the "No Placeholders" section above. Fix them.
-
-**3. Type consistency:** Do the types, method signatures, and property names you used in later tasks match what you defined in earlier tasks? A function called `clearLayers()` in Task 3 but `clearFullLayers()` in Task 7 is a bug.
-
-If you find issues, fix them inline. No need to re-review — just fix and move on. If you find a spec requirement with no task, add the task.
+Fix issues inline. Re-review is not needed — just fix and move on.
 
 ## Execution Handoff
 
 After saving the plan, offer execution choice:
 
-**"Plan complete and saved to `docs/superpowers/plans/<filename>.md`. Two execution options:**
+**"Plan complete and saved to `docs/aegis/plans/<filename>.md`. Two execution options:**
 
 **1. Subagent-Driven (recommended)** - I dispatch a fresh subagent per task, review between tasks, fast iteration
 
@@ -144,9 +182,15 @@ After saving the plan, offer execution choice:
 **Which approach?"**
 
 **If Subagent-Driven chosen:**
-- **REQUIRED SUB-SKILL:** Use superpowers:subagent-driven-development
+- **REQUIRED SUB-SKILL:** Use aegis:subagent-driven-development
 - Fresh subagent per task + two-stage review
 
 **If Inline Execution chosen:**
-- **REQUIRED SUB-SKILL:** Use superpowers:executing-plans
+- **REQUIRED SUB-SKILL:** Use aegis:executing-plans
 - Batch execution with checkpoints for review
+
+## Planning Boundaries
+
+- A plan can define implementation slices, verification, rollback surface, and retirement expectations
+- A plan cannot grant authoritative completion
+- A plan should prepare runtime-ready execution, not pretend to be runtime authority

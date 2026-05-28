@@ -306,7 +306,9 @@ impl Compiler {
             vec![ValType::I64],
         );
         // Type 33: (i32, i32) -> () — console varargs（args_base, args_count）
-        types.ty().function(vec![ValType::I32, ValType::I32], vec![]);
+        types
+            .ty()
+            .function(vec![ValType::I32, ValType::I32], vec![]);
         // Type 34: (i64, i64, i64, i64, i64) -> (i64) — scope_record_add_binding (5 i64 args)
         types.ty().function(
             vec![
@@ -324,9 +326,9 @@ impl Compiler {
         imports.import("env", "func_apply", EntityType::Function(16));
         // Import index 80: func_bind — Type 12 (uses shadow stack for bound args)
         imports.import("env", "func_bind", EntityType::Function(12));
-        // Import index 81: object_rest: (i64, i64) -> (i64)
+        // Import index 100: object_rest: (i64, i64) -> (i64)
         imports.import("env", "object_rest", EntityType::Function(2));
-        // Import index 82: obj_spread: (i64, i64) -> ()
+        // Import index 101: obj_spread: (i64, i64) -> ()
         imports.import("env", "obj_spread", EntityType::Function(5));
         // Import index 83: has_own_property: (i64, i32) -> (i64)
         imports.import("env", "has_own_property", EntityType::Function(8));
@@ -809,6 +811,12 @@ impl Compiler {
         imports.import("env", "uint32array_constructor", EntityType::Function(16));
         imports.import("env", "float32array_constructor", EntityType::Function(16));
         imports.import("env", "float64array_constructor", EntityType::Function(16));
+        imports.import("env", "bigint64array_constructor", EntityType::Function(16));
+        imports.import(
+            "env",
+            "biguint64array_constructor",
+            EntityType::Function(16),
+        );
         // ── TypedArray prototype imports ──
         // Import index 306: typedarray_proto_length: (i64) -> i64
         imports.import("env", "typedarray_proto_length", EntityType::Function(3));
@@ -842,145 +850,199 @@ impl Compiler {
         imports.import("env", "private_set", EntityType::Function(32));
         // Import index 317: private_has: (i64, i32) -> i64
         imports.import("env", "private_has", EntityType::Function(8));
-        // Import index 318: proxy_trap_get: (i64 proxy, i32 name_id) -> i64
+        // Import index 320: proxy_trap_get: (i64 proxy, i32 name_id) -> i64
         imports.import("env", "proxy_trap_get", EntityType::Function(8));
-        // Import index 319: proxy_trap_set: (i64 proxy, i32 name_id, i64 value) -> ()
+        // Import index 321: proxy_trap_set: (i64 proxy, i32 name_id, i64 value) -> ()
         imports.import("env", "proxy_trap_set", EntityType::Function(9));
-        // Import index 320: proxy_trap_delete: (i64 proxy, i32 name_id) -> i64
+        // Import index 322: proxy_trap_delete: (i64 proxy, i32 name_id) -> i64
         imports.import("env", "proxy_trap_delete", EntityType::Function(8));
-        // Import index 321: get_builtin_global: (i64) -> i64
+        // Import index 323: get_builtin_global: (i64) -> i64
         imports.import("env", "get_builtin_global", EntityType::Function(3));
-        // Import index 322: new_target: (i64) -> i64
+        // Import index 324: new_target: (i64) -> i64
         imports.import("env", "new_target", EntityType::Function(3));
-        // Import index 323: new_target_set: (i64) -> i64
+        // Import index 325: new_target_set: (i64) -> i64
         imports.import("env", "new_target_set", EntityType::Function(3));
-        // Import index 324: create_unmapped_arguments_object: (i64, i64) -> i64
-        imports.import("env", "create_unmapped_arguments_object", EntityType::Function(2));
-        // Import index 325: create_mapped_arguments_object: (i64, i64, i64) -> i64
-        imports.import("env", "create_mapped_arguments_object", EntityType::Function(16));
-        // Import index 326: typedarray_proto_fill: (i64, i64, i64, i64) -> i64 (receiver, value, start, end)
+        // Import index 326: create_unmapped_arguments_object: (i64, i64) -> i64
+        imports.import(
+            "env",
+            "create_unmapped_arguments_object",
+            EntityType::Function(2),
+        );
+        // Import index 327: create_mapped_arguments_object: (i64, i64, i64) -> i64
+        imports.import(
+            "env",
+            "create_mapped_arguments_object",
+            EntityType::Function(16),
+        );
+        // Import index 328: typedarray_proto_fill: (i64, i64, i64, i64) -> i64 (receiver, value, start, end)
         imports.import("env", "typedarray_proto_fill", EntityType::Function(17));
-        // Import index 327: typedarray_proto_reverse: (i64) -> i64
+        // Import index 329: typedarray_proto_reverse: (i64) -> i64
         imports.import("env", "typedarray_proto_reverse", EntityType::Function(3));
-        // Import index 328: typedarray_proto_index_of: (i64, i64, i64) -> i64
+        // Import index 330: typedarray_proto_index_of: (i64, i64, i64) -> i64
         imports.import("env", "typedarray_proto_index_of", EntityType::Function(16));
-        // Import index 329: typedarray_proto_last_index_of: (i64, i64, i64) -> i64
-        imports.import("env", "typedarray_proto_last_index_of", EntityType::Function(16));
-        // Import index 330: typedarray_proto_includes: (i64, i64, i64) -> i64
+        // Import index 331: typedarray_proto_last_index_of: (i64, i64, i64) -> i64
+        imports.import(
+            "env",
+            "typedarray_proto_last_index_of",
+            EntityType::Function(16),
+        );
+        // Import index 332: typedarray_proto_includes: (i64, i64, i64) -> i64
         imports.import("env", "typedarray_proto_includes", EntityType::Function(16));
-        // Import index 331: typedarray_proto_join: (i64, i64) -> i64
+        // Import index 333: typedarray_proto_join: (i64, i64) -> i64
         imports.import("env", "typedarray_proto_join", EntityType::Function(2));
-        // Import index 332: typedarray_proto_to_string: (i64) -> i64
+        // Import index 334: typedarray_proto_to_string: (i64) -> i64
         imports.import("env", "typedarray_proto_to_string", EntityType::Function(3));
-        // Import index 333: typedarray_proto_copy_within: (i64, i64, i64, i64) -> i64 (receiver, target, start, end)
-        imports.import("env", "typedarray_proto_copy_within", EntityType::Function(17));
-        // Import index 334: typedarray_proto_at: (i64, i64) -> i64
+        // Import index 335: typedarray_proto_copy_within: (i64, i64, i64, i64) -> i64 (receiver, target, start, end)
+        imports.import(
+            "env",
+            "typedarray_proto_copy_within",
+            EntityType::Function(17),
+        );
+        // Import index 336: typedarray_proto_at: (i64, i64) -> i64
         imports.import("env", "typedarray_proto_at", EntityType::Function(2));
         // ── TypedArray 新增原型方法: 回调方法 (Type 12 shadow stack) ──
-        // Import index 335: typedarray_proto_for_each: Type 12
+        // Import index 337: typedarray_proto_for_each: Type 12
         imports.import("env", "typedarray_proto_for_each", EntityType::Function(12));
-        // Import index 336: typedarray_proto_map: Type 12
+        // Import index 338: typedarray_proto_map: Type 12
         imports.import("env", "typedarray_proto_map", EntityType::Function(12));
-        // Import index 337: typedarray_proto_filter: Type 12
+        // Import index 339: typedarray_proto_filter: Type 12
         imports.import("env", "typedarray_proto_filter", EntityType::Function(12));
-        // Import index 338: typedarray_proto_reduce: Type 12
+        // Import index 340: typedarray_proto_reduce: Type 12
         imports.import("env", "typedarray_proto_reduce", EntityType::Function(12));
-        // Import index 339: typedarray_proto_reduce_right: Type 12
-        imports.import("env", "typedarray_proto_reduce_right", EntityType::Function(12));
-        // Import index 340: typedarray_proto_find: Type 12
+        // Import index 341: typedarray_proto_reduce_right: Type 12
+        imports.import(
+            "env",
+            "typedarray_proto_reduce_right",
+            EntityType::Function(12),
+        );
+        // Import index 342: typedarray_proto_find: Type 12
         imports.import("env", "typedarray_proto_find", EntityType::Function(12));
-        // Import index 341: typedarray_proto_find_index: Type 12
-        imports.import("env", "typedarray_proto_find_index", EntityType::Function(12));
-        // Import index 342: typedarray_proto_some: Type 12
+        // Import index 343: typedarray_proto_find_index: Type 12
+        imports.import(
+            "env",
+            "typedarray_proto_find_index",
+            EntityType::Function(12),
+        );
+        // Import index 344: typedarray_proto_some: Type 12
         imports.import("env", "typedarray_proto_some", EntityType::Function(12));
-        // Import index 343: typedarray_proto_every: Type 12
+        // Import index 345: typedarray_proto_every: Type 12
         imports.import("env", "typedarray_proto_every", EntityType::Function(12));
-        // Import index 344: typedarray_proto_sort: Type 12
+        // Import index 346: typedarray_proto_sort: Type 12
         imports.import("env", "typedarray_proto_sort", EntityType::Function(12));
         // ── TypedArray 迭代器方法: (i64) -> i64 ──
-        // Import index 345: typedarray_proto_entries: (i64) -> i64
+        // Import index 347: typedarray_proto_entries: (i64) -> i64
         imports.import("env", "typedarray_proto_entries", EntityType::Function(3));
-        // Import index 346: typedarray_proto_keys: (i64) -> i64
+        // Import index 348: typedarray_proto_keys: (i64) -> i64
         imports.import("env", "typedarray_proto_keys", EntityType::Function(3));
-        // Import index 347: typedarray_proto_values: (i64) -> i64
+        // Import index 349: typedarray_proto_values: (i64) -> i64
         imports.import("env", "typedarray_proto_values", EntityType::Function(3));
         // ── ScopeRecord eval bridge ──
-        // Import index 348: scope_record_create: (i64) -> i64
+        // Import index 350: scope_record_create: (i64) -> i64
         imports.import("env", "scope_record_create", EntityType::Function(3));
-        // Import index 349: scope_record_add_binding: (i64, i64, i64, i64, i64) -> ()
+        // Import index 351: scope_record_add_binding: (i64, i64, i64, i64, i64) -> ()
         imports.import("env", "scope_record_add_binding", EntityType::Function(34));
-        // Import index 350: eval_get_binding: (i64, i64) -> i64
+        // Import index 352: eval_get_binding: (i64, i64) -> i64
         imports.import("env", "eval_get_binding", EntityType::Function(2));
-        // Import index 351: eval_set_binding: (i64, i64, i64) -> i64
+        // Import index 353: eval_set_binding: (i64, i64, i64) -> i64
         imports.import("env", "eval_set_binding", EntityType::Function(16));
-        // Import index 352: eval_has_binding: (i64, i64) -> i64
+        // Import index 354: eval_has_binding: (i64, i64) -> i64
         imports.import("env", "eval_has_binding", EntityType::Function(2));
-        // Import index 353: eval_super_base: (i64) -> i64
+        // Import index 355: eval_super_base: (i64) -> i64
         imports.import("env", "eval_super_base", EntityType::Function(3));
-        // Import index 354: scope_record_set_meta: (i64, i64, i64) -> i64
+        // Import index 356: scope_record_set_meta: (i64, i64, i64) -> i64
         imports.import("env", "scope_record_set_meta", EntityType::Function(16));
-        // Import index 355: scope_record_destroy: (i64) -> ()
+        // Import index 357: scope_record_destroy: (i64) -> ()
         imports.import("env", "scope_record_destroy", EntityType::Function(0));
         // ── WeakRef imports ──
-        // Import index 356: weakref_constructor: Type 12 (shadow stack)
+        // Import index 358: weakref_constructor: Type 12 (shadow stack)
         imports.import("env", "weakref_constructor", EntityType::Function(12));
-        // Import index 357: weakref_proto_deref: (i64) -> i64
+        // Import index 359: weakref_proto_deref: (i64) -> i64
         imports.import("env", "weakref_proto_deref", EntityType::Function(3));
         // ── FinalizationRegistry imports ──
-        // Import index 358: finalization_registry_constructor: Type 12 (shadow stack)
-        imports.import("env", "finalization_registry_constructor", EntityType::Function(12));
-        // Import index 359: finalization_registry_proto_register: Type 12 (shadow stack)
-        imports.import("env", "finalization_registry_proto_register", EntityType::Function(12));
-        // Import index 360: finalization_registry_proto_unregister: (i64, i64) -> i64
-        imports.import("env", "finalization_registry_proto_unregister", EntityType::Function(2));
+        // Import index 360: finalization_registry_constructor: Type 12 (shadow stack)
+        imports.import(
+            "env",
+            "finalization_registry_constructor",
+            EntityType::Function(12),
+        );
+        // Import index 361: finalization_registry_proto_register: Type 12 (shadow stack)
+        imports.import(
+            "env",
+            "finalization_registry_proto_register",
+            EntityType::Function(12),
+        );
+        // Import index 362: finalization_registry_proto_unregister: (i64, i64) -> i64
+        imports.import(
+            "env",
+            "finalization_registry_proto_unregister",
+            EntityType::Function(2),
+        );
         // ── SharedArrayBuffer imports ──
-        // Import index 361: sharedarraybuffer_constructor: (i64) -> i64
-        imports.import("env", "sharedarraybuffer_constructor", EntityType::Function(3));
-        // Import index 362: sharedarraybuffer_proto_byte_length: (i64) -> i64
-        imports.import("env", "sharedarraybuffer_proto_byte_length", EntityType::Function(3));
-        // Import index 363: sharedarraybuffer_proto_slice: (i64, i64, i64) -> i64
-        imports.import("env", "sharedarraybuffer_proto_slice", EntityType::Function(16));
-        // Import index 364: sharedarraybuffer_proto_species: (i64) -> i64
-        imports.import("env", "sharedarraybuffer_proto_species", EntityType::Function(3));
+        // Import index 363: sharedarraybuffer_constructor: (i64) -> i64
+        imports.import(
+            "env",
+            "sharedarraybuffer_constructor",
+            EntityType::Function(3),
+        );
+        // Import index 364: sharedarraybuffer_proto_byte_length: (i64) -> i64
+        imports.import(
+            "env",
+            "sharedarraybuffer_proto_byte_length",
+            EntityType::Function(3),
+        );
+        // Import index 365: sharedarraybuffer_proto_slice: (i64, i64, i64) -> i64
+        imports.import(
+            "env",
+            "sharedarraybuffer_proto_slice",
+            EntityType::Function(16),
+        );
+        // Import index 366: sharedarraybuffer_proto_species: (i64) -> i64
+        imports.import(
+            "env",
+            "sharedarraybuffer_proto_species",
+            EntityType::Function(3),
+        );
         // ── Atomics imports ──
-        // Import index 365: atomics_load: (i64, i64) -> i64
+        // Import index 367: atomics_load: (i64, i64) -> i64
         imports.import("env", "atomics_load", EntityType::Function(2));
-        // Import index 366: atomics_store: (i64, i64, i64) -> i64
+        // Import index 368: atomics_store: (i64, i64, i64) -> i64
         imports.import("env", "atomics_store", EntityType::Function(16));
-        // Import index 367: atomics_add: (i64, i64, i64) -> i64
+        // Import index 369: atomics_add: (i64, i64, i64) -> i64
         imports.import("env", "atomics_add", EntityType::Function(16));
-        // Import index 368: atomics_sub: (i64, i64, i64) -> i64
+        // Import index 370: atomics_sub: (i64, i64, i64) -> i64
         imports.import("env", "atomics_sub", EntityType::Function(16));
-        // Import index 369: atomics_and: (i64, i64, i64) -> i64
+        // Import index 371: atomics_and: (i64, i64, i64) -> i64
         imports.import("env", "atomics_and", EntityType::Function(16));
-        // Import index 370: atomics_or: (i64, i64, i64) -> i64
+        // Import index 372: atomics_or: (i64, i64, i64) -> i64
         imports.import("env", "atomics_or", EntityType::Function(16));
-        // Import index 371: atomics_xor: (i64, i64, i64) -> i64
+        // Import index 373: atomics_xor: (i64, i64, i64) -> i64
         imports.import("env", "atomics_xor", EntityType::Function(16));
-        // Import index 372: atomics_exchange: (i64, i64, i64) -> i64
+        // Import index 374: atomics_exchange: (i64, i64, i64) -> i64
         imports.import("env", "atomics_exchange", EntityType::Function(16));
-        // Import index 373: atomics_compare_exchange: (i64, i64, i64, i64) -> i64
+        // Import index 375: atomics_compare_exchange: (i64, i64, i64, i64) -> i64
         imports.import("env", "atomics_compare_exchange", EntityType::Function(17));
-        // Import index 374: atomics_is_lock_free: (i64) -> i64
+        // Import index 376: atomics_is_lock_free: (i64) -> i64
         imports.import("env", "atomics_is_lock_free", EntityType::Function(3));
-        // Import index 375: atomics_wait: (i64, i64, i64, i64) -> i64
+        // Import index 377: atomics_wait: (i64, i64, i64, i64) -> i64
         imports.import("env", "atomics_wait", EntityType::Function(17));
-        // Import index 376: atomics_notify: (i64, i64, i64) -> i64
+        // Import index 378: atomics_notify: (i64, i64, i64) -> i64
         imports.import("env", "atomics_notify", EntityType::Function(16));
-        // Import index 377: atomics_wait_async: (i64, i64, i64, i64) -> i64
+        // Import index 379: atomics_wait_async: (i64, i64, i64, i64) -> i64
         imports.import("env", "atomics_wait_async", EntityType::Function(17));
-        // Import index 378: async_iterator_from: (i64) -> i64
+        // Import index 380: async_iterator_from: (i64) -> i64
         imports.import("env", "async_iterator_from", EntityType::Function(3));
-        // Import index 379: object.group_by: (i64, i64) -> i64
+        // Import index 381: object.group_by: (i64, i64) -> i64
         imports.import("env", "object.group_by", EntityType::Function(2));
-        // Import index 380: map.group_by: (i64, i64) -> i64
+        // Import index 382: map.group_by: (i64, i64) -> i64
         imports.import("env", "map.group_by", EntityType::Function(2));
-        // Import index 381: symbol_property_key: (i64) -> i32
+        // Import index 383: symbol_property_key: (i64) -> i32
         imports.import("env", "symbol_property_key", EntityType::Function(10));
-        // Import index 382: array.from — Type 12 (shadow stack variadic)
+        // Import index 384: array.from — Type 12 (shadow stack variadic)
         imports.import("env", "array.from", EntityType::Function(12));
-        // Import index 383: obj_get_by_index: (i64, i32) -> i64 — Type 8
+        // Import index 385: obj_get_by_index: (i64, i32) -> i64 — Type 8
         imports.import("env", "obj_get_by_index", EntityType::Function(8));
+        // Import index 386: typedarray_set_by_index: (i64, i32, i64) -> i64 — Type 32
+        imports.import("env", "typedarray_set_by_index", EntityType::Function(32));
         if mode == CompileMode::Eval {
             imports.import(
                 "env",
@@ -1020,16 +1082,14 @@ impl Compiler {
                 if let Some(&idx) = name_to_idx.get(name) {
                     builtin_func_indices.insert(builtin, idx);
                 } else {
-                    // Debugger 是免调用的 no-op，BigInt64/BigUint64Array 暂未实现，安全跳过
-                    if matches!(
-                        builtin,
-                        Builtin::Debugger
-                            | Builtin::BigInt64ArrayConstructor
-                            | Builtin::BigUint64ArrayConstructor
-                    ) {
+                    // Debugger 是免调用的 no-op，安全跳过
+                    if matches!(builtin, Builtin::Debugger) {
                         continue;
                     }
-                    panic!("Builtin::{:?} import_name()=\"{name}\" not found in HOST_IMPORT_NAMES", builtin);
+                    panic!(
+                        "Builtin::{:?} import_name()=\"{name}\" not found in HOST_IMPORT_NAMES",
+                        builtin
+                    );
                 }
             }
         }
@@ -1105,7 +1165,8 @@ impl Compiler {
             shadow_sp_scratch_idx: 0,
             eval_var_base_local_idx: 0,
             gc_collect_func_idx: 22,
-            obj_get_by_index_func_idx: 383,
+            obj_get_by_index_func_idx: 385,
+            typedarray_set_by_index_func_idx: 386,
             alloc_counter_global_idx: 0,
             object_heap_start_global_idx: 6,
             num_ir_functions_global_idx: 7,
@@ -1114,18 +1175,18 @@ impl Compiler {
             closure_get_func_idx: 36,
             closure_get_env_idx: 37,
             native_call_func_idx: 141,
-            new_target_set_func_idx: 323,
+            new_target_set_func_idx: 325,
             array_proto_handle_global_idx: 0,
             arr_proto_table_base: 0,
             obj_spread_func_idx: 0,
-            proxy_trap_get_func_idx: 318,
-            proxy_trap_set_func_idx: 319,
-            proxy_trap_delete_func_idx: 320,
+            proxy_trap_get_func_idx: 320,
+            proxy_trap_set_func_idx: 321,
+            proxy_trap_delete_func_idx: 322,
             get_proto_from_ctor_func_idx: 0,
             string_eq_func_idx: 0,
             function_id_to_wasm_idx: HashMap::new(),
             object_proto_handle_global_idx: 0,
-            symbol_key_func_idx: 381,
+            symbol_key_func_idx: 383,
             eval_var_map_ptr_global_idx: 11,
             eval_var_map_count_global_idx: 12,
             eval_var_map_records: Vec::new(),

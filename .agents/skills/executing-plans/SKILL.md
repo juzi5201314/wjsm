@@ -11,7 +11,7 @@ Load plan, review critically, execute all tasks, report when complete.
 
 **Announce at start:** "I'm using the executing-plans skill to implement this plan."
 
-**Note:** Tell your human partner that Superpowers works much better with access to subagents. The quality of its work will be significantly higher if run on a platform with subagent support (such as Claude Code or Codex). If subagents are available, use superpowers:subagent-driven-development instead of this skill.
+**Note:** Tell your human partner that Aegis works much better with access to subagents. The quality of its work will be significantly higher if run on a platform with subagent support (such as Claude Code or Codex). If subagents are available, use aegis:subagent-driven-development instead of this skill.
 
 ## The Process
 
@@ -21,19 +21,47 @@ Load plan, review critically, execute all tasks, report when complete.
 3. If concerns: Raise them with your human partner before starting
 4. If no concerns: Create TodoWrite and proceed
 
+### Step 1.5: Long-Task Checkpoint Setup
+
+If the plan has multiple tasks, may span sessions, or includes architecture / contract / workflow changes:
+
+1. Announce: "I'm using the long-task-continuation skill to keep this plan checkpointed and drift-aware."
+2. Load aegis:long-task-continuation.
+3. Create the initial checkpoint from the plan:
+   - current todo
+   - active task
+   - completed tasks
+   - evidence refs
+   - blockers
+   - next step
+4. Before each task, restate the current checkpoint.
+5. After each task, update checkpoint, evidence refs, and drift check.
+
 ### Step 2: Execute Tasks
 
 For each task:
 1. Mark as in_progress
 2. Follow each step exactly (plan has bite-sized steps)
-3. Run verifications as specified
-4. Mark as completed
+3. Before any non-trivial source edit, run the plan's
+   `Pre-Edit Complexity Check` or create a compact one:
+
+   ```text
+   Pre-Edit Complexity Check:
+   - Safer edit boundary:
+   - Decision: edit-in-place | extract helper | add owner file | split task | pause for plan update
+   ```
+
+   If the check contradicts the plan's file boundary, pause and return to plan
+   review instead of silently stuffing logic into an overloaded owner.
+4. Run verifications as specified
+5. Update `TodoCheckpointDraft` and `DriftCheckDraft` before marking the task completed
+6. Mark as completed
 
 ### Step 3: Complete Development
 
 After all tasks complete and verified:
 - Announce: "I'm using the finishing-a-development-branch skill to complete this work."
-- **REQUIRED SUB-SKILL:** Use superpowers:finishing-a-development-branch
+- **REQUIRED SUB-SKILL:** Use aegis:finishing-a-development-branch
 - Follow that skill to verify tests, present options, execute choice
 
 ## When to Stop and Ask for Help
@@ -65,6 +93,6 @@ After all tasks complete and verified:
 ## Integration
 
 **Required workflow skills:**
-- **superpowers:using-git-worktrees** - Ensures isolated workspace (creates one or verifies existing)
-- **superpowers:writing-plans** - Creates the plan this skill executes
-- **superpowers:finishing-a-development-branch** - Complete development after all tasks
+- **aegis:using-git-worktrees** - REQUIRED: Set up isolated workspace before starting
+- **aegis:writing-plans** - Creates the plan this skill executes
+- **aegis:finishing-a-development-branch** - Complete development after all tasks
