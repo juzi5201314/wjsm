@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+=== Object.keys on proxy ===
+keys: ["Symbol.asyncIterator","Symbol.toStringTag"]
+
+=== Object.entries on proxy ===
+entries: [["Symbol.toStringTag","AsyncGenerator"]]
+
+=== Object.getOwnPropertyNames on proxy ===
+own names: ["length","name"]
+--- stderr ---

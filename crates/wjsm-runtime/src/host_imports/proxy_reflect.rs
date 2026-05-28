@@ -450,7 +450,12 @@ pub(crate) fn define_proxy_reflect(linker: &mut Linker<RuntimeState>, mut store:
                     let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf").unwrap_or_else(value::encode_undefined);
                     if !value::is_undefined(trap) && !value::is_null(trap) {
                         let res = call_wasm_callback(caller, trap, entry.handler, &[entry.target]).unwrap_or_else(|_| value::encode_null());
-                        // Invariant check: if target is non-extensible, returned prototype must match target prototype
+                        // 不变量检查: getPrototypeOf trap 返回值必须是 null 或对象
+                        if !value::is_null(res) && !value::is_object(res) && !value::is_array(res) && !value::is_proxy(res) && !value::is_function(res) {
+                            set_runtime_error(caller.data(), "TypeError: Proxy getPrototypeOf must return an object or null".to_string());
+                            return value::encode_null();
+                        }
+                        // 不变量检查: 若 target 不可扩展，返回的原型必须与 target 原型一致
                         let ext = is_extensible_impl(caller, entry.target);
                         if !ext {
                             let target_proto = reflect_get_prototype_of_impl(caller, entry.target);
@@ -954,6 +959,11 @@ pub(crate) fn define_proxy_reflect(linker: &mut Linker<RuntimeState>, mut store:
                     let trap = read_object_property_by_name(&mut caller, handler_ptr, "construct")
                         .unwrap_or_else(value::encode_undefined);
                     if !value::is_undefined(trap) && !value::is_null(trap) {
+                        // 不变量检查: target 必须是可调用的函数
+                        if !is_callable_in_runtime(&mut caller, entry.target) {
+                            set_runtime_error(caller.data(), "TypeError: Proxy construct: target must be a callable function".to_string());
+                            return value::encode_undefined();
+                        }
                         let arr = alloc_array(&mut caller, args.len() as u32);
                         for (i, &arg) in args.iter().enumerate() {
                             set_array_elem(&mut caller, arr, i as i32, arg);

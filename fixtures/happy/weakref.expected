@@ -2,7 +2,7 @@ exit_code: 2
 --- stdout ---
 --- stderr ---
 Runtime error: WASM trap: error while executing at wasm backtrace:
-    0:   0x4a95 - <unknown>!<wasm function 384>
+    0:   0x4c1d - <unknown>!<wasm function 391>
 
 Caused by:
     wasm trap: indirect call type mismatch

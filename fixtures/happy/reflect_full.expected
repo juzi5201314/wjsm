@@ -1,0 +1,39 @@
+exit_code: 0
+--- stdout ---
+=== Reflect.has ===
+has name: true
+has age: false
+
+=== Reflect.deleteProperty ===
+delete a: true
+a after delete: undefined
+has a: false
+
+=== Reflect.apply ===
+apply sum: 7
+
+=== Reflect.construct ===
+pt.x: 10
+pt.y: 20
+
+=== Reflect.setPrototypeOf ===
+set proto: true
+inherited: true
+
+=== Reflect.isExtensible ===
+extensible: true
+
+=== Reflect.preventExtensions ===
+prevent: true
+extensible after: false
+
+=== Reflect.getOwnPropertyDescriptor ===
+value: 42
+writable: true
+enumerable: true
+configurable: true
+
+=== Reflect.defineProperty ===
+define: true
+prop value: 99
+--- stderr ---
