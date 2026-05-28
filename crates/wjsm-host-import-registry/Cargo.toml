@@ -1,0 +1,8 @@
+[package]
+name = "wjsm-host-import-registry"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
