@@ -217,9 +217,8 @@ fn build_test_source(test: &Test, harness: &Harness) -> String {
     source.push_str("var Infinity = 1 / 0;\n");
     // print() 是 test262 harness 使用的全局函数，wjsm 没有原生支持
     source.push_str("function print(msg) { console.log(msg); }\n");
-    source.push_str("function gc() { return undefined; }\n");
     source.push('\n');
-    // 设置 $262 对象（host-defined test262 API）
+    // 设置 $262 对象（host-defined test262 API），保留运行时原生 gc 绑定。
     source.push_str("var $262 = { gc: gc };\n");
     source.push('\n');
 
@@ -333,5 +332,49 @@ pub fn run_suite(
 fn add_by_feature(by_feature: &mut HashMap<String, Statistics>, test: &Test, result: &TestResult) {
     for feature in &test.metadata.features {
         by_feature.entry(feature.clone()).or_default().add(result);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, path::PathBuf};
+
+    use super::*;
+    use crate::read::{HarnessFile, MetaData};
+
+    fn empty_harness() -> Harness {
+        Harness {
+            assert: HarnessFile {
+                content: String::new(),
+            },
+            sta: HarnessFile {
+                content: String::new(),
+            },
+            doneprint_handle: HarnessFile {
+                content: String::new(),
+            },
+            includes: HashMap::new(),
+        }
+    }
+
+    fn empty_test() -> Test {
+        Test::new(
+            PathBuf::from("gc-test.js"),
+            MetaData {
+                features: Vec::new(),
+                includes: Vec::new(),
+                flags: Vec::new(),
+                negative: None,
+            },
+            String::new(),
+        )
+    }
+
+    #[test]
+    fn build_test_source_preserves_runtime_gc_binding() {
+        let source = build_test_source(&empty_test(), &empty_harness());
+
+        assert!(source.contains("var $262 = { gc: gc };"));
+        assert!(!source.contains("function gc()"));
     }
 }

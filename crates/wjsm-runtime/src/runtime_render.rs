@@ -97,7 +97,7 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
                 }
             }
 
-                let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+            let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
             if let Some(sh) = set_handle {
                 let handle = value::decode_f64(sh) as usize;
                 let vals = {
@@ -121,29 +121,88 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
             if let Some(th) = ta_handle_val {
                 let ta_handle = value::decode_f64(th) as usize;
                 let (entry, buf_data) = {
-                    let ta_table = caller.data().typedarray_table.lock().expect("typedarray_table mutex");
+                    let ta_table = caller
+                        .data()
+                        .typedarray_table
+                        .lock()
+                        .expect("typedarray_table mutex");
                     let entry = ta_table.get(ta_handle).cloned();
                     let buf_data = entry.as_ref().and_then(|e| {
-                        let ab_table = caller.data().arraybuffer_table.lock().expect("arraybuffer_table mutex");
-                        ab_table.get(e.buffer_handle as usize).map(|b| b.data.clone())
+                        let ab_table = caller
+                            .data()
+                            .arraybuffer_table
+                            .lock()
+                            .expect("arraybuffer_table mutex");
+                        ab_table
+                            .get(e.buffer_handle as usize)
+                            .map(|b| b.data.clone())
                     });
                     (entry, buf_data)
                 };
                 if let (Some(entry), Some(buf_data)) = (entry, buf_data) {
                     let mut parts = Vec::new();
                     for i in 0..entry.length {
-                        let byte_off = entry.byte_offset as usize + (i as usize) * (entry.element_size as usize);
+                        let byte_off = entry.byte_offset as usize
+                            + (i as usize) * (entry.element_size as usize);
                         let end = byte_off + entry.element_size as usize;
                         if end <= buf_data.len() {
                             let val = match (entry.element_size, entry.element_kind) {
                                 (1, 0) => format!("{}", buf_data[byte_off] as i8),
                                 (1, 1) | (1, 2) => format!("{}", buf_data[byte_off]),
-                                (2, 0) => format!("{}", i16::from_le_bytes([buf_data[byte_off], buf_data[byte_off + 1]])),
-                                (2, 1) => format!("{}", u16::from_le_bytes([buf_data[byte_off], buf_data[byte_off + 1]])),
-                                (4, 0) => format!("{}", i32::from_le_bytes([buf_data[byte_off], buf_data[byte_off + 1], buf_data[byte_off + 2], buf_data[byte_off + 3]])),
-                                (4, 1) => format!("{}", u32::from_le_bytes([buf_data[byte_off], buf_data[byte_off + 1], buf_data[byte_off + 2], buf_data[byte_off + 3]])),
-                                (4, 3) => format!("{}", f32::from_le_bytes([buf_data[byte_off], buf_data[byte_off + 1], buf_data[byte_off + 2], buf_data[byte_off + 3]])),
-                                (8, 3) => format!("{}", f64::from_le_bytes([buf_data[byte_off], buf_data[byte_off + 1], buf_data[byte_off + 2], buf_data[byte_off + 3], buf_data[byte_off + 4], buf_data[byte_off + 5], buf_data[byte_off + 6], buf_data[byte_off + 7]])),
+                                (2, 0) => format!(
+                                    "{}",
+                                    i16::from_le_bytes([
+                                        buf_data[byte_off],
+                                        buf_data[byte_off + 1]
+                                    ])
+                                ),
+                                (2, 1) => format!(
+                                    "{}",
+                                    u16::from_le_bytes([
+                                        buf_data[byte_off],
+                                        buf_data[byte_off + 1]
+                                    ])
+                                ),
+                                (4, 0) => format!(
+                                    "{}",
+                                    i32::from_le_bytes([
+                                        buf_data[byte_off],
+                                        buf_data[byte_off + 1],
+                                        buf_data[byte_off + 2],
+                                        buf_data[byte_off + 3]
+                                    ])
+                                ),
+                                (4, 1) => format!(
+                                    "{}",
+                                    u32::from_le_bytes([
+                                        buf_data[byte_off],
+                                        buf_data[byte_off + 1],
+                                        buf_data[byte_off + 2],
+                                        buf_data[byte_off + 3]
+                                    ])
+                                ),
+                                (4, 3) => format!(
+                                    "{}",
+                                    f32::from_le_bytes([
+                                        buf_data[byte_off],
+                                        buf_data[byte_off + 1],
+                                        buf_data[byte_off + 2],
+                                        buf_data[byte_off + 3]
+                                    ])
+                                ),
+                                (8, 3) => format!(
+                                    "{}",
+                                    f64::from_le_bytes([
+                                        buf_data[byte_off],
+                                        buf_data[byte_off + 1],
+                                        buf_data[byte_off + 2],
+                                        buf_data[byte_off + 3],
+                                        buf_data[byte_off + 4],
+                                        buf_data[byte_off + 5],
+                                        buf_data[byte_off + 6],
+                                        buf_data[byte_off + 7]
+                                    ])
+                                ),
                                 (8, 4) => {
                                     let v = i64::from_le_bytes([
                                         buf_data[byte_off],
@@ -155,13 +214,7 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
                                         buf_data[byte_off + 6],
                                         buf_data[byte_off + 7],
                                     ]);
-                                    let handle = {
-                                        let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
-                                        let handle = table.len() as u32;
-                                        table.push(num_bigint::BigInt::from(v));
-                                        handle
-                                    };
-                                    render_value(caller, value::encode_bigint_handle(handle)).unwrap_or_else(|_| "?".to_string())
+                                    format!("{v}n")
                                 }
                                 (8, 5) => {
                                     let v = u64::from_le_bytes([
@@ -174,20 +227,18 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
                                         buf_data[byte_off + 6],
                                         buf_data[byte_off + 7],
                                     ]);
-                                    let handle = {
-                                        let mut table = caller.data().bigint_table.lock().expect("bigint_table mutex");
-                                        let handle = table.len() as u32;
-                                        table.push(num_bigint::BigInt::from(v));
-                                        handle
-                                    };
-                                    render_value(caller, value::encode_bigint_handle(handle)).unwrap_or_else(|_| "?".to_string())
+                                    format!("{v}n")
                                 }
                                 _ => "?".to_string(),
                             };
                             parts.push(val);
                         }
                     }
-                    return Ok(format!("TypedArray({}) [{}]", entry.length, parts.join(", ")));
+                    return Ok(format!(
+                        "TypedArray({}) [{}]",
+                        entry.length,
+                        parts.join(", ")
+                    ));
                 }
             }
         }

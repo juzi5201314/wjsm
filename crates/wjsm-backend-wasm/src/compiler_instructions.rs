@@ -158,10 +158,27 @@ impl Compiler {
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     UnaryOp::Neg => {
+                        let bigint_neg_idx = self
+                            .builtin_func_indices
+                            .get(&Builtin::BigIntNeg)
+                            .copied()
+                            .context("no WASM func index for BigIntNeg")?;
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                        self.emit(WasmInstruction::I64Const(32));
+                        self.emit(WasmInstruction::I64ShrU);
+                        self.emit(WasmInstruction::I64Const(0x1F));
+                        self.emit(WasmInstruction::I64And);
+                        self.emit(WasmInstruction::I64Const(value::TAG_BIGINT as i64));
+                        self.emit(WasmInstruction::I64Eq);
+                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+                        self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                        self.emit(WasmInstruction::Call(bigint_neg_idx));
+                        self.emit(WasmInstruction::Else);
                         self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                         self.emit(WasmInstruction::F64ReinterpretI64);
                         self.emit(WasmInstruction::F64Neg);
                         self.emit(WasmInstruction::I64ReinterpretF64);
+                        self.emit(WasmInstruction::End);
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     UnaryOp::Pos => {
@@ -941,33 +958,31 @@ impl Compiler {
         // ArrayIsArray: this_val=undefined, 所有 args 走影子栈
         // FuncCall/FuncBind: env_obj=func, this_val=args[1], shadow_args=args[2..]
         // 其他方法: this_val=args[0], args[1..] 走影子栈
-        let (env_obj_val, this_val_idx, shadow_args) = if matches!(
-            builtin,
-            Builtin::FuncCall | Builtin::FuncBind
-        ) {
-            // args = [func, this_val, ...restArgs]
-            let func: ValueId = args.first().copied().unwrap_or(ValueId(0));
-            let this: Option<ValueId> = args.get(1).copied();
-            let shadow_slice: &[ValueId] = if args.len() > 2 { &args[2..] } else { &[] };
-            (Some(func), this, shadow_slice)
-        } else if matches!(
-            builtin,
-            Builtin::ArrayIsArray
-                | Builtin::ArrayFrom
-                | Builtin::StringFromCharCode
-                | Builtin::StringFromCodePoint
-                | Builtin::MathMax
-                | Builtin::MathMin
-                | Builtin::MathHypot
-                | Builtin::DateConstructor
-        ) {
-            (None, None, args)
-        } else {
-            let this = args
-                .first()
-                .with_context(|| format!("{builtin} expects at least 1 argument (this_val)"))?;
-            (None, Some(*this), &args[1..])
-        };
+        let (env_obj_val, this_val_idx, shadow_args) =
+            if matches!(builtin, Builtin::FuncCall | Builtin::FuncBind) {
+                // args = [func, this_val, ...restArgs]
+                let func: ValueId = args.first().copied().unwrap_or(ValueId(0));
+                let this: Option<ValueId> = args.get(1).copied();
+                let shadow_slice: &[ValueId] = if args.len() > 2 { &args[2..] } else { &[] };
+                (Some(func), this, shadow_slice)
+            } else if matches!(
+                builtin,
+                Builtin::ArrayIsArray
+                    | Builtin::ArrayFrom
+                    | Builtin::StringFromCharCode
+                    | Builtin::StringFromCodePoint
+                    | Builtin::MathMax
+                    | Builtin::MathMin
+                    | Builtin::MathHypot
+                    | Builtin::DateConstructor
+            ) {
+                (None, None, args)
+            } else {
+                let this = args
+                    .first()
+                    .with_context(|| format!("{builtin} expects at least 1 argument (this_val)"))?;
+                (None, Some(*this), &args[1..])
+            };
         // 保存 shadow_sp 基址
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
         self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
