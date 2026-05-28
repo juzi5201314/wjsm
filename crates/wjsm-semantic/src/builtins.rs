@@ -141,6 +141,8 @@ pub(crate) fn builtin_from_static_member(object: &str, property: &str) -> Option
             "getOwnPropertyNames" => Some(Builtin::ObjectGetOwnPropertyNames),
             "is" => Some(Builtin::ObjectIs),
             "groupBy" => Some(Builtin::ObjectGroupBy),
+            "isExtensible" => Some(Builtin::ObjectIsExtensible),
+            "preventExtensions" => Some(Builtin::ObjectPreventExtensions),
             _ => None,
         },
         "Map" => match property {

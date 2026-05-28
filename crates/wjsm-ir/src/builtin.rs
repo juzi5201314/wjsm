@@ -103,6 +103,8 @@ pub enum Builtin {
     ObjectGetOwnPropertyNames,
     ObjectIs,
     ObjectGroupBy,
+    ObjectIsExtensible,
+    ObjectPreventExtensions,
     // ── Map.groupBy ──
     MapGroupBy,
     // ── BigInt operations ──────────────────────────────────────────────
@@ -520,6 +522,8 @@ impl fmt::Display for Builtin {
             Self::ObjectGetOwnPropertyNames => "object.get_own_property_names",
             Self::ObjectIs => "object.is",
             Self::ObjectGroupBy => "object.group_by",
+            Self::ObjectIsExtensible => "object.is_extensible",
+            Self::ObjectPreventExtensions => "object.prevent_extensions",
             Self::MapGroupBy => "map.group_by",
             Self::BigIntFromLiteral => "bigint.from_literal",
             Self::BigIntAdd => "bigint.add",
