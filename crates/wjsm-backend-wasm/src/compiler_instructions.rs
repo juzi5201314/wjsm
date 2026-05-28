@@ -1,4 +1,5 @@
 use super::*;
+use crate::host_import_registry::SpecialHostImport;
 
 impl Compiler {
     pub(crate) fn compile_instruction(
@@ -376,7 +377,7 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key: lower 32 bits (string pointer or name_id).
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::Call(self.symbol_key_func_idx));
+                self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey]));
                 // Call $obj_get(boxed, name_id) -> i64
                 self.emit(WasmInstruction::Call(self.obj_get_func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
@@ -387,7 +388,7 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::Call(self.symbol_key_func_idx));
+                self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey]));
                 // Value (i64 NaN-boxed).
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 // Call $obj_set(boxed, name_id, value)
@@ -399,7 +400,7 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key: lower 32 bits.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::Call(self.symbol_key_func_idx));
+                self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey]));
                 // Call $obj_delete(boxed, name_id) -> i64 (NaN-boxed bool)
                 self.emit(WasmInstruction::Call(self.obj_delete_func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
@@ -762,7 +763,7 @@ impl Compiler {
             Some(value) => self.emit(WasmInstruction::LocalGet(self.local_idx(value.0))),
             None => self.emit(WasmInstruction::I64Const(value::encode_undefined())),
         }
-        self.emit(WasmInstruction::Call(self.new_target_set_func_idx));
+        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::NewTargetSet]));
         self.emit(WasmInstruction::LocalSet(saved_new_target));
 
         // Step 1: 保存 shadow_sp 到 scratch local
@@ -803,7 +804,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const(args.len() as i32));
-        self.emit(WasmInstruction::Call(self.native_call_func_idx));
+        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::NativeCall]));
         self.emit(WasmInstruction::Else);
 
         // 运行时解析 callee → (func_idx, env_obj)。callee 可能是 TAG_FUNCTION 或 TAG_CLOSURE。
@@ -817,11 +818,11 @@ impl Compiler {
         self.emit(WasmInstruction::If(BlockType::Empty));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::Call(self.closure_get_func_idx));
+        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc]));
         self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::Call(self.closure_get_env_idx));
+        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv]));
         self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
         self.emit(WasmInstruction::Else);
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
@@ -846,7 +847,7 @@ impl Compiler {
 
         // Step 4: 恢复 new.target 和 shadow_sp
         self.emit(WasmInstruction::LocalGet(saved_new_target));
-        self.emit(WasmInstruction::Call(self.new_target_set_func_idx));
+        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::NewTargetSet]));
         self.emit(WasmInstruction::Drop);
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
@@ -1109,7 +1110,7 @@ impl Compiler {
         if is_prop {
             self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
             self.emit(WasmInstruction::LocalGet(self.local_idx(k.0)));
-            self.emit(WasmInstruction::Call(self.symbol_key_func_idx));
+            self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey]));
             self.emit(WasmInstruction::Call(self.obj_get_func_idx));
         } else {
             // OptionalGetElem: object, to_int32(key)
@@ -1183,11 +1184,11 @@ impl Compiler {
         self.emit(WasmInstruction::If(BlockType::Empty));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::Call(self.closure_get_func_idx));
+        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc]));
         self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::Call(self.closure_get_env_idx));
+        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv]));
         self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
         self.emit(WasmInstruction::Else);
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
@@ -1219,7 +1220,7 @@ impl Compiler {
     pub(crate) fn compile_object_spread(&mut self, dest: &ValueId, source: &ValueId) -> Result<()> {
         self.emit(WasmInstruction::LocalGet(self.local_idx(dest.0)));
         self.emit(WasmInstruction::LocalGet(self.local_idx(source.0)));
-        self.emit(WasmInstruction::Call(self.obj_spread_func_idx));
+        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ObjSpread]));
         Ok(())
     }
 

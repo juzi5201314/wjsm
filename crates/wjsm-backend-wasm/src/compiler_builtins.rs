@@ -1,4 +1,5 @@
 use super::*;
+use crate::host_import_registry::SpecialHostImport;
 
 impl Compiler {
     pub(crate) fn ensure_string_ptr_const(&mut self, s: &str) -> u32 {
@@ -126,7 +127,7 @@ impl Compiler {
                 // 推入 env_obj (i64)
                 self.emit(WasmInstruction::LocalGet(self.local_idx(env_obj_val.0)));
                 // 调用 closure_create
-                self.emit(WasmInstruction::Call(self.closure_create_func_idx));
+                self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureCreate]));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 } else {

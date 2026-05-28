@@ -1,4 +1,5 @@
 use super::*;
+use crate::host_import_registry::SpecialHostImport;
 
 impl Compiler {
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -34,11 +35,11 @@ impl Compiler {
 
         func.instruction(&WasmInstruction::LocalGet(callee_local));
         func.instruction(&WasmInstruction::I32WrapI64);
-        func.instruction(&WasmInstruction::Call(self.closure_get_func_idx));
+        func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc]));
         func.instruction(&WasmInstruction::LocalSet(func_idx_local));
         func.instruction(&WasmInstruction::LocalGet(callee_local));
         func.instruction(&WasmInstruction::I32WrapI64);
-        func.instruction(&WasmInstruction::Call(self.closure_get_env_idx));
+        func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv]));
         func.instruction(&WasmInstruction::LocalSet(env_obj_local));
 
         func.instruction(&WasmInstruction::Else);
@@ -142,11 +143,6 @@ impl Compiler {
         self.functions.function(9); // Type 9: (i64, i32, i64) -> ()
         self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
-        self.obj_spread_func_idx = HOST_IMPORT_NAMES
-            .iter()
-            .position(|name| *name == "obj_spread")
-            .expect("obj_spread host import must be present")
-            as u32;
 
         self.get_proto_from_ctor_func_idx = self._next_import_func;
         self.functions.function(3); // Type 3: (i64) -> (i64)
