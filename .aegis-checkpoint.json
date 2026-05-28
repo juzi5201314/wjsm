@@ -1,7 +1,0 @@
-{
-  "plan": "2026-05-28-host-import-registry-consolidation",
-  "checkpoint": "task-1-start",
-  "completed": [],
-  "active": "Task 1: 建立 registry owner 与最小不变量测试",
-  "next": "Task 2: 用 registry 接管 import section、导出名、count 与 lookup"
-}
