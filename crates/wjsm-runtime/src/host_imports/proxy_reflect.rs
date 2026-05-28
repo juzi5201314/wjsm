@@ -804,7 +804,7 @@ pub(crate) fn define_proxy_reflect(linker: &mut Linker<RuntimeState>, mut store:
         let arr = alloc_array(caller, names.len() as u32);
         for (i, name) in names.into_iter().enumerate() {
             let name_val = store_runtime_string(caller, name);
-            let _ = define_host_data_property_from_caller(caller, arr, &i.to_string(), name_val);
+            set_array_elem(caller, arr, i as i32, name_val);
         }
         arr
     }
@@ -968,7 +968,7 @@ pub(crate) fn define_proxy_reflect(linker: &mut Linker<RuntimeState>, mut store:
                         for (i, &arg) in args.iter().enumerate() {
                             set_array_elem(&mut caller, arr, i as i32, arg);
                         }
-                        let trap_result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, arr, entry.target]);
+                        let trap_result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, arr, proxy]);
                         return match trap_result {
                             Ok(res) => {
                                 if !value::is_js_object(res) {
@@ -986,7 +986,7 @@ pub(crate) fn define_proxy_reflect(linker: &mut Linker<RuntimeState>, mut store:
                     }
                 }
                 // 无 trap，转发到 target
-                return reflect_construct_impl(&mut caller, entry.target, &args, entry.target);
+                return reflect_construct_impl(&mut caller, entry.target, &args, proxy);
             }
             value::encode_undefined()
         },
