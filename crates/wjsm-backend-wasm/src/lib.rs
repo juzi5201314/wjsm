@@ -15,7 +15,7 @@ use wjsm_ir::{
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
-const HOST_IMPORT_NAMES: [&str; 386] = [
+const HOST_IMPORT_NAMES: [&str; 387] = [
     "console_log",
     "f64_mod",
     "f64_pow",
@@ -388,36 +388,37 @@ const HOST_IMPORT_NAMES: [&str; 386] = [
     "scope_record_set_meta",
     "scope_record_destroy",
     // ── WeakRef / FinalizationRegistry imports ──
-    "weakref_constructor",              // index 358
-    "weakref_proto_deref",              // 359
-    "finalization_registry_constructor", // 360
-    "finalization_registry_proto_register", // 361
+    "weakref_constructor",                    // index 358
+    "weakref_proto_deref",                    // 359
+    "finalization_registry_constructor",      // 360
+    "finalization_registry_proto_register",   // 361
     "finalization_registry_proto_unregister", // 362
     // ── SharedArrayBuffer imports ──
-    "sharedarraybuffer_constructor",           // 363
-    "sharedarraybuffer_proto_byte_length",      // 364
-    "sharedarraybuffer_proto_slice",            // 365
-    "sharedarraybuffer_proto_species",          // 366
+    "sharedarraybuffer_constructor",       // 363
+    "sharedarraybuffer_proto_byte_length", // 364
+    "sharedarraybuffer_proto_slice",       // 365
+    "sharedarraybuffer_proto_species",     // 366
     // ── Atomics imports ──
-    "atomics_load",                             // 367
-    "atomics_store",                            // 368
-    "atomics_add",                              // 369
-    "atomics_sub",                              // 370
-    "atomics_and",                              // 371
-    "atomics_or",                               // 372
-    "atomics_xor",                              // 373
-    "atomics_exchange",                         // 374
-    "atomics_compare_exchange",                 // 375
-    "atomics_is_lock_free",                     // 376
-    "atomics_wait",                             // 377
-    "atomics_notify",                           // 378
-    "atomics_wait_async",                       // 379
-    "async_iterator_from",                      // 380
-    "object.group_by",                          // 381
-    "map.group_by",                             // 382
-    "symbol_property_key",                      // 383
-    "array.from",                               // 384
-    "obj_get_by_index",                         // 385
+    "atomics_load",             // 367
+    "atomics_store",            // 368
+    "atomics_add",              // 369
+    "atomics_sub",              // 370
+    "atomics_and",              // 371
+    "atomics_or",               // 372
+    "atomics_xor",              // 373
+    "atomics_exchange",         // 374
+    "atomics_compare_exchange", // 375
+    "atomics_is_lock_free",     // 376
+    "atomics_wait",             // 377
+    "atomics_notify",           // 378
+    "atomics_wait_async",       // 379
+    "async_iterator_from",      // 380
+    "object.group_by",          // 381
+    "map.group_by",             // 382
+    "symbol_property_key",      // 383
+    "array.from",               // 384
+    "obj_get_by_index",         // 385
+    "typedarray_set_by_index",  // 386
 ];
 // SHADOW_STACK_ALIGN: reserved for future use
 
@@ -426,7 +427,7 @@ const HOST_IMPORT_NAMES: [&str; 386] = [
 pub fn compile(program: &Program) -> Result<Vec<u8>> {
     debug_assert_eq!(
         HOST_IMPORT_NAMES.len(),
-        386,
+        387,
         "HOST_IMPORT_NAMES length must match expected import count"
     );
     let mut compiler = Compiler::new(CompileMode::Normal);
@@ -536,6 +537,8 @@ struct Compiler {
     gc_collect_func_idx: u32,
     /// WASM function index for obj_get_by_index host function.
     obj_get_by_index_func_idx: u32,
+    /// WASM function index for typedarray_set_by_index host function.
+    typedarray_set_by_index_func_idx: u32,
     /// WASM global index for alloc_counter (GC heuristic).
     alloc_counter_global_idx: u32,
     /// WASM global index for __object_heap_start (runtime GC heap base).
@@ -936,7 +939,10 @@ fn detect_loops(blocks: &[BasicBlock]) -> Vec<LoopInfo> {
     loops.retain(|loop_info| {
         // 过滤掉终止符为 Jump 的"幻影循环"：只有 Branch 终止符才能是真正的循环头。
         // Jump 终止符的块是空块（如 for 循环增量），不应被当作独立循环。
-        if !matches!(blocks[loop_info.header_idx].terminator(), Terminator::Branch { .. }) {
+        if !matches!(
+            blocks[loop_info.header_idx].terminator(),
+            Terminator::Branch { .. }
+        ) {
             return false;
         }
         if let Terminator::Branch { true_block, .. } = blocks[loop_info.header_idx].terminator() {
@@ -1427,8 +1433,12 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::WeakRefConstructor => ("WeakRef", 1),
         Builtin::WeakRefProtoDeref => ("WeakRef.prototype.deref", 1),
         Builtin::FinalizationRegistryConstructor => ("FinalizationRegistry", 1),
-        Builtin::FinalizationRegistryProtoRegister => ("FinalizationRegistry.prototype.register", 4),
-        Builtin::FinalizationRegistryProtoUnregister => ("FinalizationRegistry.prototype.unregister", 2),
+        Builtin::FinalizationRegistryProtoRegister => {
+            ("FinalizationRegistry.prototype.register", 4)
+        }
+        Builtin::FinalizationRegistryProtoUnregister => {
+            ("FinalizationRegistry.prototype.unregister", 2)
+        }
     }
 }
 

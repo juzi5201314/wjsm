@@ -51,7 +51,10 @@ pub(crate) fn call_wasm_callback(
     // 解析函数：支持闭包、函数引用、代理链
     let mut resolved = func_val;
     loop {
-        if value::is_closure(resolved) || value::is_function(resolved) || value::is_native_callable(resolved) {
+        if value::is_closure(resolved)
+            || value::is_function(resolved)
+            || value::is_native_callable(resolved)
+        {
             break;
         }
         if value::is_bound(resolved) {
@@ -88,15 +91,24 @@ pub(crate) fn call_wasm_callback(
     if value::is_native_callable(resolved) {
         // 先恢复 shadow_sp，因为 native_callable 不走 WASM 调用路径
         let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
-        return call_native_callable_with_args_from_caller(&mut *caller, resolved, this_val, args.to_vec())
-            .ok_or_else(|| anyhow::anyhow!("native callable returned None"));
+        return call_native_callable_with_args_from_caller(
+            &mut *caller,
+            resolved,
+            this_val,
+            args.to_vec(),
+        )
+        .ok_or_else(|| anyhow::anyhow!("native callable returned None"));
     }
     if value::is_bound(resolved) {
         let bound_idx = value::decode_bound_idx(resolved) as usize;
         let (bound_func, bound_this, bound_args) = {
             let bound = caller.data().bound_objects.lock().unwrap();
             let record = &bound[bound_idx];
-            (record.target_func, record.bound_this, record.bound_args.clone())
+            (
+                record.target_func,
+                record.bound_this,
+                record.bound_args.clone(),
+            )
         };
         // 先恢复 shadow_sp
         let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
@@ -164,12 +176,13 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
     let size = 16 + capacity * 8;
     let new_heap_ptr = heap_ptr + size;
     let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
+    let proto = env.array_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
     let d = env.memory.data_mut(&mut *ctx);
     let ptr = heap_ptr as usize;
     if (new_heap_ptr as usize) > d.len() {
         return value::encode_undefined();
     }
-    d[ptr..ptr + 4].copy_from_slice(&(-1i32).to_le_bytes());
+    d[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());
     d[ptr + 4] = 1u8;
     d[ptr + 5..ptr + 8].fill(0);
     d[ptr + 8..ptr + 12].copy_from_slice(&0u32.to_le_bytes());
@@ -293,8 +306,7 @@ pub(crate) fn define_host_data_property_with_env<C: AsContextMut<Data = RuntimeS
 ) -> Option<()> {
     let name_id = find_memory_c_string_with_env(ctx, env, name)
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, name))?;
-    let obj_ptr =
-        resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize)?;
+    let obj_ptr = resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize)?;
     let (capacity, num_props) = {
         let data = env.memory.data(&*ctx);
         if obj_ptr + 16 > data.len() {
@@ -475,7 +487,11 @@ pub(crate) fn value_to_number(arg: i64) -> f64 {
 }
 
 pub(crate) fn is_callable_in_runtime(caller: &mut Caller<'_, RuntimeState>, val: i64) -> bool {
-    if value::is_function(val) || value::is_closure(val) || value::is_bound(val) || value::is_native_callable(val) {
+    if value::is_function(val)
+        || value::is_closure(val)
+        || value::is_bound(val)
+        || value::is_native_callable(val)
+    {
         return true;
     }
     if value::is_proxy(val) {
@@ -511,7 +527,11 @@ pub(crate) fn is_extensible_impl(caller: &mut Caller<'_, RuntimeState>, target: 
         }
         return false;
     }
-    let set = caller.data().non_extensible_handles.lock().expect("non_extensible_handles mutex");
+    let set = caller
+        .data()
+        .non_extensible_handles
+        .lock()
+        .expect("non_extensible_handles mutex");
     !set.contains(&(target as u64))
 }
 
@@ -533,7 +553,11 @@ pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, tar
         }
         return false;
     }
-    let mut set = caller.data().non_extensible_handles.lock().expect("non_extensible_handles mutex");
+    let mut set = caller
+        .data()
+        .non_extensible_handles
+        .lock()
+        .expect("non_extensible_handles mutex");
     set.insert(target as u64);
     true
 }
@@ -574,12 +598,18 @@ fn parse_descriptor(
     let prop_set = read_object_property_by_name(caller, desc_ptr, "set");
 
     if let Some(getter) = prop_get {
-        if !value::is_undefined(getter) && !value::is_null(getter) && !is_callable_in_runtime(caller, getter) {
+        if !value::is_undefined(getter)
+            && !value::is_null(getter)
+            && !is_callable_in_runtime(caller, getter)
+        {
             return Err("TypeError: property getter must be callable".to_string());
         }
     }
     if let Some(setter) = prop_set {
-        if !value::is_undefined(setter) && !value::is_null(setter) && !is_callable_in_runtime(caller, setter) {
+        if !value::is_undefined(setter)
+            && !value::is_null(setter)
+            && !is_callable_in_runtime(caller, setter)
+        {
             return Err("TypeError: property setter must be callable".to_string());
         }
     }
@@ -588,10 +618,16 @@ fn parse_descriptor(
         || (prop_set.is_some() && !value::is_undefined(prop_set.unwrap()));
     if has_accessor {
         if prop_value.is_some() {
-            return Err("TypeError: Invalid property descriptor: cannot specify both accessor and value".to_string());
+            return Err(
+                "TypeError: Invalid property descriptor: cannot specify both accessor and value"
+                    .to_string(),
+            );
         }
         if prop_writable.is_some() {
-            return Err("TypeError: Invalid property descriptor: cannot specify both accessor and writable".to_string());
+            return Err(
+                "TypeError: Invalid property descriptor: cannot specify both accessor and writable"
+                    .to_string(),
+            );
         }
     }
 
@@ -624,8 +660,10 @@ fn get_target_descriptor(
             return None;
         };
         let data = memory.data(caller);
-        let getter = i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap());
-        let setter = i64::from_le_bytes(data[slot_offset + 24..slot_offset + 32].try_into().unwrap());
+        let getter =
+            i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap());
+        let setter =
+            i64::from_le_bytes(data[slot_offset + 24..slot_offset + 32].try_into().unwrap());
         (Some(getter), Some(setter))
     } else {
         (None, None)
@@ -692,7 +730,10 @@ fn define_property_on_target(
             None => return Err("TypeError: Proxy target not found".to_string()),
         };
         if entry.revoked {
-            return Err("TypeError: Cannot perform 'defineProperty' on a proxy that has been revoked".to_string());
+            return Err(
+                "TypeError: Cannot perform 'defineProperty' on a proxy that has been revoked"
+                    .to_string(),
+            );
         }
 
         if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
@@ -825,8 +866,10 @@ fn define_property_on_normal_object(
                 return Err("TypeError: Memory not found".to_string());
             };
             let data = memory.data(&*caller);
-            let g = i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap());
-            let s = i64::from_le_bytes(data[slot_offset + 24..slot_offset + 32].try_into().unwrap());
+            let g =
+                i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap());
+            let s =
+                i64::from_le_bytes(data[slot_offset + 24..slot_offset + 32].try_into().unwrap());
             (g, s)
         } else {
             (value::encode_undefined(), value::encode_undefined())
@@ -850,7 +893,9 @@ fn define_property_on_normal_object(
                 // 数据属性
                 if !old_writable {
                     if desc.writable == Some(true) {
-                        return Err("TypeError: Cannot make non-writable property writable".to_string());
+                        return Err(
+                            "TypeError: Cannot make non-writable property writable".to_string()
+                        );
                     }
                     if let Some(new_val) = desc.value {
                         let same = strict_eq(caller, old_val, new_val);
@@ -863,12 +908,18 @@ fn define_property_on_normal_object(
                 // 访问器属性
                 if let Some(new_getter) = desc.get {
                     if new_getter != old_getter {
-                        return Err("TypeError: Cannot change getter of non-configurable property".to_string());
+                        return Err(
+                            "TypeError: Cannot change getter of non-configurable property"
+                                .to_string(),
+                        );
                     }
                 }
                 if let Some(new_setter) = desc.set {
                     if new_setter != old_setter {
-                        return Err("TypeError: Cannot change setter of non-configurable property".to_string());
+                        return Err(
+                            "TypeError: Cannot change setter of non-configurable property"
+                                .to_string(),
+                        );
                     }
                 }
             }
@@ -1013,13 +1064,11 @@ pub(crate) fn write_new_property_to_memory(
             let old_size = 16 + num_props * 32;
             data.copy_within(actual_obj_ptr..actual_obj_ptr + old_size, heap_ptr);
 
-            data[heap_ptr + 8..heap_ptr + 12]
-                .copy_from_slice(&(new_capacity as u32).to_le_bytes());
+            data[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&(new_capacity as u32).to_le_bytes());
 
             let slot_addr = obj_table_ptr + handle_idx as usize * 4;
             if slot_addr + 4 <= data.len() {
-                data[slot_addr..slot_addr + 4]
-                    .copy_from_slice(&(heap_ptr as u32).to_le_bytes());
+                data[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
             }
         }
 
@@ -1064,15 +1113,23 @@ pub(crate) fn reflect_get_impl(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(caller.data(), "TypeError: Cannot perform 'get' on a proxy that has been revoked".to_string());
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Cannot perform 'get' on a proxy that has been revoked".to_string(),
+                );
                 return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "get")
                     .unwrap_or_else(value::encode_undefined);
                 if !value::is_undefined(trap) && !value::is_null(trap) {
-                    return call_wasm_callback(caller, trap, entry.handler, &[entry.target, prop, target])
-                        .unwrap_or_else(|_| value::encode_undefined());
+                    return call_wasm_callback(
+                        caller,
+                        trap,
+                        entry.handler,
+                        &[entry.target, prop, target],
+                    )
+                    .unwrap_or_else(|_| value::encode_undefined());
                 }
             }
             // 无 trap，转发到 target（递归）
@@ -1085,19 +1142,30 @@ pub(crate) fn reflect_get_impl(
     let obj_ptr = resolve_handle(caller, target);
     let prop_name = render_value(caller, prop).ok();
     let existing_val = obj_ptr.and_then(|ptr| {
-        prop_name.as_ref()
+        prop_name
+            .as_ref()
             .and_then(|name| read_object_property_by_name(caller, ptr, name))
     });
 
     let is_proto_req = prop_name.as_deref() == Some("prototype");
 
-    if is_proto_req && (value::is_function(target) || value::is_closure(target) || value::is_bound(target)) {
+    if is_proto_req
+        && (value::is_function(target) || value::is_closure(target) || value::is_bound(target))
+    {
         match existing_val {
             Some(v) if !value::is_undefined(v) => return v,
             _ => {
                 // 创建默认 prototype 对象并作为函数的 own property 写入，GC 可自然追踪
-                let default_proto = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) };
-                let _ = define_host_data_property_from_caller(caller, target, "prototype", default_proto);
+                let default_proto = {
+                    let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                    alloc_host_object(caller, &_wjsm_env, 4)
+                };
+                let _ = define_host_data_property_from_caller(
+                    caller,
+                    target,
+                    "prototype",
+                    default_proto,
+                );
                 // 设置 proto 的 constructor 属性
                 let ctor_prop_name_id = find_memory_c_string(caller, "constructor");
                 if let Some(name_c) = ctor_prop_name_id {
@@ -1175,13 +1243,19 @@ pub(crate) fn alloc_promise(caller: &mut Caller<'_, RuntimeState>, entry: Promis
 }
 
 #[inline]
-pub(crate) fn find_memory_c_string(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
+pub(crate) fn find_memory_c_string(
+    caller: &mut Caller<'_, RuntimeState>,
+    name: &str,
+) -> Option<u32> {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     find_memory_c_string_with_env(caller, &env, name)
 }
 
 #[inline]
-pub(crate) fn alloc_heap_c_string(caller: &mut Caller<'_, RuntimeState>, name: &str) -> Option<u32> {
+pub(crate) fn alloc_heap_c_string(
+    caller: &mut Caller<'_, RuntimeState>,
+    name: &str,
+) -> Option<u32> {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     alloc_heap_c_string_with_env(caller, &env, name)
 }
@@ -1239,4 +1313,3 @@ pub(crate) fn define_host_data_property(
     data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
     Some(())
 }
-

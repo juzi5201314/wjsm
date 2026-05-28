@@ -2,41 +2,88 @@ use anyhow::Result;
 use wasmtime::{Caller, Linker};
 
 use crate::*;
+fn concat_operand_bytes(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec<u8> {
+    if value::is_string(val) {
+        return read_value_string_bytes(caller, val).unwrap_or_default();
+    }
+    if value::is_array(val) {
+        return array_to_string_bytes(caller, val);
+    }
+    render_value(caller, val).unwrap_or_default().into_bytes()
+}
 
-pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+fn array_to_string_bytes(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec<u8> {
+    let Some(ptr) = resolve_handle(caller, val) else {
+        return Vec::new();
+    };
+    let len = read_array_length(caller, ptr).unwrap_or(0);
+    let mut out = Vec::new();
+    for i in 0..len {
+        if i != 0 {
+            out.push(b',');
+        }
+        let Some(elem) = read_array_elem(caller, ptr, i) else {
+            continue;
+        };
+        if value::is_undefined(elem) || value::is_null(elem) {
+            continue;
+        }
+        out.extend(concat_operand_bytes(caller, elem));
+    }
+    out
+}
+
+pub(crate) fn define_core(
+    linker: &mut Linker<RuntimeState>,
+    mut store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, None);
         },
     );
     linker.define(&mut store, "env", "console_log", f)?;
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, Some("error"));
         },
     );
     linker.define(&mut store, "env", "console_error", f)?;
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, Some("warn"));
         },
     );
     linker.define(&mut store, "env", "console_warn", f)?;
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, Some("info"));
         },
     );
     linker.define(&mut store, "env", "console_info", f)?;
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, Some("debug"));
         },
     );
     linker.define(&mut store, "env", "console_debug", f)?;
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| {
             write_console_values(&mut caller, args_base, args_count, Some("trace"));
         },
     );
     linker.define(&mut store, "env", "console_trace", f)?;
 
     // ── Import 1: f64_mod(i64, i64) → i64 ───────────────────────────────
-    let f = Func::wrap(&mut store, |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let af = f64::from_bits(a as u64);
             let bf = f64::from_bits(b as u64);
             let result = af - bf * (af / bf).trunc();
@@ -46,7 +93,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "f64_mod", f)?;
 
     // ── Import 2: f64_pow(i64, i64) → i64 ───────────────────────────────
-    let f = Func::wrap(&mut store, |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let af = f64::from_bits(a as u64);
             let bf = f64::from_bits(b as u64);
             let result = af.powf(bf);
@@ -58,7 +107,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     // 已弃用：异常传播现在通过 create_exception (import 313) + WASM return 实现。
     // throw_fn 保留仅为兼容旧的 WASM 二进制，不再被新编译的代码调用。
     // 注意：由于 import table 索引稳定性约束，不能移除此函数。
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, val: i64| {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| {
             // 将异常值存入 error_table，以便 eval 调用方能通过 ExceptionValue 恢复原始值
             {
                 let mut errors = caller.data().error_table.lock().unwrap();
@@ -85,7 +136,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "throw", f)?;
 
     // ── Import 4: iterator_from(i64) → i64 ──────────────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             if let Some(string_data) = read_value_string_bytes(&mut caller, val) {
                 let mut iters = caller.data().iterators.lock().expect("iterators mutex");
                 let handle = iters.len() as u32;
@@ -97,37 +150,37 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
             }
 
             if value::is_array(val)
-                && let Some(ptr) = resolve_handle(&mut caller, val) {
-                    let length = read_array_length(&mut caller, ptr).unwrap_or(0);
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                    let handle = iters.len() as u32;
-                    iters.push(IteratorState::ArrayIter {
-                        ptr,
-                        index: 0,
-                        length,
-                    });
-                    return value::encode_handle(value::TAG_ITERATOR, handle);
-                }
+                && let Some(ptr) = resolve_handle(&mut caller, val)
+            {
+                let length = read_array_length(&mut caller, ptr).unwrap_or(0);
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                let handle = iters.len() as u32;
+                iters.push(IteratorState::ArrayIter {
+                    ptr,
+                    index: 0,
+                    length,
+                });
+                return value::encode_handle(value::TAG_ITERATOR, handle);
+            }
 
             if (value::is_object(val) || value::is_function(val))
                 && let Some(ptr) = resolve_handle(&mut caller, val)
-                    && let Some(next) = read_object_property_by_name(&mut caller, ptr, "next")
-                        && value::is_callable(next) {
-                            let return_method =
-                                read_object_property_by_name(&mut caller, ptr, "return")
-                                    .filter(|candidate| value::is_callable(*candidate));
-                            let mut iters =
-                                caller.data().iterators.lock().expect("iterators mutex");
-                            let handle = iters.len() as u32;
-                            iters.push(IteratorState::ObjectIter {
-                                next,
-                                return_method,
-                                current_value: value::encode_undefined(),
-                                has_current: false,
-                                done: false,
-                            });
-                            return value::encode_handle(value::TAG_ITERATOR, handle);
-                        }
+                && let Some(next) = read_object_property_by_name(&mut caller, ptr, "next")
+                && value::is_callable(next)
+            {
+                let return_method = read_object_property_by_name(&mut caller, ptr, "return")
+                    .filter(|candidate| value::is_callable(*candidate));
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                let handle = iters.len() as u32;
+                iters.push(IteratorState::ObjectIter {
+                    next,
+                    return_method,
+                    current_value: value::encode_undefined(),
+                    has_current: false,
+                    done: false,
+                });
+                return value::encode_handle(value::TAG_ITERATOR, handle);
+            }
 
             let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             let handle = iters.len() as u32;
@@ -138,7 +191,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "iterator_from", f)?;
 
     // ── Import 5: iterator_next(i64) → i64 ──────────────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let table = caller.get_export("__table").and_then(|e| e.into_table());
             let Some(func_table) = table else {
@@ -163,6 +218,11 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                         return value::encode_undefined();
                     }
                     IteratorState::MapValueIter { index, .. } => {
+                        *index += 1;
+                        return value::encode_undefined();
+                    }
+                    IteratorState::TypedArrayValueIter { index, .. }
+                    | IteratorState::TypedArrayEntryIter { index, .. } => {
                         *index += 1;
                         return value::encode_undefined();
                     }
@@ -201,7 +261,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "iterator_next", f)?;
 
     // ── Import 6: iterator_close(i64) → () ──────────────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, handle: i64| {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| {
             let handle_idx = value::decode_handle(handle) as usize;
             let return_method = {
                 let mut iters = caller.data().iterators.lock().expect("iterators mutex");
@@ -230,12 +292,12 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                 && !(value::is_object(result)
                     || value::is_function(result)
                     || value::is_array(result))
-                {
-                    set_runtime_error(
-                        caller.data(),
-                        "TypeError: iterator return must return an object".to_string(),
-                    );
-                }
+            {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: iterator return must return an object".to_string(),
+                );
+            }
             if let Some(IteratorState::ObjectIter { done, .. }) = caller
                 .data()
                 .iterators
@@ -249,7 +311,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     );
     linker.define(&mut store, "env", "iterator_close", f)?;
 
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             if let Some(iter) = iters.get_mut(handle_idx) {
@@ -288,6 +352,52 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                             value::encode_undefined()
                         }
                     }
+                    IteratorState::TypedArrayValueIter {
+                        entry,
+                        index,
+                        length,
+                    } => {
+                        if *index < *length {
+                            let entry = entry.clone();
+                            let idx = *index;
+                            drop(iters);
+                            typedarray_element_read_entry(&mut caller, &entry, idx)
+                                .unwrap_or_else(value::encode_undefined)
+                        } else {
+                            value::encode_undefined()
+                        }
+                    }
+                    IteratorState::TypedArrayEntryIter {
+                        entry,
+                        index,
+                        length,
+                    } => {
+                        if *index < *length {
+                            let typedarray_entry = entry.clone();
+                            let idx = *index;
+                            drop(iters);
+                            let entry = alloc_array(&mut caller, 2);
+                            if let Some(entry_ptr) = resolve_array_ptr(&mut caller, entry) {
+                                let elem = typedarray_element_read_entry(
+                                    &mut caller,
+                                    &typedarray_entry,
+                                    idx,
+                                )
+                                .unwrap_or_else(value::encode_undefined);
+                                write_array_elem(
+                                    &mut caller,
+                                    entry_ptr,
+                                    0,
+                                    value::encode_f64(idx as f64),
+                                );
+                                write_array_elem(&mut caller, entry_ptr, 1, elem);
+                                write_array_length(&mut caller, entry_ptr, 2);
+                            }
+                            entry
+                        } else {
+                            value::encode_undefined()
+                        }
+                    }
                     IteratorState::ObjectIter { current_value, .. } => *current_value,
                     IteratorState::Error => {
                         *caller
@@ -307,7 +417,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "iterator_value", f)?;
 
     // ── Import 8: iterator_done(i64) → i64 ──────────────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let next = {
                 let mut iters = caller.data().iterators.lock().expect("iterators mutex");
@@ -326,6 +438,10 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                     }
                     IteratorState::MapValueIter { values, index } => {
                         return value::encode_bool(*index as usize >= values.len());
+                    }
+                    IteratorState::TypedArrayValueIter { index, length, .. }
+                    | IteratorState::TypedArrayEntryIter { index, length, .. } => {
+                        return value::encode_bool(*index >= *length);
                     }
                     IteratorState::ObjectIter {
                         next,
@@ -379,7 +495,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "iterator_done", f)?;
 
     // ── Import 9: enumerator_from(i64) → i64 ────────────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             if let Some(string_data) = read_value_string_bytes(&mut caller, val) {
                 // 字符串枚举：遍历字节索引
                 let len = string_data.len();
@@ -426,7 +544,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "enumerator_from", f)?;
 
     // ── Import 10: enumerator_next(i64) → i64 ───────────────────────────
-    let f = Func::wrap(&mut store, |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
             if let Some(enm) = enums.get_mut(handle_idx) {
@@ -450,7 +570,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "enumerator_next", f)?;
 
     // ── Import 11: enumerator_key(i64) → i64 ────────────────────────────
-    let f = Func::wrap(&mut store, |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
             if let Some(enm) = enums.get_mut(handle_idx) {
@@ -482,7 +604,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "enumerator_key", f)?;
 
     // ── Import 12: enumerator_done(i64) → i64 ───────────────────────────
-    let f = Func::wrap(&mut store, |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
             let handle_idx = value::decode_handle(handle) as usize;
             let mut enums = caller.data().enumerators.lock().expect("enumerators mutex");
             let done = if let Some(enm) = enums.get_mut(handle_idx) {
@@ -508,7 +632,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "enumerator_done", f)?;
 
     // ── Import 13: typeof(i64) → i64 ───────────────────────────────────────
-    let f = Func::wrap(&mut store, |caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             if value::is_undefined(val) {
                 value::encode_typeof_undefined()
             } else if value::is_null(val) {
@@ -563,7 +689,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "typeof", f)?;
 
     // ── Import 14: op_in(i64, i64) → i64 ───────────────────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, object: i64, prop: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, object: i64, prop: i64| -> i64 {
             // Proxy: 触发 has trap
             if value::is_proxy(object) {
                 let handle = value::decode_proxy_handle(object) as usize;
@@ -573,7 +701,11 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                 };
                 if let Some(entry) = entry {
                     if entry.revoked {
-                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'has' on a proxy that has been revoked".to_string());
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: Cannot perform 'has' on a proxy that has been revoked"
+                                .to_string(),
+                        );
                         return value::encode_bool(false);
                     }
                     // 查找 handler 的 has trap
@@ -581,8 +713,13 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                         let trap = read_object_property_by_name(&mut caller, handler_ptr, "has")
                             .unwrap_or_else(value::encode_undefined);
                         if !value::is_undefined(trap) && !value::is_null(trap) {
-                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, prop])
-                                .unwrap_or_else(|_| value::encode_bool(false));
+                            let result = call_wasm_callback(
+                                &mut caller,
+                                trap,
+                                entry.handler,
+                                &[entry.target, prop],
+                            )
+                            .unwrap_or_else(|_| value::encode_bool(false));
                             return value::encode_bool(nanbox_to_bool(result));
                         }
                     }
@@ -602,125 +739,127 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "op_in", f)?;
 
     fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, prop: i64) -> i64 {
-            // 检查 object 是否有 prop 属性
-            if !value::is_object(object) && !value::is_function(object) {
-                *caller
+        // 检查 object 是否有 prop 属性
+        if !value::is_object(object) && !value::is_function(object) {
+            *caller
+                .data()
+                .runtime_error
+                .lock()
+                .expect("runtime error mutex") =
+                Some("TypeError: cannot use 'in' operator on non-object".to_string());
+            return value::encode_bool(false);
+        }
+
+        // 获取属性名（ToPropertyKey 转换）
+        let prop_str = if value::is_string(prop) {
+            if value::is_runtime_string_handle(prop) {
+                let handle = value::decode_runtime_string_handle(prop) as usize;
+                let strings = caller
                     .data()
-                    .runtime_error
+                    .runtime_strings
                     .lock()
-                    .expect("runtime error mutex") =
-                    Some("TypeError: cannot use 'in' operator on non-object".to_string());
+                    .expect("runtime strings mutex");
+                strings.get(handle).cloned().unwrap_or_default()
+            } else {
+                let ptr = value::decode_string_ptr(prop);
+                read_string(caller, ptr).unwrap_or_default()
+            }
+        } else if value::is_f64(prop) {
+            let f = f64::from_bits(prop as u64);
+            if f.is_nan() {
+                String::from("NaN")
+            } else if f == 0.0 {
+                String::from("0")
+            } else if f == f.floor() && f.is_finite() && f.abs() < 9007199254740992.0 {
+                format!("{}", f as i64)
+            } else {
+                format!("{}", f)
+            }
+        } else if value::is_null(prop) {
+            String::from("null")
+        } else if value::is_undefined(prop) {
+            String::from("undefined")
+        } else if value::is_bool(prop) {
+            format!("{}", value::decode_bool(prop))
+        } else {
+            String::new()
+        };
+
+        // 解析对象指针：通过 handle 表统一解析（支持 object 和 function）
+        let mut ptr = match resolve_handle(caller, object) {
+            Some(p) => p,
+            None => return value::encode_bool(false),
+        };
+
+        // 搜索属性，遍历原型链
+        loop {
+            // 读取对象属性
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return value::encode_bool(false);
+            };
+            let data = memory.data(&caller);
+            if ptr + 16 > data.len() {
                 return value::encode_bool(false);
             }
 
-            // 获取属性名（ToPropertyKey 转换）
-            let prop_str = if value::is_string(prop) {
-                if value::is_runtime_string_handle(prop) {
-                    let handle = value::decode_runtime_string_handle(prop) as usize;
-                    let strings = caller
-                        .data()
-                        .runtime_strings
-                        .lock()
-                        .expect("runtime strings mutex");
-                    strings.get(handle).cloned().unwrap_or_default()
-                } else {
-                    let ptr = value::decode_string_ptr(prop);
-                    read_string(caller, ptr).unwrap_or_default()
-                }
-            } else if value::is_f64(prop) {
-                let f = f64::from_bits(prop as u64);
-                if f.is_nan() {
-                    String::from("NaN")
-                } else if f == 0.0 {
-                    String::from("0")
-                } else if f == f.floor() && f.is_finite() && f.abs() < 9007199254740992.0 {
-                    format!("{}", f as i64)
-                } else {
-                    format!("{}", f)
-                }
-            } else if value::is_null(prop) {
-                String::from("null")
-            } else if value::is_undefined(prop) {
-                String::from("undefined")
-            } else if value::is_bool(prop) {
-                format!("{}", value::decode_bool(prop))
-            } else {
-                String::new()
-            };
+            let num_props = u32::from_le_bytes([
+                data[ptr + 12],
+                data[ptr + 13],
+                data[ptr + 14],
+                data[ptr + 15],
+            ]) as usize;
 
-            // 解析对象指针：通过 handle 表统一解析（支持 object 和 function）
-            let mut ptr = match resolve_handle(caller, object) {
-                Some(p) => p,
-                None => return value::encode_bool(false),
-            };
-
-            // 搜索属性，遍历原型链
-            loop {
-                // 读取对象属性
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                    return value::encode_bool(false);
-                };
-                let data = memory.data(&caller);
-                if ptr + 16 > data.len() {
-                    return value::encode_bool(false);
-                }
-
-                let num_props = u32::from_le_bytes([
-                    data[ptr + 12],
-                    data[ptr + 13],
-                    data[ptr + 14],
-                    data[ptr + 15],
-                ]) as usize;
-
-                let name_ids: Vec<u32> = (0..num_props)
-                    .filter_map(|i| {
-                        let slot_offset = ptr + 16 + i * 32;
-                        if slot_offset + 4 <= data.len() {
-                            Some(u32::from_le_bytes([
-                                data[slot_offset],
-                                data[slot_offset + 1],
-                                data[slot_offset + 2],
-                                data[slot_offset + 3],
-                            ]))
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                let _ = data;
-
-                for name_id in name_ids {
-                    let name_str = read_string_bytes(caller, name_id);
-                    if name_str == prop_str.as_bytes() {
-                        return value::encode_bool(true);
+            let name_ids: Vec<u32> = (0..num_props)
+                .filter_map(|i| {
+                    let slot_offset = ptr + 16 + i * 32;
+                    if slot_offset + 4 <= data.len() {
+                        Some(u32::from_le_bytes([
+                            data[slot_offset],
+                            data[slot_offset + 1],
+                            data[slot_offset + 2],
+                            data[slot_offset + 3],
+                        ]))
+                    } else {
+                        None
                     }
-                }
+                })
+                .collect();
 
-                // 读取 __proto__（offset 0），遍历原型链
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                    return value::encode_bool(false);
-                };
-                let data = memory.data(&caller);
-                if ptr + 4 > data.len() {
-                    return value::encode_bool(false);
-                }
-                let proto_handle =
-                    u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
+            let _ = data;
 
-                if proto_handle == 0xFFFF_FFFF {
-                    return value::encode_bool(false);
-                }
-                if let Some(proto_ptr) = resolve_handle_idx(caller, proto_handle as usize) {
-                    ptr = proto_ptr;
-                } else {
-                    return value::encode_bool(false);
+            for name_id in name_ids {
+                let name_str = read_string_bytes(caller, name_id);
+                if name_str == prop_str.as_bytes() {
+                    return value::encode_bool(true);
                 }
             }
+
+            // 读取 __proto__（offset 0），遍历原型链
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return value::encode_bool(false);
+            };
+            let data = memory.data(&caller);
+            if ptr + 4 > data.len() {
+                return value::encode_bool(false);
+            }
+            let proto_handle =
+                u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
+
+            if proto_handle == 0xFFFF_FFFF {
+                return value::encode_bool(false);
+            }
+            if let Some(proto_ptr) = resolve_handle_idx(caller, proto_handle as usize) {
+                ptr = proto_ptr;
+            } else {
+                return value::encode_bool(false);
+            }
+        }
     }
 
     // ── Import 15: op_instanceof(i64, i64) ────────────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, value: i64, constructor: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, value: i64, constructor: i64| -> i64 {
             // 1. 原始类型直接返回 false
             if !value::is_js_object(value) {
                 return value::encode_bool(false);
@@ -795,23 +934,13 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "op_instanceof", f)?;
 
     // ── Import 16: string_concat(i64, i64) → i64 ──────────────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             if value::is_string(a) || value::is_string(b) {
                 // 至少一个操作数是字符串 → 执行字符串连接
-                let a_s = if value::is_string(a) {
-                    read_value_string_bytes(&mut caller, a).unwrap_or_default()
-                } else {
-                    render_value(&mut caller, a)
-                        .unwrap_or_default()
-                        .into_bytes()
-                };
-                let b_s = if value::is_string(b) {
-                    read_value_string_bytes(&mut caller, b).unwrap_or_default()
-                } else {
-                    render_value(&mut caller, b)
-                        .unwrap_or_default()
-                        .into_bytes()
-                };
+                let a_s = concat_operand_bytes(&mut caller, a);
+                let b_s = concat_operand_bytes(&mut caller, b);
                 let mut result = a_s;
                 result.extend(b_s);
                 let s = String::from_utf8(result).unwrap_or_default();
@@ -825,7 +954,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "string_concat", f)?;
 
     // ── Import 17: string_concat_va(i32, i32) → i64 ────────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
             let mut result = Vec::new();
             for i in 0..args_count as u32 {
                 let arg = read_shadow_arg(&mut caller, args_base, i);
@@ -839,7 +970,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "string_concat_va", f)?;
 
     // ── Import 18: define_property(i64, i32, i64) → () ────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32, desc: i64| {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32, desc: i64| {
             // 检查 obj 和 desc 是否是对象或函数
             if (!value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj))
                 || (!value::is_object(desc) && !value::is_function(desc) && !value::is_array(desc))
@@ -872,25 +1005,29 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
 
             // 检查是否为访问器属性（有 get 或 set）
             if let Some(getter) = prop_get
-                && !value::is_undefined(getter) && !value::is_callable(getter) {
-                    *caller
-                        .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") =
-                        Some("TypeError: property getter must be callable".to_string());
-                    return;
-                }
+                && !value::is_undefined(getter)
+                && !value::is_callable(getter)
+            {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: property getter must be callable".to_string());
+                return;
+            }
             if let Some(setter) = prop_set
-                && !value::is_undefined(setter) && !value::is_callable(setter) {
-                    *caller
-                        .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") =
-                        Some("TypeError: property setter must be callable".to_string());
-                    return;
-                }
+                && !value::is_undefined(setter)
+                && !value::is_callable(setter)
+            {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: property setter must be callable".to_string());
+                return;
+            }
 
             let is_accessor = prop_get.is_some() || prop_set.is_some();
 
@@ -1050,7 +1187,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     );
     linker.define(&mut store, "env", "define_property", f)?;
 
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64, key: i32| -> i64 {
             // 检查 obj 是否是对象或函数
             if !value::is_object(obj) && !value::is_function(obj) {
                 *caller
@@ -1143,7 +1282,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "get_own_prop_desc", f)?;
 
     // ── Import 19: abstract_eq(i64, i64) → i64 ──────────────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             // 实现 Abstract Equality Comparison (ECMAScript 7.2.15)
             // 使用迭代而非递归来避免无限循环
             // 最多迭代 10 次防止死循环
@@ -1301,7 +1442,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "abstract_eq", f)?;
 
     // ── Import 20: abstract_compare(i64, i64) → i64 ──────────────────────────────
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             // 实现 Abstract Relational Comparison (ECMAScript 7.2.17)
             // 返回值: true (a < b), false (a >= b 或无法比较)
 
@@ -1336,7 +1479,9 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     // ── Import 21: gc_collect(i32) → i32 ─────────────────────────────────────
     // 标记-清除 GC：尝试回收足够空间满足 requested_size。
     // 返回新的 heap_ptr 或 0（失败）。
-    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>, requested_size: i32| -> i32 {
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, requested_size: i32| -> i32 {
             // 获取全局变量
             let heap_ptr = {
                 let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
@@ -1451,11 +1596,12 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                                 let closures =
                                     caller.data().closures.lock().expect("closures mutex");
                                 if let Some(entry) = closures.get(closure_idx)
-                                    && value::is_object(entry.env_obj) {
-                                        let handle_idx =
-                                            value::decode_object_handle(entry.env_obj) as usize;
-                                        add_root(handle_idx, data, &mut roots);
-                                    }
+                                    && value::is_object(entry.env_obj)
+                                {
+                                    let handle_idx =
+                                        value::decode_object_handle(entry.env_obj) as usize;
+                                    add_root(handle_idx, data, &mut roots);
+                                }
                             }
                         }
                     }
@@ -1470,8 +1616,8 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                 {
                     let timers = caller.data().timers.lock().expect("timers mutex");
                     for timer in timers.iter() {
-                            let val = timer.callback;
-                          if value::is_function(val) {
+                        let val = timer.callback;
+                        if value::is_function(val) {
                             let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
                             if func_idx < num_ir_functions as usize {
                                 add_root(func_idx, data, &mut roots);
@@ -1481,11 +1627,12 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                             let closure_idx = value::decode_closure_idx(val) as usize;
                             let closures = caller.data().closures.lock().expect("closures mutex");
                             if let Some(entry) = closures.get(closure_idx)
-                                && value::is_object(entry.env_obj) {
-                                    let handle_idx =
-                                        value::decode_object_handle(entry.env_obj) as usize;
-                                    add_root(handle_idx, data, &mut roots);
-                                }
+                                && value::is_object(entry.env_obj)
+                            {
+                                let handle_idx =
+                                    value::decode_object_handle(entry.env_obj) as usize;
+                                add_root(handle_idx, data, &mut roots);
+                            }
                         }
                     }
                 }
@@ -1667,7 +1814,11 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
 
             // ── Process weak references (WeakRef + FinalizationRegistry) ──
             {
-                let mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits mutex");
+                let mark_bits = caller
+                    .data()
+                    .gc_mark_bits
+                    .lock()
+                    .expect("gc_mark_bits mutex");
                 let is_marked = |handle_idx: u32| -> bool {
                     let word = (handle_idx as usize) / 64;
                     let bit = (handle_idx as usize) % 64;
@@ -1676,7 +1827,11 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
 
                 // Process WeakRef entries
                 {
-                    let mut wr_table = caller.data().weakref_table.lock().expect("weakref_table mutex");
+                    let mut wr_table = caller
+                        .data()
+                        .weakref_table
+                        .lock()
+                        .expect("weakref_table mutex");
                     for entry in wr_table.iter_mut() {
                         if entry.target_handle != 0 && !is_marked(entry.target_handle) {
                             entry.target_handle = 0;
@@ -1686,7 +1841,11 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
 
                 // Process FinalizationRegistry entries
                 {
-                    let mut fr_table = caller.data().finalization_registry_table.lock().expect("fr_table mutex");
+                    let mut fr_table = caller
+                        .data()
+                        .finalization_registry_table
+                        .lock()
+                        .expect("fr_table mutex");
                     for entry in fr_table.iter_mut() {
                         // Skip if the FinalizationRegistry object itself was collected
                         if !is_marked(entry.object_handle) {
@@ -1702,8 +1861,11 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                             }
                         });
                         if !held_values.is_empty() {
-                            let mut pending = caller.data().pending_cleanup_callbacks
-                                .lock().expect("pending_cleanup_callbacks mutex");
+                            let mut pending = caller
+                                .data()
+                                .pending_cleanup_callbacks
+                                .lock()
+                                .expect("pending_cleanup_callbacks mutex");
                             pending.push((entry.callback, held_values));
                         }
                     }
@@ -1712,13 +1874,19 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
 
             // Schedule FinalizationRegistry cleanup microtasks
             {
-                let mut pending = caller.data().pending_cleanup_callbacks
-                    .lock().expect("pending_cleanup_callbacks mutex");
+                let mut pending = caller
+                    .data()
+                    .pending_cleanup_callbacks
+                    .lock()
+                    .expect("pending_cleanup_callbacks mutex");
                 let microtasks_to_schedule: Vec<(i64, Vec<i64>)> = pending.drain(..).collect();
                 drop(pending);
 
-                let mut mq = caller.data().microtask_queue
-                    .lock().expect("microtask_queue mutex");
+                let mut mq = caller
+                    .data()
+                    .microtask_queue
+                    .lock()
+                    .expect("microtask_queue mutex");
                 for (callback, held_values) in microtasks_to_schedule {
                     for held_value in held_values {
                         mq.push_back(Microtask::CleanupFinalizationRegistry {
@@ -1740,4 +1908,3 @@ pub(crate) fn define_core(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     // ── Import 27: set_timeout(i64, i64) → i64 ────────────────────────────
     Ok(())
 }
-

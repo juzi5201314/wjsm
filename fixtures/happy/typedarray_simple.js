@@ -24,3 +24,10 @@ console.log("join: " + arr3.join("-"));
 
 // at
 console.log("at: " + arr3.at(-1));
+
+// Numeric index assignment must not create ordinary object properties
+arr3[0] = 9;
+console.log("index assignment: " + arr3[0]);
+console.log("index property leak: " + arr3.undefined);
+arr3[-1] = 7;
+console.log("negative index: " + arr3[-1]);

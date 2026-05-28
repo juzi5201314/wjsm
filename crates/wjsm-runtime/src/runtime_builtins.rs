@@ -1423,14 +1423,20 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             if value::is_object(this_val) {
                 Some(this_val)
             } else {
-                Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) })
+                Some({
+                    let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                    alloc_host_object(caller, &_wjsm_env, 4)
+                })
             }
         }
         NativeCallable::ObjectConstructor => {
             if value::is_object(this_val) || value::is_function(this_val) {
                 Some(this_val)
             } else {
-                Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) })
+                Some({
+                    let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                    alloc_host_object(caller, &_wjsm_env, 4)
+                })
             }
         }
         NativeCallable::FunctionConstructor
@@ -1465,23 +1471,57 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             Some(create_error_object(caller, error_name, msg))
         }
-        NativeCallable::MapConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
-        NativeCallable::SetConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
-        NativeCallable::WeakMapConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
-        NativeCallable::WeakSetConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
-        NativeCallable::WeakRefConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
-        NativeCallable::FinalizationRegistryConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
-        NativeCallable::DateConstructorGlobal => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
-        NativeCallable::PromiseConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) }),
-        NativeCallable::ArrayBufferConstructorGlobal => {
-            Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) })
-        }
-        NativeCallable::DataViewConstructorGlobal => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
-        NativeCallable::TypedArrayConstructor(_) => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
+        NativeCallable::MapConstructor => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 0)
+        }),
+        NativeCallable::SetConstructor => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 0)
+        }),
+        NativeCallable::WeakMapConstructor => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 0)
+        }),
+        NativeCallable::WeakSetConstructor => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 0)
+        }),
+        NativeCallable::WeakRefConstructor => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 0)
+        }),
+        NativeCallable::FinalizationRegistryConstructor => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 0)
+        }),
+        NativeCallable::DateConstructorGlobal => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 4)
+        }),
+        NativeCallable::PromiseConstructor => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 0)
+        }),
+        NativeCallable::ArrayBufferConstructorGlobal => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 4)
+        }),
+        NativeCallable::DataViewConstructorGlobal => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 4)
+        }),
+        NativeCallable::TypedArrayConstructor(_) => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 4)
+        }),
         NativeCallable::BigInt64ArrayConstructor | NativeCallable::BigUint64ArrayConstructor => {
             Some(value::encode_undefined())
         }
-        NativeCallable::ProxyConstructor => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
+        NativeCallable::ProxyConstructor => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 4)
+        }),
         NativeCallable::ProxyRevoker { proxy_handle } => {
             let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
             if let Some(entry) = table.get_mut(proxy_handle as usize) {
@@ -1494,7 +1534,10 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             Some(fr_register_impl_with_args(caller, this_val, args))
         }
         NativeCallable::FinalizationRegistryUnregisterMethod => {
-            let token = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let token = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
             Some(fr_unregister_impl(caller, this_val, token))
         }
         NativeCallable::StubGlobal(_) => Some(value::encode_undefined()),
@@ -1508,12 +1551,8 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             // Simplified: no-op for now (would parse script and spawn thread)
             Some(value::encode_undefined())
         }
-        NativeCallable::AgentBroadcast => {
-            Some(value::encode_undefined())
-        }
-        NativeCallable::AgentReceiveBroadcast => {
-            Some(value::encode_undefined())
-        }
+        NativeCallable::AgentBroadcast => Some(value::encode_undefined()),
+        NativeCallable::AgentReceiveBroadcast => Some(value::encode_undefined()),
         NativeCallable::AgentGetReport => {
             let shared = match caller.data().shared_state.clone() {
                 Some(s) => s,
@@ -1535,10 +1574,15 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             let start = START.get_or_init(std::time::Instant::now);
             Some(value::encode_f64(start.elapsed().as_millis() as f64))
         }
-        NativeCallable::AtomicsGlobal => Some({ let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 4) }),
+        NativeCallable::AtomicsGlobal => Some({
+            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &_wjsm_env, 4)
+        }),
         // ── Async iterator methods ──
         NativeCallable::AsyncIteratorProtoSymbolAsyncIterator => Some(this_val),
-        NativeCallable::AsyncFromSyncNext { handle } => Some(advance_async_from_sync(caller, handle)),
+        NativeCallable::AsyncFromSyncNext { handle } => {
+            Some(advance_async_from_sync(caller, handle))
+        }
         NativeCallable::AsyncFromSyncReturn { handle } => {
             let arg = args.first().copied().unwrap_or(value::encode_undefined());
             let (sync_iter_handle, sync_done) = {
@@ -1569,7 +1613,12 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                     entry.sync_done = true;
                 }
             }
-            Some(call_sync_iter_and_wrap(caller, sync_iter_handle, Some(arg), false))
+            Some(call_sync_iter_and_wrap(
+                caller,
+                sync_iter_handle,
+                Some(arg),
+                false,
+            ))
         }
         NativeCallable::AsyncFromSyncThrow { handle } => {
             let arg = args.first().copied().unwrap_or(value::encode_undefined());
@@ -1651,11 +1700,7 @@ pub(crate) fn create_async_from_sync_iterator(
     };
 
     // 注册为 ObjectIter（next/return 为 NativeCallable）
-    let mut iters = caller
-        .data()
-        .iterators
-        .lock()
-        .expect("iterators mutex");
+    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
     let iter_handle = iters.len() as u32;
     iters.push(IteratorState::ObjectIter {
         next: next_callable,
@@ -1676,9 +1721,7 @@ fn call_sync_iter_and_wrap(
 ) -> i64 {
     let sync_handle_idx = value::decode_handle(sync_iter_handle) as usize;
 
-    let table = caller
-        .get_export("__table")
-        .and_then(|e| e.into_table());
+    let table = caller.get_export("__table").and_then(|e| e.into_table());
     let Some(func_table) = table else {
         return value::encode_undefined();
     };
@@ -1686,7 +1729,11 @@ fn call_sync_iter_and_wrap(
     let method_to_call = {
         let iters = caller.data().iterators.lock().expect("iterators mutex");
         match iters.get(sync_handle_idx) {
-            Some(IteratorState::ObjectIter { next, return_method, .. }) => {
+            Some(IteratorState::ObjectIter {
+                next,
+                return_method,
+                ..
+            }) => {
                 if arg_if_return.is_some() {
                     return_method.unwrap_or(*next)
                 } else {
@@ -1708,25 +1755,23 @@ fn call_sync_iter_and_wrap(
     }
 
     let call_arg = arg_if_return.unwrap_or(value::encode_undefined());
-    let raw_result =
-        call_host_function_from_caller(caller, &func_table, method_to_call, call_arg)
-            .unwrap_or(value::encode_undefined());
+    let raw_result = call_host_function_from_caller(caller, &func_table, method_to_call, call_arg)
+        .unwrap_or(value::encode_undefined());
 
-    let (done, current_value) =
-        if (value::is_object(raw_result)
-            || value::is_function(raw_result)
-            || value::is_array(raw_result))
-            && let Some(ptr) = resolve_handle(caller, raw_result)
-        {
-            let done = read_object_property_by_name(caller, ptr, "done")
-                .map(nanbox_to_bool)
-                .unwrap_or(true);
-            let value = read_object_property_by_name(caller, ptr, "value")
-                .unwrap_or(value::encode_undefined());
-            (done, value)
-        } else {
-            (true, call_arg)
-        };
+    let (done, current_value) = if (value::is_object(raw_result)
+        || value::is_function(raw_result)
+        || value::is_array(raw_result))
+        && let Some(ptr) = resolve_handle(caller, raw_result)
+    {
+        let done = read_object_property_by_name(caller, ptr, "done")
+            .map(nanbox_to_bool)
+            .unwrap_or(true);
+        let value =
+            read_object_property_by_name(caller, ptr, "value").unwrap_or(value::encode_undefined());
+        (done, value)
+    } else {
+        (true, call_arg)
+    };
 
     let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
     let result = alloc_iterator_result_from_caller(caller, current_value, done);
@@ -1735,10 +1780,7 @@ fn call_sync_iter_and_wrap(
 }
 
 /// AsyncFromSyncIterator.next()：推进同步迭代器并返回 Promise<IteratorResult>。
-fn advance_async_from_sync(
-    caller: &mut Caller<'_, RuntimeState>,
-    handle: u32,
-) -> i64 {
+fn advance_async_from_sync(caller: &mut Caller<'_, RuntimeState>, handle: u32) -> i64 {
     let (sync_iter_handle, sync_done) = {
         let table = caller
             .data()
@@ -1754,8 +1796,7 @@ fn advance_async_from_sync(
 
     if sync_done {
         let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
-        let result =
-            alloc_iterator_result_from_caller(caller, value::encode_undefined(), true);
+        let result = alloc_iterator_result_from_caller(caller, value::encode_undefined(), true);
         resolve_promise_from_caller(caller, promise, result);
         return promise;
     }
@@ -1796,6 +1837,46 @@ fn advance_async_from_sync(
                     Some((true, value::encode_undefined()))
                 }
             }
+            Some(IteratorState::TypedArrayValueIter {
+                entry,
+                index,
+                length,
+            }) => {
+                if *index < *length {
+                    let entry = entry.clone();
+                    let idx = *index;
+                    *index += 1;
+                    drop(iters);
+                    let val = typedarray_element_read_entry(caller, &entry, idx)
+                        .unwrap_or(value::encode_undefined());
+                    Some((false, val))
+                } else {
+                    Some((true, value::encode_undefined()))
+                }
+            }
+            Some(IteratorState::TypedArrayEntryIter {
+                entry,
+                index,
+                length,
+            }) => {
+                if *index < *length {
+                    let typedarray_entry = entry.clone();
+                    let idx = *index;
+                    *index += 1;
+                    drop(iters);
+                    let entry = alloc_array(caller, 2);
+                    if let Some(entry_ptr) = resolve_array_ptr(caller, entry) {
+                        let elem = typedarray_element_read_entry(caller, &typedarray_entry, idx)
+                            .unwrap_or(value::encode_undefined());
+                        write_array_elem(caller, entry_ptr, 0, value::encode_f64(idx as f64));
+                        write_array_elem(caller, entry_ptr, 1, elem);
+                        write_array_length(caller, entry_ptr, 2);
+                    }
+                    Some((false, entry))
+                } else {
+                    Some((true, value::encode_undefined()))
+                }
+            }
             Some(IteratorState::StringIter { byte_pos, data }) => {
                 if *byte_pos < data.len() {
                     let ch = data[*byte_pos] as char;
@@ -1813,7 +1894,10 @@ fn advance_async_from_sync(
 
     if let Some((done, current_value)) = direct_result {
         if done {
-            let mut table = caller.data().async_from_sync_iterators.lock()
+            let mut table = caller
+                .data()
+                .async_from_sync_iterators
+                .lock()
                 .expect("async-from-sync iterators mutex");
             if let Some(entry) = table.get_mut(handle as usize) {
                 entry.sync_done = true;
@@ -1832,7 +1916,10 @@ fn advance_async_from_sync(
         if let Some(IteratorState::ObjectIter { done, .. }) = iters.get(sync_handle_idx) {
             if *done {
                 drop(iters);
-                let mut table = caller.data().async_from_sync_iterators.lock()
+                let mut table = caller
+                    .data()
+                    .async_from_sync_iterators
+                    .lock()
                     .expect("async-from-sync iterators mutex");
                 if let Some(entry) = table.get_mut(handle as usize) {
                     entry.sync_done = true;
@@ -1843,20 +1930,13 @@ fn advance_async_from_sync(
 
     promise
 }
-pub(crate) fn weakref_deref_impl(
-    caller: &mut Caller<'_, RuntimeState>,
-    this_val: i64,
-) -> i64 {
+pub(crate) fn weakref_deref_impl(caller: &mut Caller<'_, RuntimeState>, this_val: i64) -> i64 {
     if !value::is_object(this_val) {
         return value::encode_undefined();
     }
-    let obj_ptr = resolve_handle_idx(
-        caller,
-        value::decode_object_handle(this_val) as usize,
-    );
-    let handle_val = obj_ptr.and_then(|p| {
-        read_object_property_by_name(caller, p, "__weakref_handle__")
-    });
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let handle_val =
+        obj_ptr.and_then(|p| read_object_property_by_name(caller, p, "__weakref_handle__"));
     let handle = handle_val
         .map(|v| value::decode_f64(v) as usize)
         .unwrap_or(0);
@@ -1882,17 +1962,9 @@ pub(crate) fn fr_unregister_impl(
     if !value::is_object(this_val) {
         return value::encode_bool(false);
     }
-    let obj_ptr = resolve_handle_idx(
-        caller,
-        value::decode_object_handle(this_val) as usize,
-    );
-    let handle_val = obj_ptr.and_then(|p| {
-        read_object_property_by_name(
-            caller,
-            p,
-            "__finalization_registry_handle__",
-        )
-    });
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let handle_val = obj_ptr
+        .and_then(|p| read_object_property_by_name(caller, p, "__finalization_registry_handle__"));
     let handle = handle_val
         .map(|v| value::decode_f64(v) as usize)
         .unwrap_or(0);
@@ -1909,11 +1981,9 @@ pub(crate) fn fr_unregister_impl(
     }
     let entry = &mut table[handle];
     let initial_len = entry.registrations.len();
-    entry.registrations.retain(|r| {
-        match &r.unregister_token {
-            Some(t) => !same_value_zero(*t, token),
-            None => true,
-        }
+    entry.registrations.retain(|r| match &r.unregister_token {
+        Some(t) => !same_value_zero(*t, token),
+        None => true,
     });
     value::encode_bool(entry.registrations.len() < initial_len)
 }
@@ -1947,17 +2017,9 @@ pub(crate) fn fr_register_impl_with_args(
     if !value::is_object(this_val) {
         return value::encode_undefined();
     }
-    let obj_ptr = resolve_handle_idx(
-        caller,
-        value::decode_object_handle(this_val) as usize,
-    );
-    let handle_val = obj_ptr.and_then(|p| {
-        read_object_property_by_name(
-            caller,
-            p,
-            "__finalization_registry_handle__",
-        )
-    });
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let handle_val = obj_ptr
+        .and_then(|p| read_object_property_by_name(caller, p, "__finalization_registry_handle__"));
     let handle = handle_val
         .map(|v| value::decode_f64(v) as usize)
         .unwrap_or(0);
@@ -1971,13 +2033,11 @@ pub(crate) fn fr_register_impl_with_args(
             .lock()
             .expect("finalization registry table mutex");
         if handle < table.len() {
-            table[handle]
-                .registrations
-                .push(FinalizationRegistration {
-                    target_handle,
-                    held_value,
-                    unregister_token,
-                });
+            table[handle].registrations.push(FinalizationRegistration {
+                target_handle,
+                held_value,
+                unregister_token,
+            });
         }
     }
     value::encode_undefined()
@@ -1993,7 +2053,9 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
     }
 
     // Get WASM globals
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else { return };
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return;
+    };
     let heap_ptr = get_global_i32(caller, "__heap_ptr");
     let obj_table_ptr = get_global_i32(caller, "__obj_table_ptr");
     let obj_table_count = get_global_i32(caller, "__obj_table_count");
@@ -2001,7 +2063,9 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
     let num_ir_functions = get_global_i32(caller, "__num_ir_functions");
     let shadow_sp = get_global_i32(caller, "__shadow_sp");
 
-    if heap_ptr == 0 || obj_table_count == 0 { return; }
+    if heap_ptr == 0 || obj_table_count == 0 {
+        return;
+    }
 
     // Initialize/clear mark bits
     {
@@ -2025,8 +2089,10 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
         let slot_addr = opt_usize + handle_idx * 4;
         if slot_addr + 4 <= data.len() {
             let obj_ptr = u32::from_le_bytes([
-                data[slot_addr], data[slot_addr + 1],
-                data[slot_addr + 2], data[slot_addr + 3],
+                data[slot_addr],
+                data[slot_addr + 1],
+                data[slot_addr + 2],
+                data[slot_addr + 3],
             ]) as usize;
             if obj_ptr != 0 {
                 roots.push((handle_idx, obj_ptr));
@@ -2042,10 +2108,14 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
             let frame_addr = shadow_stack_base + frame * 8;
             if frame_addr + 8 <= data.len() {
                 let val = i64::from_le_bytes([
-                    data[frame_addr], data[frame_addr + 1],
-                    data[frame_addr + 2], data[frame_addr + 3],
-                    data[frame_addr + 4], data[frame_addr + 5],
-                    data[frame_addr + 6], data[frame_addr + 7],
+                    data[frame_addr],
+                    data[frame_addr + 1],
+                    data[frame_addr + 2],
+                    data[frame_addr + 3],
+                    data[frame_addr + 4],
+                    data[frame_addr + 5],
+                    data[frame_addr + 6],
+                    data[frame_addr + 7],
                 ]);
                 if value::is_object(val) {
                     let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
@@ -2110,7 +2180,11 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
 
     // 3e. Module namespace cache
     {
-        let cache = caller.data().module_namespace_cache.lock().expect("module cache");
+        let cache = caller
+            .data()
+            .module_namespace_cache
+            .lock()
+            .expect("module cache");
         for &val in cache.values() {
             if value::is_object(val) {
                 let handle_idx = value::decode_object_handle(val) as usize;
@@ -2149,37 +2223,52 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
         for handle_idx in 0..obj_table_count as usize {
             let word_idx = handle_idx / 64;
             let bit_idx = handle_idx % 64;
-            if word_idx < mark_snapshot.len()
-                && (mark_snapshot[word_idx] & (1u64 << bit_idx)) != 0
+            if word_idx < mark_snapshot.len() && (mark_snapshot[word_idx] & (1u64 << bit_idx)) != 0
             {
                 let slot_addr = opt_usize + handle_idx * 4;
-                if slot_addr + 4 > data.len() { continue; }
+                if slot_addr + 4 > data.len() {
+                    continue;
+                }
                 let old_ptr = u32::from_le_bytes([
-                    data[slot_addr], data[slot_addr + 1],
-                    data[slot_addr + 2], data[slot_addr + 3],
+                    data[slot_addr],
+                    data[slot_addr + 1],
+                    data[slot_addr + 2],
+                    data[slot_addr + 3],
                 ]) as usize;
-                if old_ptr == 0 { continue; }
-                if old_ptr + 16 > data.len() { continue; }
+                if old_ptr == 0 {
+                    continue;
+                }
+                if old_ptr + 16 > data.len() {
+                    continue;
+                }
                 let heap_type = data[old_ptr + 4];
                 let (capacity, elem_size) = if heap_type == wjsm_ir::HEAP_TYPE_ARRAY {
                     (
                         u32::from_le_bytes([
-                            data[old_ptr + 12], data[old_ptr + 13],
-                            data[old_ptr + 14], data[old_ptr + 15],
+                            data[old_ptr + 12],
+                            data[old_ptr + 13],
+                            data[old_ptr + 14],
+                            data[old_ptr + 15],
                         ]) as usize,
                         8usize,
                     )
                 } else {
                     (
                         u32::from_le_bytes([
-                            data[old_ptr + 8], data[old_ptr + 9],
-                            data[old_ptr + 10], data[old_ptr + 11],
+                            data[old_ptr + 8],
+                            data[old_ptr + 9],
+                            data[old_ptr + 10],
+                            data[old_ptr + 11],
                         ]) as usize,
                         32usize,
                     )
                 };
-                let Some(payload_size) = capacity.checked_mul(elem_size) else { continue; };
-                let Some(size) = 16usize.checked_add(payload_size) else { continue; };
+                let Some(payload_size) = capacity.checked_mul(elem_size) else {
+                    continue;
+                };
+                let Some(size) = 16usize.checked_add(payload_size) else {
+                    continue;
+                };
                 live_objects.push((handle_idx, old_ptr, size));
             }
         }
@@ -2198,7 +2287,10 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
     // Move objects (independent data_mut calls, no held borrows)
     let mut current_ptr = heap_base;
     for &(handle_idx, old_ptr, size) in &live_objects {
-        if old_ptr != current_ptr && old_ptr < heap_ptr as usize && current_ptr + size <= heap_ptr as usize {
+        if old_ptr != current_ptr
+            && old_ptr < heap_ptr as usize
+            && current_ptr + size <= heap_ptr as usize
+        {
             unsafe {
                 let data_ptr = memory.data_mut(&mut *caller);
                 std::ptr::copy(
@@ -2226,6 +2318,4 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
 
     // Reset alloc counter
     *caller.data().alloc_counter.lock().expect("alloc_counter") = 0;
-
-
 }
