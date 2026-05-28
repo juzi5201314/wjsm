@@ -890,5 +890,98 @@ pub(crate) fn define_proxy_reflect(linker: &mut Linker<RuntimeState>, mut store:
         },
     );
     linker.define(&mut store, "env", "reflect_own_keys", reflect_own_keys_fn)?;
+
+    // ── proxy_apply: WASM 调用路径中 TAG_PROXY 的 [[Call]] 派发 ──
+    let proxy_apply_fn = Func::wrap(&mut store,
+        |mut caller: Caller<'_, RuntimeState>, proxy: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let handle = value::decode_proxy_handle(proxy) as usize;
+            let entry = {
+                let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                table.get(handle).cloned()
+            };
+            if let Some(entry) = entry {
+                if entry.revoked {
+                    set_runtime_error(caller.data(), "TypeError: Cannot perform call on a proxy that has been revoked".to_string());
+                    return value::encode_undefined();
+                }
+                // 从影子栈读取参数
+                let args: Vec<i64> = (0..args_count.max(0))
+                    .map(|i| read_shadow_arg(&mut caller, args_base, i as u32))
+                    .collect();
+                // 查找 handler 的 apply trap
+                if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                    let trap = read_object_property_by_name(&mut caller, handler_ptr, "apply")
+                        .unwrap_or_else(value::encode_undefined);
+                    if !value::is_undefined(trap) && !value::is_null(trap) {
+                        let arr = alloc_array(&mut caller, args.len() as u32);
+                        for (i, &arg) in args.iter().enumerate() {
+                            set_array_elem(&mut caller, arr, i as i32, arg);
+                        }
+                        return call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, this_val, arr])
+                            .unwrap_or_else(|_| {
+                                set_runtime_error(caller.data(), "TypeError: Proxy apply trap failed".to_string());
+                                value::encode_undefined()
+                            });
+                    }
+                }
+                // 无 trap，转发到 target
+                return reflect_apply_impl(&mut caller, entry.target, this_val, &args);
+            }
+            value::encode_undefined()
+        },
+    );
+    linker.define(&mut store, "env", "proxy.apply", proxy_apply_fn)?;
+
+    // ── proxy_construct: WASM 调用路径中 TAG_PROXY 的 [[Construct]] 派发 ──
+    let proxy_construct_fn = Func::wrap(&mut store,
+        |mut caller: Caller<'_, RuntimeState>, proxy: i64, _this_val: i64, args_base: i32, args_count: i32| -> i64 {
+            let handle = value::decode_proxy_handle(proxy) as usize;
+            let entry = {
+                let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                table.get(handle).cloned()
+            };
+            if let Some(entry) = entry {
+                if entry.revoked {
+                    set_runtime_error(caller.data(), "TypeError: Cannot perform construct on a proxy that has been revoked".to_string());
+                    return value::encode_undefined();
+                }
+                // 从影子栈读取参数
+                let args: Vec<i64> = (0..args_count.max(0))
+                    .map(|i| read_shadow_arg(&mut caller, args_base, i as u32))
+                    .collect();
+                // 查找 handler 的 construct trap
+                if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                    let trap = read_object_property_by_name(&mut caller, handler_ptr, "construct")
+                        .unwrap_or_else(value::encode_undefined);
+                    if !value::is_undefined(trap) && !value::is_null(trap) {
+                        let arr = alloc_array(&mut caller, args.len() as u32);
+                        for (i, &arg) in args.iter().enumerate() {
+                            set_array_elem(&mut caller, arr, i as i32, arg);
+                        }
+                        let trap_result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, arr, entry.target]);
+                        return match trap_result {
+                            Ok(res) => {
+                                if !value::is_js_object(res) {
+                                    set_runtime_error(caller.data(), "TypeError: Proxy construct trap returned non-object".to_string());
+                                    value::encode_undefined()
+                                } else {
+                                    res
+                                }
+                            }
+                            Err(e) => {
+                                set_runtime_error(caller.data(), format!("TypeError: Proxy construct trap failed: {}", e));
+                                value::encode_undefined()
+                            }
+                        };
+                    }
+                }
+                // 无 trap，转发到 target
+                return reflect_construct_impl(&mut caller, entry.target, &args, entry.target);
+            }
+            value::encode_undefined()
+        },
+    );
+    linker.define(&mut store, "env", "proxy.construct", proxy_construct_fn)?;
+
     Ok(())
 }
