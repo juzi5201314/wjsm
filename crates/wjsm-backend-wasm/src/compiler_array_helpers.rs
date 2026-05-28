@@ -1,4 +1,5 @@
 use super::*;
+use crate::host_import_registry::SpecialHostImport;
 
 impl Compiler {
     pub(crate) fn compile_array_helpers(&mut self) {
@@ -14,7 +15,7 @@ impl Compiler {
             // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx
             let locals: Vec<(u32, wasm_encoder::ValType)> = vec![(3, wasm_encoder::ValType::I32)];
             let mut func = Function::new(locals);
-            let gc_collect_idx = self.gc_collect_func_idx;
+            let gc_collect_idx = self.special_host_import_indices[&SpecialHostImport::GcCollect];
 
             // size = 16 + capacity * 8 (4 proto + 1 type + 3 pad + 4 length + 4 capacity + cap*8)
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -220,7 +221,7 @@ impl Compiler {
             // 不是 TAG_ARRAY → 委托给 $obj_get_by_index 进行属性访问（将 i32 转换为字符串后查找）
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(self.obj_get_by_index_func_idx));
+            func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ObjGetByIndex]));
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);
@@ -310,7 +311,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::Call(
-                self.typedarray_set_by_index_func_idx,
+                self.special_host_import_indices[&SpecialHostImport::TypedArraySetByIndex],
             ));
             func.instruction(&WasmInstruction::I64Const(value::encode_bool(true)));
             func.instruction(&WasmInstruction::I64Eq);
