@@ -5,8 +5,8 @@ use swc_core::ecma::ast as swc_ast;
 use thiserror::Error;
 use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, ConstantId, Function,
-    FunctionId, Instruction, Module, PhiSource, Program, SwitchCaseTarget, Terminator, UnaryOp,
-    ValueId,
+    FunctionId, HomeObject, Instruction, Module, PhiSource, Program, SwitchCaseTarget, Terminator,
+    UnaryOp, ValueId,
 };
 
 const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
@@ -1252,6 +1252,12 @@ struct Lowerer {
     function_scope_id_stack: Vec<usize>,
     /// 追踪当前是否在箭头函数中（箭头函数的 this 需要词法捕获）
     is_arrow_fn_stack: Vec<bool>,
+    /// 当前函数是否拥有 [[HomeObject]] / 可合法解析 super。
+    super_allowed: bool,
+    /// 当前函数是否可合法执行 super() 构造调用。
+    super_call_allowed: bool,
+    function_super_allowed_stack: Vec<bool>,
+    function_super_call_allowed_stack: Vec<bool>,
     /// 每层函数的共享 env 对象 (ValueId) + 已注册的捕获绑定集合。
     /// 同一外层函数中的多个闭包共享同一个 env 对象，确保可变捕获变量的修改对所有闭包可见。
     shared_env_stack: Vec<Option<(ValueId, std::collections::HashSet<CapturedBinding>)>>,

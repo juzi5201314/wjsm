@@ -10,11 +10,14 @@ impl Lowerer {
         if arrow.is_async {
             return self.lower_async_arrow_expr(arrow, block);
         }
+        let outer_super_allowed = self.super_allowed;
+        let outer_super_call_allowed = self.super_call_allowed;
         let name = format!("arrow_{}", self.module.functions().len());
         self.push_function_context(&name, BasicBlockId(0));
-        // 标记当前为箭头函数
+        // 标记当前为箭头函数；箭头函数继承外层 super 绑定。
         *self.is_arrow_fn_stack.last_mut().unwrap() = true;
-
+        self.super_allowed = outer_super_allowed;
+        self.super_call_allowed = outer_super_call_allowed;
         // 声明 $env（闭包环境对象）
         let env_scope_id = self
             .scopes
@@ -136,6 +139,8 @@ impl Lowerer {
         arrow: &swc_ast::ArrowExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        let outer_super_allowed = self.super_allowed;
+        let outer_super_call_allowed = self.super_call_allowed;
         let name = format!("arrow_{}", self.module.functions().len());
         let async_name = format!("{name}$async");
 
@@ -145,7 +150,8 @@ impl Lowerer {
         self.captured_var_slots.clear();
         self.async_resume_blocks.clear();
         *self.is_arrow_fn_stack.last_mut().unwrap() = true;
-
+        self.super_allowed = outer_super_allowed;
+        self.super_call_allowed = outer_super_call_allowed;
         let env_scope_id = self
             .scopes
             .declare("$env", VarKind::Let, true)

@@ -584,6 +584,24 @@ pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, tar
     set.insert(target as u64);
     true
 }
+pub(crate) fn prototype_handle_to_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    proto_handle: u32,
+) -> i64 {
+    if proto_handle == 0xFFFF_FFFF {
+        return value::encode_null();
+    }
+    let num_ir_functions = caller
+        .get_export("__num_ir_functions")
+        .and_then(Extern::into_global)
+        .and_then(|global| global.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    if proto_handle < num_ir_functions {
+        value::encode_function_idx(proto_handle)
+    } else {
+        value::encode_object_handle(proto_handle)
+    }
+}
 
 pub(crate) fn proxy_or_target_get_prototype_of_impl(
     caller: &mut Caller<'_, RuntimeState>,
@@ -656,11 +674,10 @@ pub(crate) fn proxy_or_target_get_prototype_of_impl(
         return value::encode_null();
     }
     let proto_handle = u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
-    if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
-        value::encode_null()
-    } else {
-        value::encode_object_handle(proto_handle)
+    if proto_handle == 0 && value::is_object(target) {
+        return value::encode_null();
     }
+    prototype_handle_to_value(caller, proto_handle)
 }
 
 pub(crate) fn proxy_or_target_is_extensible_impl(
@@ -1434,6 +1451,15 @@ pub(crate) fn reflect_get_impl(
     target: i64,
     prop: i64,
 ) -> i64 {
+    reflect_get_impl_with_receiver(caller, target, prop, target)
+}
+
+pub(crate) fn reflect_get_impl_with_receiver(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    prop: i64,
+    receiver: i64,
+) -> i64 {
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
@@ -1456,68 +1482,87 @@ pub(crate) fn reflect_get_impl(
                         caller,
                         trap,
                         entry.handler,
-                        &[entry.target, prop, target],
+                        &[entry.target, prop, receiver],
                     )
                     .unwrap_or_else(|_| value::encode_undefined());
                 }
             }
-            // 无 trap，转发到 target（递归）
-            return reflect_get_impl(caller, entry.target, prop);
+            return reflect_get_impl_with_receiver(caller, entry.target, prop, receiver);
         }
         return value::encode_undefined();
     }
 
-    // 非 Proxy 对象
-    let obj_ptr = resolve_handle(caller, target);
-    let prop_name = render_value(caller, prop).ok();
-    let existing_val = obj_ptr.and_then(|ptr| {
-        prop_name
-            .as_ref()
-            .and_then(|name| read_object_property_by_name(caller, ptr, name))
-    });
+    let prop_name = match render_value(caller, prop) {
+        Ok(name) => name,
+        Err(_) => return value::encode_undefined(),
+    };
+    let obj_ptr = match resolve_handle(caller, target) {
+        Some(ptr) => ptr,
+        None => return value::encode_undefined(),
+    };
+    let name_id = find_memory_c_string(caller, &prop_name);
 
-    let is_proto_req = prop_name.as_deref() == Some("prototype");
-
-    if is_proto_req
+    if prop_name == "prototype"
         && (value::is_function(target) || value::is_closure(target) || value::is_bound(target))
     {
-        match existing_val {
-            Some(v) if !value::is_undefined(v) => return v,
-            _ => {
-                // 创建默认 prototype 对象并作为函数的 own property 写入，GC 可自然追踪
-                let default_proto = {
-                    let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
-                    alloc_host_object(caller, &_wjsm_env, 4)
-                };
-                let _ = define_host_data_property_from_caller(
-                    caller,
-                    target,
-                    "prototype",
-                    default_proto,
-                );
-                // 设置 proto 的 constructor 属性
-                let ctor_prop_name_id = find_memory_c_string(caller, "constructor");
-                if let Some(name_c) = ctor_prop_name_id {
-                    if let Some(dp_ptr) = resolve_handle(caller, default_proto) {
-                        write_object_property_by_name_id(
-                            caller,
-                            dp_ptr,
-                            default_proto,
-                            name_c as u32,
-                            target,
-                            constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
-                        );
-                    }
-                }
-                return default_proto;
-            }
+        if let Some(id) = name_id
+            && let Some((_, _, value)) = find_property_slot_by_name_id(caller, obj_ptr, id)
+            && !value::is_undefined(value)
+        {
+            return value;
         }
+
+        // 函数首次读取 prototype 时按需创建默认 prototype，并写回函数对象。
+        let default_proto = {
+            let wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &wjsm_env, 4)
+        };
+        let _ = define_host_data_property_from_caller(caller, target, "prototype", default_proto);
+        if let Some(name_c) = find_memory_c_string(caller, "constructor")
+            && let Some(dp_ptr) = resolve_handle(caller, default_proto)
+        {
+            write_object_property_by_name_id(
+                caller,
+                dp_ptr,
+                default_proto,
+                name_c as u32,
+                target,
+                constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+            );
+        }
+        return default_proto;
     }
 
-    if let Some(v) = existing_val {
-        return v;
+    if let Some(id) = name_id
+        && let Some((slot_offset, flags, value)) =
+            find_property_slot_by_name_id(caller, obj_ptr, id)
+    {
+        if (flags & constants::FLAG_IS_ACCESSOR) == 0 {
+            return value;
+        }
+        let getter = {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return value::encode_undefined();
+            };
+            let data = memory.data(&*caller);
+            if slot_offset + 24 > data.len() {
+                return value::encode_undefined();
+            }
+            i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap())
+        };
+        if value::is_undefined(getter) || value::is_null(getter) {
+            return value::encode_undefined();
+        }
+        return call_wasm_callback(caller, getter, receiver, &[])
+            .unwrap_or_else(|_| value::encode_undefined());
     }
-    value::encode_undefined()
+
+    let proto = proxy_or_target_get_prototype_of_impl(caller, target);
+    if value::is_null(proto) {
+        value::encode_undefined()
+    } else {
+        reflect_get_impl_with_receiver(caller, proto, prop, receiver)
+    }
 }
 
 // ── Caller 双参数便捷入口（委托 WasmEnv 泛型实现）────────────────────

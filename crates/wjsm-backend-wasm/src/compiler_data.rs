@@ -52,6 +52,20 @@ impl Compiler {
             }
         }
     }
+
+    pub(crate) fn encode_function_ref_id(&self, function_id: wjsm_ir::FunctionId) -> i64 {
+        let wasm_idx = self
+            .function_id_to_wasm_idx
+            .get(&function_id.0)
+            .copied()
+            .unwrap_or(0);
+        let table_idx = self
+            .function_table_reverse
+            .get(&wasm_idx)
+            .copied()
+            .unwrap_or(0);
+        value::encode_function_idx(table_idx)
+    }
     /// Intern a nul-terminated string in the data section and return its offset.
     /// 如果字符串已缓存，直接返回已有偏移量。
     /// 与 encode_constant 中的字符串处理逻辑相同。

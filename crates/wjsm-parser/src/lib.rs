@@ -37,7 +37,10 @@ pub fn parse_script_as_module(source: &str) -> Result<swc_ast::Module> {
     );
 
     let lexer = Lexer::new(
-        Syntax::Es(Default::default()),
+        Syntax::Es(swc_core::ecma::parser::EsSyntax {
+            allow_super_outside_method: true,
+            ..Default::default()
+        }),
         Default::default(),
         StringInput::from(&*fm),
         None,

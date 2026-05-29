@@ -444,14 +444,15 @@ impl Lowerer {
         match assign.op {
             swc_ast::AssignOp::Assign => {
                 let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+                let store_block = self.resolve_store_block(block);
                 self.current_function.append_instruction(
-                    block,
+                    store_block,
                     Instruction::StoreVar {
                         name: ir_name,
                         value: rhs,
                     },
                 );
-                self.append_eval_var_leak_if_needed(&name, kind, rhs, block);
+                self.append_eval_var_leak_if_needed(&name, kind, rhs, store_block);
                 // 更新 TypedArray 绑定跟踪：arr = new Int32Array -> 标记；arr = 其他 -> 取消标记
                 if is_typedarray_constructor_expr(assign.right.as_ref()) {
                     self.typedarray_bindings.insert((scope_id, name.clone()));
@@ -618,8 +619,9 @@ impl Lowerer {
         match assign.op {
             swc_ast::AssignOp::Assign => {
                 let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+                let store_block = self.resolve_store_block(block);
                 self.current_function.append_instruction(
-                    block,
+                    store_block,
                     Instruction::SetProp {
                         object: env_val,
                         key: key_val,
