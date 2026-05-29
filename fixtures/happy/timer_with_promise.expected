@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+main
+main-end
+promise-before-timeout
+--- stderr ---

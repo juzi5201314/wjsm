@@ -1,0 +1,4 @@
+exit_code: 0
+--- stdout ---
+{"visible":1}
+--- stderr ---

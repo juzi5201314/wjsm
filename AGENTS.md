@@ -299,7 +299,7 @@ Four-tier test strategy:
 
 ### 4. E2E Fixture Runner Tests
 
-每个 fixture 是一个独立 `#[test]`（由 `build.rs` 自动生成），共 390+ 个：
+每个 fixture 是一个独立 `#[test]`（由 `build.rs` 自动生成），共 470+ 个：
 - `fixtures/happy/hello.js` → `#[test] fn happy__hello()`
 - `fixtures/modules/cjs_simple/main.js` → `#[test] fn modules__cjs_simple_main()`
 
@@ -318,12 +318,15 @@ Auto-update: `WJSM_UPDATE_FIXTURES=1 cargo nextest run` 写入新的 `.expected`
 生成文件位置：`tests/gen/generated_fixtures.rs`（由 `build.rs` 写入，`.gitignore`）。
 
 ### Covered by fixtures
-**Happy path** (340+ fixtures): 319+ `.js` + 21 `.ts`/`.tsx`. Comprehensive E2E coverage added for: timer API (setTimeout/setInterval/clear* with microtask interleaving — all 0-delay deterministic), advanced class features (getter/setter/static/static blocks/private/computed methods/super-prop/super-constructor/inheritance/static-super/object-literal-super/direct-eval-super), console variants (log/error/warn/info/debug/trace + cross-domain), JSON.stringify boundaries (sparse/undefined/toJSON/special-numbers/escaping/replacer/space documented). JSON.parse fixtures added but explicitly marked stub.
+**Happy path** (365 fixtures): 344 `.js` + 21 `.ts`/`.tsx`. Comprehensive E2E coverage for: timer API (setTimeout/setInterval/clear* — all 0-delay, KNOWN-BROKEN: timer callbacks do not currently fire), advanced class features (getter/setter/static/static blocks/private/computed methods/super-prop/super-constructor/inheritance/static-super/object-literal-super/direct-eval-super — NOTE: setters bypassed, computed methods not supported), console variants (log/error/warn/info/debug/trace + cross-domain), JSON.stringify boundaries (sparse/undefined/toJSON/special-numbers/escaping/replacer/space — NOTE: NaN→undefined spec gap). JSON.parse fixtures marked stub.
 **Note on gaps** (normative gaps or implementation limitations — documented in fixtures):
   - fetch: data: URLs only, synchronous string, no Promise/Response. Not conformant. `fetch_data_url.js` is behavior record only.
-  - JSON.parse: stub (returns input string). All parse fixtures carry "KNOWN-BROKEN / STUB BEHAVIOR" header documenting intended spec behavior.
-  - Timers, advanced classes, console variants, and JSON.stringify now have comprehensive dedicated coverage (no longer "thin").
-**Error path** (47 fixtures): undeclared_var, const_reassign, tdz, let_redeclare, redeclare combinations, unsupported statements/expressions, syntax_error, await/yield/for-await outside valid contexts, break/continue outside loop, unknown/duplicate labels, with statement, for-in/for-of bad LHS, for-of non-iterable, for-await non-iterable, bigint JSON, regex_invalid, regexp_flags_invalid, get_own_property_descriptor non-object, define_property_accessor non-callable, group_by non-callable/non-iterable, typedarray invalid length, bigint typedarray number write, weakref non-object, eval errors (strict var leak, syntax, throw, lexical redeclare, const reassign, arguments conflict), plus recent additions (proxy invariants, JSON cycle, etc.).
+  - JSON.parse: stub (returns input string). All parse fixtures carry "KNOWN-BROKEN / STUB BEHAVIOR" header documenting actual stub behavior.
+  - Timer callbacks: do not currently fire (only main-thread + microtask output captured). Timer fixtures carry KNOWN-BROKEN headers.
+  - Class setters: bypassed on assignment; creates own data property instead of invoking setter.
+  - Class computed methods: not supported; produces undefined at runtime.
+  - JSON.stringify(NaN): outputs undefined instead of null (spec gap).
+**Error path** (57 fixtures): undeclared_var, const_reassign, tdz, let_redeclare, redeclare combinations, unsupported statements/expressions, syntax_error, await/yield/for-await outside valid contexts, break/continue outside loop, unknown/duplicate labels, with statement, for-in/for-of bad LHS, for-of non-iterable, for-await non-iterable, bigint JSON, regex_invalid, regexp_flags_invalid, get_own_property_descriptor non-object, define_property_accessor non-callable, group_by non-callable/non-iterable, typedarray invalid length, bigint typedarray number write, weakref non-object, eval errors (strict var leak, syntax, throw, lexical redeclare, const reassign, arguments conflict), plus recent additions (proxy invariants, JSON cycle, class TDZ/static field errors, timer non-function).
 **Module path** (52 source files across 23 scenarios): ESM (simple, default/named/re-export, alias, circular, deep chain, shared reuse, side effect, dynamic import, missing export) and CJS (simple, circular, conditional require, default export, exports alias, mixed ESM, require error, syntax error).
 ### Not yet tested
 Full test262 conformance suite (via `wjsm-test262` crate). Semantic IR snapshots (96) only cover `.js` sources (TS/TSX have no `.ir` snapshots).

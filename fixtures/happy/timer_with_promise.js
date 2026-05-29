@@ -1,4 +1,6 @@
-// Timer callback + Promise microtask priority: microtasks drain before next timer.
+// Timer + Promise interaction — documents actual behavior (timer callbacks do not fire).
+// Expected spec behavior: microtasks drain before next timer callback.
+// Actual: only main-thread + microtask output captured; timer callback is dead code.
 console.log("main");
 
 setTimeout(() => {

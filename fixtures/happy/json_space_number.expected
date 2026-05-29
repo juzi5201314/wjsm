@@ -1,0 +1,4 @@
+exit_code: 0
+--- stdout ---
+{"a":1,"b":{"c":2}}
+--- stderr ---

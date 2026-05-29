@@ -1,0 +1,4 @@
+exit_code: 0
+--- stdout ---
+[info] a b c 1 2 3 null undefined true [object Object]
+--- stderr ---

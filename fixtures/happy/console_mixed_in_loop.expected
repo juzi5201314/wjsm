@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+log 0
+[warn] warn 0
+[info] info 0
+log 1
+[warn] warn 1
+[info] info 1
+log 2
+[warn] warn 2
+[info] info 2
+done
+--- stderr ---

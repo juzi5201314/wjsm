@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+[warn] hello 42 [object Object]
+log-comparison 42 [object Object]
+--- stderr ---

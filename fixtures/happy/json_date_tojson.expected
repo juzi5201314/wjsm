@@ -1,0 +1,4 @@
+exit_code: 0
+--- stdout ---
+{"__date_ms__":1780056000000}
+--- stderr ---
