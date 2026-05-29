@@ -1,0 +1,4 @@
+exit_code: 2
+--- stdout ---
+--- stderr ---
+Runtime error: TypeError: Proxy getOwnPropertyDescriptor invariant violated: non-configurable descriptor is incompatible with target

@@ -1,10 +1,13 @@
 use anyhow::Result;
-use wasmtime::{Caller, Linker, Func};
 use wasmtime::Store;
+use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
-pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
+pub(crate) fn define_weakref_finalization(
+    linker: &mut Linker<RuntimeState>,
+    mut store: &mut Store<RuntimeState>,
+) -> Result<()> {
     // ── Method factory functions ──
     fn create_weakref_deref_method(state: &RuntimeState) -> i64 {
         let mut table = state
@@ -37,7 +40,8 @@ pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut
     }
 
     // ── 1. WeakRef constructor (Type 12: env, this, args_base, args_count) ──
-    let weakref_constructor_fn = Func::wrap(&mut store,
+    let weakref_constructor_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env: i64,
          _this: i64,
@@ -45,14 +49,20 @@ pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut
          args_count: i32|
          -> i64 {
             if args_count < 1 {
-                let msg_val = store_runtime_string(&mut caller, "TypeError: WeakRef constructor requires a target argument".to_string());
+                let msg_val = store_runtime_string(
+                    &mut caller,
+                    "TypeError: WeakRef constructor requires a target argument".to_string(),
+                );
                 let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
                 return value::encode_exception(value::decode_object_handle(error_obj));
             }
             let target = read_shadow_arg(&mut caller, args_base, 0);
             // Validate: target must be a JS object (per spec, Type(target) must be Object)
             if !value::is_js_object(target) {
-                let msg_val = store_runtime_string(&mut caller, "TypeError: WeakRef: target must be an object".to_string());
+                let msg_val = store_runtime_string(
+                    &mut caller,
+                    "TypeError: WeakRef: target must be an object".to_string(),
+                );
                 let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
                 return value::encode_exception(value::decode_object_handle(error_obj));
             }
@@ -61,7 +71,10 @@ pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut
                 Some(ptr) => ptr as u32,
                 None => {
                     // If handle resolution fails, target is not a heap-allocated object
-                    let msg_val = store_runtime_string(&mut caller, "TypeError: WeakRef: cannot resolve target handle".to_string());
+                    let msg_val = store_runtime_string(
+                        &mut caller,
+                        "TypeError: WeakRef: cannot resolve target handle".to_string(),
+                    );
                     let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
                     return value::encode_exception(value::decode_object_handle(error_obj));
                 }
@@ -83,7 +96,10 @@ pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut
                 create_weakref_deref_method(state)
             };
             // Allocate host object and set the internal handle + deref method
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 2) };
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 2)
+            };
             let handle_val = value::encode_f64(handle as f64);
             let _ = define_host_data_property_from_caller(
                 &mut caller,
@@ -91,23 +107,34 @@ pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut
                 "__weakref_handle__",
                 handle_val,
             );
-            let _ =
-                define_host_data_property_from_caller(&mut caller, obj, "deref", deref_fn);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "deref", deref_fn);
             obj
         },
     );
-    linker.define(&mut store, "env", "weakref_constructor", weakref_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "weakref_constructor",
+        weakref_constructor_fn,
+    )?;
 
     // ── 2. WeakRef.prototype.deref (direct: this_val → i64) ──
-    let weakref_proto_deref_fn = Func::wrap(&mut store,
+    let weakref_proto_deref_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
             weakref_deref_impl(&mut caller, this_val)
         },
     );
-    linker.define(&mut store, "env", "weakref_proto_deref", weakref_proto_deref_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "weakref_proto_deref",
+        weakref_proto_deref_fn,
+    )?;
 
     // ── 3. FinalizationRegistry constructor (Type 12) ──
-    let finalization_registry_constructor_fn = Func::wrap(&mut store,
+    let finalization_registry_constructor_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env: i64,
          _this: i64,
@@ -129,7 +156,10 @@ pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut
                 return value::encode_undefined();
             }
             // Allocate host object first to get its VM handle
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 3) };
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 3)
+            };
             let object_handle = value::decode_object_handle(obj);
             // Push a new FinalizationRegistry entry, storing the callback alongside
             let handle;
@@ -162,12 +192,8 @@ pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut
                 "__finalization_registry_handle__",
                 handle_val,
             );
-            let _ = define_host_data_property_from_caller(
-                &mut caller,
-                obj,
-                "register",
-                register_fn,
-            );
+            let _ =
+                define_host_data_property_from_caller(&mut caller, obj, "register", register_fn);
             let _ = define_host_data_property_from_caller(
                 &mut caller,
                 obj,
@@ -177,10 +203,16 @@ pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut
             obj
         },
     );
-    linker.define(&mut store, "env", "finalization_registry_constructor", finalization_registry_constructor_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "finalization_registry_constructor",
+        finalization_registry_constructor_fn,
+    )?;
 
     // ── 4. FinalizationRegistry.prototype.register (Type 12) ──
-    let finalization_registry_proto_register_fn = Func::wrap(&mut store,
+    let finalization_registry_proto_register_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env: i64,
          this_val: i64,
@@ -217,16 +249,10 @@ pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut
             if !value::is_object(this_val) {
                 return value::encode_undefined();
             }
-            let obj_ptr = resolve_handle_idx(
-                &mut caller,
-                value::decode_object_handle(this_val) as usize,
-            );
+            let obj_ptr =
+                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             let handle_val = obj_ptr.and_then(|p| {
-                read_object_property_by_name(
-                    &mut caller,
-                    p,
-                    "__finalization_registry_handle__",
-                )
+                read_object_property_by_name(&mut caller, p, "__finalization_registry_handle__")
             });
             let handle = handle_val
                 .map(|v| value::decode_f64(v) as usize)
@@ -242,27 +268,36 @@ pub(crate) fn define_weakref_finalization(linker: &mut Linker<RuntimeState>, mut
                     .lock()
                     .expect("finalization registry table mutex");
                 if handle < table.len() {
-                    table[handle]
-                        .registrations
-                        .push(FinalizationRegistration {
-                            target_handle,
-                            held_value,
-                            unregister_token,
-                        });
+                    table[handle].registrations.push(FinalizationRegistration {
+                        target_handle,
+                        held_value,
+                        unregister_token,
+                    });
                 }
             }
             value::encode_undefined()
         },
     );
-    linker.define(&mut store, "env", "finalization_registry_proto_register", finalization_registry_proto_register_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "finalization_registry_proto_register",
+        finalization_registry_proto_register_fn,
+    )?;
 
     // ── 5. FinalizationRegistry.prototype.unregister (direct: this_val, token → i64) ──
-    let finalization_registry_proto_unregister_fn = Func::wrap(&mut store,
+    let finalization_registry_proto_unregister_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64, token: i64| -> i64 {
             fr_unregister_impl(&mut caller, this_val, token)
         },
     );
-    linker.define(&mut store, "env", "finalization_registry_proto_unregister", finalization_registry_proto_unregister_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "finalization_registry_proto_unregister",
+        finalization_registry_proto_unregister_fn,
+    )?;
 
     // ── Exports ──
     Ok(())

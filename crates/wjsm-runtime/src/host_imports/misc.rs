@@ -1,12 +1,16 @@
 use anyhow::Result;
-use wasmtime::{Caller, Linker, Func};
 use wasmtime::Store;
+use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
-pub(crate) fn define_misc(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
+pub(crate) fn define_misc(
+    linker: &mut Linker<RuntimeState>,
+    mut store: &mut Store<RuntimeState>,
+) -> Result<()> {
     // ECMAScript §7.2.3 IsCallable(argument) → boolean
-    let is_callable_fn = Func::wrap(&mut store,
+    let is_callable_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             value::encode_bool(is_callable_in_runtime(&mut caller, val))
         },
@@ -14,7 +18,8 @@ pub(crate) fn define_misc(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "is_callable", is_callable_fn)?;
 
     // ── Import 129: queue_microtask(i64) -> () ──────────────────────────────
-    let queue_microtask_fn = Func::wrap(&mut store,
+    let queue_microtask_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, callback: i64| {
             let mut queue = caller
                 .data()
@@ -34,7 +39,8 @@ pub(crate) fn define_misc(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     });
     linker.define(&mut store, "env", "drain_microtasks", drain_microtasks_fn)?;
 
-    let native_call_fn = Func::wrap(&mut store,
+    let native_call_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          callable: i64,
          this_val: i64,
@@ -52,22 +58,39 @@ pub(crate) fn define_misc(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                 };
                 if let Some(entry) = entry {
                     if entry.revoked {
-                        set_runtime_error(caller.data(), "TypeError: Cannot perform call on a proxy that has been revoked".to_string());
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: Cannot perform call on a proxy that has been revoked"
+                                .to_string(),
+                        );
                         return value::encode_undefined();
                     }
 
                     if !value::is_undefined(new_target_val) {
                         // 构造调用
+                        if !is_constructor_in_runtime(&mut caller, entry.target) {
+                            set_runtime_error(
+                                caller.data(),
+                                "TypeError: Proxy target must be a constructor".to_string(),
+                            );
+                            return value::encode_undefined();
+                        }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                            let trap = read_object_property_by_name(&mut caller, handler_ptr, "construct")
-                                .unwrap_or_else(value::encode_undefined);
+                            let trap =
+                                read_object_property_by_name(&mut caller, handler_ptr, "construct")
+                                    .unwrap_or_else(value::encode_undefined);
                             if !value::is_undefined(trap) && !value::is_null(trap) {
                                 let arr = alloc_array(&mut caller, args_count as u32);
                                 for i in 0..args_count {
                                     let arg = read_shadow_arg(&mut caller, args_base, i as u32);
                                     set_array_elem(&mut caller, arr, i, arg);
                                 }
-                                let trap_res = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, arr, new_target_val]);
+                                let trap_res = call_wasm_callback(
+                                    &mut caller,
+                                    trap,
+                                    entry.handler,
+                                    &[entry.target, arr, new_target_val],
+                                );
                                 return match trap_res {
                                     Ok(res) => {
                                         if !value::is_js_object(res) {
@@ -78,35 +101,69 @@ pub(crate) fn define_misc(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
                                         }
                                     }
                                     Err(e) => {
-                                        set_runtime_error(caller.data(), format!("TypeError: Proxy construct trap failed: {}", e));
+                                        set_runtime_error(
+                                            caller.data(),
+                                            format!(
+                                                "TypeError: Proxy construct trap failed: {}",
+                                                e
+                                            ),
+                                        );
                                         value::encode_undefined()
                                     }
                                 };
                             }
                         }
                         caller.data().new_target.set(new_target_val);
-                        let result = resolve_and_call(&mut caller, entry.target, this_val, args_base, args_count);
+                        let result = resolve_and_call(
+                            &mut caller,
+                            entry.target,
+                            this_val,
+                            args_base,
+                            args_count,
+                        );
                         caller.data().new_target.set(value::encode_undefined());
                         return result;
                     } else {
                         // 普通函数调用
+                        if !is_callable_in_runtime(&mut caller, entry.target) {
+                            set_runtime_error(
+                                caller.data(),
+                                "TypeError: Proxy target must be callable".to_string(),
+                            );
+                            return value::encode_undefined();
+                        }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                            let trap = read_object_property_by_name(&mut caller, handler_ptr, "apply")
-                                .unwrap_or_else(value::encode_undefined);
+                            let trap =
+                                read_object_property_by_name(&mut caller, handler_ptr, "apply")
+                                    .unwrap_or_else(value::encode_undefined);
                             if !value::is_undefined(trap) && !value::is_null(trap) {
                                 let arr = alloc_array(&mut caller, args_count as u32);
                                 for i in 0..args_count {
                                     let arg = read_shadow_arg(&mut caller, args_base, i as u32);
                                     set_array_elem(&mut caller, arr, i, arg);
                                 }
-                            let result = call_wasm_callback(&mut caller, trap, entry.handler, &[entry.target, this_val, arr]);
-                            return result.unwrap_or_else(|_| {
-                                set_runtime_error(caller.data(), "TypeError: Proxy apply trap failed".to_string());
-                                value::encode_undefined()
-                            });
+                                let result = call_wasm_callback(
+                                    &mut caller,
+                                    trap,
+                                    entry.handler,
+                                    &[entry.target, this_val, arr],
+                                );
+                                return result.unwrap_or_else(|_| {
+                                    set_runtime_error(
+                                        caller.data(),
+                                        "TypeError: Proxy apply trap failed".to_string(),
+                                    );
+                                    value::encode_undefined()
+                                });
                             }
                         }
-                        return resolve_and_call(&mut caller, entry.target, this_val, args_base, args_count);
+                        return resolve_and_call(
+                            &mut caller,
+                            entry.target,
+                            this_val,
+                            args_base,
+                            args_count,
+                        );
                     }
                 }
                 return value::encode_undefined();
@@ -118,8 +175,9 @@ pub(crate) fn define_misc(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
             let args = (0..args_count.max(0))
                 .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
                 .collect();
-            let result = call_native_callable_with_args_from_caller(&mut caller, callable, this_val, args)
-                .unwrap_or_else(value::encode_undefined);
+            let result =
+                call_native_callable_with_args_from_caller(&mut caller, callable, this_val, args)
+                    .unwrap_or_else(value::encode_undefined);
             caller.data().new_target.set(value::encode_undefined());
             result
         },
@@ -128,7 +186,8 @@ pub(crate) fn define_misc(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
 
     // ── Import 146: register_module_namespace(i64, i64) -> () ──────────────
     // 将模块命名空间对象注册到运行时缓存
-    let register_module_namespace_fn = Func::wrap(&mut store,
+    let register_module_namespace_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, module_id: i64, namespace_obj: i64| {
             let mid = module_id as u32;
             let mut cache = caller
@@ -139,11 +198,17 @@ pub(crate) fn define_misc(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
             cache.insert(mid, namespace_obj);
         },
     );
-    linker.define(&mut store, "env", "register_module_namespace", register_module_namespace_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "register_module_namespace",
+        register_module_namespace_fn,
+    )?;
 
     // ── Import 147: dynamic_import(i64) -> i64 ────────────────────────────
     // 动态导入：查找命名空间对象并返回 resolved Promise
-    let dynamic_import_fn = Func::wrap(&mut store,
+    let dynamic_import_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, module_id: i64| -> i64 {
             let mid = module_id as u32;
 
@@ -193,35 +258,40 @@ pub(crate) fn define_misc(linker: &mut Linker<RuntimeState>, mut store: &mut Sto
     linker.define(&mut store, "env", "dynamic_import", dynamic_import_fn)?;
 
     // ── Import 148/149: eval ────────────────────────────────────────────────
-    let eval_direct_fn = Func::wrap(&mut store,
+    let eval_direct_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, code: i64, scope_env: i64| -> i64 {
             perform_eval_from_caller(&mut caller, code, Some(scope_env))
         },
     );
     linker.define(&mut store, "env", "eval_direct", eval_direct_fn)?;
-    let eval_indirect_fn = Func::wrap(&mut store,
+    let eval_indirect_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, code: i64| -> i64 {
             perform_eval_from_caller(&mut caller, code, None)
         },
     );
     linker.define(&mut store, "env", "eval_indirect", eval_indirect_fn)?;
 
-    let jsx_create_element_fn = Func::wrap(&mut store,
+    let jsx_create_element_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, tag: i64, props: i64, children: i64| -> i64 {
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 4) };
-            let _ = define_host_data_property_from_caller(
-                &mut caller, obj, "type", tag,
-            );
-            let _ = define_host_data_property_from_caller(
-                &mut caller, obj, "props", props,
-            );
-            let _ = define_host_data_property_from_caller(
-                &mut caller, obj, "children", children,
-            );
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 4)
+            };
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "type", tag);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "props", props);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "children", children);
             obj
         },
     );
-    linker.define(&mut store, "env", "jsx_create_element", jsx_create_element_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "jsx_create_element",
+        jsx_create_element_fn,
+    )?;
 
     Ok(())
 }

@@ -1,11 +1,15 @@
 use anyhow::Result;
-use wasmtime::{Caller, Linker, Func};
 use wasmtime::Store;
+use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
-pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
-    let arr_proto_push_fn = Func::wrap(&mut store,
+pub(crate) fn define_array_object(
+    linker: &mut Linker<RuntimeState>,
+    mut store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    let arr_proto_push_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -39,7 +43,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_push", arr_proto_push_fn)?;
 
     // ── arr_proto_pop (#50) ───────────────────────────────────────────
-    let arr_proto_pop_fn = Func::wrap(&mut store,
+    let arr_proto_pop_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -63,7 +68,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_pop", arr_proto_pop_fn)?;
 
     // ── arr_proto_includes (#51) ──────────────────────────────────────
-    let arr_proto_includes_fn = Func::wrap(&mut store,
+    let arr_proto_includes_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -77,17 +83,24 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
                 if let Some(elem) = read_array_elem(&mut caller, ptr, i)
-                    && elem == val {
-                        return value::encode_bool(true);
-                    }
+                    && elem == val
+                {
+                    return value::encode_bool(true);
+                }
             }
             value::encode_bool(false)
         },
     );
-    linker.define(&mut store, "env", "arr_proto_includes", arr_proto_includes_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "arr_proto_includes",
+        arr_proto_includes_fn,
+    )?;
 
     // ── arr_proto_index_of (#52) ──────────────────────────────────────
-    let arr_proto_index_of_fn = Func::wrap(&mut store,
+    let arr_proto_index_of_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -101,17 +114,24 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
             for i in 0..len {
                 if let Some(elem) = read_array_elem(&mut caller, ptr, i)
-                    && elem == val {
-                        return value::encode_f64(i as f64);
-                    }
+                    && elem == val
+                {
+                    return value::encode_f64(i as f64);
+                }
             }
             value::encode_f64(-1.0)
         },
     );
-    linker.define(&mut store, "env", "arr_proto_index_of", arr_proto_index_of_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "arr_proto_index_of",
+        arr_proto_index_of_fn,
+    )?;
 
     // ── arr_proto_join (#53) ─────────────────────────────────────────
-    let arr_proto_join_fn = Func::wrap(&mut store,
+    let arr_proto_join_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -147,7 +167,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_join", arr_proto_join_fn)?;
 
     // ── arr_proto_concat (#54) ────────────────────────────────────────
-    let arr_proto_concat_fn = Func::wrap(&mut store,
+    let arr_proto_concat_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -207,7 +228,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_concat", arr_proto_concat_fn)?;
 
     // ── arr_proto_slice (#55) ─────────────────────────────────────────
-    let arr_proto_slice_fn = Func::wrap(&mut store,
+    let arr_proto_slice_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -259,7 +281,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_slice", arr_proto_slice_fn)?;
 
     // ── arr_proto_fill (#56) ──────────────────────────────────────────
-    let arr_proto_fill_fn = Func::wrap(&mut store,
+    let arr_proto_fill_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -304,7 +327,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_fill", arr_proto_fill_fn)?;
 
     // ── arr_proto_reverse (#57) ───────────────────────────────────────
-    let arr_proto_reverse_fn = Func::wrap(&mut store,
+    let arr_proto_reverse_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -328,7 +352,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_reverse", arr_proto_reverse_fn)?;
 
     // ── arr_proto_flat (#58) ──────────────────────────────────────────
-    let arr_proto_flat_fn = Func::wrap(&mut store,
+    let arr_proto_flat_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -385,7 +410,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_flat", arr_proto_flat_fn)?;
 
     // ── arr_proto_shift (#59) ─────────────────────────────────────────
-    let arr_proto_shift_fn = Func::wrap(&mut store,
+    let arr_proto_shift_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -413,7 +439,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_shift", arr_proto_shift_fn)?;
 
     // ── arr_proto_unshift (#60) ───────────────────────────────────────
-    let arr_proto_unshift_fn = Func::wrap(&mut store,
+    let arr_proto_unshift_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -454,7 +481,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_unshift", arr_proto_unshift_fn)?;
 
     // ── arr_proto_sort (#61) ──────────────────────────────────────────
-    let arr_proto_sort_fn = Func::wrap(&mut store,
+    let arr_proto_sort_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -519,7 +547,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_sort", arr_proto_sort_fn)?;
 
     // ── arr_proto_at (#62) ────────────────────────────────────────────
-    let arr_proto_at_fn = Func::wrap(&mut store,
+    let arr_proto_at_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -552,7 +581,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_at", arr_proto_at_fn)?;
 
     // ── arr_proto_copy_within (#63) ──────────────────────────────────
-    let arr_proto_copy_within_fn = Func::wrap(&mut store,
+    let arr_proto_copy_within_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -617,10 +647,16 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
             this_val
         },
     );
-    linker.define(&mut store, "env", "arr_proto_copy_within", arr_proto_copy_within_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "arr_proto_copy_within",
+        arr_proto_copy_within_fn,
+    )?;
 
     // ── arr_proto_for_each (#64) ─────────────────────────────────────
-    let arr_proto_for_each_fn = Func::wrap(&mut store,
+    let arr_proto_for_each_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -653,10 +689,16 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
             value::encode_undefined()
         },
     );
-    linker.define(&mut store, "env", "arr_proto_for_each", arr_proto_for_each_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "arr_proto_for_each",
+        arr_proto_for_each_fn,
+    )?;
 
     // ── arr_proto_map (#65) ──────────────────────────────────────────
-    let arr_proto_map_fn = Func::wrap(&mut store,
+    let arr_proto_map_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -699,7 +741,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_map", arr_proto_map_fn)?;
 
     // ── arr_proto_filter (#66) ───────────────────────────────────────
-    let arr_proto_filter_fn = Func::wrap(&mut store,
+    let arr_proto_filter_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -748,7 +791,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_filter", arr_proto_filter_fn)?;
 
     // ── arr_proto_reduce (#67) ────────────────────────────────────────
-    let arr_proto_reduce_fn = Func::wrap(&mut store,
+    let arr_proto_reduce_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -803,7 +847,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_reduce", arr_proto_reduce_fn)?;
 
     // ── arr_proto_reduce_right (#68) ──────────────────────────────────
-    let arr_proto_reduce_right_fn = Func::wrap(&mut store,
+    let arr_proto_reduce_right_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -856,10 +901,16 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
             acc
         },
     );
-    linker.define(&mut store, "env", "arr_proto_reduce_right", arr_proto_reduce_right_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "arr_proto_reduce_right",
+        arr_proto_reduce_right_fn,
+    )?;
 
     // ── arr_proto_find (#69) ──────────────────────────────────────────
-    let arr_proto_find_fn = Func::wrap(&mut store,
+    let arr_proto_find_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -883,10 +934,10 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
                     cb,
                     value::encode_undefined(),
                     &[elem, idx_val, this_val],
-                )
-                    && value::is_truthy(r) {
-                        return elem;
-                    }
+                ) && value::is_truthy(r)
+                {
+                    return elem;
+                }
             }
             value::encode_undefined()
         },
@@ -894,7 +945,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_find", arr_proto_find_fn)?;
 
     // ── arr_proto_find_index (#70) ────────────────────────────────────
-    let arr_proto_find_index_fn = Func::wrap(&mut store,
+    let arr_proto_find_index_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -918,18 +970,24 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
                     cb,
                     value::encode_undefined(),
                     &[elem, idx_val, this_val],
-                )
-                    && value::is_truthy(r) {
-                        return value::encode_f64(i as f64);
-                    }
+                ) && value::is_truthy(r)
+                {
+                    return value::encode_f64(i as f64);
+                }
             }
             value::encode_f64(-1.0)
         },
     );
-    linker.define(&mut store, "env", "arr_proto_find_index", arr_proto_find_index_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "arr_proto_find_index",
+        arr_proto_find_index_fn,
+    )?;
 
     // ── arr_proto_some (#71) ─────────────────────────────────────────
-    let arr_proto_some_fn = Func::wrap(&mut store,
+    let arr_proto_some_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -953,10 +1011,10 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
                     cb,
                     value::encode_undefined(),
                     &[elem, idx_val, this_val],
-                )
-                    && value::is_truthy(r) {
-                        return value::encode_bool(true);
-                    }
+                ) && value::is_truthy(r)
+                {
+                    return value::encode_bool(true);
+                }
             }
             value::encode_bool(false)
         },
@@ -964,7 +1022,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_some", arr_proto_some_fn)?;
 
     // ── arr_proto_every (#72) ────────────────────────────────────────
-    let arr_proto_every_fn = Func::wrap(&mut store,
+    let arr_proto_every_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -1003,7 +1062,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_every", arr_proto_every_fn)?;
 
     // ── arr_proto_flat_map (#73) ─────────────────────────────────────
-    let arr_proto_flat_map_fn = Func::wrap(&mut store,
+    let arr_proto_flat_map_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -1059,10 +1119,16 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
             new_arr
         },
     );
-    linker.define(&mut store, "env", "arr_proto_flat_map", arr_proto_flat_map_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "arr_proto_flat_map",
+        arr_proto_flat_map_fn,
+    )?;
 
     // ── arr_proto_splice (#74) ───────────────────────────────────────
-    let arr_proto_splice_fn = Func::wrap(&mut store,
+    let arr_proto_splice_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          this_val: i64,
@@ -1154,7 +1220,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "arr_proto_splice", arr_proto_splice_fn)?;
 
     // ── arr_proto_is_array (#75) ──────────────────────────────────────
-    let arr_proto_is_array_fn = Func::wrap(&mut store,
+    let arr_proto_is_array_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          _this_val: i64,
@@ -1165,10 +1232,16 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
             value::encode_bool(value::is_array(val))
         },
     );
-    linker.define(&mut store, "env", "arr_proto_is_array", arr_proto_is_array_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "arr_proto_is_array",
+        arr_proto_is_array_fn,
+    )?;
 
     // ── abort_shadow_stack_overflow (#76) ─────────────────────────────
-    let abort_shadow_stack_overflow_fn = Func::wrap(&mut store,
+    let abort_shadow_stack_overflow_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, shadow_sp: i32, args_bytes: i32, stack_end: i32| {
             let mut buffer = caller
                 .data()
@@ -1188,11 +1261,17 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
             ));
         },
     );
-    linker.define(&mut store, "env", "abort_shadow_stack_overflow", abort_shadow_stack_overflow_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "abort_shadow_stack_overflow",
+        abort_shadow_stack_overflow_fn,
+    )?;
 
     // ── func_call (#78): Function.prototype.call ────────────────────────────
     // 签名: (i64 func, i64 this_val, i64 args_base, i32 args_count) -> i64
-    let func_call_fn = Func::wrap(&mut store,
+    let func_call_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          func: i64,
          this_val: i64,
@@ -1203,7 +1282,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "func_call", func_call_fn)?;
 
     // ── func_apply (#79): Function.prototype.apply ──────────────────────────
-    let func_apply_fn = Func::wrap(&mut store,
+    let func_apply_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, func: i64, this_val: i64, args_array: i64| -> i64 {
             func_apply_impl(&mut caller, func, this_val, args_array)
         },
@@ -1211,7 +1291,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "func_apply", func_apply_fn)?;
 
     // ── func_bind (#80): Function.prototype.bind ────────────────────────────
-    let func_bind_fn = Func::wrap(&mut store,
+    let func_bind_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          func: i64,
          this_val: i64,
@@ -1222,7 +1303,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "func_bind", func_bind_fn)?;
 
     // ── object_rest (#81): Exclude specified keys from object ───────────────
-    let object_rest_fn = Func::wrap(&mut store,
+    let object_rest_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, excluded_keys: i64| -> i64 {
             object_rest_impl(&mut caller, obj, excluded_keys)
         },
@@ -1230,7 +1312,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "object_rest", object_rest_fn)?;
 
     // ── obj_spread (#82): Copy own enumerable properties ────────────────────
-    let obj_spread_fn = Func::wrap(&mut store,
+    let obj_spread_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, dest: i64, source: i64| {
             obj_spread_impl(&mut caller, dest, source);
         },
@@ -1238,7 +1321,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     linker.define(&mut store, "env", "obj_spread", obj_spread_fn)?;
 
     // ── Import 83: has_own_property(i64, i32) -> i64 ──────────────────────────
-    let has_own_property_fn = Func::wrap(&mut store,
+    let has_own_property_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_ptr: i32| -> i64 {
             if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
                 *caller
@@ -1258,7 +1342,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     );
     linker.define(&mut store, "env", "has_own_property", has_own_property_fn)?;
     // ── Import 84: obj_keys(i64) -> i64 ───────────────────────────────────────
-    let obj_keys_fn = Func::wrap(&mut store,
+    let obj_keys_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
             let Some(ptr) = resolve_handle(&mut caller, obj) else {
                 return value::encode_undefined();
@@ -1278,7 +1363,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     );
     linker.define(&mut store, "env", "obj_keys", obj_keys_fn)?;
     // ── Import 85: obj_values(i64) -> i64 ─────────────────────────────────────
-    let obj_values_fn = Func::wrap(&mut store,
+    let obj_values_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
             let Some(ptr) = resolve_handle(&mut caller, obj) else {
                 return value::encode_undefined();
@@ -1297,7 +1383,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     );
     linker.define(&mut store, "env", "obj_values", obj_values_fn)?;
     // ── Import 86: obj_entries(i64) -> i64 ────────────────────────────────────
-    let obj_entries_fn = Func::wrap(&mut store,
+    let obj_entries_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
             let Some(ptr) = resolve_handle(&mut caller, obj) else {
                 return value::encode_undefined();
@@ -1327,7 +1414,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     );
     linker.define(&mut store, "env", "obj_entries", obj_entries_fn)?;
     // ── Import 87: obj_assign(i64, i64, i32, i32) -> i64 ──────────────────────
-    let obj_assign_fn = Func::wrap(&mut store,
+    let obj_assign_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          _env: i64,
          target: i64,
@@ -1508,7 +1596,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     );
     linker.define(&mut store, "env", "obj_assign", obj_assign_fn)?;
     // ── Import 88: obj_create(i64, i64) -> i64 ────────────────────────────────
-    let obj_create_fn = Func::wrap(&mut store,
+    let obj_create_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, proto: i64, _properties: i64| -> i64 {
             let obj_handle = alloc_object(&mut caller, 0);
             if !value::is_null(proto) && !value::is_undefined(proto) {
@@ -1530,31 +1619,19 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     );
     linker.define(&mut store, "env", "obj_create", obj_create_fn)?;
     // ── Import 89: obj_get_proto_of(i64) -> i64 ───────────────────────────────
-    let obj_get_proto_of_fn = Func::wrap(&mut store,
+    let obj_get_proto_of_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+            if !value::is_js_object(obj) {
                 return value::encode_undefined();
             };
-            let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
-                return value::encode_undefined();
-            };
-            let d = mem.data(&caller);
-            if ptr + 4 > d.len() {
-                return value::encode_undefined();
-            }
-            let proto_handle = u32::from_le_bytes([d[ptr], d[ptr + 1], d[ptr + 2], d[ptr + 3]]);
-            if proto_handle == 0xFFFF_FFFF || proto_handle == 0 {
-                return value::encode_null();
-            }
-            let Some(_proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
-                return value::encode_null();
-            };
-            value::encode_object_handle(proto_handle)
+            proxy_or_target_get_prototype_of_impl(&mut caller, obj)
         },
     );
     linker.define(&mut store, "env", "obj_get_proto_of", obj_get_proto_of_fn)?;
     // ── Import 90: obj_set_proto_of(i64, i64) -> i64 ──────────────────────────
-    let obj_set_proto_of_fn = Func::wrap(&mut store,
+    let obj_set_proto_of_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, proto: i64| -> i64 {
             if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
                 return obj; // primitive → no-op per spec
@@ -1625,7 +1702,8 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     );
     linker.define(&mut store, "env", "obj_set_proto_of", obj_set_proto_of_fn)?;
     // ── Import 91: obj_get_own_prop_names(i64) -> i64 ─────────────────────────
-    let obj_get_own_prop_names_fn = Func::wrap(&mut store,
+    let obj_get_own_prop_names_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
             let Some(ptr) = resolve_handle(&mut caller, obj) else {
                 return value::encode_undefined();
@@ -1643,9 +1721,15 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
             arr
         },
     );
-    linker.define(&mut store, "env", "obj_get_own_prop_names", obj_get_own_prop_names_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "obj_get_own_prop_names",
+        obj_get_own_prop_names_fn,
+    )?;
     // ── Import 92: obj_is(i64, i64) -> i64 ────────────────────────────────────
-    let obj_is_fn = Func::wrap(&mut store,
+    let obj_is_fn = Func::wrap(
+        &mut store,
         |_caller: Caller<'_, RuntimeState>, val1: i64, val2: i64| -> i64 {
             // SameValue (ECMAScript 7.2.11)
             // 注意: wjsm 使用 NaN-boxing 编码，NaN-boxed 值的高位与 IEEE NaN 重叠，
@@ -1679,17 +1763,29 @@ pub(crate) fn define_array_object(linker: &mut Linker<RuntimeState>, mut store: 
     );
     linker.define(&mut store, "env", "obj_is", obj_is_fn)?;
     // ── Import 93: obj_proto_to_string(i64) -> i64 ────────────────────────────
-    let obj_proto_to_string_fn = Func::wrap(&mut store,
+    let obj_proto_to_string_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
             obj_proto_to_string_impl(&mut caller, obj)
         },
     );
-    linker.define(&mut store, "env", "obj_proto_to_string", obj_proto_to_string_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "obj_proto_to_string",
+        obj_proto_to_string_fn,
+    )?;
     // ── Import 94: obj_proto_value_of(i64) -> i64 ─────────────────────────────
-    let obj_proto_value_of_fn = Func::wrap(&mut store,
+    let obj_proto_value_of_fn = Func::wrap(
+        &mut store,
         |_caller: Caller<'_, RuntimeState>, obj: i64| -> i64 { obj },
     );
-    linker.define(&mut store, "env", "obj_proto_value_of", obj_proto_value_of_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "obj_proto_value_of",
+        obj_proto_value_of_fn,
+    )?;
 
     // ═══════════════════════════════════════════════════════════════════
     // ── BigInt host functions ──────────────────────────────────────────

@@ -1154,9 +1154,9 @@ impl Compiler {
                             );
                         }
                         return Ok(false);
-                }           // closes inner else
-            }               // closes outer else
-            }               // closes Branch arm
+                    } // closes inner else
+                } // closes outer else
+            } // closes Branch arm
             _ => {
                 self.emit(WasmInstruction::Unreachable);
                 Ok(true)

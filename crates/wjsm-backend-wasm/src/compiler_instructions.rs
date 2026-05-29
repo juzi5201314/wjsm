@@ -23,7 +23,7 @@ impl Compiler {
                         .builtin_func_indices
                         .get(&Builtin::BigIntFromLiteral)
                         .copied()
-                    .expect("BigIntFromLiteral import must be registered");
+                        .expect("BigIntFromLiteral import must be registered");
                     self.emit(WasmInstruction::Call(func_idx));
                     self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 } else if let Constant::RegExp { pattern, flags } = constant {
@@ -57,7 +57,9 @@ impl Compiler {
                         // 调用 string_concat(lhs, rhs)
                         self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
                         self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::StringConcat]));
+                        self.emit(WasmInstruction::Call(
+                            self.special_host_import_indices[&SpecialHostImport::StringConcat],
+                        ));
                         // 存到 scratch
                         self.emit(WasmInstruction::LocalSet(self.string_concat_scratch_idx));
                         // 检查结果是否为 undefined（哨兵值：表示无字符串操作数）
@@ -377,7 +379,9 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key: lower 32 bits (string pointer or name_id).
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey]));
+                self.emit(WasmInstruction::Call(
+                    self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+                ));
                 // Call $obj_get(boxed, name_id) -> i64
                 self.emit(WasmInstruction::Call(self.obj_get_func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
@@ -388,7 +392,9 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey]));
+                self.emit(WasmInstruction::Call(
+                    self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+                ));
                 // Value (i64 NaN-boxed).
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 // Call $obj_set(boxed, name_id, value)
@@ -400,7 +406,9 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key: lower 32 bits.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key.0)));
-                self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey]));
+                self.emit(WasmInstruction::Call(
+                    self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+                ));
                 // Call $obj_delete(boxed, name_id) -> i64 (NaN-boxed bool)
                 self.emit(WasmInstruction::Call(self.obj_delete_func_idx));
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
@@ -763,7 +771,9 @@ impl Compiler {
             Some(value) => self.emit(WasmInstruction::LocalGet(self.local_idx(value.0))),
             None => self.emit(WasmInstruction::I64Const(value::encode_undefined())),
         }
-        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::NewTargetSet]));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NewTargetSet],
+        ));
         self.emit(WasmInstruction::LocalSet(saved_new_target));
 
         // Step 1: 保存 shadow_sp 到 scratch local
@@ -804,7 +814,9 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const(args.len() as i32));
-        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::NativeCall]));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NativeCall],
+        ));
         self.emit(WasmInstruction::Else);
 
         // TAG_PROXY 检测: 代理调用走 ProxyApply/ProxyConstruct 宿主函数
@@ -822,9 +834,13 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const(args.len() as i32));
         if new_target.is_some() {
-            self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ProxyConstruct]));
+            self.emit(WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ProxyConstruct],
+            ));
         } else {
-            self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ProxyApply]));
+            self.emit(WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ProxyApply],
+            ));
         }
         self.emit(WasmInstruction::Else);
 
@@ -839,11 +855,15 @@ impl Compiler {
         self.emit(WasmInstruction::If(BlockType::Empty));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc]));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc],
+        ));
         self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv]));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv],
+        ));
         self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
         self.emit(WasmInstruction::Else);
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
@@ -869,7 +889,9 @@ impl Compiler {
 
         // Step 4: 恢复 new.target 和 shadow_sp
         self.emit(WasmInstruction::LocalGet(saved_new_target));
-        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::NewTargetSet]));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NewTargetSet],
+        ));
         self.emit(WasmInstruction::Drop);
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
@@ -1085,7 +1107,9 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const(parts.len() as i32));
         // 调用 import 17: string_concat_va
-        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::StringConcatVa]));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::StringConcatVa],
+        ));
         // 先保存返回值
         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
         // 恢复 shadow_sp
@@ -1132,7 +1156,9 @@ impl Compiler {
         if is_prop {
             self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
             self.emit(WasmInstruction::LocalGet(self.local_idx(k.0)));
-            self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey]));
+            self.emit(WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+            ));
             self.emit(WasmInstruction::Call(self.obj_get_func_idx));
         } else {
             // OptionalGetElem: object, to_int32(key)
@@ -1206,11 +1232,15 @@ impl Compiler {
         self.emit(WasmInstruction::If(BlockType::Empty));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc]));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc],
+        ));
         self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I32WrapI64);
-        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv]));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv],
+        ));
         self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
         self.emit(WasmInstruction::Else);
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
@@ -1242,7 +1272,9 @@ impl Compiler {
     pub(crate) fn compile_object_spread(&mut self, dest: &ValueId, source: &ValueId) -> Result<()> {
         self.emit(WasmInstruction::LocalGet(self.local_idx(dest.0)));
         self.emit(WasmInstruction::LocalGet(self.local_idx(source.0)));
-        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ObjSpread]));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ObjSpread],
+        ));
         Ok(())
     }
 

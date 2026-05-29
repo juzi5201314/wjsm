@@ -79,9 +79,7 @@ impl FixtureRunner {
         let expected_path = input_path.with_extension("expected");
         let relative_path = input_path
             .strip_prefix(&self.fixtures_root)
-            .with_context(|| {
-                format!("Failed to build relative path for {}", input_path.display())
-            })?
+            .with_context(|| format!("Failed to build relative path for {}", input_path.display()))?
             .to_path_buf();
 
         let fixture = FixtureCase {

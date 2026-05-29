@@ -1120,6 +1120,13 @@ pub(crate) fn resolve_callable_and_call(
                 );
                 return value::encode_undefined();
             }
+            if !is_callable_in_runtime(caller, entry.target) {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Proxy target must be callable".to_string(),
+                );
+                return value::encode_undefined();
+            }
             // 查找 apply trap
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "apply")

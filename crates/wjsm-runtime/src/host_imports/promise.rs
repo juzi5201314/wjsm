@@ -1,11 +1,15 @@
 use anyhow::Result;
-use wasmtime::{Caller, Linker, Func};
 use wasmtime::Store;
+use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
-pub(crate) fn define_promise(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
-    let promise_create_fn = Func::wrap(&mut store,
+pub(crate) fn define_promise(
+    linker: &mut Linker<RuntimeState>,
+    mut store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    let promise_create_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, _arg: i64| -> i64 {
             let promise = alloc_object(&mut caller, 0);
             let handle = value::decode_object_handle(promise) as usize;
@@ -21,23 +25,36 @@ pub(crate) fn define_promise(linker: &mut Linker<RuntimeState>, mut store: &mut 
     linker.define(&mut store, "env", "promise_create", promise_create_fn)?;
 
     // ── Import 117: promise_instance_resolve(i64, i64) -> () ───────────────
-    let promise_instance_resolve_fn = Func::wrap(&mut store,
+    let promise_instance_resolve_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, promise: i64, value: i64| {
             resolve_promise_from_caller(&mut caller, promise, value);
         },
     );
-    linker.define(&mut store, "env", "promise_instance_resolve", promise_instance_resolve_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "promise_instance_resolve",
+        promise_instance_resolve_fn,
+    )?;
 
     // ── Import 118: promise_instance_reject(i64, i64) -> () ────────────────
-    let promise_instance_reject_fn = Func::wrap(&mut store,
+    let promise_instance_reject_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, promise: i64, reason: i64| {
             settle_promise(caller.data(), promise, PromiseSettlement::Reject(reason));
         },
     );
-    linker.define(&mut store, "env", "promise_instance_reject", promise_instance_reject_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "promise_instance_reject",
+        promise_instance_reject_fn,
+    )?;
 
     // ── Import 142: promise_create_resolve_function(i64) -> i64 ─────────────
-    let promise_create_resolve_function_fn = Func::wrap(&mut store,
+    let promise_create_resolve_function_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, promise: i64| -> i64 {
             let handle = raw_promise_handle(promise);
             let already_resolved = {
@@ -61,10 +78,16 @@ pub(crate) fn define_promise(linker: &mut Linker<RuntimeState>, mut store: &mut 
             )
         },
     );
-    linker.define(&mut store, "env", "promise_create_resolve_function", promise_create_resolve_function_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "promise_create_resolve_function",
+        promise_create_resolve_function_fn,
+    )?;
 
     // ── Import 143: promise_create_reject_function(i64) -> i64 ──────────────
-    let promise_create_reject_function_fn = Func::wrap(&mut store,
+    let promise_create_reject_function_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, promise: i64| -> i64 {
             let handle = raw_promise_handle(promise);
             let already_resolved = {
@@ -89,10 +112,16 @@ pub(crate) fn define_promise(linker: &mut Linker<RuntimeState>, mut store: &mut 
             )
         },
     );
-    linker.define(&mut store, "env", "promise_create_reject_function", promise_create_reject_function_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "promise_create_reject_function",
+        promise_create_reject_function_fn,
+    )?;
 
     // ── Import 119: promise_then(i64, i64, i64) -> i64 ─────────────────────
-    let promise_then_fn = Func::wrap(&mut store,
+    let promise_then_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          promise: i64,
          on_fulfilled: i64,
@@ -159,7 +188,8 @@ pub(crate) fn define_promise(linker: &mut Linker<RuntimeState>, mut store: &mut 
     linker.define(&mut store, "env", "promise_then", promise_then_fn)?;
 
     // ── Import 120: promise_catch(i64, i64) -> i64 ──────────────────────────
-    let promise_catch_fn = Func::wrap(&mut store,
+    let promise_catch_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, promise: i64, on_rejected: i64| -> i64 {
             let handle = raw_promise_handle(promise);
             let result_promise = alloc_object(&mut caller, 0);
@@ -221,7 +251,8 @@ pub(crate) fn define_promise(linker: &mut Linker<RuntimeState>, mut store: &mut 
     linker.define(&mut store, "env", "promise_catch", promise_catch_fn)?;
 
     // ── Import 121: promise_finally(i64, i64) -> i64 ────────────────────────
-    let promise_finally_fn = Func::wrap(&mut store,
+    let promise_finally_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, promise: i64, on_finally: i64| -> i64 {
             let handle = raw_promise_handle(promise);
             let result_promise = alloc_object(&mut caller, 0);
@@ -283,7 +314,8 @@ pub(crate) fn define_promise(linker: &mut Linker<RuntimeState>, mut store: &mut 
     linker.define(&mut store, "env", "promise_finally", promise_finally_fn)?;
 
     // §27.2.4.6 Promise.resolve(C, x) — species-aware
-    let promise_resolve_static_fn = Func::wrap(&mut store,
+    let promise_resolve_static_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, constructor: i64, val: i64| -> i64 {
             // 若 x 是 promise，检查 SameValue(x.constructor, C)
             if is_promise_value(caller.data(), val) {
@@ -319,11 +351,17 @@ pub(crate) fn define_promise(linker: &mut Linker<RuntimeState>, mut store: &mut 
             promise
         },
     );
-    linker.define(&mut store, "env", "promise_resolve_static", promise_resolve_static_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "promise_resolve_static",
+        promise_resolve_static_fn,
+    )?;
 
     // ── Import 127: promise_reject_static(i64, i64) -> i64 ────────────
     // §27.2.4.5 Promise.reject(C, r) — species-aware
-    let promise_reject_static_fn = Func::wrap(&mut store,
+    let promise_reject_static_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, constructor: i64, reason: i64| -> i64 {
             // NewPromiseCapability(C) + reject(r)
             let mut entry = PromiseEntry::rejected(reason);
@@ -333,26 +371,41 @@ pub(crate) fn define_promise(linker: &mut Linker<RuntimeState>, mut store: &mut 
             alloc_promise_from_caller(&mut caller, entry)
         },
     );
-    linker.define(&mut store, "env", "promise_reject_static", promise_reject_static_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "promise_reject_static",
+        promise_reject_static_fn,
+    )?;
 
     // ── Import 145: promise_with_resolvers(i64) -> i64 ────────────────
     // §27.2.3.9 Promise.withResolvers(C) — ES2024
-    let promise_with_resolvers_fn = Func::wrap(&mut store,
+    let promise_with_resolvers_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, constructor: i64| -> i64 {
             let (promise, resolve, reject) =
                 new_promise_capability_from_caller(&mut caller, constructor);
             // 创建 { promise, resolve, reject } 对象
-            let obj = { let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv"); alloc_host_object(&mut caller, &_wjsm_env, 3) };
+            let obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 3)
+            };
             define_host_data_property_from_caller(&mut caller, obj, "promise", promise);
             define_host_data_property_from_caller(&mut caller, obj, "resolve", resolve);
             define_host_data_property_from_caller(&mut caller, obj, "reject", reject);
             obj
         },
     );
-    linker.define(&mut store, "env", "promise_with_resolvers", promise_with_resolvers_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "promise_with_resolvers",
+        promise_with_resolvers_fn,
+    )?;
 
     // ── Import 128: is_promise(i64) -> i64 ──────────────────────────────────
-    let is_promise_fn = Func::wrap(&mut store,
+    let is_promise_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
             value::encode_bool(is_promise_value(caller.data(), val))
         },

@@ -1,5 +1,5 @@
 use super::*;
-use crate::host_import_registry::{host_import_specs, SpecialHostImport};
+use crate::host_import_registry::{SpecialHostImport, host_import_specs};
 
 impl Compiler {
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -35,11 +35,15 @@ impl Compiler {
 
         func.instruction(&WasmInstruction::LocalGet(callee_local));
         func.instruction(&WasmInstruction::I32WrapI64);
-        func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc]));
+        func.instruction(&WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc],
+        ));
         func.instruction(&WasmInstruction::LocalSet(func_idx_local));
         func.instruction(&WasmInstruction::LocalGet(callee_local));
         func.instruction(&WasmInstruction::I32WrapI64);
-        func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv]));
+        func.instruction(&WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv],
+        ));
         func.instruction(&WasmInstruction::LocalSet(env_obj_local));
 
         func.instruction(&WasmInstruction::Else);
@@ -151,7 +155,9 @@ impl Compiler {
         // Register array prototype method imports in function table
         let arr_proto_base = self.function_table.len() as u32;
         for (idx, spec) in host_import_specs().iter().enumerate() {
-            if spec.group == Some(crate::host_import_registry::HostImportGroup::ArrayPrototypeMethod) {
+            if spec.group
+                == Some(crate::host_import_registry::HostImportGroup::ArrayPrototypeMethod)
+            {
                 self.push_func_table(idx as u32);
             }
         }

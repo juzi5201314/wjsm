@@ -115,7 +115,9 @@ pub(crate) fn decrement_combinator_remaining(
     }
 }
 
-pub(crate) fn handle_combinator_reaction<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+pub(crate) fn handle_combinator_reaction<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
     ctx: &mut C,
     env: &WasmEnv,
     handler: i64,
@@ -161,8 +163,9 @@ pub(crate) fn handle_combinator_reaction<C: AsContextMut<Data = RuntimeState> + 
                 PromiseCombinatorReactionKind::AllSettledReject => ("rejected", "reason"),
                 _ => unreachable!(),
             };
-            let record =
-                crate::runtime_heap::alloc_all_settled_result(ctx, env, status, value_name, argument);
+            let record = crate::runtime_heap::alloc_all_settled_result(
+                ctx, env, status, value_name, argument,
+            );
             if let Some(result_ptr) = resolve_array_ptr_with_env(ctx, env, result_array) {
                 write_array_elem_with_env(ctx, env, result_ptr, index as u32, record);
             }

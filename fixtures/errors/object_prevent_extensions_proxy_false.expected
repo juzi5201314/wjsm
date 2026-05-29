@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+preventExtensions trap called
+--- stderr ---
+Runtime error: TypeError: Object.preventExtensions proxy trap returned falsy

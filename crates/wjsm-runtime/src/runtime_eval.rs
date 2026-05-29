@@ -195,7 +195,11 @@ pub(crate) fn compiled_eval_import(
         "create_mapped_arguments_object" => {
             return Func::wrap(
                 &mut *caller,
-                |mut caller: Caller<'_, RuntimeState>, args_array: i64, param_count: i64, func_ref: i64| -> i64 {
+                |mut caller: Caller<'_, RuntimeState>,
+                 args_array: i64,
+                 param_count: i64,
+                 func_ref: i64|
+                 -> i64 {
                     create_mapped_arguments_object(&mut caller, args_array, param_count, func_ref)
                 },
             );
@@ -271,7 +275,9 @@ pub(crate) fn perform_eval_from_caller(
     // 如果调用上下文有 arguments 绑定且 eval 代码声明了某个同名绑定 → SyntaxError
     if let Some(env) = scope_env {
         let handle = value::decode_scope_record_handle(env);
-        let has_arguments = caller.data().scope_records
+        let has_arguments = caller
+            .data()
+            .scope_records
             .get(&handle)
             .map(|r| r.has_arguments_binding)
             .unwrap_or(false);
@@ -988,7 +994,6 @@ pub(crate) fn eval_to_number(val: i64) -> f64 {
     }
 }
 
-
 pub(crate) fn eval_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
     if value::is_string(val) {
         read_value_string_bytes(caller, val)
@@ -1028,11 +1033,7 @@ pub(crate) fn to_property_key(caller: &mut Caller<'_, RuntimeState>, val: i64) -
     eval_to_string(caller, key)
 }
 
-
-pub(crate) fn scope_record_create(
-    mut caller: Caller<'_, RuntimeState>,
-    capacity: i64,
-) -> i64 {
+pub(crate) fn scope_record_create(mut caller: Caller<'_, RuntimeState>, capacity: i64) -> i64 {
     let data = caller.data_mut();
     let handle = data.scope_record_next_handle;
     data.scope_record_next_handle += 1;
@@ -1042,13 +1043,16 @@ pub(crate) fn scope_record_create(
     } else {
         0
     };
-    data.scope_records.insert(handle, ScopeRecord {
-        bindings: Vec::with_capacity(cap),
-        home_object: None,
-        new_target: None,
-        has_arguments_binding: false,
-        is_strict: false,
-    });
+    data.scope_records.insert(
+        handle,
+        ScopeRecord {
+            bindings: Vec::with_capacity(cap),
+            home_object: None,
+            new_target: None,
+            has_arguments_binding: false,
+            is_strict: false,
+        },
+    );
     value::encode_scope_record_handle(handle)
 }
 
@@ -1179,10 +1183,7 @@ pub(crate) fn eval_has_binding(
     value::encode_bool(false)
 }
 
-pub(crate) fn eval_super_base(
-    caller: Caller<'_, RuntimeState>,
-    record: i64,
-) -> i64 {
+pub(crate) fn eval_super_base(caller: Caller<'_, RuntimeState>, record: i64) -> i64 {
     let handle = value::decode_scope_record_handle(record);
     if let Some(rec) = caller.data().scope_records.get(&handle) {
         if let Some(home) = rec.home_object {
@@ -1212,10 +1213,7 @@ pub(crate) fn scope_record_set_meta(
     0i64
 }
 
-pub(crate) fn scope_record_destroy(
-    mut caller: Caller<'_, RuntimeState>,
-    record: i64,
-) {
+pub(crate) fn scope_record_destroy(mut caller: Caller<'_, RuntimeState>, record: i64) {
     let handle = value::decode_scope_record_handle(record);
     caller.data_mut().scope_records.remove(&handle);
 }

@@ -1,5 +1,5 @@
 use std::collections::{BTreeSet, HashSet};
-use wjsm_backend_wasm::host_import_registry::{host_import_specs, HostImportGroup, HostImportKey};
+use wjsm_backend_wasm::host_import_registry::{HostImportGroup, HostImportKey, host_import_specs};
 use wjsm_ir::Builtin;
 
 #[test]

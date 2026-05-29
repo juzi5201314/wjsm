@@ -273,10 +273,8 @@ impl Lowerer {
                 },
             );
         } else {
-            self.current_function.append_instruction(
-                block,
-                Instruction::GetSuperBase { dest: base_val },
-            );
+            self.current_function
+                .append_instruction(block, Instruction::GetSuperBase { dest: base_val });
         }
 
         // 2. 根据 prop 类型进行属性访问

@@ -16,7 +16,10 @@ pub(crate) fn alloc_iterator_result_from_caller(
     val: i64,
     done: bool,
 ) -> i64 {
-    let obj = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 2) };
+    let obj = {
+        let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        alloc_host_object(caller, &_wjsm_env, 2)
+    };
     let _ = define_host_data_property_from_caller(caller, obj, "value", val);
     let _ = define_host_data_property_from_caller(caller, obj, "done", value::encode_bool(done));
     obj

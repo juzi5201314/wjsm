@@ -2414,9 +2414,7 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
     HostImportSpec {
         name: "proxy.construct",
         type_idx: 12,
-        key: Some(HostImportKey::Special(
-            SpecialHostImport::ProxyConstruct,
-        )),
+        key: Some(HostImportKey::Special(SpecialHostImport::ProxyConstruct)),
         group: None,
     },
 ];

@@ -439,9 +439,9 @@ impl Lowerer {
                         if self.eval_scope_record {
                             // Read new.target from scope record
                             let env = self.load_eval_scope_env(block);
-                            let name_const = self.module.add_constant(
-                                Constant::String("__wjsm_new_target".to_string()),
-                            );
+                            let name_const = self
+                                .module
+                                .add_constant(Constant::String("__wjsm_new_target".to_string()));
                             let name_val = self.alloc_value();
                             self.current_function.append_instruction(
                                 block,

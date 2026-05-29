@@ -56,7 +56,9 @@ impl Lowerer {
                 let val = self.lower_expr(expr, body_entry)?;
                 // 如果表达式 lowered 时产生了分支（如三元运算符），body_entry 已经被 set_terminator，
                 // 此时需要在 merge block 处加 Return，而不是覆盖 body_entry 的 Branch。
-                let has_branch = self.current_function.block(body_entry)
+                let has_branch = self
+                    .current_function
+                    .block(body_entry)
                     .map(|b| !matches!(b.terminator(), Terminator::Unreachable))
                     .unwrap_or(false);
                 if has_branch {

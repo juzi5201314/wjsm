@@ -286,7 +286,6 @@ pub fn encode_exception(handle: u32) -> i64 {
     encode_handle(TAG_EXCEPTION, handle)
 }
 
-
 pub fn is_iterator(val: i64) -> bool {
     let uval = val as u64;
     (uval & BOX_BASE) == BOX_BASE && ((uval >> 32) & TAG_MASK) == TAG_ITERATOR
@@ -351,10 +350,14 @@ pub fn is_callable(val: i64) -> bool {
     is_function(val) || is_closure(val) || is_bound(val) || is_native_callable(val)
 }
 pub fn is_js_object(val: i64) -> bool {
-    is_object(val) || is_array(val) || is_function(val) || is_closure(val)
-        || is_bound(val) || is_proxy(val) || is_native_callable(val)
+    is_object(val)
+        || is_array(val)
+        || is_function(val)
+        || is_closure(val)
+        || is_bound(val)
+        || is_proxy(val)
+        || is_native_callable(val)
 }
-
 
 // ── Bound function ────────────────────────────────────────────────────
 

@@ -194,7 +194,8 @@ impl Lowerer {
                         if let Some(ta_builtin) =
                             builtin_from_typedarray_proto_method(&prop_ident.sym)
                             && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
-                            && self.is_typedarray_binding(receiver_ident) {
+                            && self.is_typedarray_binding(receiver_ident)
+                        {
                             this_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![this_val];
                             for arg in &call.args {
@@ -592,7 +593,10 @@ impl Lowerer {
 
         // 6. Set meta: has_arguments (key=1)
         let args_key = self.const_val_i64(eval_block, 1);
-        let args_val = self.const_val_i64(eval_block, if self.eval_caller_has_arguments { 1 } else { 0 });
+        let args_val = self.const_val_i64(
+            eval_block,
+            if self.eval_caller_has_arguments { 1 } else { 0 },
+        );
         self.current_function.append_instruction(
             eval_block,
             Instruction::CallBuiltin {
@@ -672,7 +676,8 @@ impl Lowerer {
             if self.binding_belongs_to_current_function(&binding) {
                 if self.is_shared_binding(&binding) {
                     // Shared env: write back via SetProp on the shared env
-                    let env_val = self.shared_env_value()
+                    let env_val = self
+                        .shared_env_value()
                         .expect("shared binding must have materialized env");
                     let key_val = self.append_env_key_const(continue_block, &binding);
                     self.current_function.append_instruction(
@@ -850,10 +855,8 @@ impl Lowerer {
 
     fn const_val(&mut self, block: BasicBlockId, constant: ConstantId) -> ValueId {
         let dest = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const { dest, constant },
-        );
+        self.current_function
+            .append_instruction(block, Instruction::Const { dest, constant });
         dest
     }
 
@@ -867,7 +870,8 @@ impl Lowerer {
                     if obj_ident.sym.as_ref() == "Object" {
                         if let swc_ast::MemberProp::Ident(proto_prop) = &inner_member.prop {
                             if proto_prop.sym.as_ref() == "prototype" {
-                                if let swc_ast::MemberProp::Ident(method_prop) = &outer_member.prop {
+                                if let swc_ast::MemberProp::Ident(method_prop) = &outer_member.prop
+                                {
                                     return match method_prop.sym.as_str() {
                                         "toString" => Some(Builtin::ObjectProtoToString),
                                         "valueOf" => Some(Builtin::ObjectProtoValueOf),

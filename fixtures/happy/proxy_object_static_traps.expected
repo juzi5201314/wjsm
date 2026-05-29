@@ -1,0 +1,11 @@
+exit_code: 0
+--- stdout ---
+getPrototypeOf trap
+proto: true
+isExtensible trap
+extensible before: true
+preventExtensions trap
+prevent result same proxy: true
+isExtensible trap
+extensible after: false
+--- stderr ---
