@@ -260,6 +260,10 @@ impl Lowerer {
         super_prop: &swc_ast::SuperPropExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        if !self.eval_scope_record && !self.super_allowed {
+            return Err(self.error(super_prop.span, "super is only valid inside methods"));
+        }
+
         // 1. GetSuperBase: 从 home_object 的 proto 读取基类原型
         let base_val = self.alloc_value();
         if self.eval_scope_record {
@@ -277,7 +281,8 @@ impl Lowerer {
                 .append_instruction(block, Instruction::GetSuperBase { dest: base_val });
         }
 
-        // 2. 根据 prop 类型进行属性访问
+        // 2. super 属性访问必须以当前 this 作为 receiver（访问器与方法 this 绑定依赖它）。
+        let this_val = self.lower_this(block)?;
         match &super_prop.prop {
             swc_ast::SuperProp::Ident(ident_name) => {
                 let key_str = ident_name.sym.to_string();
@@ -293,10 +298,10 @@ impl Lowerer {
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     block,
-                    Instruction::GetProp {
-                        dest,
-                        object: base_val,
-                        key: key_dest,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::ReflectGet,
+                        args: vec![base_val, key_dest, this_val],
                     },
                 );
                 Ok(dest)
@@ -306,10 +311,10 @@ impl Lowerer {
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
                     block,
-                    Instruction::GetElem {
-                        dest,
-                        object: base_val,
-                        index: key_val,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::ReflectGet,
+                        args: vec![base_val, key_val, this_val],
                     },
                 );
                 Ok(dest)

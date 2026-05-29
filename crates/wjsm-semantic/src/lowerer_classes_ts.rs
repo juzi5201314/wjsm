@@ -1,6 +1,121 @@
 use super::*;
+use swc_core::common::Span;
+use swc_core::ecma::visit::{Visit, VisitWith};
+
+#[derive(Default)]
+struct DerivedCtorPreSuperUse {
+    seen_super_call: bool,
+    invalid_span: Option<Span>,
+}
+
+impl Visit for DerivedCtorPreSuperUse {
+    fn visit_call_expr(&mut self, call: &swc_ast::CallExpr) {
+        if self.invalid_span.is_some() {
+            return;
+        }
+        if matches!(call.callee, swc_ast::Callee::Super(_)) {
+            for arg in &call.args {
+                arg.visit_with(self);
+            }
+            self.seen_super_call = true;
+            return;
+        }
+        call.visit_children_with(self);
+    }
+
+    fn visit_this_expr(&mut self, this_expr: &swc_ast::ThisExpr) {
+        if !self.seen_super_call && self.invalid_span.is_none() {
+            self.invalid_span = Some(this_expr.span);
+        }
+    }
+
+    fn visit_super_prop_expr(&mut self, super_prop: &swc_ast::SuperPropExpr) {
+        if !self.seen_super_call && self.invalid_span.is_none() {
+            self.invalid_span = Some(super_prop.span);
+        }
+    }
+
+    fn visit_function(&mut self, _: &swc_ast::Function) {}
+
+    fn visit_arrow_expr(&mut self, _: &swc_ast::ArrowExpr) {}
+
+    fn visit_class(&mut self, _: &swc_ast::Class) {}
+}
+
+fn first_pre_super_this_or_super_span(body: &swc_ast::BlockStmt) -> Option<Span> {
+    let mut visitor = DerivedCtorPreSuperUse::default();
+    body.visit_with(&mut visitor);
+    visitor.invalid_span
+}
+fn stmt_is_direct_super_call(stmt: &swc_ast::Stmt) -> bool {
+    matches!(
+        stmt,
+        swc_ast::Stmt::Expr(expr_stmt)
+            if matches!(
+                expr_stmt.expr.as_ref(),
+                swc_ast::Expr::Call(call)
+                    if matches!(call.callee, swc_ast::Callee::Super(_))
+            )
+    )
+}
 
 impl Lowerer {
+    fn emit_instance_initializers(
+        &mut self,
+        mut block: BasicBlockId,
+        this_scope_id: usize,
+        members: &[swc_ast::ClassMember],
+        private_method_ids: &[(String, bool, FunctionId)],
+    ) -> Result<BasicBlockId, LoweringError> {
+        for member in members {
+            match member {
+                swc_ast::ClassMember::PrivateProp(prop) if !prop.is_static => {
+                    let field_name = format!("#{}", prop.key.name);
+                    block = self.emit_field_init(
+                        block,
+                        this_scope_id,
+                        &field_name,
+                        prop.value.as_deref(),
+                        true,
+                    )?;
+                }
+                swc_ast::ClassMember::ClassProp(prop) if !prop.is_static => {
+                    let prop_name = match &prop.key {
+                        swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
+                        swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                        swc_ast::PropName::Num(n) => n.value.to_string(),
+                        _ => continue,
+                    };
+                    block = self.emit_field_init(
+                        block,
+                        this_scope_id,
+                        &prop_name,
+                        prop.value.as_deref(),
+                        false,
+                    )?;
+                }
+                _ => {}
+            }
+        }
+
+        for (field_name, is_static, func_id) in private_method_ids {
+            if !is_static {
+                let this_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::LoadVar {
+                        dest: this_val,
+                        name: format!("${this_scope_id}.$this"),
+                    },
+                );
+                self.emit_private_method_bind(block, this_val, field_name, *func_id);
+                block = self.resolve_store_block(block);
+            }
+        }
+
+        Ok(block)
+    }
+
     pub(crate) fn lower_class_decl(
         &mut self,
         class_decl: &swc_ast::ClassDecl,
@@ -29,6 +144,7 @@ impl Lowerer {
                 };
 
                 self.push_function_context(&fn_name, BasicBlockId(0));
+                self.super_allowed = true;
                 let env_scope_id = self
                     .scopes
                     .declare("$env", VarKind::Let, true)
@@ -92,6 +208,8 @@ impl Lowerer {
 
         let ctor_name = format!("{}.constructor", class_name);
         self.push_function_context(&ctor_name, BasicBlockId(0));
+        self.super_allowed = true;
+        self.super_call_allowed = class_decl.class.super_class.is_some();
 
         // 声明 $env（闭包环境对象）
         let env_scope_id = self
@@ -122,6 +240,16 @@ impl Lowerer {
                     param_ir_names.push(format!("${scope_id}.{name}"));
                 }
             }
+            // 派生构造器在 super() 前不能读取 this / super 属性。
+            if class_decl.class.super_class.is_some()
+                && let Some(body) = &ctor.body
+                && let Some(span) = first_pre_super_this_or_super_span(body)
+            {
+                return Err(self.error(
+                    span,
+                    "derived constructor cannot access this or super before super()",
+                ));
+            }
 
             // Predeclare hoisted vars in constructor body.
             if let Some(body) = &ctor.body {
@@ -133,50 +261,41 @@ impl Lowerer {
         self.emit_hoisted_var_initializers(entry);
 
         let mut field_block = entry;
-        for member in &class_decl.class.body {
-            match member {
-                swc_ast::ClassMember::PrivateProp(prop) if !prop.is_static => {
-                    let field_name = format!("#{}", prop.key.name);
-                    field_block = self.emit_field_init(
-                        field_block,
-                        this_scope_id,
-                        &field_name,
-                        prop.value.as_deref(),
-                        true,
-                    )?;
-                }
-                swc_ast::ClassMember::ClassProp(prop) if !prop.is_static => {
-                    let prop_name = match &prop.key {
-                        swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                        swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
-                        swc_ast::PropName::Num(n) => n.value.to_string(),
-                        _ => continue,
-                    };
-                    field_block = self.emit_field_init(
-                        field_block,
-                        this_scope_id,
-                        &prop_name,
-                        prop.value.as_deref(),
-                        false,
-                    )?;
-                }
-                _ => {}
-            }
+        if constructor.is_none() && class_decl.class.super_class.is_some() {
+            let callee = self.alloc_value();
+            self.current_function.append_instruction(
+                field_block,
+                Instruction::GetSuperConstructor { dest: callee },
+            );
+            let this_val = self.alloc_value();
+            self.current_function.append_instruction(
+                field_block,
+                Instruction::LoadVar {
+                    dest: this_val,
+                    name: format!("${this_scope_id}.$this"),
+                },
+            );
+            self.current_function.append_instruction(
+                field_block,
+                Instruction::SuperCall {
+                    dest: None,
+                    callee,
+                    this_val,
+                    args: Vec::new(),
+                    forward_args: true,
+                },
+            );
+            field_block = self.resolve_store_block(field_block);
         }
-
-        for (field_name, is_static, func_id) in &private_method_ids {
-            if !is_static {
-                let this_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    field_block,
-                    Instruction::LoadVar {
-                        dest: this_val,
-                        name: format!("${this_scope_id}.$this"),
-                    },
-                );
-                self.emit_private_method_bind(field_block, this_val, field_name, *func_id);
-                field_block = self.resolve_store_block(field_block);
-            }
+        let defer_instance_initializers =
+            constructor.is_some() && class_decl.class.super_class.is_some();
+        if !defer_instance_initializers {
+            field_block = self.emit_instance_initializers(
+                field_block,
+                this_scope_id,
+                &class_decl.class.body,
+                &private_method_ids,
+            )?;
         }
 
         // Lower constructor body.
@@ -194,12 +313,26 @@ impl Lowerer {
         if let Some(ctor) = constructor
             && let Some(body) = &ctor.body
         {
+            let mut deferred_instance_initializers_emitted = false;
             for stmt in &body.stmts {
                 // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
                 if matches!(inner_flow, StmtFlow::Terminated) {
                     continue;
                 }
                 inner_flow = self.lower_stmt(stmt, inner_flow)?;
+                if defer_instance_initializers
+                    && !deferred_instance_initializers_emitted
+                    && stmt_is_direct_super_call(stmt)
+                    && let StmtFlow::Open(block) = inner_flow
+                {
+                    inner_flow = StmtFlow::Open(self.emit_instance_initializers(
+                        block,
+                        this_scope_id,
+                        &class_decl.class.body,
+                        &private_method_ids,
+                    )?);
+                    deferred_instance_initializers_emitted = true;
+                }
             }
         }
 
@@ -225,6 +358,18 @@ impl Lowerer {
             ir_function.push_block(block);
         }
         let ctor_function_id = self.module.push_function(ir_function);
+        if let Some(function) = self.module.function_mut(ctor_function_id) {
+            function.home_object = Some(HomeObject::Prototype(ctor_function_id));
+        }
+        for (_, is_static, func_id) in &private_method_ids {
+            if let Some(function) = self.module.function_mut(*func_id) {
+                function.home_object = Some(if *is_static {
+                    HomeObject::Constructor(ctor_function_id)
+                } else {
+                    HomeObject::Prototype(ctor_function_id)
+                });
+            }
+        }
 
         // Restore the outer function context.
         self.pop_function_context();
@@ -246,7 +391,7 @@ impl Lowerer {
 
         // Create prototype object.
         let proto_dest = self.alloc_value();
-        // 计算非构造函数方法数量，作为原型对象的容量
+
         let method_count = class_decl.class.body.iter().filter(|m| {
             matches!(m, swc_ast::ClassMember::Method(m) if matches!(m.kind, swc_ast::MethodKind::Method))
         }).count() as u32;
@@ -258,6 +403,44 @@ impl Lowerer {
                 capacity: proto_capacity,
             },
         );
+
+        if let Some(super_class) = &class_decl.class.super_class {
+            let super_ctor = self.lower_expr(super_class, outer_block)?;
+            let proto_key_const = self
+                .module
+                .add_constant(Constant::String("prototype".to_string()));
+            let proto_key_dest = self.alloc_value();
+            self.current_function.append_instruction(
+                outer_block,
+                Instruction::Const {
+                    dest: proto_key_dest,
+                    constant: proto_key_const,
+                },
+            );
+            let super_proto = self.alloc_value();
+            self.current_function.append_instruction(
+                outer_block,
+                Instruction::CallBuiltin {
+                    dest: Some(super_proto),
+                    builtin: Builtin::ReflectGet,
+                    args: vec![super_ctor, proto_key_dest, super_ctor],
+                },
+            );
+            self.current_function.append_instruction(
+                outer_block,
+                Instruction::SetProto {
+                    object: proto_dest,
+                    value: super_proto,
+                },
+            );
+            self.current_function.append_instruction(
+                outer_block,
+                Instruction::SetProto {
+                    object: ctor_dest,
+                    value: super_ctor,
+                },
+            );
+        }
 
         // For each member, process according to its kind.
         let mut static_init_idx = 0u32;
@@ -277,6 +460,7 @@ impl Lowerer {
 
                             let fn_name = format!("{}.{}", class_name, method_name);
                             self.push_function_context(&fn_name, BasicBlockId(0));
+                            self.super_allowed = true;
 
                             let env_scope_id = self
                                 .scopes
@@ -337,10 +521,11 @@ impl Lowerer {
                             let m_captured = self.captured_names_stack.last().unwrap().clone();
                             m_ir_function
                                 .set_captured_names(Self::captured_display_names(&m_captured));
-                            // 设置 home_object（实例方法才有 super 访问）
-                            if !is_static {
-                                m_ir_function.home_object = Some(ctor_function_id);
-                            }
+                            m_ir_function.home_object = Some(if is_static {
+                                HomeObject::Constructor(ctor_function_id)
+                            } else {
+                                HomeObject::Prototype(ctor_function_id)
+                            });
                             for b in m_blocks {
                                 m_ir_function.push_block(b);
                             }
@@ -396,6 +581,7 @@ impl Lowerer {
 
                             let fn_name = format!("{}.{}_{}", class_name, accessor, method_name);
                             self.push_function_context(&fn_name, BasicBlockId(0));
+                            self.super_allowed = true;
 
                             let env_scope_id = self
                                 .scopes
@@ -456,9 +642,11 @@ impl Lowerer {
                             let m_captured = self.captured_names_stack.last().unwrap().clone();
                             m_ir_function
                                 .set_captured_names(Self::captured_display_names(&m_captured));
-                            if !is_static {
-                                m_ir_function.home_object = Some(ctor_function_id);
-                            }
+                            m_ir_function.home_object = Some(if is_static {
+                                HomeObject::Constructor(ctor_function_id)
+                            } else {
+                                HomeObject::Prototype(ctor_function_id)
+                            });
                             for b in m_blocks {
                                 m_ir_function.push_block(b);
                             }
@@ -506,6 +694,7 @@ impl Lowerer {
                     static_init_idx += 1;
 
                     self.push_function_context(&fn_name, BasicBlockId(0));
+                    self.super_allowed = true;
 
                     let env_scope_id = self
                         .scopes
@@ -551,6 +740,7 @@ impl Lowerer {
                     m_ir_function.set_params(param_ir_names);
                     let m_captured = self.captured_names_stack.last().unwrap().clone();
                     m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                    m_ir_function.home_object = Some(HomeObject::Constructor(ctor_function_id));
                     for b in m_blocks {
                         m_ir_function.push_block(b);
                     }
@@ -696,6 +886,7 @@ impl Lowerer {
                 };
 
                 self.push_function_context(&fn_name, BasicBlockId(0));
+                self.super_allowed = true;
                 let env_scope_id = self
                     .scopes
                     .declare("$env", VarKind::Let, true)
@@ -759,6 +950,8 @@ impl Lowerer {
 
         let ctor_name = format!("{}.constructor", class_name);
         self.push_function_context(&ctor_name, BasicBlockId(0));
+        self.super_allowed = true;
+        self.super_call_allowed = class_expr.class.super_class.is_some();
 
         // 声明 $env（闭包环境对象）
         let env_scope_id = self
@@ -788,6 +981,16 @@ impl Lowerer {
                 }
             }
 
+            if class_expr.class.super_class.is_some()
+                && let Some(body) = &ctor.body
+                && let Some(span) = first_pre_super_this_or_super_span(body)
+            {
+                return Err(self.error(
+                    span,
+                    "derived constructor cannot access this or super before super()",
+                ));
+            }
+
             if let Some(body) = &ctor.body {
                 self.predeclare_block_stmts(&body.stmts)?;
             }
@@ -797,143 +1000,41 @@ impl Lowerer {
         self.emit_hoisted_var_initializers(entry);
 
         let mut field_block = entry;
-        for member in &class_expr.class.body {
-            match member {
-                swc_ast::ClassMember::PrivateProp(prop) if !prop.is_static => {
-                    let field_name = format!("#{}", prop.key.name);
-                    let key_const = self.module.add_constant(Constant::String(field_name));
-                    let key_dest = self.alloc_value();
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::Const {
-                            dest: key_dest,
-                            constant: key_const,
-                        },
-                    );
-                    let this_val = self.alloc_value();
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::LoadVar {
-                            dest: this_val,
-                            name: format!("${this_scope_id}.$this"),
-                        },
-                    );
-                    let init_val = if let Some(value) = &prop.value {
-                        self.lower_expr(value, field_block)?
-                    } else {
-                        let ud_const = self.module.add_constant(Constant::Undefined);
-                        let ud_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            field_block,
-                            Instruction::Const {
-                                dest: ud_dest,
-                                constant: ud_const,
-                            },
-                        );
-                        ud_dest
-                    };
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::CallBuiltin {
-                            dest: None,
-                            builtin: Builtin::PrivateSet,
-                            args: vec![this_val, key_dest, init_val],
-                        },
-                    );
-                    field_block = self.resolve_store_block(field_block);
-                }
-                swc_ast::ClassMember::ClassProp(prop) if !prop.is_static => {
-                    let prop_name = match &prop.key {
-                        swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                        swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
-                        swc_ast::PropName::Num(n) => n.value.to_string(),
-                        _ => continue,
-                    };
-                    let key_const = self.module.add_constant(Constant::String(prop_name));
-                    let key_dest = self.alloc_value();
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::Const {
-                            dest: key_dest,
-                            constant: key_const,
-                        },
-                    );
-                    let this_val = self.alloc_value();
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::LoadVar {
-                            dest: this_val,
-                            name: format!("${this_scope_id}.$this"),
-                        },
-                    );
-                    let init_val = if let Some(value) = &prop.value {
-                        self.lower_expr(value, field_block)?
-                    } else {
-                        let ud_const = self.module.add_constant(Constant::Undefined);
-                        let ud_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            field_block,
-                            Instruction::Const {
-                                dest: ud_dest,
-                                constant: ud_const,
-                            },
-                        );
-                        ud_dest
-                    };
-                    self.current_function.append_instruction(
-                        field_block,
-                        Instruction::SetProp {
-                            object: this_val,
-                            key: key_dest,
-                            value: init_val,
-                        },
-                    );
-                    field_block = self.resolve_store_block(field_block);
-                }
-                _ => {}
-            }
+        if constructor.is_none() && class_expr.class.super_class.is_some() {
+            let callee = self.alloc_value();
+            self.current_function.append_instruction(
+                field_block,
+                Instruction::GetSuperConstructor { dest: callee },
+            );
+            let this_val = self.alloc_value();
+            self.current_function.append_instruction(
+                field_block,
+                Instruction::LoadVar {
+                    dest: this_val,
+                    name: format!("${this_scope_id}.$this"),
+                },
+            );
+            self.current_function.append_instruction(
+                field_block,
+                Instruction::SuperCall {
+                    dest: None,
+                    callee,
+                    this_val,
+                    args: Vec::new(),
+                    forward_args: true,
+                },
+            );
+            field_block = self.resolve_store_block(field_block);
         }
-
-        for (field_name, is_static, func_id) in &private_method_ids {
-            if !is_static {
-                let key_const = self
-                    .module
-                    .add_constant(Constant::String(field_name.clone()));
-                let key_dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    field_block,
-                    Instruction::Const {
-                        dest: key_dest,
-                        constant: key_const,
-                    },
-                );
-                let this_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    field_block,
-                    Instruction::LoadVar {
-                        dest: this_val,
-                        name: format!("${this_scope_id}.$this"),
-                    },
-                );
-                let fn_dest = self.alloc_value();
-                let fn_ref_const = self.module.add_constant(Constant::FunctionRef(*func_id));
-                self.current_function.append_instruction(
-                    field_block,
-                    Instruction::Const {
-                        dest: fn_dest,
-                        constant: fn_ref_const,
-                    },
-                );
-                self.current_function.append_instruction(
-                    field_block,
-                    Instruction::CallBuiltin {
-                        dest: None,
-                        builtin: Builtin::PrivateSet,
-                        args: vec![this_val, key_dest, fn_dest],
-                    },
-                );
-                field_block = self.resolve_store_block(field_block);
-            }
+        let defer_instance_initializers =
+            constructor.is_some() && class_expr.class.super_class.is_some();
+        if !defer_instance_initializers {
+            field_block = self.emit_instance_initializers(
+                field_block,
+                this_scope_id,
+                &class_expr.class.body,
+                &private_method_ids,
+            )?;
         }
 
         let mut inner_flow = if field_block == entry {
@@ -950,12 +1051,26 @@ impl Lowerer {
         if let Some(ctor) = constructor
             && let Some(body) = &ctor.body
         {
+            let mut deferred_instance_initializers_emitted = false;
             for stmt in &body.stmts {
                 // 严格按照 JavaScript 规范：unreachable code 是合法的，跳过而不报错
                 if matches!(inner_flow, StmtFlow::Terminated) {
                     continue;
                 }
                 inner_flow = self.lower_stmt(stmt, inner_flow)?;
+                if defer_instance_initializers
+                    && !deferred_instance_initializers_emitted
+                    && stmt_is_direct_super_call(stmt)
+                    && let StmtFlow::Open(block) = inner_flow
+                {
+                    inner_flow = StmtFlow::Open(self.emit_instance_initializers(
+                        block,
+                        this_scope_id,
+                        &class_expr.class.body,
+                        &private_method_ids,
+                    )?);
+                    deferred_instance_initializers_emitted = true;
+                }
             }
         }
 
@@ -979,10 +1094,20 @@ impl Lowerer {
             ir_function.push_block(blk);
         }
         let ctor_function_id = self.module.push_function(ir_function);
-
+        if let Some(function) = self.module.function_mut(ctor_function_id) {
+            function.home_object = Some(HomeObject::Prototype(ctor_function_id));
+        }
+        for (_, is_static, func_id) in &private_method_ids {
+            if let Some(function) = self.module.function_mut(*func_id) {
+                function.home_object = Some(if *is_static {
+                    HomeObject::Constructor(ctor_function_id)
+                } else {
+                    HomeObject::Prototype(ctor_function_id)
+                });
+            }
+        }
         self.pop_function_context();
 
-        // 在当前 block 中创建构造函数 FunctionRef 常量
         let ctor_dest = self.alloc_value();
         let ctor_ref_const = self
             .module
@@ -1010,6 +1135,44 @@ impl Lowerer {
             },
         );
 
+        if let Some(super_class) = &class_expr.class.super_class {
+            let super_ctor = self.lower_expr(super_class, block)?;
+            let proto_key_const = self
+                .module
+                .add_constant(Constant::String("prototype".to_string()));
+            let proto_key_dest = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: proto_key_dest,
+                    constant: proto_key_const,
+                },
+            );
+            let super_proto = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(super_proto),
+                    builtin: Builtin::ReflectGet,
+                    args: vec![super_ctor, proto_key_dest, super_ctor],
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProto {
+                    object: proto_dest,
+                    value: super_proto,
+                },
+            );
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProto {
+                    object: ctor_dest,
+                    value: super_ctor,
+                },
+            );
+        }
+
         // Methods (full support for all method kinds, static, and static blocks)
         let mut static_init_idx = 0u32;
         for member in &class_expr.class.body {
@@ -1027,6 +1190,7 @@ impl Lowerer {
 
                         let fn_name = format!("{}.{}", class_name, method_name);
                         self.push_function_context(&fn_name, BasicBlockId(0));
+                        self.super_allowed = true;
 
                         let env_scope_id = self
                             .scopes
@@ -1083,9 +1247,11 @@ impl Lowerer {
                         m_ir_function.set_params(method_param_ir_names);
                         let m_captured = self.captured_names_stack.last().unwrap().clone();
                         m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
-                        if !is_static {
-                            m_ir_function.home_object = Some(ctor_function_id);
-                        }
+                        m_ir_function.home_object = Some(if is_static {
+                            HomeObject::Constructor(ctor_function_id)
+                        } else {
+                            HomeObject::Prototype(ctor_function_id)
+                        });
                         for b in m_blocks {
                             m_ir_function.push_block(b);
                         }
@@ -1140,6 +1306,7 @@ impl Lowerer {
 
                         let fn_name = format!("{}.{}_{}", class_name, accessor, method_name);
                         self.push_function_context(&fn_name, BasicBlockId(0));
+                        self.super_allowed = true;
 
                         let env_scope_id = self
                             .scopes
@@ -1196,9 +1363,11 @@ impl Lowerer {
                         m_ir_function.set_params(param_ir_names);
                         let m_captured = self.captured_names_stack.last().unwrap().clone();
                         m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
-                        if !is_static {
-                            m_ir_function.home_object = Some(ctor_function_id);
-                        }
+                        m_ir_function.home_object = Some(if is_static {
+                            HomeObject::Constructor(ctor_function_id)
+                        } else {
+                            HomeObject::Prototype(ctor_function_id)
+                        });
                         for b in m_blocks {
                             m_ir_function.push_block(b);
                         }
@@ -1242,6 +1411,7 @@ impl Lowerer {
                     static_init_idx += 1;
 
                     self.push_function_context(&fn_name, BasicBlockId(0));
+                    self.super_allowed = true;
 
                     let env_scope_id = self
                         .scopes
@@ -1284,6 +1454,7 @@ impl Lowerer {
                     m_ir_function.set_params(param_ir_names);
                     let m_captured = self.captured_names_stack.last().unwrap().clone();
                     m_ir_function.set_captured_names(Self::captured_display_names(&m_captured));
+                    m_ir_function.home_object = Some(HomeObject::Constructor(ctor_function_id));
                     for b in m_blocks {
                         m_ir_function.push_block(b);
                     }

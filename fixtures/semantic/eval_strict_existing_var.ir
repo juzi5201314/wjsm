@@ -35,8 +35,11 @@ module {
     c32 = number(1)
     c33 = number(1)
     c34 = number(0)
-    c35 = string("Symbol")
-    c36 = string("x")
+    c35 = number(2)
+    c36 = string("__wjsm_super_base")
+    c37 = number(0)
+    c38 = string("Symbol")
+    c39 = string("x")
 
   fn @main [has_eval] [entry=bb0]:
     bb0:
@@ -107,35 +110,41 @@ module {
       %37 = const c33
       %38 = const c34
       call builtin.scope_record_set_meta(%26, %37, %38)
-      %39 = call builtin.eval(%24, %26)
-      %40 = is_exception %39
-      branch %40, bb2, bb1
+      %39 = const c35
+      %40 = get_super_base
+      %41 = const c36
+      %42 = const c37
+      call builtin.scope_record_add_binding(%26, %41, %40, %42, %42)
+      call builtin.scope_record_set_meta(%26, %39, %40)
+      %43 = call builtin.eval(%24, %26)
+      %44 = is_exception %43
+      branch %44, bb2, bb1
     bb1:
-      %42 = const c35
-      %43 = call builtin.eval_get_binding(%26, %42)
-      store var $0.Symbol, %43
-      %44 = const c36
-      %45 = call builtin.eval_get_binding(%26, %44)
-      store var $0.x, %45
+      %46 = const c38
+      %47 = call builtin.eval_get_binding(%26, %46)
+      store var $0.Symbol, %47
+      %48 = const c39
+      %49 = call builtin.eval_get_binding(%26, %48)
+      store var $0.x, %49
       call builtin.scope_record_destroy(%26)
       jump bb3
     bb2:
-      %41 = call builtin.exception_value(%39)
-      throw %41
+      %45 = call builtin.exception_value(%43)
+      throw %45
     bb3:
-      %46 = is_exception %39
-      branch %46, bb5, bb4
+      %50 = is_exception %43
+      branch %50, bb5, bb4
     bb4:
-      %48 = load var $0.x
-      %49 = call builtin.console.log(%48)
-      %50 = is_exception %49
-      branch %50, bb7, bb6
+      %52 = load var $0.x
+      %53 = call builtin.console.log(%52)
+      %54 = is_exception %53
+      branch %54, bb7, bb6
     bb5:
-      %47 = call builtin.exception_value(%39)
-      throw %47
+      %51 = call builtin.exception_value(%43)
+      throw %51
     bb6:
       return
     bb7:
-      %51 = call builtin.exception_value(%49)
-      throw %51
+      %55 = call builtin.exception_value(%53)
+      throw %55
 }

@@ -36,6 +36,10 @@ impl Lowerer {
             captured_names_stack: Vec::new(),
             function_scope_id_stack: Vec::new(),
             is_arrow_fn_stack: Vec::new(),
+            super_allowed: false,
+            super_call_allowed: false,
+            function_super_allowed_stack: Vec::new(),
+            function_super_call_allowed_stack: Vec::new(),
             shared_env_stack: Vec::new(),
             current_module_id: None,
             import_bindings: std::collections::HashMap::new(),
@@ -150,6 +154,11 @@ impl Lowerer {
         self.function_scope_id_stack.push(fn_scope_id);
         self.captured_names_stack.push(Vec::new());
         self.is_arrow_fn_stack.push(false); // 默认非箭头函数，箭头函数会单独设置
+        self.function_super_allowed_stack.push(self.super_allowed);
+        self.function_super_call_allowed_stack
+            .push(self.super_call_allowed);
+        self.super_allowed = false;
+        self.super_call_allowed = false;
         self.shared_env_stack.push(None); // 新函数上下文，尚无共享 env 对象
         self.function_hoisted_stack.push((
             std::mem::take(&mut self.hoisted_vars),
@@ -179,6 +188,14 @@ impl Lowerer {
         self.function_scope_id_stack.pop();
         self.captured_names_stack.pop();
         self.is_arrow_fn_stack.pop();
+        self.super_allowed = self
+            .function_super_allowed_stack
+            .pop()
+            .expect("super context stack underflow");
+        self.super_call_allowed = self
+            .function_super_call_allowed_stack
+            .pop()
+            .expect("super call context stack underflow");
         self.shared_env_stack.pop();
         let (vars, set) = self
             .function_hoisted_stack

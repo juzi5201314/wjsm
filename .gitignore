@@ -7,6 +7,7 @@ codedb.snapshot
 .gitnexus
 
 .codegraph/
+.mcp.json
 
 # AI workspace cache (local only)
 .antigravity/

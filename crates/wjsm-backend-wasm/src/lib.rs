@@ -8,7 +8,8 @@ use wasm_encoder::{
 };
 use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction,
-    Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, constants, value,
+    HomeObject, Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, constants,
+    value,
 };
 
 pub mod host_import_registry;
@@ -154,6 +155,10 @@ struct Compiler {
     /// WASM local index for continuation handle (used in async state machine functions).
     continuation_local_idx: u32,
     current_function_has_eval: bool,
+    /// 当前正在编译的 JS 函数 [[HomeObject]]，用于生成 super base。
+    current_home_object: Option<HomeObject>,
+    /// 当前正在编译的 JS 函数 ID，用于派生构造器 super() 解析。
+    current_function_id: Option<wjsm_ir::FunctionId>,
     mode: CompileMode,
     function_param_counts: Vec<u32>,
     function_names: Vec<String>,
@@ -558,6 +563,18 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
             let max_val = callee.0.max(this_val.0).max(args_max);
             dest.map_or(max_val, |d| d.0.max(max_val))
         }
+        Instruction::SuperCall {
+            dest,
+            callee,
+            this_val,
+            args,
+            ..
+        } => args.iter().fold(
+            dest.map_or(callee.0.max(this_val.0), |d| {
+                d.0.max(callee.0).max(this_val.0)
+            }),
+            |max, arg| max.max(arg.0),
+        ),
         Instruction::ConstructCall {
             callee,
             this_val,
@@ -599,6 +616,7 @@ fn max_instruction_value_id(instruction: &Instruction) -> u32 {
         }
         Instruction::ObjectSpread { dest, source } => dest.0.max(source.0),
         Instruction::GetSuperBase { dest } => dest.0,
+        Instruction::GetSuperConstructor { dest } => dest.0,
         Instruction::NewPromise { dest } => dest.0,
         Instruction::PromiseResolve { promise, value } => promise.0.max(value.0),
         Instruction::PromiseReject { promise, reason } => promise.0.max(reason.0),

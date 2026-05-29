@@ -24,8 +24,11 @@ impl Lowerer {
                     }
                 }
 
+                if let swc_ast::Expr::SuperProp(super_prop) = expr.as_ref() {
+                    this_val = self.lower_this(block)?;
+                    callee_val = self.lower_super_prop(super_prop, block)?;
                 // 检测 MemberExpr 被调用者 → 提取 obj 作为 this
-                if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
+                } else if let swc_ast::Expr::Member(member_expr) = expr.as_ref() {
                     // 静态宿主 API（console.*, Object.*, JSON.*）不读取对象本身。
                     if let swc_ast::Expr::Ident(obj_ident) = member_expr.obj.as_ref()
                         && let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
@@ -455,11 +458,36 @@ impl Lowerer {
                 // 动态 import() 调用
                 return self.lower_dynamic_import_call(call, block);
             }
-            swc_ast::Callee::Super(_) => {
-                return Err(self.error(call.span, "super call is not supported"));
+            swc_ast::Callee::Super(super_token) => {
+                if !self.super_call_allowed {
+                    return Err(self.error(
+                        super_token.span,
+                        "super() is only valid inside derived constructors",
+                    ));
+                }
+                let callee = self.alloc_value();
+                self.current_function
+                    .append_instruction(block, Instruction::GetSuperConstructor { dest: callee });
+                let this_val = self.lower_this(block)?;
+                let mut call_block = self.resolve_store_block(block);
+                let mut args = Vec::with_capacity(call.args.len());
+                for arg in &call.args {
+                    args.push(self.lower_expr_then_continue(&arg.expr, &mut call_block)?);
+                }
+                let dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    call_block,
+                    Instruction::SuperCall {
+                        dest: Some(dest),
+                        callee,
+                        this_val,
+                        args,
+                        forward_args: false,
+                    },
+                );
+                return Ok(dest);
             }
         }
-
         // 性能优化：预分配容量避免循环中多次 reallocation
         let mut call_block = self.resolve_store_block(block);
         let mut args = Vec::with_capacity(call.args.len());
@@ -606,7 +634,46 @@ impl Lowerer {
             },
         );
 
-        // 7. Call Eval(code, scope_record)
+        // 7. Set meta: super base (key=2). 非方法上下文会得到 undefined。
+        let super_key = self.const_val_i64(eval_block, 2);
+        let super_base = self.alloc_value();
+        self.current_function
+            .append_instruction(eval_block, Instruction::GetSuperBase { dest: super_base });
+        let super_name = self
+            .module
+            .add_constant(Constant::String("__wjsm_super_base".to_string()));
+        let super_name_val = self.alloc_value();
+        self.current_function.append_instruction(
+            eval_block,
+            Instruction::Const {
+                dest: super_name_val,
+                constant: super_name,
+            },
+        );
+        let super_false = self.const_val_i64(eval_block, 0);
+        self.current_function.append_instruction(
+            eval_block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ScopeRecordAddBinding,
+                args: vec![
+                    scope_record,
+                    super_name_val,
+                    super_base,
+                    super_false,
+                    super_false,
+                ],
+            },
+        );
+        self.current_function.append_instruction(
+            eval_block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ScopeRecordSetMeta,
+                args: vec![scope_record, super_key, super_base],
+            },
+        );
+        // 8. Call Eval(code, scope_record)
         let dest = self.alloc_value();
         self.current_function.append_instruction(
             eval_block,

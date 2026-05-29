@@ -292,6 +292,8 @@ impl Compiler {
             eval_var_map_count: 0,
             continuation_local_idx: 0,
             current_function_has_eval: false,
+            current_home_object: None,
+            current_function_id: None,
             mode,
             function_param_counts: Vec::new(),
             function_names: Vec::new(),

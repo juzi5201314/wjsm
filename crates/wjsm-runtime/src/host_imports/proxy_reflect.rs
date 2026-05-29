@@ -68,12 +68,16 @@ pub(crate) fn define_proxy_reflect(
                             .unwrap_or_else(|_| value::encode_undefined());
                         }
                     }
-                    // 无 trap，转发到 target
-                    return reflect_get_impl(&mut caller, entry.target, prop);
+                    return reflect_get_impl_with_receiver(
+                        &mut caller,
+                        entry.target,
+                        prop,
+                        receiver,
+                    );
                 }
                 return value::encode_undefined();
             }
-            reflect_get_impl(&mut caller, target, prop)
+            reflect_get_impl_with_receiver(&mut caller, target, prop, receiver)
         },
     );
     linker.define(&mut store, "env", "reflect_get", reflect_get_fn)?;
@@ -730,11 +734,10 @@ pub(crate) fn define_proxy_reflect(
         }
         let proto_handle =
             u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
-        if proto_handle == 0xFFFF_FFFF {
-            value::encode_null()
-        } else {
-            value::encode_object_handle(proto_handle)
+        if proto_handle == 0 && value::is_object(target) {
+            return value::encode_null();
         }
+        prototype_handle_to_value(caller, proto_handle)
     }
 
     fn is_prototype_circular_chain(

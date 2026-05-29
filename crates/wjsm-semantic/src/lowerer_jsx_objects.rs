@@ -1,4 +1,36 @@
 use super::*;
+use swc_core::ecma::visit::{Visit, VisitWith};
+
+#[derive(Default)]
+struct ObjectMethodHomeUse {
+    needs_home: bool,
+}
+
+impl Visit for ObjectMethodHomeUse {
+    fn visit_super_prop_expr(&mut self, _: &swc_ast::SuperPropExpr) {
+        self.needs_home = true;
+    }
+
+    fn visit_call_expr(&mut self, call: &swc_ast::CallExpr) {
+        if let swc_ast::Callee::Expr(callee) = &call.callee
+            && let swc_ast::Expr::Ident(ident) = callee.as_ref()
+            && ident.sym.as_ref() == "eval"
+        {
+            self.needs_home = true;
+        }
+        call.visit_children_with(self);
+    }
+
+    fn visit_function(&mut self, _: &swc_ast::Function) {}
+
+    fn visit_class(&mut self, _: &swc_ast::Class) {}
+}
+
+fn block_needs_home_object(block: &swc_ast::BlockStmt) -> bool {
+    let mut visitor = ObjectMethodHomeUse::default();
+    block.visit_with(&mut visitor);
+    visitor.needs_home
+}
 
 impl Lowerer {
     pub(crate) fn lower_jsx_element(
@@ -758,7 +790,13 @@ impl Lowerer {
                             .body
                             .as_ref()
                             .ok_or_else(|| self.error(getter.span, "getter must have a body"))?;
-                        let fn_value = self.lower_method_to_fn(&getter.key, body, None, block)?;
+                        let home_object = if block_needs_home_object(body) {
+                            Some(obj_dest)
+                        } else {
+                            None
+                        };
+                        let fn_value =
+                            self.lower_method_to_fn(&getter.key, body, None, home_object, block)?;
                         let desc = self.build_descriptor("get", fn_value, true, true, block)?;
                         self.current_function.append_instruction(
                             block,
@@ -775,8 +813,18 @@ impl Lowerer {
                             .body
                             .as_ref()
                             .ok_or_else(|| self.error(setter.span, "setter must have a body"))?;
-                        let fn_value =
-                            self.lower_method_to_fn(&setter.key, body, Some(true), block)?;
+                        let home_object = if block_needs_home_object(body) {
+                            Some(obj_dest)
+                        } else {
+                            None
+                        };
+                        let fn_value = self.lower_method_to_fn(
+                            &setter.key,
+                            body,
+                            Some(true),
+                            home_object,
+                            block,
+                        )?;
                         let desc = self.build_descriptor("set", fn_value, true, true, block)?;
                         self.current_function.append_instruction(
                             block,
@@ -789,8 +837,22 @@ impl Lowerer {
                     }
                     swc_ast::Prop::Method(method) => {
                         let key_dest = self.lower_prop_name(&method.key, block)?;
-                        let fn_value =
-                            self.lower_method_prop_to_fn(&method.key, &method.function, block)?;
+                        let home_object = if method
+                            .function
+                            .body
+                            .as_ref()
+                            .is_some_and(block_needs_home_object)
+                        {
+                            Some(obj_dest)
+                        } else {
+                            None
+                        };
+                        let fn_value = self.lower_method_prop_to_fn(
+                            &method.key,
+                            &method.function,
+                            home_object,
+                            block,
+                        )?;
                         self.current_function.append_instruction(
                             block,
                             Instruction::SetProp {
@@ -868,16 +930,107 @@ impl Lowerer {
         val_dest: ValueId,
         block: BasicBlockId,
     ) -> Result<(), LoweringError> {
-        let key_dest = self.lower_prop_name(key, block)?;
+        let is_proto_key = match key {
+            swc_ast::PropName::Ident(ident) => ident.sym.as_ref() == "__proto__",
+            swc_ast::PropName::Str(s) => s.value.to_string_lossy().as_ref() == "__proto__",
+            _ => false,
+        };
+        if is_proto_key {
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProto {
+                    object: obj_dest,
+                    value: val_dest,
+                },
+            );
+        } else {
+            let key_dest = self.lower_prop_name(key, block)?;
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp {
+                    object: obj_dest,
+                    key: key_dest,
+                    value: val_dest,
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn create_method_env_with_home(
+        &mut self,
+        block: BasicBlockId,
+        captured: &[CapturedBinding],
+        home_object: ValueId,
+    ) -> ValueId {
+        let env_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewObject {
+                dest: env_val,
+                capacity: captured.len() as u32 + 1,
+            },
+        );
+
+        for binding in captured {
+            let current_val = if self.binding_belongs_to_current_function(binding) {
+                let current_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::LoadVar {
+                        dest: current_val,
+                        name: binding.var_ir_name(),
+                    },
+                );
+                current_val
+            } else {
+                self.record_capture(binding.clone());
+                let parent_env = self.load_env_object(block);
+                let parent_key = self.append_env_key_const(block, binding);
+                let current_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest: current_val,
+                        object: parent_env,
+                        key: parent_key,
+                    },
+                );
+                current_val
+            };
+
+            let key_val = self.append_env_key_const(block, binding);
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp {
+                    object: env_val,
+                    key: key_val,
+                    value: current_val,
+                },
+            );
+        }
+
+        let home_key = self
+            .module
+            .add_constant(Constant::String("home".to_string()));
+        let home_key_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: home_key_val,
+                constant: home_key,
+            },
+        );
         self.current_function.append_instruction(
             block,
             Instruction::SetProp {
-                object: obj_dest,
-                key: key_dest,
-                value: val_dest,
+                object: env_val,
+                key: home_key_val,
+                value: home_object,
             },
         );
-        Ok(())
+
+        env_val
     }
 
     /// 将 getter/setter 方法体编译为内联函数，返回 FunctionRef 的 ValueId
@@ -886,6 +1039,7 @@ impl Lowerer {
         key: &swc_ast::PropName,
         body: &swc_ast::BlockStmt,
         _is_setter: Option<bool>,
+        home_object: Option<ValueId>,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let method_name = match key {
@@ -897,6 +1051,7 @@ impl Lowerer {
 
         // 推入新的函数上下文（使用 push_function_context 管理作用域栈）
         self.push_function_context(&fn_name, BasicBlockId(0));
+        self.super_allowed = home_object.is_some();
 
         // 声明 $env 和 $this
         let env_scope_id = self
@@ -954,20 +1109,45 @@ impl Lowerer {
 
         self.pop_function_context();
 
-        // Create FunctionRef
-        let m_dest = self.alloc_value();
         let m_ref_const = self
             .module
             .add_constant(Constant::FunctionRef(m_function_id));
+        let func_ref_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
             Instruction::Const {
-                dest: m_dest,
+                dest: func_ref_val,
                 constant: m_ref_const,
             },
         );
 
-        Ok(m_dest)
+        if let Some(home_object) = home_object {
+            let env_val = self.create_method_env_with_home(block, &m_captured, home_object);
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![func_ref_val, env_val],
+                },
+            );
+            Ok(closure_val)
+        } else if m_captured.is_empty() {
+            Ok(func_ref_val)
+        } else {
+            let env_val = self.ensure_shared_env(block, &m_captured, key.span())?;
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![func_ref_val, env_val],
+                },
+            );
+            Ok(closure_val)
+        }
     }
 
     // TODO: lower_method_prop_to_fn 与 lower_fn_expr 的逻辑高度相似
@@ -977,6 +1157,7 @@ impl Lowerer {
         &mut self,
         key: &swc_ast::PropName,
         function: &swc_ast::Function,
+        home_object: Option<ValueId>,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let method_name = match key {
@@ -987,6 +1168,7 @@ impl Lowerer {
         let fn_name = format!("$0.{method_name}");
 
         self.push_function_context(&fn_name, BasicBlockId(0));
+        self.super_allowed = home_object.is_some();
 
         let env_scope_id = self
             .scopes
@@ -1054,7 +1236,19 @@ impl Lowerer {
             },
         );
 
-        let callee_val = if captured.is_empty() {
+        let callee_val = if let Some(home_object) = home_object {
+            let env_val = self.create_method_env_with_home(block, &captured, home_object);
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(closure_val),
+                    builtin: Builtin::CreateClosure,
+                    args: vec![func_ref_val, env_val],
+                },
+            );
+            closure_val
+        } else if captured.is_empty() {
             func_ref_val
         } else {
             let env_val = self.ensure_shared_env(block, &captured, key.span())?;

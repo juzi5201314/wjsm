@@ -1189,6 +1189,14 @@ pub(crate) fn eval_super_base(caller: Caller<'_, RuntimeState>, record: i64) -> 
         if let Some(home) = rec.home_object {
             return home;
         }
+        if let Some((_, val, initialized, _)) = rec
+            .bindings
+            .iter()
+            .find(|(name, _, _, _)| name == "__wjsm_super_base")
+            && *initialized
+        {
+            return *val;
+        }
     }
     value::encode_undefined()
 }
@@ -1200,7 +1208,11 @@ pub(crate) fn scope_record_set_meta(
     val: i64,
 ) -> i64 {
     let handle = value::decode_scope_record_handle(record);
-    let tag = key as u8;
+    let tag = if value::is_f64(key) {
+        value::decode_f64(key) as u8
+    } else {
+        key as u8
+    };
     if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
         match tag {
             0 => rec.is_strict = value::decode_bool(val),

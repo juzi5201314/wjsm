@@ -1,18 +1,8 @@
-// super() constructor call — CURRENTLY NOT SUPPORTED (normative gap).
-// Per ECMAScript spec, super() is REQUIRED in derived class constructors.
-// Current implementation rejects with LoweringError "super call is not supported".
+// super() is only valid in derived constructors.
 class Base {
-  constructor(x) {
-    this.x = x;
+  constructor() {
+    super();
   }
 }
 
-class Derived extends Base {
-  constructor(x) {
-    super(x);  // This MUST produce a compile-time diagnostic error
-    this.y = 1;
-  }
-}
-
-const d = new Derived(5);
-console.log(d.x);
+new Base();

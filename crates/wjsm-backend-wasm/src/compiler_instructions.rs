@@ -352,6 +352,16 @@ impl Compiler {
                 self.compile_call_with_new_target(dest, *callee, *this_val, args, None)?;
                 Ok(false)
             }
+            Instruction::SuperCall {
+                dest,
+                callee,
+                this_val,
+                args,
+                forward_args,
+            } => {
+                self.compile_super_call(dest, *callee, *this_val, args, *forward_args)?;
+                Ok(false)
+            }
             Instruction::ConstructCall {
                 callee,
                 this_val,
@@ -579,6 +589,9 @@ impl Compiler {
                 self.compile_object_spread(dest, source).map(|_| false)
             }
             Instruction::GetSuperBase { dest } => self.compile_get_super_base(dest).map(|_| false),
+            Instruction::GetSuperConstructor { dest } => {
+                self.compile_get_super_constructor(dest).map(|_| false)
+            }
             Instruction::NewPromise { dest } => {
                 let func_idx = self.builtin_func_indices[&Builtin::PromiseCreate];
                 self.emit(WasmInstruction::I64Const(0));
@@ -904,6 +917,153 @@ impl Compiler {
             self.emit(WasmInstruction::Drop);
         }
 
+        Ok(())
+    }
+
+    pub(crate) fn compile_super_call(
+        &mut self,
+        dest: &Option<ValueId>,
+        callee: ValueId,
+        this_val: ValueId,
+        args: &[ValueId],
+        forward_args: bool,
+    ) -> Result<()> {
+        let saved_new_target = self.string_concat_scratch_idx;
+        let result_scratch = self.call_env_obj_scratch();
+        let call_func_idx_scratch = self.call_func_idx_scratch();
+        let call_env_obj_scratch = self.call_env_obj_scratch();
+
+        self.emit(WasmInstruction::I64Const(0));
+        self.emit(WasmInstruction::Call(
+            self.builtin_func_indices[&Builtin::NewTarget],
+        ));
+        self.emit(WasmInstruction::LocalSet(saved_new_target));
+
+        if forward_args {
+            self.emit(WasmInstruction::LocalGet(2));
+            self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+        } else {
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+            self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);
+            for arg in args {
+                self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                self.emit(WasmInstruction::I64Store(MemArg {
+                    offset: 0,
+                    align: 3,
+                    memory_index: 0,
+                }));
+                self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+                self.emit(WasmInstruction::I32Const(8));
+                self.emit(WasmInstruction::I32Add);
+                self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+            }
+        }
+
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0x1F));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_NATIVE_CALLABLE as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        if forward_args {
+            self.emit(WasmInstruction::LocalGet(3));
+        } else {
+            self.emit(WasmInstruction::I32Const(args.len() as i32));
+        }
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NativeCall],
+        ));
+        self.emit(WasmInstruction::Else);
+
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0x1F));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_PROXY as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        if forward_args {
+            self.emit(WasmInstruction::LocalGet(3));
+        } else {
+            self.emit(WasmInstruction::I32Const(args.len() as i32));
+        }
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ProxyConstruct],
+        ));
+        self.emit(WasmInstruction::Else);
+
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0x1F));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ClosureGetFunc],
+        ));
+        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ClosureGetEnv],
+        ));
+        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::LocalSet(call_func_idx_scratch));
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::LocalSet(call_env_obj_scratch));
+        self.emit(WasmInstruction::End);
+
+        self.emit(WasmInstruction::LocalGet(call_env_obj_scratch));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        if forward_args {
+            self.emit(WasmInstruction::LocalGet(3));
+        } else {
+            self.emit(WasmInstruction::I32Const(args.len() as i32));
+        }
+        self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
+        self.emit(WasmInstruction::CallIndirect {
+            type_index: 12,
+            table_index: 0,
+        });
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::LocalSet(result_scratch));
+
+        self.emit(WasmInstruction::LocalGet(saved_new_target));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NewTargetSet],
+        ));
+        self.emit(WasmInstruction::Drop);
+        if !forward_args {
+            self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+            self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+        }
+
+        self.emit(WasmInstruction::LocalGet(result_scratch));
+        if let Some(d) = dest {
+            self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+        } else {
+            self.emit(WasmInstruction::Drop);
+        }
         Ok(())
     }
 
@@ -1278,32 +1438,46 @@ impl Compiler {
         Ok(())
     }
 
-    /// 编译 GetSuperBase：从 env 对象读取 "home" 属性获取 __proto__
-    /// 当前简化实现：返回 undefined（完整实现需要 closure + env 传递 home_object）
+    /// 编译 GetSuperBase：按当前函数的 [[HomeObject]] 计算 super base。
+    /// 类方法使用编译期 home metadata；对象字面量/动态 eval 通过 env.home 传入 home object。
     pub(crate) fn compile_get_super_base(&mut self, dest: &ValueId) -> Result<()> {
-        // 简化：通过 env 的 "home" 属性获取基类原型
-        // env_obj 在 WASM local 0
-        // 读取 home_obj = $obj_get(env, "home")
-        // 然后 home_obj.__proto__
-        // 如果 env 不是对象或没有 home 属性，返回 undefined
-        self.emit(WasmInstruction::LocalGet(0)); // env_obj
-        self.emit(WasmInstruction::I64Const(32));
-        self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
-        self.emit(WasmInstruction::I64And);
-        // 检查 env 是否为 TAG_OBJECT (0x8)
-        self.emit(WasmInstruction::I64Const(value::TAG_OBJECT as i64));
-        self.emit(WasmInstruction::I64Eq);
-        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-        // env 是对象：$obj_get(env, "home")
-        self.emit(WasmInstruction::LocalGet(0));
-        let home_str = "home".to_string();
-        let key_ptr = self.ensure_string_ptr_const(&home_str);
-        self.emit(WasmInstruction::I32Const(key_ptr as i32));
-        self.emit(WasmInstruction::Call(self.obj_get_func_idx));
-        self.emit(WasmInstruction::Else);
-        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
-        self.emit(WasmInstruction::End);
+        match self.current_home_object {
+            Some(HomeObject::Prototype(constructor_id)) => {
+                let constructor = self.encode_function_ref_id(constructor_id);
+                let prototype_key = self.ensure_string_ptr_const("prototype");
+                self.emit(WasmInstruction::I64Const(constructor));
+                self.emit(WasmInstruction::I32Const(prototype_key as i32));
+                self.emit(WasmInstruction::Call(self.obj_get_func_idx));
+            }
+            Some(HomeObject::Constructor(constructor_id)) => {
+                let constructor = self.encode_function_ref_id(constructor_id);
+                self.emit(WasmInstruction::I64Const(constructor));
+            }
+            None => {
+                self.emit(WasmInstruction::LocalGet(0));
+                let home_key = self.ensure_string_ptr_const("home");
+                self.emit(WasmInstruction::I32Const(home_key as i32));
+                self.emit(WasmInstruction::Call(self.obj_get_func_idx));
+            }
+        }
+
+        self.emit(WasmInstruction::Call(
+            self.builtin_func_indices[&Builtin::ObjectGetPrototypeOf],
+        ));
+        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
+        Ok(())
+    }
+
+    pub(crate) fn compile_get_super_constructor(&mut self, dest: &ValueId) -> Result<()> {
+        if let Some(function_id) = self.current_function_id {
+            let constructor = self.encode_function_ref_id(function_id);
+            self.emit(WasmInstruction::I64Const(constructor));
+            self.emit(WasmInstruction::Call(
+                self.builtin_func_indices[&Builtin::ObjectGetPrototypeOf],
+            ));
+        } else {
+            self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        }
         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
         Ok(())
     }

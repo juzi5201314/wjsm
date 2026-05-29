@@ -39,6 +39,10 @@ impl Module {
         &self.functions
     }
 
+    pub fn function_mut(&mut self, id: FunctionId) -> Option<&mut Function> {
+        self.functions.get_mut(id.0 as usize)
+    }
+
     pub fn script_mode(&self) -> bool {
         self.script_mode
     }
@@ -108,6 +112,14 @@ impl fmt::Display for Constant {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HomeObject {
+    /// 实例方法/构造器的 [[HomeObject]] 是构造器的 prototype 对象。
+    Prototype(FunctionId),
+    /// 静态方法/静态块的 [[HomeObject]] 是构造器函数对象本身。
+    Constructor(FunctionId),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Function {
     name: String,
@@ -119,10 +131,9 @@ pub struct Function {
     /// 该函数捕获的外层变量名列表（闭包用）。
     /// 语义层逃逸分析后填入，后端用于 env 对象的属性名。
     captured_names: Vec<String>,
-    /// 类方法绑定的构造函数 FunctionId，用于 super 属性访问。
-    /// 非类方法（普通函数、箭头函数等）为 None。
-    /// 对于静态方法，home_object 设置为 None（静态方法无 super）。
-    pub home_object: Option<FunctionId>,
+    /// 方法的 [[HomeObject]]，用于实现 super 属性访问。
+    /// 普通函数为 None；箭头函数可继承外层方法的 home object。
+    pub home_object: Option<HomeObject>,
 }
 
 impl Function {
@@ -203,7 +214,14 @@ impl Function {
     fn dump_into(&self, out: &mut String) {
         let _ = write!(out, "  fn @{}", self.name);
         if let Some(home) = self.home_object {
-            let _ = write!(out, " [home_object=@{}]", home.0);
+            match home {
+                HomeObject::Prototype(id) => {
+                    let _ = write!(out, " [home_object=@{}.prototype]", id.0);
+                }
+                HomeObject::Constructor(id) => {
+                    let _ = write!(out, " [home_object=@{}]", id.0);
+                }
+            }
         }
         if self.has_eval {
             let _ = write!(out, " [has_eval]");
@@ -346,6 +364,14 @@ pub enum Instruction {
         this_val: ValueId,
         args: Vec<ValueId>,
     },
+    /// 调用当前派生类的 super 构造器；保留当前 new.target。
+    SuperCall {
+        dest: Option<ValueId>,
+        callee: ValueId,
+        this_val: ValueId,
+        args: Vec<ValueId>,
+        forward_args: bool,
+    },
     ConstructCall {
         callee: ValueId,
         this_val: ValueId,
@@ -417,8 +443,12 @@ pub enum Instruction {
         dest: ValueId,
         source: ValueId,
     },
-    /// 获取 super 基类：从 home_object 的 proto header offset 0 读取原型对象
+    /// 获取 super 属性基对象：实例方法为 Base.prototype，静态方法为 Base 构造器。
     GetSuperBase {
+        dest: ValueId,
+    },
+    /// 获取派生构造器的 super 构造器。
+    GetSuperConstructor {
         dest: ValueId,
     },
     NewPromise {
@@ -536,6 +566,31 @@ impl fmt::Display for Instruction {
                 }
                 Ok(())
             }
+            Self::SuperCall {
+                dest,
+                callee,
+                this_val,
+                args,
+                forward_args,
+            } => {
+                if let Some(dest) = dest {
+                    write!(formatter, "{dest} = ")?;
+                }
+                write!(formatter, "super_call {callee}, this={this_val}")?;
+                if *forward_args {
+                    formatter.write_str(", forward_args")?;
+                } else if !args.is_empty() {
+                    formatter.write_str(", args=[")?;
+                    for (index, arg) in args.iter().enumerate() {
+                        if index > 0 {
+                            formatter.write_str(", ")?;
+                        }
+                        write!(formatter, "{arg}")?;
+                    }
+                    formatter.write_char(']')?;
+                }
+                Ok(())
+            }
             Self::ConstructCall {
                 callee,
                 this_val,
@@ -619,6 +674,9 @@ impl fmt::Display for Instruction {
             }
             Self::GetSuperBase { dest } => {
                 write!(formatter, "{dest} = get_super_base")
+            }
+            Self::GetSuperConstructor { dest } => {
+                write!(formatter, "{dest} = get_super_constructor")
             }
             Self::NewPromise { dest } => write!(formatter, "{dest} = new_promise"),
             Self::PromiseResolve { promise, value } => {

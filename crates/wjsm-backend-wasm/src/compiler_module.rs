@@ -257,11 +257,15 @@ impl Compiler {
 
         // Record user function base index (after all imports + helpers)
         self.user_func_base_idx = self._next_import_func;
-        for function in module.functions() {
+        for (function_id, function) in module.functions().iter().enumerate() {
             if function.name() == "main" {
                 self.compile_function(module, function)?;
             } else {
-                self.compile_js_function(module, function)?;
+                self.compile_js_function(
+                    module,
+                    function,
+                    wjsm_ir::FunctionId(function_id as u32),
+                )?;
             }
         }
 
@@ -674,9 +678,11 @@ impl Compiler {
         &mut self,
         module: &IrModule,
         function: &IrFunction,
+        function_id: wjsm_ir::FunctionId,
     ) -> Result<()> {
         self.current_func_returns_value = true;
-        // Type 12 signature: (i64 env_obj, i64 this_val, i32 args_base, i32 args_count) -> i64
+        self.current_home_object = function.home_object;
+        self.current_function_id = Some(function_id);
         // WASM params: local 0 = env_obj (i64), local 1 = this_val (i64),
         //              local 2 = args_base_ptr (i32), local 3 = args_count (i32)
         self.assign_eval_var_memory(function);
@@ -855,6 +861,8 @@ impl Compiler {
         self.var_memory_offsets.clear();
         self.phi_locals.clear();
         self.current_function_has_eval = false;
+        self.current_home_object = None;
+        self.current_function_id = None;
 
         Ok(())
     }
