@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+secret
+function() { [native code] }
+direct-private-access-error
+--- stderr ---

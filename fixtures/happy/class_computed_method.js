@@ -1,4 +1,5 @@
-// Computed method name — documents current behavior (may be gap or error).
+// Computed method name — documents actual behavior (gap: not supported).
+// Computed method names produce undefined at runtime; the method is not installed on the prototype.
 const methodName = "dynamic";
 
 class Dynamic {

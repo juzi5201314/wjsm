@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+[error] Error occurred: [object Object]
+after-error-log
+--- stderr ---

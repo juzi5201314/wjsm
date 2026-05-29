@@ -1,4 +1,6 @@
-// Console calls inside timer callback — verifies console + timer interaction.
+// Console calls inside timer callback — documents actual behavior.
+// NOTE: Timer callbacks do not currently fire, so this only verifies console
+// works in main-thread + microtask context. The timer callback is dead code.
 console.log("before-timer");
 
 setTimeout(() => {

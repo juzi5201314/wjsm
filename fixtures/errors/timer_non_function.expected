@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+start
+sync-throw: undefined
+no-sync-throw
+log-caught-as-exception
+end
+--- stderr ---

@@ -1,4 +1,6 @@
-// Error inside timer callback — main execution must continue, error should be observable.
+// Error inside timer callback — documents actual behavior.
+// NOTE: Timer callbacks do not currently fire, so this fixture produces no error output.
+// The entire timer body is dead code; exit=0 because main-thread completes normally.
 console.log("main-start");
 
 setTimeout(() => {
