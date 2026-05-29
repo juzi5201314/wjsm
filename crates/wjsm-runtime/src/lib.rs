@@ -210,7 +210,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
 
-    // ── Import 0: console_log(i64) → () ─────────────────────────────────
+    // ── console_log ──
     let mut linker = Linker::new(&engine);
 
     // ── 注册所有宿主函数（按名字链接） ──
@@ -228,17 +228,17 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     define_string_methods(&mut linker, &mut store)?;
     define_math_number_error(&mut linker, &mut store)?;
     define_collections_buffers(&mut linker, &mut store)?;
-    // ── Proxy traps (imports 318-320) ──
+    // ── Proxy traps ──
     define_proxy_traps(&mut linker, &mut store)?;
-    // Import 321: get_builtin_global
+    // get_builtin_global
     define_get_builtin_global(&mut linker, &mut store)?;
-    // Import 322: new_target
+    // new_target
     let f = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, _dummy: i64| -> i64 { caller.data().new_target.get() },
     );
     linker.define(&mut store, "env", "new_target", f)?;
-    // Import 323: new_target_set
+    // new_target_set
     let f = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, new_target: i64| -> i64 {
@@ -248,7 +248,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     linker.define(&mut store, "env", "new_target_set", f)?;
-    // Import 324: create_unmapped_arguments_object: (i64, i64) -> i64
+    // create_unmapped_arguments_object
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, args_array: i64, param_count: i64| -> i64 {
@@ -256,7 +256,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     linker.define(&mut store, "env", "create_unmapped_arguments_object", f)?;
-    // Import 325: create_mapped_arguments_object: (i64, i64, i64) -> i64
+    // create_mapped_arguments_object
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
@@ -268,9 +268,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     linker.define(&mut store, "env", "create_mapped_arguments_object", f)?;
-    // ── TypedArray extra methods (imports 326-347) ──
+    // ── TypedArray extra methods ──
     define_typedarray_new_methods(&mut linker, &mut store)?;
-    // ── ScopeRecord eval bridge (imports 348-355) ──
+    // ── ScopeRecord eval bridge ──
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, capacity: i64| -> i64 {
@@ -330,11 +330,11 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         |mut caller: Caller<'_, RuntimeState>, record: i64| scope_record_destroy(caller, record),
     );
     linker.define(&mut store, "env", "scope_record_destroy", f)?;
-    // ── WeakRef / FinalizationRegistry (imports 356-360) ──
+    // ── WeakRef / FinalizationRegistry ──
     define_weakref_finalization(&mut linker, &mut store)?;
-    // ── SharedArrayBuffer + Atomics (imports 361-377) ──
+    // ── SharedArrayBuffer + Atomics ──
     define_atomics(&mut linker, &mut store)?;
-    // ── Import 378: async_iterator_from(i64) -> i64 ────────────────────────
+    // ── async_iterator_from ──
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, iterable: i64| -> i64 {
@@ -483,7 +483,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     linker.define(&mut store, "env", "async_iterator_from", f)?;
-    // ── Import 379-380: Object.groupBy / Map.groupBy ─────────────────────
+    // ── Object.groupBy / Map.groupBy ──
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
@@ -709,7 +709,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     linker.define(&mut store, "env", "map.group_by", f)?;
-    // ── Import 381: symbol_property_key(i64) -> i32 ───────────────────
+    // ── symbol_property_key ──
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
@@ -735,7 +735,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     linker.define(&mut store, "env", "symbol_property_key", f)?;
-    // ── Import 382: array.from ──
+    // ── array.from ──
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>,
@@ -885,7 +885,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
         },
     );
     linker.define(&mut store, "env", "array.from", f)?;
-    // ── Import 383: obj_get_by_index(i64, i32) -> i64 ────────────────────
+    // ── obj_get_by_index ──
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, index: i32| -> i64 {

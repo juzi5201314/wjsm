@@ -5,8 +5,8 @@ use wasmtime::Store;
 use crate::*;
 
 pub(crate) fn define_get_builtin_global(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
-// Import 321: get_builtin_global (kept temporarily for semantic layer compat)
-{
+    // get_builtin_global
+    {
     let get_builtin_global_fn = Func::wrap(&mut store,
         |mut caller: Caller<'_, RuntimeState>, name_val: i64| -> i64 {
             let name = read_runtime_string(&mut caller, name_val);
