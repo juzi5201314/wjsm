@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+no-throw: {not valid json
+threw: undefined
+--- stderr ---

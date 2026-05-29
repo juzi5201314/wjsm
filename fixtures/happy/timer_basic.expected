@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+main-start
+main-end
+microtask-1
+microtask-2
+--- stderr ---
