@@ -1,5 +1,5 @@
 use super::*;
-use crate::host_import_registry::SpecialHostImport;
+use crate::host_import_registry::{host_import_specs, SpecialHostImport};
 
 impl Compiler {
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -148,10 +148,12 @@ impl Compiler {
         self.functions.function(3); // Type 3: (i64) -> (i64)
         self.push_func_table(self._next_import_func);
         self._next_import_func += 1;
-        // Register array prototype method imports in function table (imports 50-76)
+        // Register array prototype method imports in function table
         let arr_proto_base = self.function_table.len() as u32;
-        for import_idx in 50u32..=76u32 {
-            self.push_func_table(import_idx);
+        for (idx, spec) in host_import_specs().iter().enumerate() {
+            if spec.group == Some(crate::host_import_registry::HostImportGroup::ArrayPrototypeMethod) {
+                self.push_func_table(idx as u32);
+            }
         }
         self.arr_proto_table_base = arr_proto_base;
 

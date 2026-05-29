@@ -534,7 +534,7 @@ impl Compiler {
                         .builtin_func_indices
                         .get(&Builtin::CreateException)
                         .copied()
-                        .unwrap_or(313);
+                        .expect("CreateException import must be registered");
                     self.emit(WasmInstruction::Call(func_idx));
                     self.emit(WasmInstruction::Return);
                     idx += 1;
@@ -929,7 +929,7 @@ impl Compiler {
                         .builtin_func_indices
                         .get(&Builtin::CreateException)
                         .copied()
-                        .unwrap_or(313);
+                        .expect("CreateException import must be registered");
                     self.emit(WasmInstruction::Call(func_idx));
                     self.emit(WasmInstruction::Return);
                     break;
@@ -1047,7 +1047,7 @@ impl Compiler {
                     .builtin_func_indices
                     .get(&Builtin::CreateException)
                     .copied()
-                    .unwrap_or(313);
+                    .expect("CreateException import must be registered");
                 self.emit(WasmInstruction::Call(func_idx));
                 self.emit(WasmInstruction::Return);
                 Ok(true)

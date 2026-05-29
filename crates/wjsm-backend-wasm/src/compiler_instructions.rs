@@ -23,7 +23,7 @@ impl Compiler {
                         .builtin_func_indices
                         .get(&Builtin::BigIntFromLiteral)
                         .copied()
-                        .unwrap_or(95);
+                    .expect("BigIntFromLiteral import must be registered");
                     self.emit(WasmInstruction::Call(func_idx));
                     self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 } else if let Constant::RegExp { pattern, flags } = constant {
@@ -57,7 +57,7 @@ impl Compiler {
                         // 调用 string_concat(lhs, rhs)
                         self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
                         self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                        self.emit(WasmInstruction::Call(16)); // import 16: string_concat
+                        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::StringConcat]));
                         // 存到 scratch
                         self.emit(WasmInstruction::LocalSet(self.string_concat_scratch_idx));
                         // 检查结果是否为 undefined（哨兵值：表示无字符串操作数）
@@ -1085,7 +1085,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const(parts.len() as i32));
         // 调用 import 17: string_concat_va
-        self.emit(WasmInstruction::Call(17));
+        self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::StringConcatVa]));
         // 先保存返回值
         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
         // 恢复 shadow_sp

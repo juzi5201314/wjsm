@@ -306,7 +306,7 @@ impl Compiler {
             .builtin_func_indices
             .get(&Builtin::AbortShadowStackOverflow)
             .copied()
-            .unwrap_or(76);
+            .expect("AbortShadowStackOverflow import must be registered");
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const(arg_count_bytes));
         self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
