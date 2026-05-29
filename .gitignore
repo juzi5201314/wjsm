@@ -6,6 +6,8 @@ codedb.snapshot
 .env
 .gitnexus
 
+.codegraph/
+
 # AI workspace cache (local only)
 .antigravity/
 CONTEXT.md
