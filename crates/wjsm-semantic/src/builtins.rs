@@ -578,8 +578,12 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::WeakRefProtoDeref => ("WeakRef.prototype.deref", 1),
         // ── FinalizationRegistry builtins ──
         Builtin::FinalizationRegistryConstructor => ("FinalizationRegistry", 1),
-        Builtin::FinalizationRegistryProtoRegister => ("FinalizationRegistry.prototype.register", 4),
-        Builtin::FinalizationRegistryProtoUnregister => ("FinalizationRegistry.prototype.unregister", 2),
+        Builtin::FinalizationRegistryProtoRegister => {
+            ("FinalizationRegistry.prototype.register", 4)
+        }
+        Builtin::FinalizationRegistryProtoUnregister => {
+            ("FinalizationRegistry.prototype.unregister", 2)
+        }
         // ── ArrayBuffer builtins ──
         Builtin::ArrayBufferConstructor => ("ArrayBuffer", 1),
         Builtin::ArrayBufferProtoByteLength => ("ArrayBuffer.prototype.byteLength", 1),

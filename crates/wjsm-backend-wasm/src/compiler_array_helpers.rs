@@ -221,7 +221,9 @@ impl Compiler {
             // 不是 TAG_ARRAY → 委托给 $obj_get_by_index 进行属性访问（将 i32 转换为字符串后查找）
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ObjGetByIndex]));
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ObjGetByIndex],
+            ));
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
             self.codes.function(&func);

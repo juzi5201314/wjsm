@@ -2,8 +2,6 @@ use anyhow::Result;
 use std::path::PathBuf;
 use std::process::Command;
 
-
-
 #[test]
 fn modules_respects_explicit_root_flag() -> Result<()> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

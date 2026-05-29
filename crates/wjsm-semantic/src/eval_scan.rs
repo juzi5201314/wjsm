@@ -120,7 +120,13 @@ pub fn eval_literal_binding_names(code: &str) -> Vec<String> {
             || is_word_at(bytes, index, b"let")
             || is_word_at(bytes, index, b"const")
         {
-            let keyword_len = if bytes[index] == b'v' { 3 } else if bytes[index] == b'l' { 3 } else { 5 };
+            let keyword_len = if bytes[index] == b'v' {
+                3
+            } else if bytes[index] == b'l' {
+                3
+            } else {
+                5
+            };
             index += keyword_len;
             loop {
                 while index < bytes.len()

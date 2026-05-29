@@ -51,7 +51,8 @@ impl Lowerer {
 
         // Detect if calling context has explicit arguments binding
         let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
-        self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_expr.function.params) || has_explicit_arguments;
+        self.eval_caller_has_arguments =
+            Self::detect_param_arguments(&fn_expr.function.params) || has_explicit_arguments;
 
         let body_entry = self.emit_arguments_init(body_entry)?;
 
@@ -364,7 +365,8 @@ impl Lowerer {
 
         // Detect if calling context has explicit arguments binding
         let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
-        self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_expr.function.params) || has_explicit_arguments;
+        self.eval_caller_has_arguments =
+            Self::detect_param_arguments(&fn_expr.function.params) || has_explicit_arguments;
         let after_inits = self.emit_arguments_init(after_inits)?;
 
         let dispatch_block = self.current_function.new_block();
@@ -519,7 +521,8 @@ impl Lowerer {
 
         // Detect if calling context has explicit arguments binding
         let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
-        self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_expr.function.params) || has_explicit_arguments;
+        self.eval_caller_has_arguments =
+            Self::detect_param_arguments(&fn_expr.function.params) || has_explicit_arguments;
         let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
 
         let promise_val = self.alloc_value();

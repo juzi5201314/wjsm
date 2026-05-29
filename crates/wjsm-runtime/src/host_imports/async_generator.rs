@@ -1,11 +1,15 @@
 use anyhow::Result;
-use wasmtime::{Caller, Linker, Func};
 use wasmtime::Store;
+use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
-pub(crate) fn define_async_generator(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
-    let async_generator_start_fn = Func::wrap(&mut store,
+pub(crate) fn define_async_generator(
+    linker: &mut Linker<RuntimeState>,
+    mut store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    let async_generator_start_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, continuation: i64| -> i64 {
             let generator = alloc_object(&mut caller, 4);
             // 设置 [[Prototype]] = AsyncGenerator.prototype
@@ -17,8 +21,9 @@ pub(crate) fn define_async_generator(linker: &mut Linker<RuntimeState>, mut stor
                         .and_then(|e| e.into_memory())
                         .expect("memory");
                     let data = memory.data_mut(&mut caller);
-                    data[ptr..ptr + 4]
-                        .copy_from_slice(&value::decode_object_handle(async_gen_proto).to_le_bytes());
+                    data[ptr..ptr + 4].copy_from_slice(
+                        &value::decode_object_handle(async_gen_proto).to_le_bytes(),
+                    );
                 }
             }
             if !value::is_object(generator) {
@@ -75,10 +80,16 @@ pub(crate) fn define_async_generator(linker: &mut Linker<RuntimeState>, mut stor
             generator
         },
     );
-    linker.define(&mut store, "env", "async_generator_start", async_generator_start_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "async_generator_start",
+        async_generator_start_fn,
+    )?;
 
     // ── Import 138: async_generator_next(i64, i64) -> i64 ───────────────────
-    let async_generator_next_fn = Func::wrap(&mut store,
+    let async_generator_next_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
             let resume_promise = alloc_promise(&mut caller, PromiseEntry::pending());
             let handle = value::decode_object_handle(generator) as usize;
@@ -91,8 +102,11 @@ pub(crate) fn define_async_generator(linker: &mut Linker<RuntimeState>, mut stor
                 if let Some(entry) = table.get(handle) {
                     if matches!(entry.state, AsyncGeneratorState::Completed) {
                         drop(table);
-                        let result =
-                            alloc_iterator_result_from_caller(&mut caller, value::encode_undefined(), true);
+                        let result = alloc_iterator_result_from_caller(
+                            &mut caller,
+                            value::encode_undefined(),
+                            true,
+                        );
                         resolve_promise_from_caller(&mut caller, resume_promise, result);
                         return resume_promise;
                     }
@@ -119,10 +133,16 @@ pub(crate) fn define_async_generator(linker: &mut Linker<RuntimeState>, mut stor
             resume_promise
         },
     );
-    linker.define(&mut store, "env", "async_generator_next", async_generator_next_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "async_generator_next",
+        async_generator_next_fn,
+    )?;
 
     // ── Import 139: async_generator_return(i64, i64) -> i64 ─────────────────
-    let async_generator_return_fn = Func::wrap(&mut store,
+    let async_generator_return_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
             let handle = value::decode_object_handle(generator) as usize;
             let action = {
@@ -179,10 +199,16 @@ pub(crate) fn define_async_generator(linker: &mut Linker<RuntimeState>, mut stor
             value::encode_undefined()
         },
     );
-    linker.define(&mut store, "env", "async_generator_return", async_generator_return_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "async_generator_return",
+        async_generator_return_fn,
+    )?;
 
     // ── Import 140: async_generator_throw(i64, i64) -> i64 ──────────────────
-    let async_generator_throw_fn = Func::wrap(&mut store,
+    let async_generator_throw_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
             let handle = value::decode_object_handle(generator) as usize;
             let action = {
@@ -232,7 +258,12 @@ pub(crate) fn define_async_generator(linker: &mut Linker<RuntimeState>, mut stor
             value::encode_undefined()
         },
     );
-    linker.define(&mut store, "env", "async_generator_throw", async_generator_throw_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "async_generator_throw",
+        async_generator_throw_fn,
+    )?;
 
     Ok(())
 }

@@ -772,11 +772,12 @@ impl Lowerer {
         self.async_resume_blocks.push((next_state, resume_block));
         let visible_bindings = self.async_visible_binding_names();
 
-        self.pending_suspends.push(lowerer_async_eval::PendingSuspend {
-            suspend_block: header,
-            resume_block,
-            visible_bindings,
-        });
+        self.pending_suspends
+            .push(lowerer_async_eval::PendingSuspend {
+                suspend_block: header,
+                resume_block,
+                visible_bindings,
+            });
 
         self.current_function.append_instruction(
             header,

@@ -190,7 +190,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ProxyTrapGet]));
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ProxyTrapGet],
+            ));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(3));
@@ -484,7 +486,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ProxyTrapSet]));
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ProxyTrapSet],
+            ));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(5));
@@ -845,7 +849,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ProxyTrapDelete]));
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ProxyTrapDelete],
+            ));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(3));

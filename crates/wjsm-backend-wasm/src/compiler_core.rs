@@ -1,5 +1,5 @@
 use super::*;
-use crate::host_import_registry::{host_import_specs, HostImportKey};
+use crate::host_import_registry::{HostImportKey, host_import_specs};
 
 impl Compiler {
     pub(crate) fn push_func_table(&mut self, wasm_idx: u32) {

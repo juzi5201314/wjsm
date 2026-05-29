@@ -1,11 +1,15 @@
 use anyhow::Result;
-use wasmtime::{Caller, Linker, Func};
 use wasmtime::Store;
+use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
-pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
-    let bigint_from_literal_fn = Func::wrap(&mut store,
+pub(crate) fn define_primitive_core(
+    linker: &mut Linker<RuntimeState>,
+    mut store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    let bigint_from_literal_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, ptr: i32, _len: i32| -> i64 {
             let s = read_string(&mut caller, ptr as u32).unwrap_or_default();
             // 去掉末尾可能存在的 nul 字符
@@ -24,7 +28,12 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
             }
         },
     );
-    linker.define(&mut store, "env", "bigint_from_literal", bigint_from_literal_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "bigint_from_literal",
+        bigint_from_literal_fn,
+    )?;
 
     // ── BigInt arithmetic helpers ─────────────────────────────────────
     fn bigint_binary_op(
@@ -59,25 +68,29 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
         }
     }
 
-    let bigint_add_fn = Func::wrap(&mut store,
+    let bigint_add_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             bigint_binary_op(&mut caller, a, b, |x, y| x + y)
         },
     );
     linker.define(&mut store, "env", "bigint_add", bigint_add_fn)?;
-    let bigint_sub_fn = Func::wrap(&mut store,
+    let bigint_sub_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             bigint_binary_op(&mut caller, a, b, |x, y| x - y)
         },
     );
     linker.define(&mut store, "env", "bigint_sub", bigint_sub_fn)?;
-    let bigint_mul_fn = Func::wrap(&mut store,
+    let bigint_mul_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             bigint_binary_op(&mut caller, a, b, |x, y| x * y)
         },
     );
     linker.define(&mut store, "env", "bigint_mul", bigint_mul_fn)?;
-    let bigint_div_fn = Func::wrap(&mut store,
+    let bigint_div_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
@@ -115,7 +128,8 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
         },
     );
     linker.define(&mut store, "env", "bigint_div", bigint_div_fn)?;
-    let bigint_mod_fn = Func::wrap(&mut store,
+    let bigint_mod_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
@@ -153,7 +167,8 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
         },
     );
     linker.define(&mut store, "env", "bigint_mod", bigint_mod_fn)?;
-    let bigint_pow_fn = Func::wrap(&mut store,
+    let bigint_pow_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
@@ -204,7 +219,8 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
         },
     );
     linker.define(&mut store, "env", "bigint_pow", bigint_pow_fn)?;
-    let bigint_neg_fn = Func::wrap(&mut store,
+    let bigint_neg_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, a: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let a_val = {
@@ -231,7 +247,8 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
         },
     );
     linker.define(&mut store, "env", "bigint_neg", bigint_neg_fn)?;
-    let bigint_eq_fn = Func::wrap(&mut store,
+    let bigint_eq_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
@@ -251,7 +268,8 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
         },
     );
     linker.define(&mut store, "env", "bigint_eq", bigint_eq_fn)?;
-    let bigint_cmp_fn = Func::wrap(&mut store,
+    let bigint_cmp_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
             let a_handle = value::decode_bigint_handle(a) as usize;
             let b_handle = value::decode_bigint_handle(b) as usize;
@@ -283,7 +301,8 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
     // ═══════════════════════════════════════════════════════════════════
 
     // ── Import 105: symbol_create(i64) → i64 ──────────────────────────
-    let symbol_create_fn = Func::wrap(&mut store,
+    let symbol_create_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, desc: i64| -> i64 {
             let description = if value::is_undefined(desc) {
                 None
@@ -310,7 +329,8 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
     // ── Import 106: symbol_for(i64) → i64 ─────────────────────────────
     // 全局 symbol 注册表（static 变量，与 RuntimeState 生命周期相同）
     // Symbol.for(key) 返回全局注册表中的 symbol
-    let symbol_for_fn = Func::wrap(&mut store,
+    let symbol_for_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, key: i64| -> i64 {
             let key_str = if value::is_string(key) {
                 read_value_string_bytes(&mut caller, key)
@@ -343,7 +363,8 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
     linker.define(&mut store, "env", "symbol_for", symbol_for_fn)?;
 
     // ── Import 107: symbol_key_for(i64) → i64 ─────────────────────────
-    let symbol_key_for_fn = Func::wrap(&mut store,
+    let symbol_key_for_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, sym: i64| -> i64 {
             if !value::is_symbol(sym) {
                 return value::encode_undefined();
@@ -366,7 +387,8 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
 
     // ECMAScript § 6.1.5.1 Well-Known Symbols
     // 返回预分配的 well-known symbol（id=0..7）
-    let symbol_well_known_fn = Func::wrap(&mut store,
+    let symbol_well_known_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, id: i32| -> i64 {
             if !(0..=7).contains(&id) {
                 return value::encode_undefined();
@@ -386,7 +408,8 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
     linker.define(&mut store, "env", "symbol_well_known", symbol_well_known_fn)?;
 
     // ── Import 109: regex_create(i32, i32, i32, i32) → i64 ──────────────────────
-    let regex_create_fn = Func::wrap(&mut store,
+    let regex_create_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>,
          pat_ptr: i32,
          pat_len: i32,
@@ -431,21 +454,27 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
             let mut seen = [false; 128u8 as usize];
             for c in flags.chars() {
                 if !VALID_FLAGS.contains(&c) {
-                    *caller.data().runtime_error.lock().expect("runtime error mutex") =
-                        Some(format!(
-                            "SyntaxError: Invalid regular expression flag: '{}'",
-                            c
-                        ));
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") = Some(format!(
+                        "SyntaxError: Invalid regular expression flag: '{}'",
+                        c
+                    ));
                     return value::encode_undefined();
                 }
                 let idx = c as usize;
                 if idx < seen.len() {
                     if seen[idx] {
-                        *caller.data().runtime_error.lock().expect("runtime error mutex") =
-                            Some(format!(
-                                "SyntaxError: Duplicate regular expression flag: '{}'",
-                                c
-                            ));
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .expect("runtime error mutex") = Some(format!(
+                            "SyntaxError: Duplicate regular expression flag: '{}'",
+                            c
+                        ));
                         return value::encode_undefined();
                     }
                     seen[idx] = true;
@@ -486,7 +515,8 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
     linker.define(&mut store, "env", "regex_create", regex_create_fn)?;
 
     // ── Import 110: regex_test(i64, i64) → i64 ───────────────────────────────────
-    let regex_test_fn = Func::wrap(&mut store,
+    let regex_test_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, regex_val: i64, str_val: i64| -> i64 {
             if !value::is_regexp(regex_val) {
                 return value::encode_bool(false);
@@ -551,101 +581,134 @@ pub(crate) fn define_primitive_core(linker: &mut Linker<RuntimeState>, mut store
         },
     );
     linker.define(&mut store, "env", "regex_test", regex_test_fn)?;
-/// 从 regress::Match 构建 RegExp 执行结果数组
-// 返回的数组包含 .index, .input, .groups 属性；
-// 若 flags 包含 'd' 则额外设置 .indices 及 indices.groups。
-// named_groups() 只 collect 一次，供 .groups 和 .indices.groups 复用。
-fn build_match_result(
-    caller: &mut Caller<'_, RuntimeState>,
-    m: &regress::Match,
-    s: &str,
-    group_count: u32,
-    flags: &str,
-) -> i64 {
-    let arr = alloc_array(caller, group_count);
-    let Some(arr_ptr) = resolve_array_ptr(caller, arr) else {
-        return value::encode_null();
-    };
-    for i in 0..group_count {
-        let elem = if let Some(range) = m.group(i as usize) {
-            let group_str = &s[range];
-            store_runtime_string(caller, group_str.to_string())
-        } else {
-            value::encode_undefined()
-        };
-        write_array_elem(caller, arr_ptr, i as u32, elem);
-    }
-    write_array_length(caller, arr_ptr, group_count);
-    // .index — 使用 m.start() 保持一致
-    let index_val = value::encode_f64(m.start() as f64);
-    let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "index", index_val);
-    // .input
-    let input_val = store_runtime_string(caller, s.to_string());
-    let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "input", input_val);
-    // .groups（collect 一次，供 .groups 和 .indices.groups 复用）
-    let named: Vec<(&str, Option<std::ops::Range<usize>>)> = m.named_groups().collect();
-    if !named.is_empty() {
-        let groups_obj = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_null_proto_object(caller, &_wjsm_env, named.len() as u32) };
-        for (name, range) in &named {
-            let val = match range {
-                Some(r) => store_runtime_string(caller, s[r.clone()].to_string()),
-                None => value::encode_undefined(),
-            };
-            let _ = define_host_data_property_from_caller(caller, groups_obj, name, val);
-        }
-        let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "groups", groups_obj);
-    } else {
-        let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "groups", value::encode_undefined());
-    }
-    // .indices（仅 d 标志）
-    if flags.contains('d') {
-        let indices_arr = alloc_array(caller, group_count);
-        let Some(indices_ptr) = resolve_array_ptr(caller, indices_arr) else {
+    /// 从 regress::Match 构建 RegExp 执行结果数组
+    // 返回的数组包含 .index, .input, .groups 属性；
+    // 若 flags 包含 'd' 则额外设置 .indices 及 indices.groups。
+    // named_groups() 只 collect 一次，供 .groups 和 .indices.groups 复用。
+    fn build_match_result(
+        caller: &mut Caller<'_, RuntimeState>,
+        m: &regress::Match,
+        s: &str,
+        group_count: u32,
+        flags: &str,
+    ) -> i64 {
+        let arr = alloc_array(caller, group_count);
+        let Some(arr_ptr) = resolve_array_ptr(caller, arr) else {
             return value::encode_null();
         };
         for i in 0..group_count {
-            let elem = match m.group(i as usize) {
-                Some(range) => {
-                    let pair = alloc_array(caller, 2);
-                    let pair_ptr = resolve_array_ptr(caller, pair).unwrap_or(0);
-                    write_array_elem(caller, pair_ptr, 0, value::encode_f64(range.start as f64));
-                    write_array_elem(caller, pair_ptr, 1, value::encode_f64(range.end as f64));
-                    write_array_length(caller, pair_ptr, 2);
-                    pair
-                }
-                None => value::encode_undefined(),
+            let elem = if let Some(range) = m.group(i as usize) {
+                let group_str = &s[range];
+                store_runtime_string(caller, group_str.to_string())
+            } else {
+                value::encode_undefined()
             };
-            write_array_elem(caller, indices_ptr, i as u32, elem);
+            write_array_elem(caller, arr_ptr, i as u32, elem);
         }
-        write_array_length(caller, indices_ptr, group_count);
+        write_array_length(caller, arr_ptr, group_count);
+        // .index — 使用 m.start() 保持一致
+        let index_val = value::encode_f64(m.start() as f64);
+        let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "index", index_val);
+        // .input
+        let input_val = store_runtime_string(caller, s.to_string());
+        let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "input", input_val);
+        // .groups（collect 一次，供 .groups 和 .indices.groups 复用）
+        let named: Vec<(&str, Option<std::ops::Range<usize>>)> = m.named_groups().collect();
         if !named.is_empty() {
-            let ig = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_null_proto_object(caller, &_wjsm_env, named.len() as u32) };
+            let groups_obj = {
+                let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                alloc_host_null_proto_object(caller, &_wjsm_env, named.len() as u32)
+            };
             for (name, range) in &named {
                 let val = match range {
-                    Some(r) => {
+                    Some(r) => store_runtime_string(caller, s[r.clone()].to_string()),
+                    None => value::encode_undefined(),
+                };
+                let _ = define_host_data_property_from_caller(caller, groups_obj, name, val);
+            }
+            let _ =
+                define_host_data_property_from_caller(caller, arr_ptr as i64, "groups", groups_obj);
+        } else {
+            let _ = define_host_data_property_from_caller(
+                caller,
+                arr_ptr as i64,
+                "groups",
+                value::encode_undefined(),
+            );
+        }
+        // .indices（仅 d 标志）
+        if flags.contains('d') {
+            let indices_arr = alloc_array(caller, group_count);
+            let Some(indices_ptr) = resolve_array_ptr(caller, indices_arr) else {
+                return value::encode_null();
+            };
+            for i in 0..group_count {
+                let elem = match m.group(i as usize) {
+                    Some(range) => {
                         let pair = alloc_array(caller, 2);
                         let pair_ptr = resolve_array_ptr(caller, pair).unwrap_or(0);
-                        write_array_elem(caller, pair_ptr, 0, value::encode_f64(r.start as f64));
-                        write_array_elem(caller, pair_ptr, 1, value::encode_f64(r.end as f64));
+                        write_array_elem(
+                            caller,
+                            pair_ptr,
+                            0,
+                            value::encode_f64(range.start as f64),
+                        );
+                        write_array_elem(caller, pair_ptr, 1, value::encode_f64(range.end as f64));
                         write_array_length(caller, pair_ptr, 2);
                         pair
                     }
                     None => value::encode_undefined(),
                 };
-                let _ = define_host_data_property_from_caller(caller, ig, name, val);
+                write_array_elem(caller, indices_ptr, i as u32, elem);
             }
-            let _ = define_host_data_property_from_caller(caller, indices_ptr as i64, "groups", ig);
-        } else {
-            let _ = define_host_data_property_from_caller(caller, indices_ptr as i64, "groups", value::encode_undefined());
+            write_array_length(caller, indices_ptr, group_count);
+            if !named.is_empty() {
+                let ig = {
+                    let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                    alloc_host_null_proto_object(caller, &_wjsm_env, named.len() as u32)
+                };
+                for (name, range) in &named {
+                    let val = match range {
+                        Some(r) => {
+                            let pair = alloc_array(caller, 2);
+                            let pair_ptr = resolve_array_ptr(caller, pair).unwrap_or(0);
+                            write_array_elem(
+                                caller,
+                                pair_ptr,
+                                0,
+                                value::encode_f64(r.start as f64),
+                            );
+                            write_array_elem(caller, pair_ptr, 1, value::encode_f64(r.end as f64));
+                            write_array_length(caller, pair_ptr, 2);
+                            pair
+                        }
+                        None => value::encode_undefined(),
+                    };
+                    let _ = define_host_data_property_from_caller(caller, ig, name, val);
+                }
+                let _ =
+                    define_host_data_property_from_caller(caller, indices_ptr as i64, "groups", ig);
+            } else {
+                let _ = define_host_data_property_from_caller(
+                    caller,
+                    indices_ptr as i64,
+                    "groups",
+                    value::encode_undefined(),
+                );
+            }
+            let _ = define_host_data_property_from_caller(
+                caller,
+                arr_ptr as i64,
+                "indices",
+                indices_arr,
+            );
         }
-        let _ = define_host_data_property_from_caller(caller, arr_ptr as i64, "indices", indices_arr);
+        arr
     }
-    arr
-}
-
 
     // ── Import 111: regex_exec(i64, i64) → i64 ───────────────────────────────────
-    let regex_exec_fn = Func::wrap(&mut store,
+    let regex_exec_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, regex_val: i64, str_val: i64| -> i64 {
             if !value::is_regexp(regex_val) {
                 return value::encode_null();
@@ -696,7 +759,13 @@ fn build_match_result(
                             e.last_index = m.end() as i64;
                         }
                     }
-                    build_match_result(&mut caller, &m, &s, (m.captures.len() + 1) as u32, &entry.flags)
+                    build_match_result(
+                        &mut caller,
+                        &m,
+                        &s,
+                        (m.captures.len() + 1) as u32,
+                        &entry.flags,
+                    )
                 }
                 None => {
                     // 无匹配时重置 lastIndex
@@ -714,7 +783,8 @@ fn build_match_result(
     linker.define(&mut store, "env", "regex_exec", regex_exec_fn)?;
 
     // ── Import 112: string_match(i64, i64) → i64 ─────────────────────────────────
-    let string_match_fn = Func::wrap(&mut store,
+    let string_match_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, regexp: i64| -> i64 {
             // str.match(regexp)
             let s = get_string_value(&mut caller, receiver);
@@ -740,7 +810,13 @@ fn build_match_result(
                         // 非全局匹配：返回第一个匹配结果
                         match entry.compiled.find(&s) {
                             Some(m) => {
-                                return build_match_result(&mut caller, &m, &s, (m.captures.len() + 1) as u32, "");
+                                return build_match_result(
+                                    &mut caller,
+                                    &m,
+                                    &s,
+                                    (m.captures.len() + 1) as u32,
+                                    "",
+                                );
                             }
                             None => return value::encode_null(),
                         }
@@ -799,9 +875,13 @@ fn build_match_result(
             } else {
                 // 非全局：返回 exec 结果（数组或 null）
                 match entry.compiled.find(&s) {
-                    Some(m) => {
-                        build_match_result(&mut caller, &m, &s, (m.captures.len() + 1) as u32, &entry.flags)
-                    }
+                    Some(m) => build_match_result(
+                        &mut caller,
+                        &m,
+                        &s,
+                        (m.captures.len() + 1) as u32,
+                        &entry.flags,
+                    ),
                     None => value::encode_null(),
                 }
             }
@@ -810,7 +890,8 @@ fn build_match_result(
     linker.define(&mut store, "env", "string_match", string_match_fn)?;
 
     // ── Import 113: string_replace(i64, i64, i64) → i64 ──────────────────────────
-    let string_replace_fn = Func::wrap(&mut store,
+    let string_replace_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, replace: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
 
@@ -818,11 +899,7 @@ fn build_match_result(
             let is_func_replace = value::is_callable(replace);
 
             /// 处理 JavaScript 替换模式：$$, $&, $`, $', $n, $nn, $<name>
-            fn process_replacement(
-                replace_str: &str,
-                s: &str,
-                m: &regress::Match,
-            ) -> String {
+            fn process_replacement(replace_str: &str, s: &str, m: &regress::Match) -> String {
                 let match_start = m.start();
                 let match_end = m.end();
                 let mut result = String::new();
@@ -916,23 +993,26 @@ fn build_match_result(
             }
 
             /// 从 Match 构建命名捕获组对象
-            let build_groups_obj =
-                |caller: &mut Caller<'_, RuntimeState>, m: &regress::Match| -> i64 {
-                    let named: Vec<(&str, Option<std::ops::Range<usize>>)> =
-                        m.named_groups().collect();
-                    if named.is_empty() {
-                        return value::encode_undefined();
-                    }
-                    let obj = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_null_proto_object(caller, &_wjsm_env, named.len() as u32) };
-                    for (name, range) in named {
-                        let val = match range {
-                            Some(r) => store_runtime_string(caller, s[r].to_string()),
-                            None => value::encode_undefined(),
-                        };
-                        let _ = define_host_data_property_from_caller(caller, obj, name, val);
-                    }
-                    obj
+            let build_groups_obj = |caller: &mut Caller<'_, RuntimeState>,
+                                    m: &regress::Match|
+             -> i64 {
+                let named: Vec<(&str, Option<std::ops::Range<usize>>)> = m.named_groups().collect();
+                if named.is_empty() {
+                    return value::encode_undefined();
+                }
+                let obj = {
+                    let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                    alloc_host_null_proto_object(caller, &_wjsm_env, named.len() as u32)
                 };
+                for (name, range) in named {
+                    let val = match range {
+                        Some(r) => store_runtime_string(caller, s[r].to_string()),
+                        None => value::encode_undefined(),
+                    };
+                    let _ = define_host_data_property_from_caller(caller, obj, name, val);
+                }
+                obj
+            };
             /// 调用替换函数并返回替换字符串
             fn call_replace_func(
                 caller: &mut Caller<'_, RuntimeState>,
@@ -1139,7 +1219,8 @@ fn build_match_result(
     linker.define(&mut store, "env", "string_replace", string_replace_fn)?;
 
     // ── Import 114: string_search(i64, i64) → i64 ────────────────────────────────
-    let string_search_fn = Func::wrap(&mut store,
+    let string_search_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, regexp: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
 
@@ -1185,7 +1266,8 @@ fn build_match_result(
     linker.define(&mut store, "env", "string_search", string_search_fn)?;
 
     // ── Import 115: string_split(i64, i64, i64) → i64 ────────────────────────────
-    let string_split_fn = Func::wrap(&mut store,
+    let string_split_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, sep: i64, limit: i64| -> i64 {
             let s = get_string_value(&mut caller, receiver);
 

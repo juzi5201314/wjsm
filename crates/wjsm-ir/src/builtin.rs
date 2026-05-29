@@ -725,7 +725,9 @@ impl fmt::Display for Builtin {
             Self::WeakRefProtoDeref => "WeakRef.prototype.deref",
             Self::FinalizationRegistryConstructor => "FinalizationRegistry",
             Self::FinalizationRegistryProtoRegister => "FinalizationRegistry.prototype.register",
-            Self::FinalizationRegistryProtoUnregister => "FinalizationRegistry.prototype.unregister",
+            Self::FinalizationRegistryProtoUnregister => {
+                "FinalizationRegistry.prototype.unregister"
+            }
             Self::ArrayBufferConstructor => "ArrayBuffer",
             Self::ArrayBufferProtoByteLength => "ArrayBuffer.prototype.byteLength",
             Self::ArrayBufferProtoSlice => "ArrayBuffer.prototype.slice",

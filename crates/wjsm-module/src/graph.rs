@@ -135,11 +135,14 @@ impl ModuleGraph {
                 let dep_path = ModuleResolver::resolve_path(&source, &module.path)?;
                 if let Some(dep_id) = resolver.get_id_by_path(&dep_path) {
                     // 用空 names 创建合成 ImportEntry（表示依赖关系，不引入绑定）
-                    imports_with_ids.push((dep_id, ImportEntry {
-                        specifier: source,
-                        names: Vec::new(),
-                        source_span: Default::default(),
-                    }));
+                    imports_with_ids.push((
+                        dep_id,
+                        ImportEntry {
+                            specifier: source,
+                            names: Vec::new(),
+                            source_span: Default::default(),
+                        },
+                    ));
                 }
             }
 

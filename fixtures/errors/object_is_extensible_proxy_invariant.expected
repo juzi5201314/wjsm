@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+isExtensible trap called
+--- stderr ---
+Runtime error: TypeError: Proxy isExtensible trap returned result that does not match target's extensibility

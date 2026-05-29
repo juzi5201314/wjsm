@@ -396,9 +396,9 @@ impl Lowerer {
                 }
                 if self.strict_mode {
                     // strict eval: 对未声明变量赋值 → ReferenceError
-                    let msg_const = self.module.add_constant(Constant::String(
-                        format!("assignment to undeclared variable '{name}'"),
-                    ));
+                    let msg_const = self.module.add_constant(Constant::String(format!(
+                        "assignment to undeclared variable '{name}'"
+                    )));
                     let msg_val = self.alloc_value();
                     self.current_function.append_instruction(
                         block,

@@ -1,11 +1,15 @@
 use anyhow::Result;
-use wasmtime::{Caller, Linker, Func};
 use wasmtime::Store;
+use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
-pub(crate) fn define_async_fn(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
-    let async_function_start_fn = Func::wrap(&mut store,
+pub(crate) fn define_async_fn(
+    linker: &mut Linker<RuntimeState>,
+    mut store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    let async_function_start_fn = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, fn_table_idx: i64| -> i64 {
             let fn_table_idx = if value::is_function(fn_table_idx) {
                 value::decode_function_idx(fn_table_idx)
@@ -53,10 +57,16 @@ pub(crate) fn define_async_fn(linker: &mut Linker<RuntimeState>, mut store: &mut
             outer_promise
         },
     );
-    linker.define(&mut store, "env", "async_function_start", async_function_start_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "async_function_start",
+        async_function_start_fn,
+    )?;
 
     // ── Import 132: async_function_resume(i64, i64, i64, i64, i64) -> () ───
-    let async_function_resume_fn = Func::wrap(&mut store,
+    let async_function_resume_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>,
          fn_table_idx: i64,
          continuation: i64,
@@ -103,10 +113,16 @@ pub(crate) fn define_async_fn(linker: &mut Linker<RuntimeState>, mut store: &mut
             });
         },
     );
-    linker.define(&mut store, "env", "async_function_resume", async_function_resume_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "async_function_resume",
+        async_function_resume_fn,
+    )?;
 
     // ── Import 133: async_function_suspend(i64, i64, i64) -> () ─────────────
-    let async_function_suspend_fn = Func::wrap(&mut store,
+    let async_function_suspend_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, continuation: i64, awaited_promise: i64, state: i64| {
             let cont_handle = value::decode_object_handle(continuation) as usize;
             let cont_fn_idx = {
@@ -177,10 +193,16 @@ pub(crate) fn define_async_fn(linker: &mut Linker<RuntimeState>, mut store: &mut
             }
         },
     );
-    linker.define(&mut store, "env", "async_function_suspend", async_function_suspend_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "async_function_suspend",
+        async_function_suspend_fn,
+    )?;
 
     // ── Import 134: continuation_create(i64, i64, i64) -> i64 ───────────────
-    let continuation_create_fn = Func::wrap(&mut store,
+    let continuation_create_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>,
          fn_table_idx: i64,
          outer_promise: i64,
@@ -215,10 +237,16 @@ pub(crate) fn define_async_fn(linker: &mut Linker<RuntimeState>, mut store: &mut
             value::encode_object_handle(handle)
         },
     );
-    linker.define(&mut store, "env", "continuation_create", continuation_create_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "continuation_create",
+        continuation_create_fn,
+    )?;
 
     // ── Import 135: continuation_save_var(i64, i64, i64) -> () ──────────────
-    let continuation_save_var_fn = Func::wrap(&mut store,
+    let continuation_save_var_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, continuation: i64, slot: i64, val: i64| {
             let handle = value::decode_object_handle(continuation) as usize;
             let actual_slot = nanbox_to_usize(slot);
@@ -228,15 +256,22 @@ pub(crate) fn define_async_fn(linker: &mut Linker<RuntimeState>, mut store: &mut
                 .lock()
                 .expect("continuation table mutex");
             if let Some(entry) = table.get_mut(handle)
-                && actual_slot < entry.captured_vars.len() {
-                    entry.captured_vars[actual_slot] = val;
-                }
+                && actual_slot < entry.captured_vars.len()
+            {
+                entry.captured_vars[actual_slot] = val;
+            }
         },
     );
-    linker.define(&mut store, "env", "continuation_save_var", continuation_save_var_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "continuation_save_var",
+        continuation_save_var_fn,
+    )?;
 
     // ── Import 136: continuation_load_var(i64, i64) -> i64 ──────────────────
-    let continuation_load_var_fn = Func::wrap(&mut store,
+    let continuation_load_var_fn = Func::wrap(
+        &mut store,
         |caller: Caller<'_, RuntimeState>, continuation: i64, slot: i64| -> i64 {
             let handle = value::decode_object_handle(continuation) as usize;
             let actual_slot = nanbox_to_usize(slot);
@@ -246,13 +281,19 @@ pub(crate) fn define_async_fn(linker: &mut Linker<RuntimeState>, mut store: &mut
                 .lock()
                 .expect("continuation table mutex");
             if let Some(entry) = table.get(handle)
-                && actual_slot < entry.captured_vars.len() {
-                    return entry.captured_vars[actual_slot];
-                }
+                && actual_slot < entry.captured_vars.len()
+            {
+                return entry.captured_vars[actual_slot];
+            }
             value::encode_undefined()
         },
     );
-    linker.define(&mut store, "env", "continuation_load_var", continuation_load_var_fn)?;
+    linker.define(
+        &mut store,
+        "env",
+        "continuation_load_var",
+        continuation_load_var_fn,
+    )?;
 
     Ok(())
 }

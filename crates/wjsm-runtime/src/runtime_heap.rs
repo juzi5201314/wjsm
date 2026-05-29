@@ -11,11 +11,7 @@ pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let size = 16 + capacity * 32;
     let new_heap_ptr = heap_ptr.saturating_add(size);
-    let proto = env
-        .object_proto_handle
-        .get(&mut *ctx)
-        .i32()
-        .unwrap_or(-1) as u32;
+    let proto = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
     {
         let data = env.memory.data_mut(&mut *ctx);
         let ptr = heap_ptr as usize;
@@ -71,7 +67,6 @@ pub(crate) fn alloc_host_null_proto_object<C: AsContextMut<Data = RuntimeState>>
         .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
     value::encode_object_handle(obj_table_count)
 }
-
 
 pub(crate) fn create_error_object(
     caller: &mut Caller<'_, RuntimeState>,
@@ -229,7 +224,8 @@ pub(crate) fn alloc_all_settled_result<C: AsContextMut<Data = RuntimeState>>(
     val: i64,
 ) -> i64 {
     let obj = alloc_host_object(ctx, env, 2);
-    let status_value = store_runtime_string_in_state(ctx.as_context_mut().data_mut(), status.to_string());
+    let status_value =
+        store_runtime_string_in_state(ctx.as_context_mut().data_mut(), status.to_string());
     let _ = define_host_data_property_with_env(ctx, env, obj, "status", status_value);
     let _ = define_host_data_property_with_env(ctx, env, obj, value_name, val);
     obj
@@ -241,7 +237,10 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
     errors: i64,
 ) -> i64 {
     let obj = alloc_host_object(ctx, env, 3);
-    let name = store_runtime_string_in_state(ctx.as_context_mut().data_mut(), "AggregateError".to_string());
+    let name = store_runtime_string_in_state(
+        ctx.as_context_mut().data_mut(),
+        "AggregateError".to_string(),
+    );
     let message = store_runtime_string_in_state(
         ctx.as_context_mut().data_mut(),
         "All promises were rejected".to_string(),

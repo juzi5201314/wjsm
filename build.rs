@@ -6,7 +6,10 @@ fn main() {
     let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
 
     let suites = ["happy", "errors", "modules"];
-    let output_path = manifest_dir.join("tests").join("gen").join("generated_fixtures.rs");
+    let output_path = manifest_dir
+        .join("tests")
+        .join("gen")
+        .join("generated_fixtures.rs");
 
     // Collect all fixture paths per suite
     let mut all_cases: Vec<(String, String)> = Vec::new(); // (suite, relative_stem)
@@ -53,7 +56,10 @@ fn main() {
     }
 
     fs::write(&output_path, &out).unwrap_or_else(|e| {
-        panic!("Failed to write generated test file at {}: {e}", output_path.display());
+        panic!(
+            "Failed to write generated test file at {}: {e}",
+            output_path.display()
+        );
     });
 
     // Rerun when fixtures change
@@ -93,10 +99,7 @@ fn collect_fixtures(dir: &Path, suite_dir: &Path, suite: &str, cases: &mut Vec<(
                 continue;
             }
 
-            let relative = path
-                .strip_prefix(suite_dir)
-                .unwrap()
-                .with_extension("");
+            let relative = path.strip_prefix(suite_dir).unwrap().with_extension("");
             let stem = relative.to_str().unwrap().to_string();
             cases.push((suite.to_string(), stem));
         }

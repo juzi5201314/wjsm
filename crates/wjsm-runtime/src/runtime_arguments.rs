@@ -17,9 +17,14 @@ pub(crate) fn create_unmapped_arguments_object(
     } else {
         None
     };
-    let len = arr_ptr.and_then(|ptr| read_array_length(caller, ptr)).unwrap_or(0);
+    let len = arr_ptr
+        .and_then(|ptr| read_array_length(caller, ptr))
+        .unwrap_or(0);
     let capacity = (len + 1).max(4);
-    let obj = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, capacity) };
+    let obj = {
+        let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        alloc_host_object(caller, &_wjsm_env, capacity)
+    };
 
     // 覆写 heap type 为 HEAP_TYPE_ARGUMENTS 用于 [object Arguments] 检测
     if let Some(ptr) = resolve_handle(caller, obj) {
@@ -40,7 +45,8 @@ pub(crate) fn create_unmapped_arguments_object(
     }
 
     // Set length = 实际参数个数（writable, enumerable=false, configurable=true）
-    let _ = define_host_data_property_from_caller(caller, obj, "length", value::encode_f64(len as f64));
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "length", value::encode_f64(len as f64));
 
     obj
 }
@@ -63,9 +69,14 @@ pub(crate) fn create_mapped_arguments_object(
     } else {
         None
     };
-    let len = arr_ptr.and_then(|ptr| read_array_length(caller, ptr)).unwrap_or(0);
+    let len = arr_ptr
+        .and_then(|ptr| read_array_length(caller, ptr))
+        .unwrap_or(0);
     let capacity = (len + 2).max(4);
-    let obj = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, capacity) };
+    let obj = {
+        let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        alloc_host_object(caller, &_wjsm_env, capacity)
+    };
 
     // 覆写 heap type 为 HEAP_TYPE_ARGUMENTS 用于 [object Arguments] 检测
     if let Some(ptr) = resolve_handle(caller, obj) {
@@ -86,7 +97,8 @@ pub(crate) fn create_mapped_arguments_object(
     }
 
     // Set length = 实际参数个数
-    let _ = define_host_data_property_from_caller(caller, obj, "length", value::encode_f64(len as f64));
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "length", value::encode_f64(len as f64));
 
     // Set callee = func_ref（仅非严格模式）
     if !value::is_undefined(func_ref) {

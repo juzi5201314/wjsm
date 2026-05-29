@@ -207,23 +207,7 @@ pub(crate) fn define_object_builtins(
             if !value::is_js_object(obj) {
                 return value::encode_null();
             }
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return value::encode_null();
-            };
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return value::encode_null();
-            };
-            let data = memory.data(&caller);
-            if ptr + 4 > data.len() {
-                return value::encode_null();
-            }
-            let proto_handle =
-                u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
-            if proto_handle == 0xFFFF_FFFF {
-                value::encode_null()
-            } else {
-                value::encode_object_handle(proto_handle)
-            }
+            proxy_or_target_get_prototype_of_impl(&mut caller, obj)
         },
     );
     linker.define(
@@ -307,7 +291,7 @@ pub(crate) fn define_object_builtins(
             if !value::is_js_object(obj) {
                 return value::encode_bool(false);
             }
-            value::encode_bool(is_extensible_impl(&mut caller, obj))
+            value::encode_bool(proxy_or_target_is_extensible_impl(&mut caller, obj))
         },
     );
     linker.define(
@@ -329,7 +313,19 @@ pub(crate) fn define_object_builtins(
                 );
                 return obj;
             }
-            prevent_extensions_impl(&mut caller, obj);
+            let result = proxy_or_target_prevent_extensions_impl(&mut caller, obj);
+            let has_error = caller
+                .data()
+                .runtime_error
+                .lock()
+                .expect("runtime error mutex")
+                .is_some();
+            if !result && value::is_proxy(obj) && !has_error {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Object.preventExtensions proxy trap returned falsy".to_string(),
+                );
+            }
             obj
         },
     );
@@ -387,10 +383,8 @@ pub(crate) fn define_object_builtins(
             let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
             let desc = alloc_host_object(&mut caller, &env, 4);
             if is_accessor {
-                let _ =
-                    define_host_data_property_from_caller(&mut caller, desc, "get", getter_val);
-                let _ =
-                    define_host_data_property_from_caller(&mut caller, desc, "set", setter_val);
+                let _ = define_host_data_property_from_caller(&mut caller, desc, "get", getter_val);
+                let _ = define_host_data_property_from_caller(&mut caller, desc, "set", setter_val);
             } else {
                 let _ = define_host_data_property_from_caller(&mut caller, desc, "value", val);
                 let _ = define_host_data_property_from_caller(

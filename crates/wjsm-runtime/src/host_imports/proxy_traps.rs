@@ -1,11 +1,18 @@
 use anyhow::Result;
-use wasmtime::{Caller, Linker, Func};
 use wasmtime::Store;
+use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
-pub(crate) fn define_proxy_traps(linker: &mut Linker<RuntimeState>, mut store: &mut Store<RuntimeState>) -> Result<()> {
-    fn proxy_entry(caller: &mut Caller<'_, RuntimeState>, proxy: i64, op: &str) -> Option<(i64, i64)> {
+pub(crate) fn define_proxy_traps(
+    linker: &mut Linker<RuntimeState>,
+    mut store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    fn proxy_entry(
+        caller: &mut Caller<'_, RuntimeState>,
+        proxy: i64,
+        op: &str,
+    ) -> Option<(i64, i64)> {
         if !value::is_proxy(proxy) {
             set_runtime_error(
                 caller.data(),
@@ -54,7 +61,11 @@ pub(crate) fn define_proxy_traps(linker: &mut Linker<RuntimeState>, mut store: &
         store_runtime_string(caller, name)
     }
 
-    fn ordinary_get_by_name_id(caller: &mut Caller<'_, RuntimeState>, target: i64, name_id: i32) -> i64 {
+    fn ordinary_get_by_name_id(
+        caller: &mut Caller<'_, RuntimeState>,
+        target: i64,
+        name_id: i32,
+    ) -> i64 {
         if value::is_proxy(target) {
             return proxy_internal_get(caller, target, name_id);
         }
@@ -95,17 +106,33 @@ pub(crate) fn define_proxy_traps(linker: &mut Linker<RuntimeState>, mut store: &
         this_val: i64,
         args: &[i64],
     ) -> i64 {
-        let memory = caller.get_export("memory").and_then(|e| e.into_memory()).unwrap();
-        let shadow_sp_global = caller.get_export("__shadow_sp").and_then(|e| e.into_global()).unwrap();
+        let memory = caller
+            .get_export("memory")
+            .and_then(|e| e.into_memory())
+            .unwrap();
+        let shadow_sp_global = caller
+            .get_export("__shadow_sp")
+            .and_then(|e| e.into_global())
+            .unwrap();
         let saved_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
         let total_size = (args.len() * 8) as i32;
         let new_sp = saved_sp + total_size;
         for (i, &arg) in args.iter().enumerate() {
-            memory.write(&mut *caller, (saved_sp + i as i32 * 8) as usize, &arg.to_le_bytes()).unwrap();
+            memory
+                .write(
+                    &mut *caller,
+                    (saved_sp + i as i32 * 8) as usize,
+                    &arg.to_le_bytes(),
+                )
+                .unwrap();
         }
-        shadow_sp_global.set(&mut *caller, Val::I32(new_sp)).unwrap();
+        shadow_sp_global
+            .set(&mut *caller, Val::I32(new_sp))
+            .unwrap();
         let result = resolve_and_call(caller, trap, this_val, saved_sp, args.len() as i32);
-        shadow_sp_global.set(&mut *caller, Val::I32(saved_sp)).unwrap();
+        shadow_sp_global
+            .set(&mut *caller, Val::I32(saved_sp))
+            .unwrap();
         result
     }
 
@@ -120,7 +147,12 @@ pub(crate) fn define_proxy_traps(linker: &mut Linker<RuntimeState>, mut store: &
         ordinary_get_by_name_id(caller, target, name_id)
     }
 
-    fn proxy_internal_set(caller: &mut Caller<'_, RuntimeState>, proxy: i64, name_id: i32, val: i64) {
+    fn proxy_internal_set(
+        caller: &mut Caller<'_, RuntimeState>,
+        proxy: i64,
+        name_id: i32,
+        val: i64,
+    ) {
         let Some((target, handler)) = proxy_entry(caller, proxy, "set") else {
             return;
         };
@@ -128,14 +160,21 @@ pub(crate) fn define_proxy_traps(linker: &mut Linker<RuntimeState>, mut store: &
             let prop = property_key_value(caller, name_id);
             let result = call_trap_with_args(caller, trap, handler, &[target, prop, val, proxy]);
             if !nanbox_to_bool(result) {
-                set_runtime_error(caller.data(), "TypeError: Proxy set trap returned falsy".to_string());
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Proxy set trap returned falsy".to_string(),
+                );
             }
             return;
         }
         let _ = ordinary_set_by_name_id(caller, target, name_id, val);
     }
 
-    fn proxy_internal_delete(caller: &mut Caller<'_, RuntimeState>, proxy: i64, name_id: i32) -> i64 {
+    fn proxy_internal_delete(
+        caller: &mut Caller<'_, RuntimeState>,
+        proxy: i64,
+        name_id: i32,
+    ) -> i64 {
         let Some((target, handler)) = proxy_entry(caller, proxy, "deleteProperty") else {
             return value::encode_bool(false);
         };
@@ -147,21 +186,24 @@ pub(crate) fn define_proxy_traps(linker: &mut Linker<RuntimeState>, mut store: &
         value::encode_bool(true)
     }
 
-    let proxy_trap_get = Func::wrap(&mut store,
+    let proxy_trap_get = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, proxy: i64, name_id: i32| -> i64 {
             proxy_internal_get(&mut caller, proxy, name_id)
         },
     );
     linker.define(&mut store, "env", "proxy_trap_get", proxy_trap_get)?;
 
-    let proxy_trap_set = Func::wrap(&mut store,
+    let proxy_trap_set = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, proxy: i64, name_id: i32, val: i64| {
             proxy_internal_set(&mut caller, proxy, name_id, val);
         },
     );
     linker.define(&mut store, "env", "proxy_trap_set", proxy_trap_set)?;
 
-    let proxy_trap_delete = Func::wrap(&mut store,
+    let proxy_trap_delete = Func::wrap(
+        &mut store,
         |mut caller: Caller<'_, RuntimeState>, proxy: i64, name_id: i32| -> i64 {
             proxy_internal_delete(&mut caller, proxy, name_id)
         },

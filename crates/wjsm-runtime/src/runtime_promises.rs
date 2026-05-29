@@ -106,7 +106,10 @@ pub(crate) fn alloc_promise_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     entry: PromiseEntry,
 ) -> i64 {
-    let promise = { let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv"); alloc_host_object(caller, &_wjsm_env, 0) };
+    let promise = {
+        let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        alloc_host_object(caller, &_wjsm_env, 0)
+    };
     if value::is_object(promise) {
         let handle = value::decode_object_handle(promise) as usize;
         let mut table = caller
@@ -137,12 +140,6 @@ pub(crate) fn new_promise_capability_from_caller(
     (promise, resolve, reject)
 }
 
-
-
-
-
-
-
 pub(crate) fn is_promise_settled(state: &RuntimeState, promise: i64) -> bool {
     let handle = raw_promise_handle(promise);
     let table = state.promise_table.lock().expect("promise table mutex");
@@ -150,8 +147,6 @@ pub(crate) fn is_promise_settled(state: &RuntimeState, promise: i64) -> bool {
         .map(|entry| !matches!(entry.state, PromiseState::Pending))
         .unwrap_or(true)
 }
-
-
 
 pub(crate) fn queue_promise_reactions(
     state: &RuntimeState,
@@ -285,11 +280,8 @@ pub(crate) fn resolve_promise<C: AsContextMut<Data = RuntimeState> + RuntimeStat
     if (value::is_object(resolution)
         || value::is_function(resolution)
         || value::is_callable(resolution))
-        && let Some(ptr) = resolve_handle_idx_with_env(
-            ctx,
-            env,
-            (resolution as u64 & 0xFFFF_FFFF) as usize,
-        )
+        && let Some(ptr) =
+            resolve_handle_idx_with_env(ctx, env, (resolution as u64 & 0xFFFF_FFFF) as usize)
         && let Some(then) = read_object_property_by_name_with_env(ctx, env, ptr, "then")
         && value::is_callable(then)
     {
@@ -349,8 +341,6 @@ pub(crate) fn set_runtime_error(state: &RuntimeState, message: String) {
     }
 }
 
-
-
 pub(crate) fn nanbox_to_usize(val: i64) -> usize {
     if value::is_bool(val) {
         if value::decode_bool(val) { 1 } else { 0 }
@@ -370,5 +360,3 @@ pub(crate) fn nanbox_to_bool(val: i64) -> bool {
         f64::from_bits(val as u64) != 0.0
     }
 }
-
-
