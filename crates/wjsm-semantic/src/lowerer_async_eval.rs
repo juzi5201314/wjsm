@@ -153,13 +153,12 @@ impl Lowerer {
         captured: &[CapturedBinding],
         _span: Span,
     ) -> Result<ValueId, LoweringError> {
-        // 步骤 1：读取当前共享 env 状态（不持有引用的情况下）
         let existing_env_val = self
             .shared_env_stack
             .last()
             .unwrap()
             .as_ref()
-            .map(|(v, _)| *v);
+            .map(|(value, _)| *value);
         let existing_names = self
             .shared_env_stack
             .last()
@@ -168,62 +167,178 @@ impl Lowerer {
             .map(|(_, names)| names.clone())
             .unwrap_or_default();
 
-        let env_val = match existing_env_val {
-            Some(val) => val,
-            None => {
-                if captured
-                    .iter()
-                    .any(|binding| !self.binding_belongs_to_current_function(binding))
-                {
-                    // 子闭包继续捕获祖先绑定时，复用父 env，保持同一个绑定槽。
-                    self.load_env_object(block)
-                } else {
-                    // 当前函数首次共享本地绑定时创建 env 对象。
-                    let env_val = self.alloc_value();
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::NewObject {
-                            dest: env_val,
-                            capacity: captured.len() as u32,
-                        },
-                    );
-                    env_val
-                }
+        if existing_env_val.is_none() {
+            self.initialize_shared_env_slot();
+            let env_val = self.create_shared_env_object(block, captured);
+            self.current_function.append_instruction(
+                block,
+                Instruction::StoreVar {
+                    name: self.shared_env_ir_name(),
+                    value: env_val,
+                },
+            );
+            self.write_shared_env_bindings(block, env_val, captured, &existing_names);
+
+            let mut name_set = std::collections::HashSet::new();
+            for binding in captured {
+                name_set.insert(binding.clone());
             }
+            *self.shared_env_stack.last_mut().unwrap() = Some((env_val, name_set));
+            return Ok(env_val);
+        }
+
+        let branch_block = if self.current_function.block(block).is_some_and(|candidate| {
+            candidate
+                .instructions()
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::Phi { .. }))
+        }) {
+            let next = self.current_function.new_block();
+            self.current_function
+                .set_terminator(block, Terminator::Jump { target: next });
+            next
+        } else {
+            block
         };
 
-        // 步骤 2：写入新变量到 env 对象（仅写入尚未存在的变量）
+        let loaded_env = self.alloc_value();
+        self.current_function.append_instruction(
+            branch_block,
+            Instruction::LoadVar {
+                dest: loaded_env,
+                name: self.shared_env_ir_name(),
+            },
+        );
+        let undef_const = self.module.add_constant(Constant::Undefined);
+        let undef_val = self.alloc_value();
+        self.current_function.append_instruction(
+            branch_block,
+            Instruction::Const {
+                dest: undef_val,
+                constant: undef_const,
+            },
+        );
+        let env_missing = self.alloc_value();
+        self.current_function.append_instruction(
+            branch_block,
+            Instruction::Compare {
+                dest: env_missing,
+                op: CompareOp::StrictEq,
+                lhs: loaded_env,
+                rhs: undef_val,
+            },
+        );
+
+        let create_block = self.current_function.new_block();
+        let existing_block = self.current_function.new_block();
+        let merge = self.current_function.new_block();
+        self.current_function.set_terminator(
+            branch_block,
+            Terminator::Branch {
+                condition: env_missing,
+                true_block: create_block,
+                false_block: existing_block,
+            },
+        );
+
+        let mut create_bindings = existing_names.iter().cloned().collect::<Vec<_>>();
+        create_bindings.sort_by_key(CapturedBinding::env_key);
+        for binding in captured {
+            if !create_bindings.contains(binding) {
+                create_bindings.push(binding.clone());
+            }
+        }
+        let created_env = self.create_shared_env_object(create_block, &create_bindings);
+        self.current_function.append_instruction(
+            create_block,
+            Instruction::StoreVar {
+                name: self.shared_env_ir_name(),
+                value: created_env,
+            },
+        );
+        self.write_shared_env_bindings(
+            create_block,
+            created_env,
+            &create_bindings,
+            &Default::default(),
+        );
+        self.current_function
+            .set_terminator(create_block, Terminator::Jump { target: merge });
+
+        self.write_shared_env_bindings(existing_block, loaded_env, captured, &existing_names);
+        self.current_function
+            .set_terminator(existing_block, Terminator::Jump { target: merge });
+
+        let env_val = self.alloc_value();
+        self.current_function.append_instruction(
+            merge,
+            Instruction::Phi {
+                dest: env_val,
+                sources: vec![
+                    PhiSource {
+                        predecessor: create_block,
+                        value: created_env,
+                    },
+                    PhiSource {
+                        predecessor: existing_block,
+                        value: loaded_env,
+                    },
+                ],
+            },
+        );
+        self.current_function.append_instruction(
+            merge,
+            Instruction::StoreVar {
+                name: self.shared_env_ir_name(),
+                value: env_val,
+            },
+        );
+        if let Some((value, names)) = self.shared_env_stack.last_mut().unwrap() {
+            *value = env_val;
+            for binding in captured {
+                names.insert(binding.clone());
+            }
+        }
+        self.expr_merge_block = Some(merge);
+
+        Ok(env_val)
+    }
+
+    fn create_shared_env_object(
+        &mut self,
+        block: BasicBlockId,
+        captured: &[CapturedBinding],
+    ) -> ValueId {
+        if captured
+            .iter()
+            .any(|binding| !self.binding_belongs_to_current_function(binding))
+        {
+            self.load_env_object(block)
+        } else {
+            let env_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::NewObject {
+                    dest: env_val,
+                    capacity: captured.len() as u32,
+                },
+            );
+            env_val
+        }
+    }
+
+    fn write_shared_env_bindings(
+        &mut self,
+        block: BasicBlockId,
+        env_val: ValueId,
+        captured: &[CapturedBinding],
+        existing_names: &std::collections::HashSet<CapturedBinding>,
+    ) {
         for binding in captured {
             if existing_names.contains(binding) {
                 continue;
             }
-
-            let current_val = if self.binding_belongs_to_current_function(binding) {
-                let current_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::LoadVar {
-                        dest: current_val,
-                        name: binding.var_ir_name(),
-                    },
-                );
-                current_val
-            } else {
-                self.record_capture(binding.clone());
-                let parent_env = self.load_env_object(block);
-                let parent_key = self.append_env_key_const(block, binding);
-                let current_val = self.alloc_value();
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::GetProp {
-                        dest: current_val,
-                        object: parent_env,
-                        key: parent_key,
-                    },
-                );
-                current_val
-            };
-
+            let current_val = self.load_value_for_shared_env_binding(block, binding);
             let key_val = self.append_env_key_const(block, binding);
             self.current_function.append_instruction(
                 block,
@@ -234,25 +349,38 @@ impl Lowerer {
                 },
             );
         }
+    }
 
-        // 步骤 3：更新共享 env 状态
-        if existing_env_val.is_none() {
-            let mut name_set = std::collections::HashSet::new();
-            for binding in captured {
-                name_set.insert(binding.clone());
-            }
-            *self.shared_env_stack.last_mut().unwrap() = Some((env_val, name_set));
+    fn load_value_for_shared_env_binding(
+        &mut self,
+        block: BasicBlockId,
+        binding: &CapturedBinding,
+    ) -> ValueId {
+        if self.binding_belongs_to_current_function(binding) {
+            let current_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::LoadVar {
+                    dest: current_val,
+                    name: binding.var_ir_name(),
+                },
+            );
+            current_val
         } else {
-            // 追加新变量名到已有集合
-            let shared = self.shared_env_stack.last_mut().unwrap();
-            if let Some((_, names)) = shared {
-                for binding in captured {
-                    names.insert(binding.clone());
-                }
-            }
+            self.record_capture(binding.clone());
+            let parent_env = self.load_env_object(block);
+            let parent_key = self.append_env_key_const(block, binding);
+            let current_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::GetProp {
+                    dest: current_val,
+                    object: parent_env,
+                    key: parent_key,
+                },
+            );
+            current_val
         }
-
-        Ok(env_val)
     }
 
     pub(crate) fn lower_super_prop(

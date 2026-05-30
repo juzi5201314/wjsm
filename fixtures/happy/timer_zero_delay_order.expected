@@ -2,4 +2,7 @@ exit_code: 0
 --- stdout ---
 start
 end
+first
+second
+third
 --- stderr ---

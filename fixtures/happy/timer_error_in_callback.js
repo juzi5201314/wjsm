@@ -1,6 +1,5 @@
-// Error inside timer callback — documents actual behavior.
-// NOTE: Timer callbacks do not currently fire, so this fixture produces no error output.
-// The entire timer body is dead code; exit=0 because main-thread completes normally.
+// Error inside timer callback — documents current host-timer behavior.
+// Timer callbacks fire; a thrown callback error does not stop later timer callbacks.
 console.log("main-start");
 
 setTimeout(() => {

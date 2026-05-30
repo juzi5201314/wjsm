@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-start
-end
-outer
-inner
+main
+fast: 1
+fast: 2
+fast: 3
 --- stderr ---

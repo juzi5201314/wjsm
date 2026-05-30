@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-start
-end
-outer
-inner
+main
+chain-1: 1
+chain-2: 2
+chain-3: 3
 --- stderr ---

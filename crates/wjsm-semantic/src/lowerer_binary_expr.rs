@@ -503,18 +503,38 @@ impl Lowerer {
         // ── Step 1: 确定存储目标类型并加载当前值 ──
         enum Target {
             Var(String),
+            Captured(ValueId, ValueId), // env_val, key_val
             Member { obj: ValueId, key: ValueId },
         }
 
         let target = match update.arg.as_ref() {
             swc_ast::Expr::Ident(ident) => {
                 let name = ident.sym.to_string();
-                // 性能优化：使用 lookup_for_assign 一次遍历完成 const 检查 + TDZ 检查 + scope 解析
                 let (scope_id, _kind) = self
                     .scopes
                     .lookup_for_assign(&name)
                     .map_err(|msg| self.error(update.span(), msg))?;
-                Target::Var(format!("${scope_id}.{name}"))
+
+                let binding = CapturedBinding::new(name.clone(), scope_id);
+                if self.binding_belongs_to_current_function(&binding)
+                    && self.is_shared_binding(&binding)
+                {
+                    return self.lower_update_shared_local(
+                        update,
+                        block,
+                        format!("${scope_id}.{name}"),
+                        &binding,
+                    );
+                }
+
+                if !self.binding_belongs_to_current_function(&binding) {
+                    self.record_capture(binding.clone());
+                    let env_val = self.load_env_object(block);
+                    let key_val = self.append_env_key_const(block, &binding);
+                    Target::Captured(env_val, key_val)
+                } else {
+                    Target::Var(format!("${scope_id}.{name}"))
+                }
             }
             swc_ast::Expr::Member(member) => {
                 let mut current_block = block;
@@ -564,6 +584,16 @@ impl Lowerer {
                     Instruction::LoadVar {
                         dest: old_val,
                         name: ir_name.clone(),
+                    },
+                );
+            }
+            Target::Captured(env_val, key_val) => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest: old_val,
+                        object: *env_val,
+                        key: *key_val,
                     },
                 );
             }
@@ -617,13 +647,23 @@ impl Lowerer {
             },
         );
 
-        // 5. 写回 (StoreVar or SetProp)
+        // 5. 写回 (StoreVar / SetProp / SetProp for captured)
         match target {
             Target::Var(ir_name) => {
                 self.current_function.append_instruction(
                     block,
                     Instruction::StoreVar {
                         name: ir_name,
+                        value: new_val,
+                    },
+                );
+            }
+            Target::Captured(env_val, key_val) => {
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::SetProp {
+                        object: env_val,
+                        key: key_val,
                         value: new_val,
                     },
                 );
@@ -641,6 +681,174 @@ impl Lowerer {
         }
 
         Ok(if update.prefix { new_val } else { num_val })
+    }
+
+    fn append_update_math(
+        &mut self,
+        block: BasicBlockId,
+        old_val: ValueId,
+        update_op: swc_ast::UpdateOp,
+    ) -> (ValueId, ValueId) {
+        let num_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Unary {
+                dest: num_val,
+                op: UnaryOp::Pos,
+                value: old_val,
+            },
+        );
+
+        let one = self.module.add_constant(Constant::Number(1.0));
+        let one_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: one_val,
+                constant: one,
+            },
+        );
+
+        let new_val = self.alloc_value();
+        let op = match update_op {
+            swc_ast::UpdateOp::PlusPlus => BinaryOp::Add,
+            swc_ast::UpdateOp::MinusMinus => BinaryOp::Sub,
+        };
+        self.current_function.append_instruction(
+            block,
+            Instruction::Binary {
+                dest: new_val,
+                op,
+                lhs: num_val,
+                rhs: one_val,
+            },
+        );
+
+        (num_val, new_val)
+    }
+
+    fn lower_update_shared_local(
+        &mut self,
+        update: &swc_ast::UpdateExpr,
+        block: BasicBlockId,
+        ir_name: String,
+        binding: &CapturedBinding,
+    ) -> Result<ValueId, LoweringError> {
+        let branch_block = if self.current_function.block(block).is_some_and(|b| {
+            b.instructions()
+                .iter()
+                .any(|instruction| matches!(instruction, Instruction::Phi { .. }))
+        }) {
+            let new_branch = self.current_function.new_block();
+            self.current_function
+                .set_terminator(block, Terminator::Jump { target: new_branch });
+            new_branch
+        } else {
+            block
+        };
+
+        let env_val = self.alloc_value();
+        self.current_function.append_instruction(
+            branch_block,
+            Instruction::LoadVar {
+                dest: env_val,
+                name: self.shared_env_ir_name(),
+            },
+        );
+        let undef_const = self.module.add_constant(Constant::Undefined);
+        let undef_val = self.alloc_value();
+        self.current_function.append_instruction(
+            branch_block,
+            Instruction::Const {
+                dest: undef_val,
+                constant: undef_const,
+            },
+        );
+        let env_missing = self.alloc_value();
+        self.current_function.append_instruction(
+            branch_block,
+            Instruction::Compare {
+                dest: env_missing,
+                op: CompareOp::StrictEq,
+                lhs: env_val,
+                rhs: undef_val,
+            },
+        );
+
+        let local_block = self.current_function.new_block();
+        let env_block = self.current_function.new_block();
+        let merge = self.current_function.new_block();
+        self.current_function.set_terminator(
+            branch_block,
+            Terminator::Branch {
+                condition: env_missing,
+                true_block: local_block,
+                false_block: env_block,
+            },
+        );
+
+        let local_old = self.alloc_value();
+        self.current_function.append_instruction(
+            local_block,
+            Instruction::LoadVar {
+                dest: local_old,
+                name: ir_name.clone(),
+            },
+        );
+        let (local_num, local_new) = self.append_update_math(local_block, local_old, update.op);
+        self.current_function.append_instruction(
+            local_block,
+            Instruction::StoreVar {
+                name: ir_name,
+                value: local_new,
+            },
+        );
+        let local_result = if update.prefix { local_new } else { local_num };
+        self.current_function
+            .set_terminator(local_block, Terminator::Jump { target: merge });
+
+        let key_val = self.append_env_key_const(env_block, binding);
+        let env_old = self.alloc_value();
+        self.current_function.append_instruction(
+            env_block,
+            Instruction::GetProp {
+                dest: env_old,
+                object: env_val,
+                key: key_val,
+            },
+        );
+        let (env_num, env_new) = self.append_update_math(env_block, env_old, update.op);
+        self.current_function.append_instruction(
+            env_block,
+            Instruction::SetProp {
+                object: env_val,
+                key: key_val,
+                value: env_new,
+            },
+        );
+        let env_result = if update.prefix { env_new } else { env_num };
+        self.current_function
+            .set_terminator(env_block, Terminator::Jump { target: merge });
+
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: local_block,
+                        value: local_result,
+                    },
+                    PhiSource {
+                        predecessor: env_block,
+                        value: env_result,
+                    },
+                ],
+            },
+        );
+        self.expr_merge_block = Some(merge);
+        Ok(result)
     }
 
     pub(crate) fn lower_cond(

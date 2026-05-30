@@ -102,11 +102,12 @@ impl Lowerer {
             // 非闭包函数：直接使用 FunctionRef
             func_ref_val
         } else {
-            // 闭包函数：获取共享 env 对象（同一外层函数中多个闭包共享）
-            let env_val = self.ensure_shared_env(outer_block, &captured, fn_decl.span())?;
+            let mut closure_block = outer_block;
+            let env_val = self.ensure_shared_env(closure_block, &captured, fn_decl.span())?;
+            closure_block = self.resolve_store_block(closure_block);
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
-                outer_block,
+                closure_block,
                 Instruction::CallBuiltin {
                     dest: Some(closure_val),
                     builtin: Builtin::CreateClosure,
@@ -701,10 +702,12 @@ impl Lowerer {
         let callee_val = if captured.is_empty() {
             wrapper_ref_val
         } else {
-            let env_val = self.ensure_shared_env(outer_block, &captured, fn_decl.span())?;
+            let mut closure_block = outer_block;
+            let env_val = self.ensure_shared_env(closure_block, &captured, fn_decl.span())?;
+            closure_block = self.resolve_store_block(closure_block);
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
-                outer_block,
+                closure_block,
                 Instruction::CallBuiltin {
                     dest: Some(closure_val),
                     builtin: Builtin::CreateClosure,
@@ -1342,10 +1345,12 @@ impl Lowerer {
         let callee_val = if captured.is_empty() {
             wrapper_ref_val
         } else {
-            let env_val = self.ensure_shared_env(outer_block, &captured, fn_decl.span())?;
+            let mut closure_block = outer_block;
+            let env_val = self.ensure_shared_env(closure_block, &captured, fn_decl.span())?;
+            closure_block = self.resolve_store_block(closure_block);
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
-                outer_block,
+                closure_block,
                 Instruction::CallBuiltin {
                     dest: Some(closure_val),
                     builtin: Builtin::CreateClosure,

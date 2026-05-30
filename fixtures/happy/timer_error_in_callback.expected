@@ -2,4 +2,6 @@ exit_code: 0
 --- stdout ---
 main-start
 main-end
+before-throw
+after-error-timer
 --- stderr ---

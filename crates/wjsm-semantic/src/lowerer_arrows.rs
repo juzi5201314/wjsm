@@ -118,10 +118,12 @@ impl Lowerer {
         let callee_val = if captured.is_empty() {
             func_ref_val
         } else {
-            let env_val = self.ensure_shared_env(block, &captured, arrow.span)?;
+            let mut closure_block = block;
+            let env_val = self.ensure_shared_env(closure_block, &captured, arrow.span)?;
+            closure_block = self.resolve_store_block(closure_block);
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                closure_block,
                 Instruction::CallBuiltin {
                     dest: Some(closure_val),
                     builtin: Builtin::CreateClosure,
@@ -753,10 +755,12 @@ impl Lowerer {
         let callee_val = if captured.is_empty() {
             wrapper_ref_val
         } else {
-            let env_val = self.ensure_shared_env(block, &captured, arrow.span)?;
+            let mut closure_block = block;
+            let env_val = self.ensure_shared_env(closure_block, &captured, arrow.span)?;
+            closure_block = self.resolve_store_block(closure_block);
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                closure_block,
                 Instruction::CallBuiltin {
                     dest: Some(closure_val),
                     builtin: Builtin::CreateClosure,

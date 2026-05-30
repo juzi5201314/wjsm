@@ -1,7 +1,6 @@
 exit_code: 0
 --- stdout ---
-start
-end
-outer
-inner
+main
+timer-1-start
+timer-2
 --- stderr ---
