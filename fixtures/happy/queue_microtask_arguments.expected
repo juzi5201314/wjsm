@@ -1,7 +1,4 @@
 exit_code: 0
 --- stdout ---
-start
-end
-outer
-inner
+0 1
 --- stderr ---

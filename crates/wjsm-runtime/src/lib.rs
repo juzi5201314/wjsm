@@ -1134,31 +1134,17 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 let interval = entry.interval;
                 let entry_id = entry.id;
 
-                // Call the callback via WASM function table call_indirect
-                let raw_idx = value::decode_function_idx(callback) as u64;
-                if let Some(Extern::Table(tbl)) = instance.get_export(&mut store, "__table") {
-                    if let Some(Ref::Func(Some(func))) = tbl.get(&mut store, raw_idx)
-                        && let Ok(typed) = func.typed::<(i64, i32, i32), i64>(&store)
-                    {
-                        match typed.call(&mut store, (value::encode_undefined(), 0i32, 0i32)) {
-                            Ok(_) => {}
-                            Err(e) => {
-                                let msg = format!("timer callback error: {}", e);
-                                let mut error_lock = store
-                                    .data()
-                                    .runtime_error
-                                    .lock()
-                                    .expect("runtime_error mutex");
-                                if error_lock.is_none() {
-                                    *error_lock = Some(msg);
-                                }
-                                break;
-                            }
-                        }
-                    }
-                    // Drain microtasks after timer callback
-                    drain_microtasks(&mut store, &wasm_env);
-                }
+                // 定时器回调按宿主 API 语义以 this=undefined、零参数调用。
+                call_host_function_with_args(
+                    &mut store,
+                    &wasm_env,
+                    callback,
+                    value::encode_undefined(),
+                    &[],
+                );
+
+                // Drain microtasks after timer callback
+                drain_microtasks(&mut store, &wasm_env);
 
                 // Re-schedule if repeating
                 if repeating {

@@ -607,19 +607,22 @@ impl Lowerer {
         block: BasicBlockId,
         binding: &CapturedBinding,
     ) -> Result<ValueId, LoweringError> {
+        let mut current_block = block;
         let env_val = if self.binding_belongs_to_current_function(binding) {
-            self.shared_env_value()
-                .expect("shared binding must have a materialized env")
+            let env_val =
+                self.ensure_shared_env(current_block, std::slice::from_ref(binding), assign.span)?;
+            current_block = self.resolve_store_block(current_block);
+            env_val
         } else {
             self.record_capture(binding.clone());
-            self.load_env_object(block)
+            self.load_env_object(current_block)
         };
-        let key_val = self.append_env_key_const(block, binding);
+        let key_val = self.append_env_key_const(current_block, binding);
 
         match assign.op {
             swc_ast::AssignOp::Assign => {
-                let rhs = self.lower_expr(assign.right.as_ref(), block)?;
-                let store_block = self.resolve_store_block(block);
+                let rhs = self.lower_expr(assign.right.as_ref(), current_block)?;
+                let store_block = self.resolve_store_block(current_block);
                 self.current_function.append_instruction(
                     store_block,
                     Instruction::SetProp {
@@ -638,8 +641,13 @@ impl Lowerer {
                         | swc_ast::AssignOp::OrAssign
                         | swc_ast::AssignOp::NullishAssign
                 ) {
-                    return self
-                        .lower_logical_assign_captured(assign, block, binding, env_val, key_val);
+                    return self.lower_logical_assign_captured(
+                        assign,
+                        current_block,
+                        binding,
+                        env_val,
+                        key_val,
+                    );
                 }
                 // 算术/位运算复合赋值
                 let bin_op = assign_op_to_binary(op).ok_or_else(|| {
@@ -648,19 +656,19 @@ impl Lowerer {
                 // 从 env 对象读取当前值
                 let loaded = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::GetProp {
                         dest: loaded,
                         object: env_val,
                         key: key_val,
                     },
                 );
-                let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+                let rhs = self.lower_expr(assign.right.as_ref(), current_block)?;
                 let dest = self.alloc_value();
                 match bin_op {
                     BinaryOp::Mod => {
                         self.current_function.append_instruction(
-                            block,
+                            current_block,
                             Instruction::CallBuiltin {
                                 dest: Some(dest),
                                 builtin: Builtin::F64Mod,
@@ -670,7 +678,7 @@ impl Lowerer {
                     }
                     BinaryOp::Exp => {
                         self.current_function.append_instruction(
-                            block,
+                            current_block,
                             Instruction::CallBuiltin {
                                 dest: Some(dest),
                                 builtin: Builtin::F64Exp,
@@ -680,7 +688,7 @@ impl Lowerer {
                     }
                     _ => {
                         self.current_function.append_instruction(
-                            block,
+                            current_block,
                             Instruction::Binary {
                                 dest,
                                 op: bin_op,
@@ -691,9 +699,9 @@ impl Lowerer {
                     }
                 }
                 // 写回 env 对象
-                let key_val2 = self.append_env_key_const(block, binding);
+                let key_val2 = self.append_env_key_const(current_block, binding);
                 self.current_function.append_instruction(
-                    block,
+                    current_block,
                     Instruction::SetProp {
                         object: env_val,
                         key: key_val2,

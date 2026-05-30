@@ -2,5 +2,5 @@ exit_code: 0
 --- stdout ---
 start
 end
-Internal error: timer event loop exceeded max iterations
+tick 1
 --- stderr ---

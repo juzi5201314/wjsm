@@ -4,4 +4,5 @@ main-start
 main-end
 microtask-1
 microtask-2
+timeout-callback
 --- stderr ---

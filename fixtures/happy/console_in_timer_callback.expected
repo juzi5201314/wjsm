@@ -2,4 +2,6 @@ exit_code: 0
 --- stdout ---
 before-timer
 after-schedule
+inside-timer-log
+[warn] inside-timer-warn
 --- stderr ---

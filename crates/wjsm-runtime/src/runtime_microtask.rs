@@ -89,7 +89,13 @@ pub(crate) fn drain_microtasks<C: AsContextMut<Data = RuntimeState> + RuntimeSta
             }
             Some(Microtask::MicrotaskCallback { callback }) => {
                 if value::is_callable(callback) {
-                    let _ = call_host_function(ctx, env, callback, value::encode_undefined());
+                    let _ = call_host_function_with_args(
+                        ctx,
+                        env,
+                        callback,
+                        value::encode_undefined(),
+                        &[],
+                    );
                 }
             }
             Some(Microtask::AsyncResume {
@@ -186,6 +192,34 @@ pub(crate) fn call_host_function<C: AsContextMut<Data = RuntimeState> + RuntimeS
     handler: i64,
     argument: i64,
 ) -> Option<i64> {
+    call_host_function_with_args(ctx, env, handler, value::encode_undefined(), &[argument])
+}
+
+pub(crate) fn call_host_function_with_args<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    handler: i64,
+    this_val: i64,
+    args: &[i64],
+) -> Option<i64> {
+    if value::is_bound(handler) {
+        let bound_idx = value::decode_bound_idx(handler);
+        let (target_func, bound_this, mut combined_args) = {
+            let state = ctx.state_mut();
+            let bound = state.bound_objects.lock().unwrap();
+            let record = &bound[bound_idx as usize];
+            (
+                record.target_func,
+                record.bound_this,
+                record.bound_args.clone(),
+            )
+        };
+        combined_args.extend_from_slice(args);
+        return call_host_function_with_args(ctx, env, target_func, bound_this, &combined_args);
+    }
+
     let (func_idx, env_obj) = {
         let state = ctx.state_mut();
         if value::is_closure(handler) {
@@ -198,28 +232,25 @@ pub(crate) fn call_host_function<C: AsContextMut<Data = RuntimeState> + RuntimeS
                 value::decode_function_idx(handler),
                 value::encode_undefined(),
             )
-        } else if value::is_bound(handler) {
-            let bound_idx = value::decode_bound_idx(handler);
-            let bound = state.bound_objects.lock().unwrap();
-            let record = &bound[bound_idx as usize];
-            (
-                value::decode_function_idx(record.target_func),
-                record.bound_this,
-            )
         } else {
             return None;
         }
     };
 
     let saved_sp = env.shadow_sp.get(&mut *ctx).i32().unwrap_or(0);
+    let args_bytes = args.len().checked_mul(8)?;
     {
         let data = env.memory.data_mut(&mut *ctx);
         let offset = saved_sp as usize;
-        if offset + 8 <= data.len() {
-            data[offset..offset + 8].copy_from_slice(&argument.to_le_bytes());
+        if offset + args_bytes > data.len() {
+            return None;
+        }
+        for (index, arg) in args.iter().enumerate() {
+            let write_offset = offset + index * 8;
+            data[write_offset..write_offset + 8].copy_from_slice(&arg.to_le_bytes());
         }
     }
-    let new_sp = saved_sp + 8;
+    let new_sp = saved_sp + (args.len() as i32) * 8;
     let _ = env.shadow_sp.set(&mut *ctx, Val::I32(new_sp));
 
     let func_ref = env.func_table.get(&mut *ctx, func_idx as u64);
@@ -228,26 +259,31 @@ pub(crate) fn call_host_function<C: AsContextMut<Data = RuntimeState> + RuntimeS
         let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
         return None;
     };
+    let previous_new_target = ctx
+        .state_mut()
+        .new_target
+        .replace(value::encode_undefined());
     let mut results = [Val::I64(0)];
-    if let Err(err) = func.call(
+    let call_result = func.call(
         &mut *ctx,
         &[
             Val::I64(env_obj),
-            Val::I64(value::encode_undefined()),
+            Val::I64(this_val),
             Val::I32(saved_sp),
-            Val::I32(1),
+            Val::I32(args.len() as i32),
         ],
         &mut results,
-    ) {
+    );
+    ctx.state_mut().new_target.set(previous_new_target);
+    let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
+
+    if let Err(err) = call_result {
         set_runtime_error(
             ctx.state_mut(),
-            format!("promise reaction handler error: {err}"),
+            format!("host function callback error: {err}"),
         );
-        let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
         return None;
     }
-
-    let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
 
     results[0].i64()
 }

@@ -278,6 +278,29 @@ impl Lowerer {
             .and_then(|shared| shared.as_ref().map(|(value, _)| *value))
     }
 
+    pub(crate) fn shared_env_ir_name(&self) -> String {
+        format!("${}.$shared_env", self.current_function_scope_id())
+    }
+
+    pub(crate) fn initialize_shared_env_slot(&mut self) {
+        let undef_const = self.module.add_constant(Constant::Undefined);
+        let undef_val = self.alloc_value();
+        self.current_function.append_instruction(
+            BasicBlockId(0),
+            Instruction::Const {
+                dest: undef_val,
+                constant: undef_const,
+            },
+        );
+        self.current_function.append_instruction(
+            BasicBlockId(0),
+            Instruction::StoreVar {
+                name: self.shared_env_ir_name(),
+                value: undef_val,
+            },
+        );
+    }
+
     pub(crate) fn append_env_key_const(
         &mut self,
         block: BasicBlockId,
@@ -302,17 +325,101 @@ impl Lowerer {
         block: BasicBlockId,
         binding: &CapturedBinding,
     ) -> Result<ValueId, LoweringError> {
-        let env_val = if self.binding_belongs_to_current_function(binding) {
-            self.shared_env_value()
-                .expect("shared binding must have a materialized env")
-        } else {
-            self.record_capture(binding.clone());
-            self.load_env_object(block)
-        };
-        let key_val = self.append_env_key_const(block, binding);
+        let current_block = block;
+        if self.binding_belongs_to_current_function(binding) {
+            let shared_env = self.alloc_value();
+            self.current_function.append_instruction(
+                current_block,
+                Instruction::LoadVar {
+                    dest: shared_env,
+                    name: self.shared_env_ir_name(),
+                },
+            );
+
+            let undef_const = self.module.add_constant(Constant::Undefined);
+            let undef_val = self.alloc_value();
+            self.current_function.append_instruction(
+                current_block,
+                Instruction::Const {
+                    dest: undef_val,
+                    constant: undef_const,
+                },
+            );
+
+            let env_missing = self.alloc_value();
+            self.current_function.append_instruction(
+                current_block,
+                Instruction::Compare {
+                    dest: env_missing,
+                    op: CompareOp::StrictEq,
+                    lhs: shared_env,
+                    rhs: undef_val,
+                },
+            );
+
+            let local_block = self.current_function.new_block();
+            let env_block = self.current_function.new_block();
+            let merge = self.current_function.new_block();
+            self.current_function.set_terminator(
+                current_block,
+                Terminator::Branch {
+                    condition: env_missing,
+                    true_block: local_block,
+                    false_block: env_block,
+                },
+            );
+
+            let local_val = self.alloc_value();
+            self.current_function.append_instruction(
+                local_block,
+                Instruction::LoadVar {
+                    dest: local_val,
+                    name: binding.var_ir_name(),
+                },
+            );
+            self.current_function
+                .set_terminator(local_block, Terminator::Jump { target: merge });
+
+            let key_val = self.append_env_key_const(env_block, binding);
+            let env_val = self.alloc_value();
+            self.current_function.append_instruction(
+                env_block,
+                Instruction::GetProp {
+                    dest: env_val,
+                    object: shared_env,
+                    key: key_val,
+                },
+            );
+            self.current_function
+                .set_terminator(env_block, Terminator::Jump { target: merge });
+
+            let result = self.alloc_value();
+            self.current_function.append_instruction(
+                merge,
+                Instruction::Phi {
+                    dest: result,
+                    sources: vec![
+                        PhiSource {
+                            predecessor: local_block,
+                            value: local_val,
+                        },
+                        PhiSource {
+                            predecessor: env_block,
+                            value: env_val,
+                        },
+                    ],
+                },
+            );
+            self.expr_merge_block = Some(merge);
+            return Ok(result);
+        }
+
+        self.record_capture(binding.clone());
+        let env_val = self.load_env_object(current_block);
+        let key_val = self.append_env_key_const(current_block, binding);
         let dest = self.alloc_value();
         self.current_function.append_instruction(
-            block,
+            current_block,
             Instruction::GetProp {
                 dest,
                 object: env_val,

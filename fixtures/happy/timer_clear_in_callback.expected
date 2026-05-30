@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-start
-end
-outer
-inner
+main-1
+main-2
+should-not-run
+clearing
 --- stderr ---

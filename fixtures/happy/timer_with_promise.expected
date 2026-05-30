@@ -3,4 +3,6 @@ exit_code: 0
 main
 main-end
 promise-before-timeout
+timeout
+promise-inside-timeout
 --- stderr ---

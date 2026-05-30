@@ -4,4 +4,5 @@ main-after-async-call
 async-start
 after-await
 async-end
+timeout-in-async
 --- stderr ---

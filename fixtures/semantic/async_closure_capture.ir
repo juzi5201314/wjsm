@@ -47,21 +47,23 @@ module {
     c44 = undefined
     c45 = bool(false)
     c46 = functionref(@1)
-    c47 = string("$0.undefined")
+    c47 = undefined
     c48 = string("$0.undefined")
-    c49 = string("$1.count")
-    c50 = functionref(@2)
-    c51 = string("$0.undefined")
+    c49 = string("$0.undefined")
+    c50 = string("$1.count")
+    c51 = functionref(@2)
     c52 = undefined
-    c53 = undefined
-    c54 = functionref(@3)
+    c53 = string("$0.undefined")
+    c54 = undefined
     c55 = undefined
-    c56 = undefined
-    c57 = functionref(@4)
+    c56 = functionref(@3)
+    c57 = undefined
     c58 = undefined
-    c59 = undefined
-    c60 = functionref(@5)
+    c59 = functionref(@4)
+    c60 = undefined
     c61 = undefined
+    c62 = functionref(@5)
+    c63 = undefined
 
   fn @anon_0$async [captures: $0.undefined, $1.count] [params: $2.$env, $2.$this] [entry=bb0]:
     bb0:
@@ -160,17 +162,20 @@ module {
       %4 = const c23
       store var $1.count, %4
       %5 = const c46
-      %6 = load var $env
+      %6 = const c47
+      store var $1.$shared_env, %6
       %7 = load var $env
-      %8 = const c47
-      %9 = get_prop %7, %8
-      %10 = const c48
-      set_prop %6, %10, %9
-      %11 = load var $1.count
-      %12 = const c49
-      set_prop %6, %12, %11
-      %13 = call builtin.create_closure(%5, %6)
-      return %13
+      store var $1.$shared_env, %7
+      %8 = load var $env
+      %9 = const c48
+      %10 = get_prop %8, %9
+      %11 = const c49
+      set_prop %7, %11, %10
+      %12 = load var $1.count
+      %13 = const c50
+      set_prop %7, %13, %12
+      %14 = call builtin.create_closure(%5, %7)
+      return %14
 
   fn @arrow_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
     bb0:
@@ -236,52 +241,55 @@ module {
       store var $0.$global, %20
       %21 = const c20
       store var $this, %21
-      %22 = const c50
-      %23 = new_object(capacity=1)
-      %24 = load var $0.undefined
-      %25 = const c51
-      set_prop %23, %25, %24
-      %26 = call builtin.create_closure(%22, %23)
-      store var $0.makeCounter, %26
-      %27 = const c52
-      %28 = load var $0.makeCounter
-      %29 = call %28, this=%27
-      store var $0.counter, %29
-      %30 = const c53
-      %31 = load var $0.counter
-      %32 = call %31, this=%30
-      %33 = const c54
-      %34 = const c55
-      %35 = call builtin.promise.then(%32, %33, %34)
-      %36 = is_exception %35
-      branch %36, bb2, bb1
+      %22 = const c51
+      %23 = const c52
+      store var $0.$shared_env, %23
+      %24 = new_object(capacity=1)
+      store var $0.$shared_env, %24
+      %25 = load var $0.undefined
+      %26 = const c53
+      set_prop %24, %26, %25
+      %27 = call builtin.create_closure(%22, %24)
+      store var $0.makeCounter, %27
+      %28 = const c54
+      %29 = load var $0.makeCounter
+      %30 = call %29, this=%28
+      store var $0.counter, %30
+      %31 = const c55
+      %32 = load var $0.counter
+      %33 = call %32, this=%31
+      %34 = const c56
+      %35 = const c57
+      %36 = call builtin.promise.then(%33, %34, %35)
+      %37 = is_exception %36
+      branch %37, bb2, bb1
     bb1:
-      %38 = const c56
-      %39 = load var $0.counter
-      %40 = call %39, this=%38
-      %41 = const c57
-      %42 = const c58
-      %43 = call builtin.promise.then(%40, %41, %42)
-      %44 = is_exception %43
-      branch %44, bb4, bb3
+      %39 = const c58
+      %40 = load var $0.counter
+      %41 = call %40, this=%39
+      %42 = const c59
+      %43 = const c60
+      %44 = call builtin.promise.then(%41, %42, %43)
+      %45 = is_exception %44
+      branch %45, bb4, bb3
     bb2:
-      %37 = call builtin.exception_value(%35)
-      throw %37
+      %38 = call builtin.exception_value(%36)
+      throw %38
     bb3:
-      %46 = const c59
-      %47 = load var $0.counter
-      %48 = call %47, this=%46
-      %49 = const c60
-      %50 = const c61
-      %51 = call builtin.promise.then(%48, %49, %50)
-      %52 = is_exception %51
-      branch %52, bb6, bb5
+      %47 = const c61
+      %48 = load var $0.counter
+      %49 = call %48, this=%47
+      %50 = const c62
+      %51 = const c63
+      %52 = call builtin.promise.then(%49, %50, %51)
+      %53 = is_exception %52
+      branch %53, bb6, bb5
     bb4:
-      %45 = call builtin.exception_value(%43)
-      throw %45
+      %46 = call builtin.exception_value(%44)
+      throw %46
     bb5:
       return
     bb6:
-      %53 = call builtin.exception_value(%51)
-      throw %53
+      %54 = call builtin.exception_value(%52)
+      throw %54
 }

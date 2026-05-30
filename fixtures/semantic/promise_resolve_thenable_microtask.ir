@@ -28,10 +28,11 @@ module {
     c25 = number(0)
     c26 = string("$0.thenable")
     c27 = functionref(@1)
-    c28 = string("$0.thenable")
-    c29 = undefined
-    c30 = functionref(@2)
-    c31 = undefined
+    c28 = undefined
+    c29 = string("$0.thenable")
+    c30 = undefined
+    c31 = functionref(@2)
+    c32 = undefined
 
   fn @arrow_0 [params: $1.$env, $1.$this, $1.resolve] [entry=bb0]:
     bb0:
@@ -107,21 +108,24 @@ module {
       %25 = const c25
       %26 = call builtin.promise.resolve_static(%24, %25)
       %27 = const c27
-      %28 = new_object(capacity=1)
-      %29 = load var $0.thenable
-      %30 = const c28
-      set_prop %28, %30, %29
-      %31 = call builtin.create_closure(%27, %28)
-      %32 = const c29
-      %33 = call builtin.promise.then(%26, %31, %32)
-      %34 = const c30
+      %28 = const c28
+      store var $0.$shared_env, %28
+      %29 = new_object(capacity=1)
+      store var $0.$shared_env, %29
+      %30 = load var $0.thenable
+      %31 = const c29
+      set_prop %29, %31, %30
+      %32 = call builtin.create_closure(%27, %29)
+      %33 = const c30
+      %34 = call builtin.promise.then(%26, %32, %33)
       %35 = const c31
-      %36 = call builtin.promise.then(%33, %34, %35)
-      %37 = is_exception %36
-      branch %37, bb2, bb1
+      %36 = const c32
+      %37 = call builtin.promise.then(%34, %35, %36)
+      %38 = is_exception %37
+      branch %38, bb2, bb1
     bb1:
       return
     bb2:
-      %38 = call builtin.exception_value(%36)
-      throw %38
+      %39 = call builtin.exception_value(%37)
+      throw %39
 }
