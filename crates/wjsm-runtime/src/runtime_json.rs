@@ -254,4 +254,166 @@ impl<'a> JsonParser<'a> {
             Err("Expected 'false'".to_string())
         }
     }
+    fn parse_string(&mut self) -> Result<String, String> {
+        if self.next() != Some(b'"') {
+            return Err("Expected '\"'".to_string());
+        }
+
+        let start_pos = self.pos; // 位置在 '"' 之后
+
+        // ── SIMD 快路径（AVX2）──
+        #[cfg(target_arch = "x86_64")]
+        {
+            if is_x86_feature_detected!("avx2") {
+                let mut simd_result = None;
+                // SAFETY: AVX2 feature detected at runtime.
+                unsafe { self.parse_string_simd(&mut simd_result) }?;
+                if let Some(s) = simd_result {
+                    return Ok(s); // SIMD 完整解析，直接返回
+                }
+                // SIMD 未完成（遇到转义或尾部），fall through 到慢路径
+                // 此时 self.pos 已被重置为 start_pos
+            }
+        }
+
+        let _ = start_pos; // referenced in SIMD fallback comment above; keeps binding for doc intent across cfg (silences unused_variable when !avx2 or avx2 not detected)
+
+        // ── 慢路径：逐字节处理（含转义序列） ──
+        let mut result = String::new();
+        loop {
+            match self.next() {
+                None => return Err("Unterminated string".to_string()),
+                Some(b'"') => return Ok(result),
+                Some(b'\\') => {
+                    match self.next() {
+                        None => return Err("Unterminated escape sequence".to_string()),
+                        Some(b'"') => result.push('"'),
+                        Some(b'\\') => result.push('\\'),
+                        Some(b'/') => result.push('/'),
+                        Some(b'b') => result.push('\u{0008}'),
+                        Some(b'f') => result.push('\u{000C}'),
+                        Some(b'n') => result.push('\n'),
+                        Some(b'r') => result.push('\r'),
+                        Some(b't') => result.push('\t'),
+                        Some(b'u') => {
+                            let code_point = self.parse_hex_escape()?;
+                            if (0xD800..=0xDBFF).contains(&code_point) {
+                                if self.next() != Some(b'\\') {
+                                    return Err("Expected '\\' before low surrogate".to_string());
+                                }
+                                if self.next() != Some(b'u') {
+                                    return Err("Expected 'u' before low surrogate".to_string());
+                                }
+                                let low = self.parse_hex_escape()?;
+                                if !(0xDC00..=0xDFFF).contains(&low) {
+                                    return Err("Invalid low surrogate".to_string());
+                                }
+                                let full = 0x10000 + ((code_point - 0xD800) << 10) + (low - 0xDC00);
+                                match char::from_u32(full) {
+                                    Some(ch) => result.push(ch),
+                                    None => return Err("Invalid surrogate pair code point".to_string()),
+                                }
+                            } else if (0xDC00..=0xDFFF).contains(&code_point) {
+                                return Err("Unexpected low surrogate".to_string());
+                            } else {
+                                match char::from_u32(code_point) {
+                                    Some(ch) => result.push(ch),
+                                    None => return Err("Invalid unicode escape".to_string()),
+                                }
+                            }
+                        }
+                        Some(ch) => return Err(format!("Invalid escape sequence: \\{}", ch as char)),
+                    }
+                }
+                Some(ch) if ch < 0x20 => {
+                    return Err(format!("Control character in string: 0x{:02X}", ch));
+                }
+                Some(ch) => {
+                    if ch < 0x80 {
+                        result.push(ch as char);
+                    } else {
+                        let start = self.pos - 1;
+                        let width = match ch {
+                            0xC0..=0xDF => 2,
+                            0xE0..=0xEF => 3,
+                            0xF0..=0xFF => 4,
+                            _ => return Err("Invalid UTF-8 leading byte".to_string()),
+                        };
+                        if start + width > self.input.len() {
+                            return Err("Incomplete UTF-8 sequence".to_string());
+                        }
+                        for i in 1..width {
+                            let byte = self.input[start + i];
+                            if (byte & 0xC0) != 0x80 {
+                                return Err("Invalid UTF-8 continuation byte".to_string());
+                            }
+                        }
+                        self.pos = start + width;
+                        match std::str::from_utf8(&self.input[start..self.pos]) {
+                            Ok(s) => result.push_str(s),
+                            Err(_) => return Err("Invalid UTF-8 sequence".to_string()),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    unsafe fn parse_string_simd(&mut self, result_out: &mut Option<String>) -> Result<(), String> {
+        let start_pos = self.pos;
+        while self.pos + 32 <= self.input.len() {
+            // SAFETY: We are inside `unsafe fn parse_string_simd` (guarded by `is_x86_feature_detected!("avx2")` in the caller).
+            // `self.pos + 32 <= self.input.len()` guarantees at least 32 readable bytes from `self.input[self.pos..]`.
+            // This explicit unsafe block is required under Rust 2024 `unsafe_op_in_unsafe_fn`.
+            let block = unsafe { StringBlock::new_avx2(self.input[self.pos..].as_ptr()) };
+            // 只检查在第一个 quote/backslash 之前的控制字符
+            let first_structural = (block.quote_bits | block.backslash_bits).trailing_zeros() as usize;
+            // 当 block 没有引号/反斜杠时，trailing_zeros() 返回 32
+            // 1u32 << 32 是 UB，必须用 u32::MAX 作为全量掩码
+            let mask = if first_structural >= 32 { u32::MAX } else { (1u32 << first_structural) - 1 };
+            let control_before_structural = block.control_bits & mask;
+            if control_before_structural != 0 {
+                let idx = control_before_structural.trailing_zeros() as usize;
+                let ch = self.input[self.pos + idx];
+                return Err(format!("Control character in string: 0x{:02X}", ch));
+            }
+            if block.has_quote_first() {
+                let idx = block.quote_index();
+                let end = self.pos + idx;
+                let s = String::from_utf8(self.input[start_pos..end].to_vec())
+                    .map_err(|_| "Invalid UTF-8 in string".to_string())?;
+                self.pos = end + 1; // 跳过引号
+                *result_out = Some(s);
+                return Ok(());
+            }
+            if block.has_backslash() {
+                // 有转义 → 重置 pos 到 start_pos，交给慢路径从头处理
+                self.pos = start_pos;
+                return Ok(()); // result_out 仍为 None → 慢路径接管
+            }
+            // 无特殊字符，前进 32 字节
+            self.pos += 32;
+        }
+        // SIMD 扫描完毕但未找到引号或转义，交给慢路径
+        self.pos = start_pos;
+        Ok(())
+    }
+
+    fn parse_hex_escape(&mut self) -> Result<u32, String> {
+        let mut hex = 0u32;
+        for _ in 0..4 {
+            match self.next() {
+                Some(ch) if ch.is_ascii_hexdigit() => {
+                    let digit = if ch.is_ascii_digit() { ch - b'0' }
+                    else if ch.is_ascii_lowercase() { ch - b'a' + 10 }
+                    else { ch - b'A' + 10 };
+                    hex = (hex << 4) | (digit as u32);
+                }
+                Some(ch) => return Err(format!("Invalid hex digit: {}", ch as char)),
+                None => return Err("Unexpected end in unicode escape".to_string()),
+            }
+        }
+        Ok(hex)
+    }
 }
