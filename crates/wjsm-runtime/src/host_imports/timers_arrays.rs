@@ -162,7 +162,7 @@ pub(crate) fn define_timers_arrays(
     // value, replacer?, space? (B2 fills undefined for omitted optionals)
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64, replacer: i64, space: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, val: i64, _replacer: i64, _space: i64| -> i64 {
             let json_str = runtime_json_stringify(&mut caller, val);
             store_runtime_string(&caller, json_str)
         },
