@@ -26,6 +26,7 @@ mod primitive_core;
 mod proxy_traps;
 mod string_methods;
 mod timers_arrays;
+mod fetch;
 mod typedarray_new_methods;
 mod weakref_finalization;
 
@@ -40,4 +41,8 @@ pub(crate) use proxy_traps::define_proxy_traps;
 pub(crate) use string_methods::define_string_methods;
 pub(crate) use timers_arrays::define_timers_arrays;
 pub(crate) use typedarray_new_methods::define_typedarray_new_methods;
+pub(crate) use fetch::define_fetch;
+pub(crate) use fetch::call_headers_method_from_caller;
+pub(crate) use fetch::call_response_method_from_caller;
+pub(crate) use fetch::call_request_method_from_caller;
 pub(crate) use weakref_finalization::define_weakref_finalization;

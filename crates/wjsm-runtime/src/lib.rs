@@ -142,7 +142,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let arraybuffer_table: Arc<Mutex<Vec<ArrayBufferEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let dataview_table: Arc<Mutex<Vec<DataViewEntry>>> = Arc::new(Mutex::new(Vec::new()));
     let typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>> = Arc::new(Mutex::new(Vec::new()));
-
+    let headers_table: Arc<Mutex<Vec<HeadersEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let fetch_response_table: Arc<Mutex<Vec<FetchResponseEntry>>> = Arc::new(Mutex::new(Vec::new()));
+    let fetch_request_table: Arc<Mutex<Vec<FetchRequestEntry>>> = Arc::new(Mutex::new(Vec::new()));
     // GC 相关状态
     let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     let alloc_counter: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
@@ -196,6 +198,9 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             arraybuffer_table: Arc::clone(&arraybuffer_table),
             dataview_table: Arc::clone(&dataview_table),
             typedarray_table: Arc::clone(&typedarray_table),
+            headers_table: Arc::clone(&headers_table),
+            fetch_response_table: Arc::clone(&fetch_response_table),
+            fetch_request_table: Arc::clone(&fetch_request_table),
             shared_state: Some(Arc::new(SharedRuntimeState {
                 sab_table: Arc::new(Mutex::new(Vec::new())),
                 agent_state: Arc::new(AgentState {
@@ -216,6 +221,7 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     // ── 注册所有宿主函数（按名字链接） ──
     define_core(&mut linker, &mut store)?;
     define_timers_arrays(&mut linker, &mut store)?;
+    define_fetch(&mut linker, &mut store)?;
     define_array_object(&mut linker, &mut store)?;
     define_primitive_core(&mut linker, &mut store)?;
     define_promise(&mut linker, &mut store)?;
@@ -1264,6 +1270,12 @@ struct RuntimeState {
     dataview_table: Arc<Mutex<Vec<DataViewEntry>>>,
     /// TypedArray 侧表：存储 TypedArray 的 buffer 引用、偏移量和长度
     typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>>,
+    /// Headers 侧表：存储 Headers 对象 (key-value pairs, lowercased keys)
+    headers_table: Arc<Mutex<Vec<HeadersEntry>>>,
+    /// Fetch Response 侧表：存储 Response 对象 (status/headers/body)
+    fetch_response_table: Arc<Mutex<Vec<FetchResponseEntry>>>,
+    /// Fetch Request 侧表：存储 Request 对象 (method/url/headers/body)
+    fetch_request_table: Arc<Mutex<Vec<FetchRequestEntry>>>,
     /// Optional shared state for cross-agent coordination.
     /// None in normal (non-agent) execution.
     shared_state: Option<Arc<SharedRuntimeState>>,
@@ -1383,7 +1395,90 @@ pub(crate) struct TypedArrayEntry {
     element_kind: u8,
     is_shared: bool,
 }
-
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ResponseType {
+    Basic,
+    Cors,
+    Error,
+    Opaque,
+    OpaqueRedirect,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RedirectMode {
+    Follow,
+    Error,
+    Manual,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum HeadersGuard {
+    #[default]
+    None,
+    Request,
+    RequestNoCors,
+    Response,
+    Immutable,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum RequestMode {
+    #[default]
+    Cors,
+    SameOrigin,
+    NoCors,
+    Navigate,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum RequestCredentials {
+    #[default]
+    SameOrigin,
+    Omit,
+    Include,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum RequestCache {
+    #[default]
+    Default,
+    NoStore,
+    Reload,
+    NoCache,
+    ForceCache,
+    OnlyIfCached,
+}
+#[derive(Clone, Debug)]
+struct HeadersEntry {
+    /// Lowercased key → value (append allows multi-value; we store duplicates)
+    pairs: Vec<(String, String)>,
+    guard: HeadersGuard,
+}
+#[derive(Clone, Debug)]
+struct FetchResponseEntry {
+    status: u16,
+    status_text: String,
+    headers_handle: u32,
+    url: String,
+    body: Vec<u8>,
+    response_type: ResponseType,
+    redirected: bool,
+    body_used: bool,
+}
+#[derive(Clone, Debug)]
+struct FetchRequestEntry {
+    method: String,
+    url: String,
+    headers_handle: u32,
+    body: Option<Vec<u8>>,
+    redirect: RedirectMode,
+    body_used: bool,
+    // Extended observable fields per Fetch Standard
+    mode: RequestMode,
+    credentials: RequestCredentials,
+    cache: RequestCache,
+    referrer: String,
+    referrer_policy: String,
+    integrity: String,
+    keepalive: bool,
+    destination: String,
+    duplex: String,
+}
 fn bigint_low_64_bytes(value: &num_bigint::BigInt) -> [u8; 8] {
     let fill = if value.sign() == num_bigint::Sign::Minus {
         0xff
@@ -1396,7 +1491,6 @@ fn bigint_low_64_bytes(value: &num_bigint::BigInt) -> [u8; 8] {
     out[..len].copy_from_slice(&bytes[..len]);
     out
 }
-
 pub(crate) fn typedarray_entry_from_value(
     caller: &mut Caller<'_, RuntimeState>,
     value_raw: i64,
@@ -2022,8 +2116,24 @@ enum NativeCallable {
     AgentGetReport,
     AgentSleep,
     AgentMonotonicNow,
+    // ── Fetch / Headers / Response / Request method dispatch ──
+    HeadersMethod {
+        handle: u32,
+        kind: HeadersMethodKind,
+    },
+    ResponseMethod {
+        handle: u32,
+        kind: ResponseMethodKind,
+    },
+    RequestMethod {
+        handle: u32,
+        kind: RequestMethodKind,
+    },
+    // Constructors for the Fetch API (installed on globalThis)
+    HeadersConstructor,
+    ResponseConstructor,
+    RequestConstructor,
 }
-
 #[derive(Clone, Copy)]
 enum MapSetMethodKind {
     MapSet,
@@ -2038,7 +2148,6 @@ enum MapSetMethodKind {
     Values,
     Entries,
 }
-
 #[derive(Clone, Copy)]
 enum WeakMapMethodKind {
     Set,
@@ -2097,7 +2206,29 @@ enum DateMethodKind {
     ToJSON,
     ValueOf,
 }
-
+#[derive(Clone, Copy)]
+enum HeadersMethodKind {
+    Get,
+    Set,
+    Has,
+    Delete,
+    Append,
+    Entries,
+    ForEach,
+    Keys,
+    Values,
+}
+#[derive(Clone, Copy)]
+enum ResponseMethodKind {
+    Text,
+    Json,
+    ArrayBuffer,
+    Clone,
+}
+#[derive(Clone, Copy)]
+enum RequestMethodKind {
+    Clone,
+}
 #[derive(Clone, Copy)]
 enum PromiseCombinatorReactionKind {
     AllFulfill,
@@ -2105,7 +2236,6 @@ enum PromiseCombinatorReactionKind {
     AllSettledReject,
     AnyReject,
 }
-
 struct CombinatorContext {
     result_promise: i64,
     result_array: i64,
