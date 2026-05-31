@@ -1,4 +1,6 @@
 exit_code: 0
 --- stdout ---
-{"x":10}
+{
+  "x": 10
+}
 --- stderr ---

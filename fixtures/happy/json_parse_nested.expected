@@ -1,4 +1,4 @@
 exit_code: 0
 --- stdout ---
-nested-result: [1,{"x":true},null]
+nested-result: [1, [object Object], null]
 --- stderr ---
