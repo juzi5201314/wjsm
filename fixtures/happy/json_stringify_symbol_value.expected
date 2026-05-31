@@ -1,5 +1,5 @@
 exit_code: 0
 --- stdout ---
-symbol-top-level: null
-typeof-result: string
+symbol-top-level: undefined
+typeof-result: undefined
 --- stderr ---

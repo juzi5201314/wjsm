@@ -1443,9 +1443,28 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         | NativeCallable::StringConstructor
         | NativeCallable::BooleanConstructor
         | NativeCallable::NumberConstructor
-        | NativeCallable::SymbolConstructor
         | NativeCallable::BigIntConstructor
         | NativeCallable::RegExpConstructor => Some(value::encode_undefined()),
+        NativeCallable::SymbolConstructor => Some({
+            let desc = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            let description = if value::is_undefined(desc) {
+                None
+            } else if value::is_string(desc) {
+                Some(get_string_value(caller, desc))
+            } else {
+                Some(render_value(caller, desc).unwrap_or_default().trim_matches('"').to_string())
+            };
+            let mut table = caller.data().symbol_table.lock().expect("symbol_table mutex");
+            let handle = table.len() as u32;
+            table.push(SymbolEntry {
+                description,
+                global_key: None,
+            });
+            value::encode_symbol_handle(handle)
+        }),
         NativeCallable::ErrorConstructor
         | NativeCallable::TypeErrorConstructor
         | NativeCallable::RangeErrorConstructor
