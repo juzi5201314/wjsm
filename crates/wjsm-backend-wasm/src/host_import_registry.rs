@@ -251,13 +251,13 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
     },
     HostImportSpec {
         name: "json_stringify",
-        type_idx: 3,
+        type_idx: 16,
         key: Some(HostImportKey::Builtin(Builtin::JsonStringify)),
         group: None,
     },
     HostImportSpec {
         name: "json_parse",
-        type_idx: 3,
+        type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::JsonParse)),
         group: None,
     },

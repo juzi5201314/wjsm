@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+in1: false
+keys: 0,2
+join: 1||3
+--- stderr ---
