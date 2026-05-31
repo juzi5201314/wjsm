@@ -122,41 +122,6 @@ pub(crate) fn define_timers_arrays(
     );
     linker.define(&mut store, "env", "clear_interval", f)?;
 
-    // ── Import 31: fetch(i64) → i64 ────────────────────────────────────────
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, url_val: i64| -> i64 {
-            let url_str = if value::is_string(url_val) {
-                if value::is_runtime_string_handle(url_val) {
-                    let handle = value::decode_runtime_string_handle(url_val) as usize;
-                    caller
-                        .data()
-                        .runtime_strings
-                        .lock()
-                        .expect("runtime strings mutex")
-                        .get(handle)
-                        .cloned()
-                        .unwrap_or_default()
-                } else {
-                    read_string(&mut caller, value::decode_string_ptr(url_val)).unwrap_or_default()
-                }
-            } else {
-                String::new()
-            };
-
-            if url_str.starts_with("data:") {
-                // Handle data: URLs inline (no network)
-                let body = url_str.split(',').nth(1).unwrap_or("").to_string();
-                let decoded = urlencoding_decode(&body);
-                store_runtime_string(&caller, decoded)
-            } else {
-                // Network fetch — use ureq if available
-                let body = format!("[fetch blocked: {url_str}]");
-                store_runtime_string(&caller, body)
-            }
-        },
-    );
-    linker.define(&mut store, "env", "fetch", f)?;
 
     // ── Import 32: json_stringify(i64) → i64 ──────────────────────────────
     let f = Func::wrap(

@@ -1668,6 +1668,28 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             settle_promise(caller.data(), promise, PromiseSettlement::Reject(arg));
             Some(promise)
         }
+        // ── Fetch API (Headers/Response/Request) — pre-existing helpers wired for baseline compilability.
+        // These variants were added to NativeCallable and registered by attach_*_methods / global constructors,
+        // but the match was never updated. This completes the intended (documented as partial) surface
+        // without implementing new fetch behavior. Real async fetch is out of scope for the scheduler plan.
+        NativeCallable::HeadersMethod { kind, .. } => {
+            call_headers_method_from_caller(caller, this_val, kind, &args)
+        }
+        NativeCallable::ResponseMethod { kind, .. } => {
+            call_response_method_from_caller(caller, this_val, kind, &args)
+        }
+        NativeCallable::RequestMethod { kind, .. } => {
+            call_request_method_from_caller(caller, this_val, kind, &args)
+        }
+        NativeCallable::HeadersConstructor => {
+            construct_headers(caller, this_val, &args)
+        }
+        NativeCallable::ResponseConstructor => {
+            construct_response(caller, this_val, &args)
+        }
+        NativeCallable::RequestConstructor => {
+            construct_request(caller, this_val, &args)
+        }
     }
 }
 /// 创建 AsyncFromSyncIterator：将同步迭代器包装为异步迭代器协议。
