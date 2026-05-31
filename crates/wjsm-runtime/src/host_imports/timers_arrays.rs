@@ -160,10 +160,12 @@ pub(crate) fn define_timers_arrays(
 
     // ── Import 32: json_stringify(i64, i64, i64) → i64 ──────────────────────────
     // value, replacer?, space? (B2 fills undefined for omitted optionals)
+    // 修复：原调用旧 wrapper 导致 replacer/space 始终 undefined，P3 逻辑未激活
+    // 现委托 full，传递参数，启用白名单顺序、pretty gap、replacer fn transform
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64, _replacer: i64, _space: i64| -> i64 {
-            let json_str = runtime_json_stringify(&mut caller, val);
+        |mut caller: Caller<'_, RuntimeState>, val: i64, replacer: i64, space: i64| -> i64 {
+            let json_str = runtime_json_stringify_full(&mut caller, val, replacer, space);
             store_runtime_string(&caller, json_str)
         },
     );
