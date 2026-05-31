@@ -135,11 +135,43 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Builtin::Fetch | Builtin::JsonStringify | Builtin::JsonParse => {
+            Builtin::Fetch => {
                 let val = args
                     .first()
                     .with_context(|| format!("{builtin} expects 1 argument"))?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::JsonStringify => {
+                for arg in args.iter().take(3) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                for _ in args.len()..3 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::JsonParse => {
+                for arg in args.iter().take(2) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                for _ in args.len()..2 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
