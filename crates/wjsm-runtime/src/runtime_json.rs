@@ -434,4 +434,50 @@ impl<'a> JsonParser<'a> {
             Err(_) => Err("Invalid number".to_string()),
         }
     }
+    fn parse_array(&mut self) -> Result<JsonValue, String> {
+        self.expect(b'[')?;
+        let mut elems = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.peek() == Some(b']') {
+                self.next();
+                return Ok(JsonValue::Array(elems));
+            }
+            if !elems.is_empty() {
+                self.expect(b',')?;
+                self.skip_whitespace();
+                if self.peek() == Some(b']') {
+                    // 严格拒绝尾随逗号（ES JSON 规范要求）
+                    return Err("Trailing comma in array".to_string());
+                }
+            }
+            elems.push(self.parse_value()?);
+        }
+    }
+
+    fn parse_object(&mut self) -> Result<JsonValue, String> {
+        self.expect(b'{')?;
+        let mut pairs = Vec::new();
+        loop {
+            self.skip_whitespace();
+            if self.peek() == Some(b'}') {
+                self.next();
+                return Ok(JsonValue::Object(pairs));
+            }
+            if !pairs.is_empty() {
+                self.expect(b',')?;
+                self.skip_whitespace();
+                if self.peek() == Some(b'}') {
+                    // 严格拒绝尾随逗号（ES JSON 规范要求）
+                    return Err("Trailing comma in object".to_string());
+                }
+            }
+            let key = self.parse_string()?;
+            self.skip_whitespace();
+            self.expect(b':')?;
+            self.skip_whitespace();
+            let value = self.parse_value()?;
+            pairs.push((key, value));
+        }
+    }
 }
