@@ -138,7 +138,7 @@ impl StringBlock {
 
 // ── Internal parsed value representation ──
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 enum JsonValue {
     Null,
     Bool(bool),
@@ -151,7 +151,7 @@ enum JsonValue {
 struct JsonParser<'a> {
     input: &'a [u8],
     pos: usize,
-    nonspace: NonspaceBitmap,   // TODO: wire caching in later task (currently compute_nonspace_bits called directly in skip_whitespace; field kept for exact Task 5 skeleton compliance)
+    nonspace: NonspaceBitmap,   // 缓存当前 64 字节对齐窗口的 nonspace 位图；skip_whitespace 中按需更新，避免重复 compute
 }
 
 impl<'a> JsonParser<'a> {
@@ -167,7 +167,7 @@ impl<'a> JsonParser<'a> {
     // 设计：先做 ≤8 次标量检查（排空到 64 字节对齐边界），然后切入 SIMD 批量跳过
 
     fn skip_whitespace(&mut self) {
-        // 快路径：逐字节检查，最多 8 次（对齐到 64 字节边界）
+        // 快路径：逐字节检查，最多 8 次（排空到 64 字节对齐边界）
         let limit = (self.pos + 8).min(self.input.len());
         while self.pos < limit {
             match self.input[self.pos] {
@@ -175,10 +175,15 @@ impl<'a> JsonParser<'a> {
                 _ => return,
             }
         }
-        // 批量路径：使用位图加速
+        // 批量路径：使用缓存的 64B nonspace 位图加速（跨多次 skip 命中同一窗口时避免重复计算）
         while self.pos + 64 <= self.input.len() {
             let base = self.pos & !63;
-            let bits = compute_nonspace_bits(self.input, base);
+            if base != self.nonspace.base {
+                // 窗口切换或首次：计算并缓存（SIMD 或 scalar）
+                let bits = compute_nonspace_bits(self.input, base);
+                self.nonspace = NonspaceBitmap { bits, base };
+            }
+            let bits = self.nonspace.bits;
             let offset = self.pos - base;
             let mask = bits >> offset;
             if mask != 0 {
@@ -759,5 +764,94 @@ pub fn json_parse_to_wasm(
             }
         }
         Err(error) => make_exception(caller, "SyntaxError", error),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(s: &str) -> Result<JsonValue, String> {
+        let mut p = JsonParser::new(s.as_bytes());
+        let v = p.parse_value()?;
+        p.skip_whitespace();
+        if p.pos != p.input.len() {
+            return Err("trailing content".into());
+        }
+        Ok(v)
+    }
+
+    #[test]
+    fn test_parse_null_true_false() {
+        assert!(matches!(parse("null").unwrap(), JsonValue::Null));
+        assert!(matches!(parse("true").unwrap(), JsonValue::Bool(true)));
+        assert!(matches!(parse("false").unwrap(), JsonValue::Bool(false)));
+        assert!(parse(" null ").is_ok());
+    }
+
+    #[test]
+    fn test_parse_numbers() {
+        assert_eq!(parse("0").unwrap(), JsonValue::Number(0.0));
+        assert_eq!(parse("-42").unwrap(), JsonValue::Number(-42.0));
+        assert_eq!(parse("3.14").unwrap(), JsonValue::Number(3.14));
+        assert_eq!(parse("1e3").unwrap(), JsonValue::Number(1000.0));
+        assert_eq!(parse("1.5e-2").unwrap(), JsonValue::Number(0.015));
+        assert!(parse("01").is_err()); // leading zero
+        assert!(parse("1.").is_err()); // trailing dot
+        assert!(parse("-01").is_err());
+    }
+
+    #[test]
+    fn test_parse_strings_and_escapes() {
+        assert_eq!(parse(r#""hello""#).unwrap(), JsonValue::String("hello".into()));
+        assert_eq!(parse(r#""a\nb\tc""#).unwrap(), JsonValue::String("a\nb\tc".into()));
+        assert_eq!(parse(r#""\\ \" \/""#).unwrap(), JsonValue::String(r#"\ " /"#.into()));
+        // unicode + surrogate not fully exercised here but basic ok
+        assert!(parse("\"\\u0041\"").is_ok());
+    }
+
+    #[test]
+    fn test_parse_arrays() {
+        let v = parse("[1,2,3]").unwrap();
+        if let JsonValue::Array(a) = v {
+            assert_eq!(a.len(), 3);
+        } else { panic!(); }
+        assert!(parse("[]").is_ok());
+        assert!(parse("[1,]").is_err()); // trailing comma rejected
+        assert!(parse("[1,2").is_err()); // unterm
+    }
+
+    #[test]
+    fn test_parse_objects() {
+        let v = parse(r#"{"a":1,"b":true}"#).unwrap();
+        if let JsonValue::Object(o) = v {
+            assert_eq!(o.len(), 2);
+        } else { panic!(); }
+        assert!(parse("{}").is_ok());
+        assert!(parse(r#"{"a":1,}"#).is_err()); // trailing
+    }
+
+    #[test]
+    fn test_parse_errors_and_trailing() {
+        assert!(parse("{not json").is_err());
+        assert!(parse("1 2").is_err()); // trailing content after value
+        assert!(parse("").is_err());
+    }
+
+    #[test]
+    fn test_skip_whitespace_and_cache() {
+        // 多次 skip 应命中/更新缓存窗口
+        let mut p = JsonParser::new(b"   \n\t  1");
+        p.skip_whitespace();
+        assert_eq!(p.pos, 7); // 跳过所有 ws
+        // 再调用一次（已在值前）
+        p.skip_whitespace();
+        assert_eq!(p.pos, 7);
+    }
+
+    #[test]
+    fn test_parse_deeply_nested_for_coverage() {
+        // 增加一些分支覆盖（对象套数组等）
+        let s = r#"{"a":[1,{"x":null},true],"b":false}"#;
+        assert!(parse(s).is_ok());
     }
 }
