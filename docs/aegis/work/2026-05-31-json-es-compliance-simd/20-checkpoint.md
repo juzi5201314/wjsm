@@ -373,3 +373,20 @@ The corrected v4 plan remains the sole execution authority. All subsequent work 
 
 ---
 **END OF JSON ES-COMPLIANCE + SIMD EFFORT (v4 corrected plan). All tasks executed to completion per subagent-driven-development + rust-style-guide + user binding directive. v4 plan remains the sole authority.**
+
+## 2026-05-31 Controller Verification After Residual JSON Compliance Fixes
+
+- Scope executed: `runtime_json.rs`, `runtime_render.rs`, shared array/string helpers, array delete observability path, targeted JSON fixtures, and this checkpoint.
+- Verified code changes:
+  - `JSON.parse` now performs non-string input coercion through runtime ToString handling, throws catchable `SyntaxError` / `TypeError` exception objects, enforces strict JSON number grammar, and writes real array holes when reviver deletes an element.
+  - `JSON.stringify` now returns boxed JS `undefined` for unsupported top-level values like `Symbol.iterator`, distinguishes empty replacer arrays from absent property lists, omits object properties when replacer returns `undefined`, and preserves array-hole → `null` semantics.
+  - Shared runtime now has an explicit array-hole sentinel plus array-aware `Object.keys` / `'in'` / `Reflect.deleteProperty` behavior for representative hole observability.
+- Targeted fixture refresh evidence:
+  - `WJSM_UPDATE_FIXTURES=1 cargo nextest run happy__json_parse_basic happy__json_parse_nested happy__json_parse_reviver_called happy__json_parse_invalid_catch happy__json_parse_tostring_object happy__json_parse_tostring_symbol_throws happy__json_parse_reviver_delete_hole happy__json_replacer_array happy__json_replacer_function happy__json_stringify_replacer_function_omit happy__json_stringify_replacer_empty_array happy__json_stringify_symbol_value happy__json_stringify_space_utf16 happy__json_string_escaping happy__json_tojson_method happy__json_date_tojson happy__array_hole_observability errors__json_parse_invalid_number_leading_zero errors__json_parse_invalid_number_trailing_dot errors__json_parse_invalid_number_negative_leading_zero` → 20/20 pass.
+  - `cargo nextest run happy__json_parse_basic happy__json_parse_nested happy__json_parse_reviver_called happy__json_parse_invalid_catch happy__json_parse_tostring_object happy__json_parse_tostring_symbol_throws happy__json_parse_reviver_delete_hole happy__json_replacer_array happy__json_replacer_function happy__json_stringify_replacer_function_omit happy__json_stringify_replacer_empty_array happy__json_stringify_symbol_value happy__json_stringify_space_utf16 happy__json_string_escaping happy__json_tojson_method happy__json_date_tojson happy__array_hole_observability errors__json_parse_invalid_number_leading_zero errors__json_parse_invalid_number_trailing_dot errors__json_parse_invalid_number_negative_leading_zero` → 20/20 pass.
+- Direct scenario evidence:
+  - `cargo run -- run fixtures/happy/json_parse_invalid_catch.js` → `caught-name: SyntaxError` / `caught-type: object`
+  - `cargo run -- run fixtures/happy/json_parse_reviver_delete_hole.js` → `len: 3`, `in1: false`, `keys: 0,2`, `join: 1||3`, `json: [1,null,3]`
+  - `cargo run -- run fixtures/happy/json_stringify_symbol_value.js` → `symbol-top-level: undefined`, `typeof-result: undefined`
+  - `cargo run -- run fixtures/happy/json_stringify_space_utf16.js` → pretty-printed output with five gap units captured by the refreshed fixture snapshot.
+- Status: the residual JSON compliance gaps named in the approved local plan are closed in code and in targeted fixture evidence. This append supersedes earlier stale statements that claimed completion before these residual fixes were actually verified.

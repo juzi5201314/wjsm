@@ -112,8 +112,8 @@ pub(crate) fn read_array_capacity(
     ]))
 }
 
-/// 读取数组元素 elements[index]（offset 16 + index * 8）
-pub(crate) fn read_array_elem_with_env<C: AsContext>(
+/// 读取数组原始槽位值（hole sentinel 保持原样）
+pub(crate) fn read_array_elem_raw_with_env<C: AsContext>(
     ctx: &C,
     env: &WasmEnv,
     ptr: usize,
@@ -136,6 +136,31 @@ pub(crate) fn read_array_elem_with_env<C: AsContext>(
     ]))
 }
 
+/// 读取数组元素；hole 视为缺失，返回 None。
+pub(crate) fn read_array_elem_with_env<C: AsContext>(
+    ctx: &C,
+    env: &WasmEnv,
+    ptr: usize,
+    index: u32,
+) -> Option<i64> {
+    let value = read_array_elem_raw_with_env(ctx, env, ptr, index)?;
+    if value::is_array_hole(value) {
+        None
+    } else {
+        Some(value)
+    }
+}
+
+pub(crate) fn array_elem_present_with_env<C: AsContext>(
+    ctx: &C,
+    env: &WasmEnv,
+    ptr: usize,
+    index: u32,
+) -> bool {
+    read_array_elem_raw_with_env(ctx, env, ptr, index)
+        .is_some_and(|value| !value::is_array_hole(value))
+}
+
 /// 写入数组元素
 pub(crate) fn write_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
@@ -150,6 +175,15 @@ pub(crate) fn write_array_elem_with_env<C: AsContextMut<Data = RuntimeState>>(
         return;
     }
     d[elem_offset..elem_offset + 8].copy_from_slice(&val.to_le_bytes());
+}
+
+pub(crate) fn write_array_hole_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    ptr: usize,
+    index: u32,
+) {
+    write_array_elem_with_env(ctx, env, ptr, index, value::encode_array_hole());
 }
 
 /// 数组动态扩容 — 遵循现有对象扩容的 capacity × 2 倍增策略
@@ -922,6 +956,37 @@ pub(crate) fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i
     val
 }
 
+pub(crate) fn utf16_len(s: &str) -> usize {
+    s.chars().map(|ch| if ch as u32 > 0xFFFF { 2 } else { 1 }).sum()
+}
+
+pub(crate) fn utf16_index_to_byte_offset(s: &str, utf16_idx: usize) -> usize {
+    let mut utf16_count = 0usize;
+    for (byte_off, ch) in s.char_indices() {
+        if utf16_count >= utf16_idx {
+            return byte_off;
+        }
+        utf16_count += if ch as u32 > 0xFFFF { 2 } else { 1 };
+    }
+    s.len()
+}
+
+pub(crate) fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
+    let mut utf16_count = 0usize;
+    for (off, ch) in s.char_indices() {
+        if off >= byte_off {
+            break;
+        }
+        utf16_count += if ch as u32 > 0xFFFF { 2 } else { 1 };
+    }
+    utf16_count
+}
+
+pub(crate) fn truncate_utf16_prefix(s: &str, max_units: usize) -> String {
+    let end = utf16_index_to_byte_offset(s, max_units);
+    s[..end].to_string()
+}
+
 /// 严格相等比较 (ECMAScript 7.2.16)
 pub(crate) fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -> i64 {
     // 类型不同 → false
@@ -1560,6 +1625,36 @@ pub(crate) fn write_array_elem(
 ) {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     write_array_elem_with_env(caller, &env, ptr, index, val);
+}
+
+#[inline]
+pub(crate) fn read_array_elem_raw(
+    caller: &mut Caller<'_, RuntimeState>,
+    ptr: usize,
+    index: u32,
+) -> Option<i64> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    read_array_elem_raw_with_env(caller, &env, ptr, index)
+}
+
+#[inline]
+pub(crate) fn array_elem_present(
+    caller: &mut Caller<'_, RuntimeState>,
+    ptr: usize,
+    index: u32,
+) -> bool {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    array_elem_present_with_env(caller, &env, ptr, index)
+}
+
+#[inline]
+pub(crate) fn write_array_hole(
+    caller: &mut Caller<'_, RuntimeState>,
+    ptr: usize,
+    index: u32,
+) {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    write_array_hole_with_env(caller, &env, ptr, index);
 }
 
 #[inline]

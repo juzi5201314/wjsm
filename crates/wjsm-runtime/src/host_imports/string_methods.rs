@@ -8,33 +8,6 @@ pub(crate) fn define_string_methods(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    fn utf16_len(s: &str) -> usize {
-        s.chars()
-            .map(|c| if c as u32 > 0xFFFF { 2 } else { 1 })
-            .sum()
-    }
-
-    fn utf16_index_to_byte_offset(s: &str, utf16_idx: usize) -> usize {
-        let mut utf16_count = 0usize;
-        for (byte_off, ch) in s.char_indices() {
-            if utf16_count >= utf16_idx {
-                return byte_off;
-            }
-            utf16_count += if ch as u32 > 0xFFFF { 2 } else { 1 };
-        }
-        s.len()
-    }
-
-    fn byte_offset_to_utf16_index(s: &str, byte_off: usize) -> usize {
-        let mut utf16_count = 0usize;
-        for (off, ch) in s.char_indices() {
-            if off >= byte_off {
-                break;
-            }
-            utf16_count += if ch as u32 > 0xFFFF { 2 } else { 1 };
-        }
-        utf16_count
-    }
 
     fn to_f64_or(val: i64, default: f64) -> f64 {
         if value::is_f64(val) {

@@ -418,21 +418,51 @@ impl<'a> JsonParser<'a> {
     }
     fn parse_number(&mut self) -> Result<JsonValue, String> {
         let start = self.pos;
-        while let Some(ch) = self.peek() {
-            match ch {
-                b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9' => {
+
+        if self.peek() == Some(b'-') {
+            self.next();
+        }
+
+        match self.peek() {
+            Some(b'0') => {
+                self.next();
+            }
+            Some(b'1'..=b'9') => {
+                self.next();
+                while matches!(self.peek(), Some(b'0'..=b'9')) {
                     self.next();
                 }
-                _ => break,
+            }
+            _ => return Err("Invalid number".to_string()),
+        }
+
+        if self.peek() == Some(b'.') {
+            self.next();
+            if !matches!(self.peek(), Some(b'0'..=b'9')) {
+                return Err("Invalid number".to_string());
+            }
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.next();
             }
         }
-        let slice = &self.input[start..self.pos];
-        let s = std::str::from_utf8(slice)
-            .map_err(|_| "Invalid UTF-8 in number".to_string())?;
-        match s.parse::<f64>() {
-            Ok(v) => Ok(JsonValue::Number(v)),
-            Err(_) => Err("Invalid number".to_string()),
+
+        if matches!(self.peek(), Some(b'e') | Some(b'E')) {
+            self.next();
+            if matches!(self.peek(), Some(b'+') | Some(b'-')) {
+                self.next();
+            }
+            if !matches!(self.peek(), Some(b'0'..=b'9')) {
+                return Err("Invalid number".to_string());
+            }
+            while matches!(self.peek(), Some(b'0'..=b'9')) {
+                self.next();
+            }
         }
+
+        let slice = &self.input[start..self.pos];
+        let s = std::str::from_utf8(slice).map_err(|_| "Invalid UTF-8 in number".to_string())?;
+        let value = s.parse::<f64>().map_err(|_| "Invalid number".to_string())?;
+        Ok(JsonValue::Number(value))
     }
     fn parse_array(&mut self) -> Result<JsonValue, String> {
         self.expect(b'[')?;
@@ -510,6 +540,60 @@ fn delete_property_by_name_id<C: AsContextMut<Data = RuntimeState>>(
     }
 }
 
+fn make_exception(caller: &mut Caller<'_, RuntimeState>, name: &str, message: String) -> i64 {
+    let message_val = store_runtime_string(caller, message.clone());
+    let error_obj = create_error_object(caller, name, message_val);
+    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let idx = errors.len() as u32;
+    errors.push(ErrorEntry {
+        name: name.to_string(),
+        message,
+        value: error_obj,
+    });
+    value::encode_exception(idx)
+}
+
+fn json_parse_to_string(caller: &mut Caller<'_, RuntimeState>, value: i64) -> Result<String, i64> {
+    if value::is_string(value) {
+        return Ok(read_runtime_string(caller, value));
+    }
+    if value::is_symbol(value) {
+        return Err(make_exception(
+            caller,
+            "TypeError",
+            "Cannot convert a Symbol to a string".to_string(),
+        ));
+    }
+    if value::is_bigint(value) {
+        let handle = value::decode_bigint_handle(value) as usize;
+        let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
+        return Ok(table.get(handle).map(|bigint| bigint.to_string()).unwrap_or_default());
+    }
+    if value::is_f64(value)
+        || value::is_bool(value)
+        || value::is_null(value)
+        || value::is_undefined(value)
+    {
+        return Ok(eval_to_string(caller, value));
+    }
+    if value::is_js_object(value) && let Some(ptr) = resolve_handle(caller, value) {
+        for method_name in ["toString", "valueOf"] {
+            let method = read_object_property_by_name(caller, ptr, method_name)
+                .unwrap_or_else(value::encode_undefined);
+            if !is_callable_in_runtime(caller, method) {
+                continue;
+            }
+            if let Ok(result) = call_wasm_callback(caller, method, value, &[])
+                && !value::is_js_object(result)
+            {
+                return json_parse_to_string(caller, result);
+            }
+        }
+        return Ok("[object Object]".to_string());
+    }
+    Ok(eval_to_string(caller, value))
+}
+
 fn build_wasm_value(caller: &mut Caller<'_, RuntimeState>, json_value: &JsonValue) -> i64 {
     match json_value {
         JsonValue::Null => value::encode_null(),
@@ -568,11 +652,11 @@ fn apply_reviver(
                     None => continue,
                 };
                 let new_val = apply_reviver(caller, reviver, val, &i.to_string(), elem_val);
-                // ⚠️ Deviation: dense arrays don't support holes.
-                // ES §24.5.1 says "delete the element" (creating a hole),
-                // but wjsm dense arrays can't represent holes.
-                // We write undefined instead, which differs for `in`/enumeration.
-                write_array_elem(caller, ptr, i as u32, new_val);
+                if value::is_undefined(new_val) {
+                    write_array_hole(caller, ptr, i);
+                } else {
+                    write_array_elem(caller, ptr, i, new_val);
+                }
             }
         }
     } else if value::is_object(val) {
@@ -632,28 +716,21 @@ pub fn json_parse_to_wasm(
     text: i64,
     reviver: i64,
 ) -> i64 {
-    let text_str = if value::is_string(text) {
-        if value::is_runtime_string_handle(text) {
-            let handle = value::decode_runtime_string_handle(text) as usize;
-            caller.data().runtime_strings.lock()
-                .expect("runtime strings mutex")
-                .get(handle).cloned().unwrap_or_default()
-        } else {
-            read_string(caller, value::decode_string_ptr(text)).unwrap_or_default()
-        }
-    } else {
-        // 非字符串输入：使用 eval_to_string（比 render_value 更接近 ES ToString）
-        eval_to_string(caller, text)
+    let text_str = match json_parse_to_string(caller, text) {
+        Ok(text) => text,
+        Err(exception) => return exception,
     };
 
     let mut parser = JsonParser::new(text_str.as_bytes());
     match parser.parse_value() {
         Ok(json_value) => {
-            // ES 规范：解析完 value 后，剩余内容必须全是空白
             parser.skip_whitespace();
             if parser.pos < parser.input.len() {
-                set_runtime_error(caller.data(), "SyntaxError: Unexpected trailing content".to_string());
-                return value::encode_undefined();
+                return make_exception(
+                    caller,
+                    "SyntaxError",
+                    "Unexpected trailing content".to_string(),
+                );
             }
 
             let wasm_value = build_wasm_value(caller, &json_value);
@@ -681,11 +758,6 @@ pub fn json_parse_to_wasm(
                 wasm_value
             }
         }
-        Err(e) => {
-            // ⚠️ Deviation: 使用 set_runtime_error(string) 而非创建 Error 对象
-            // 创建真正的 SyntaxError 对象需要重新设计 runtime error 机制
-            set_runtime_error(caller.data(), format!("SyntaxError: {}", e));
-            value::encode_undefined()
-        }
+        Err(error) => make_exception(caller, "SyntaxError", error),
     }
 }

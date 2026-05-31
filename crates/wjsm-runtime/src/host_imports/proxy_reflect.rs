@@ -307,6 +307,24 @@ pub(crate) fn define_proxy_reflect(
             Ok(name) => name,
             Err(_) => return value::encode_bool(true),
         };
+
+        if value::is_array(target) {
+            let Some(ptr) = resolve_handle(caller, target) else {
+                return value::encode_bool(true);
+            };
+            if prop_name == "length" {
+                return value::encode_bool(false);
+            }
+            let Ok(index) = prop_name.parse::<u32>() else {
+                return value::encode_bool(true);
+            };
+            let len = read_array_length(caller, ptr).unwrap_or(0);
+            if index >= len {
+                return value::encode_bool(true);
+            }
+            write_array_hole(caller, ptr, index);
+            return value::encode_bool(true);
+        }
         let Some(ptr) = resolve_handle(caller, target) else {
             return value::encode_bool(true);
         };

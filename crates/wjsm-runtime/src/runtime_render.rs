@@ -402,8 +402,7 @@ fn json_escape_string(s: &str) -> String {
 }
 
 /// 构建 space 参数对应的 gap 缩进串（ES §24.5.2 steps 3-6）
-/// Number 走 ToIntegerOrInfinity（trunc as i32）；String 取 chars().take(10)
-/// （⚠️ 后一行为 Unicode scalar 计数，非 UTF-16 code unit，review key fix 4 已文档化）
+/// Number 走 ToIntegerOrInfinity（trunc as i32）；String 按 UTF-16 code unit 截断到 10。
 fn build_space_string(caller: &mut Caller<'_, RuntimeState>, space: i64) -> String {
     if value::is_f64(space) {
         let n = f64::from_bits(space as u64);
@@ -416,46 +415,30 @@ fn build_space_string(caller: &mut Caller<'_, RuntimeState>, space: i64) -> Stri
         }
     } else if value::is_string(space) {
         let s = read_runtime_string(caller, space);
-        s.chars().take(10).collect()
+        truncate_utf16_prefix(&s, 10)
     } else {
         String::new()
     }
 }
 
 /// 从 replacer 数组构建白名单（ES §24.5.2 step 4）
-/// 返回 Vec<String> 保证插入顺序（非 HashSet，review key fix 2）
-/// 跳过 Symbol 与非 String/Number 元素（review key fix 3）
-fn build_replacer_whitelist(caller: &mut Caller<'_, RuntimeState>, replacer: i64) -> Vec<String> {
+/// 返回 Some(Vec) 表示显式 property list；None 表示未提供数组 replacer。
+fn build_replacer_whitelist(
+    caller: &mut Caller<'_, RuntimeState>,
+    replacer: i64,
+) -> Option<Vec<String>> {
     if !value::is_array(replacer) {
-        return Vec::new();
+        return None;
     }
-    let handle_idx = value::decode_array_handle(replacer) as usize;
-    let Some(ptr) = resolve_handle_idx(caller, handle_idx) else {
-        return Vec::new();
+    let Some(ptr) = resolve_array_ptr(caller, replacer) else {
+        return Some(Vec::new());
     };
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-        return Vec::new();
-    };
-    let elems: Vec<i64> = {
-        let data = memory.data(&*caller);
-        if ptr + 16 > data.len() {
-            return Vec::new();
-        }
-        let len =
-            u32::from_le_bytes([data[ptr + 8], data[ptr + 9], data[ptr + 10], data[ptr + 11]]) as usize;
-        let mut v = Vec::with_capacity(len);
-        for i in 0..len {
-            let off = ptr + 16 + i * 8;
-            if off + 8 > data.len() {
-                v.push(value::encode_null());
-            } else {
-                v.push(i64::from_le_bytes(data[off..off + 8].try_into().unwrap()));
-            }
-        }
-        v
-    };
+    let len = read_array_length(caller, ptr).unwrap_or(0);
     let mut list = Vec::new();
-    for elem in elems {
+    for i in 0..len {
+        let Some(elem) = read_array_elem(caller, ptr, i) else {
+            continue;
+        };
         if value::is_symbol(elem) {
             continue;
         }
@@ -479,7 +462,7 @@ fn build_replacer_whitelist(caller: &mut Caller<'_, RuntimeState>, replacer: i64
             }
         }
     }
-    list
+    Some(list)
 }
 
 /// 获取并调用对象的 toJSON 方法（ES §24.5.2 SerializeJSONProperty 步骤 2）
@@ -505,30 +488,34 @@ fn get_to_json(caller: &mut Caller<'_, RuntimeState>, key: &str, value: i64) -> 
     }
 }
 
-/// 完整的 JSON.stringify（ES §24.5.2），消费 replacer/space
-/// 由 B3 激活端到端 arity 验证时调用
+/// 完整的 JSON.stringify（ES §24.5.2），返回 boxed JS 值。
 pub(crate) fn runtime_json_stringify_full(
     caller: &mut Caller<'_, RuntimeState>,
     val: i64,
     replacer: i64,
     space: i64,
-) -> String {
+) -> i64 {
     let gap = build_space_string(caller, space);
     let property_list = build_replacer_whitelist(caller, replacer);
     let replacer_is_fn = is_callable_in_runtime(caller, replacer);
     let replacer_fn = if replacer_is_fn { Some(replacer) } else { None };
     let mut stack = Vec::new();
-    serialize_json_property(
+    let json = serialize_json_property(
         caller,
         "",
         val,
         replacer_is_fn,
         replacer_fn,
-        &property_list,
+        property_list.as_deref(),
         &mut stack,
         &gap,
         "",
-    )
+    );
+    if json == "undefined" {
+        value::encode_undefined()
+    } else {
+        store_runtime_string(caller, json)
+    }
 }
 
 /// 序列化 JSON 属性（核心递归 impl，含 cycle、toJSON、replacer、pretty-print）
@@ -538,26 +525,26 @@ fn serialize_json_property(
     val: i64,
     replacer_is_fn: bool,
     replacer_fn: Option<i64>,
-    property_list: &[String],
+    property_list: Option<&[String]>,
     stack: &mut Vec<i64>,
     gap: &str,
     current_indent: &str,
 ) -> String {
-    let mut value = val;
-    value = get_to_json(caller, key, value);
-    if replacer_is_fn {
-        if let Some(rf) = replacer_fn {
-            let key_str = store_runtime_string(caller, key.to_string());
-            match call_wasm_callback(caller, rf, value, &[key_str, value]) {
-                Ok(new_val) => value = new_val,
-                Err(_) => value = value::encode_undefined(),
+    let mut value = get_to_json(caller, key, val);
+    let mut replacer_returned_undefined = false;
+    if let Some(rf) = replacer_fn.filter(|_| replacer_is_fn) {
+        let key_str = store_runtime_string(caller, key.to_string());
+        match call_wasm_callback(caller, rf, value, &[key_str, value]) {
+            Ok(new_val) => {
+                replacer_returned_undefined = value::is_undefined(new_val);
+                value = new_val;
+            }
+            Err(_) => {
+                replacer_returned_undefined = true;
+                value = value::encode_undefined();
             }
         }
     }
-    // 修复 gap2: 将 f64 (含 NaN/±Inf) 处理提前到 undefined 哨兵之前
-    // 避免 JS 侧 NaN-boxed 的 NaN/Inf 因位模式碰撞而误入 is_undefined 返回 "undefined"
-    // 同时修复 gap1: -0.0 必须序列化为 "0"（而非 "-0"），使用 ==0.0 特判（-0.0 == 0.0 为 true）
-    // 符合 ES §24.5.2 SerializeJSONProperty + 计划 key fix + checklist "-0 → \"0\""
     if value::is_f64(value) {
         let f = f64::from_bits(value as u64);
         return if !f.is_finite() {
@@ -569,10 +556,9 @@ fn serialize_json_property(
         };
     }
     if value::is_undefined(value) {
-        // 修复 gap2: 当前引擎中 NaN (0/0) 和 NaN 标识符的 value bits 与 undefined 碰撞 (is_undefined true, is_f64 false)
-        // 在 JSON 上下文中必须 -> "null"（ES checklist），而非 "undefined" 哨兵
-        // callable/symbol 仍返回哨兵以支持属性省略（omit）
-        // 未来引擎区分 NaN 位模式后，f64 路径将正确处理 NaN，undefined 仍可返回哨兵
+        if replacer_returned_undefined || key.is_empty() {
+            return "undefined".to_string();
+        }
         return "null".to_string();
     }
     if value::is_callable(value) || value::is_symbol(value) {
@@ -597,11 +583,13 @@ fn serialize_json_property(
     if value::is_null(value) {
         return "null".to_string();
     }
+
     let next_indent = if gap.is_empty() {
         String::new()
     } else {
         format!("{}{}", current_indent, gap)
     };
+
     if value::is_array(value) {
         if stack.contains(&value) {
             set_runtime_error(
@@ -612,37 +600,17 @@ fn serialize_json_property(
         }
         stack.push(value);
         let handle_idx = value::decode_array_handle(value) as usize;
-        let ptr_opt = resolve_handle_idx(caller, handle_idx);
-        let memory_opt = caller.get_export("memory").and_then(|e| e.into_memory());
-        let (ptr, memory) = match (ptr_opt, memory_opt) {
-            (Some(p), Some(m)) => (p, m),
-            _ => {
+        let ptr = match resolve_handle_idx(caller, handle_idx) {
+            Some(ptr) => ptr,
+            None => {
                 stack.pop();
                 return "null".to_string();
             }
         };
-        let elems: Vec<i64> = {
-            let data = memory.data(&*caller);
-            if ptr + 16 > data.len() {
-                stack.pop();
-                return "null".to_string();
-            }
-            let len =
-                u32::from_le_bytes([data[ptr + 8], data[ptr + 9], data[ptr + 10], data[ptr + 11]])
-                    as usize;
-            let mut v = Vec::with_capacity(len);
-            for i in 0..len {
-                let off = ptr + 16 + i * 8;
-                if off + 8 > data.len() {
-                    v.push(value::encode_null());
-                } else {
-                    v.push(i64::from_le_bytes(data[off..off + 8].try_into().unwrap()));
-                }
-            }
-            v
-        };
-        let mut parts = Vec::with_capacity(elems.len());
-        for (i, elem) in elems.into_iter().enumerate() {
+        let len = read_array_length(caller, ptr).unwrap_or(0);
+        let mut parts = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            let elem = read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
             let s = serialize_json_property(
                 caller,
                 &i.to_string(),
@@ -657,15 +625,17 @@ fn serialize_json_property(
             parts.push(if s == "undefined" { "null".to_string() } else { s });
         }
         stack.pop();
-        if parts.is_empty() {
+        return if parts.is_empty() {
             "[]".to_string()
         } else if gap.is_empty() {
             format!("[{}]", parts.join(","))
         } else {
             let inner = parts.join(&format!(",\n{}", next_indent));
             format!("[\n{}{}\n{}]", next_indent, inner, current_indent)
-        }
-    } else if value::is_object(value) {
+        };
+    }
+
+    if value::is_object(value) {
         if stack.contains(&value) {
             set_runtime_error(
                 caller.data(),
@@ -674,16 +644,17 @@ fn serialize_json_property(
             return "null".to_string();
         }
         stack.push(value);
-        let ptr_opt = resolve_handle(caller, value);
-        let memory_opt = caller.get_export("memory").and_then(|e| e.into_memory());
-        let (ptr, memory) = match (ptr_opt, memory_opt) {
-            (Some(p), Some(m)) => (p, m),
-            _ => {
+        let ptr = match resolve_handle(caller, value) {
+            Some(ptr) => ptr,
+            None => {
                 stack.pop();
                 return "null".to_string();
             }
         };
-        // 头长度检查（避免后续 data 借用跨可变调用）
+        let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
+            stack.pop();
+            return "null".to_string();
+        };
         {
             let data = memory.data(&*caller);
             if ptr + 16 > data.len() {
@@ -691,8 +662,9 @@ fn serialize_json_property(
                 return "null".to_string();
             }
         }
-        let mut pairs: Vec<String> = Vec::new();
-        if !property_list.is_empty() {
+
+        let mut pairs = Vec::new();
+        if let Some(property_list) = property_list {
             for name in property_list {
                 if let Some(prop_val) = read_object_property_by_name(caller, ptr, name) {
                     if value::is_undefined(prop_val) {
@@ -704,7 +676,7 @@ fn serialize_json_property(
                         prop_val,
                         replacer_is_fn,
                         replacer_fn,
-                        property_list,
+                        Some(property_list),
                         stack,
                         gap,
                         &next_indent,
@@ -716,7 +688,6 @@ fn serialize_json_property(
                 }
             }
         } else {
-            // 无白名单：仅自身可枚举属性，数据借用严格限定在收集块内（避免 E0502）
             let slots: Vec<(u32, i64)> = {
                 let data = memory.data(&*caller);
                 let num_props = u32::from_le_bytes([
@@ -725,7 +696,7 @@ fn serialize_json_property(
                     data[ptr + 14],
                     data[ptr + 15],
                 ]) as usize;
-                let mut s = Vec::with_capacity(num_props);
+                let mut slots = Vec::with_capacity(num_props);
                 for i in 0..num_props {
                     let slot_off = ptr + 16 + i * 32;
                     if slot_off + 32 > data.len() {
@@ -751,9 +722,9 @@ fn serialize_json_property(
                     if value::is_undefined(prop_val) {
                         continue;
                     }
-                    s.push((name_id, prop_val));
+                    slots.push((name_id, prop_val));
                 }
-                s
+                slots
             };
             for (name_id, prop_val) in slots {
                 let name_bytes = read_string_bytes(caller, name_id);
@@ -764,7 +735,7 @@ fn serialize_json_property(
                     prop_val,
                     replacer_is_fn,
                     replacer_fn,
-                    property_list,
+                    None,
                     stack,
                     gap,
                     &next_indent,
@@ -775,23 +746,23 @@ fn serialize_json_property(
                 }
             }
         }
+
         stack.pop();
-        if pairs.is_empty() {
+        return if pairs.is_empty() {
             "{}".to_string()
         } else if gap.is_empty() {
             format!("{{{}}}", pairs.join(","))
         } else {
             let inner = pairs.join(&format!(",\n{}", next_indent));
             format!("{{\n{}{}\n{}}}", next_indent, inner, current_indent)
-        }
-    } else {
-        "null".to_string()
+        };
     }
+
+    "null".to_string()
 }
 
 /// 简单的 JSON.stringify 实现（单参向后兼容包装器）
-/// Task 11 保留此签名；内部委托 full（replacer/space 传 undefined）
-pub(crate) fn runtime_json_stringify(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
+pub(crate) fn runtime_json_stringify(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
     runtime_json_stringify_full(caller, val, value::encode_undefined(), value::encode_undefined())
 }
 
