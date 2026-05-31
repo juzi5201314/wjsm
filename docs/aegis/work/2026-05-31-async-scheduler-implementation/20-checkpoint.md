@@ -222,3 +222,15 @@ The 3 reminders have been fully addressed. The only remaining work is the planne
 Until the above (or equivalent) is achieved and documented, the Phase 5-9+ bucket remains deferred.
 
 This assessment closes the loop on Reminder 1/3 (and previous reminders). The only remaining work is the intentionally deferred bucket, now with clear un-defer criteria.
+
+## Current Gate Status (post commit 5e7fe7f, addressing Reminder 1/3)
+
+- Worktree is clean.
+- The wiring step (async main path now calls its own async microtask helpers) has been committed.
+- This closes the "async main using async drain" gap listed in the assessment.
+- Remaining gaps for formal solid declaration (per assessment):
+  1. Minimal public async entry that can be used end-to-end.
+  2. At least one basic verification test running through the async path.
+  3. Explicit declaration in this checkpoint: "Phase 1-4 solid — un-deferring bucket".
+
+The deferred bucket remains deferred. We are actively completing its preconditions.
