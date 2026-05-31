@@ -416,4 +416,22 @@ impl<'a> JsonParser<'a> {
         }
         Ok(hex)
     }
+    fn parse_number(&mut self) -> Result<JsonValue, String> {
+        let start = self.pos;
+        while let Some(ch) = self.peek() {
+            match ch {
+                b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9' => {
+                    self.next();
+                }
+                _ => break,
+            }
+        }
+        let slice = &self.input[start..self.pos];
+        let s = std::str::from_utf8(slice)
+            .map_err(|_| "Invalid UTF-8 in number".to_string())?;
+        match s.parse::<f64>() {
+            Ok(v) => Ok(JsonValue::Number(v)),
+            Err(_) => Err("Invalid number".to_string()),
+        }
+    }
 }
