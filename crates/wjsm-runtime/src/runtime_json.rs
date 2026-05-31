@@ -98,24 +98,28 @@ impl StringBlock {
     /// - Caller must ensure `ptr` points to at least 32 readable bytes.
     /// - Caller must ensure AVX2 is available (via `is_x86_feature_detected!("avx2")`).
     unsafe fn new_avx2(ptr: *const u8) -> Self {
-        let v = _mm256_loadu_si256(ptr as *const __m256i);
-
-        let quote = _mm256_set1_epi8(b'"' as i8);
-        let bs = _mm256_set1_epi8(b'\\' as i8);
-        // 控制字符阈值 0x20：0x20 > v 对 v in [0x00..=0x1F] 为 true
-        // AND 排除高位字节（0x80..0xFF）：有符号比较时 0x20 > negative_byte 为 true
-        // 所以必须 AND `(v >= 0)` 即 `v > -1` 来排除 UTF-8 continuation bytes
-        let ctrl_thresh = _mm256_set1_epi8(0x20);
-        let non_neg = _mm256_set1_epi8(-1); // -1 = 0xFF，cmpgt(v, -1) = (v > -1) = (v >= 0)
-
-        let q_bits = _mm256_movemask_epi8(_mm256_cmpeq_epi8(v, quote)) as u32;
-        let bs_bits = _mm256_movemask_epi8(_mm256_cmpeq_epi8(v, bs)) as u32;
-        // control = (0x20 > v) AND (v >= 0)
-        let ctrl_bits = _mm256_movemask_epi8(
-            _mm256_and_si256(_mm256_cmpgt_epi8(ctrl_thresh, v), _mm256_cmpgt_epi8(v, non_neg))
-        ) as u32;
-
-        Self { quote_bits: q_bits, backslash_bits: bs_bits, control_bits: ctrl_bits }
+        // SAFETY: The caller of this `unsafe fn` has already ensured (see `# Safety` docs above):
+        // - `ptr` points to at least 32 readable bytes (no out-of-bounds on loads)
+        // - AVX2 is available (via `is_x86_feature_detected!("avx2")`), satisfying the
+        //   `#[target_feature(enable = "avx2")]` requirement for all intrinsics below.
+        // This explicit block is required under Rust 2024 edition (unsafe_op_in_unsafe_fn).
+        unsafe {
+            let v = _mm256_loadu_si256(ptr as *const __m256i);
+            let quote = _mm256_set1_epi8(b'"' as i8);
+            let bs = _mm256_set1_epi8(b'\\' as i8);
+            // 控制字符阈值 0x20：0x20 > v 对 v in [0x00..=0x1F] 为 true
+            // AND 排除高位字节（0x80..0xFF）：有符号比较时 0x20 > negative_byte 为 true
+            // 所以必须 AND `(v >= 0)` 即 `v > -1` 来排除 UTF-8 continuation bytes
+            let ctrl_thresh = _mm256_set1_epi8(0x20);
+            let non_neg = _mm256_set1_epi8(-1); // -1 = 0xFF，cmpgt(v, -1) = (v > -1) = (v >= 0)
+            let q_bits = _mm256_movemask_epi8(_mm256_cmpeq_epi8(v, quote)) as u32;
+            let bs_bits = _mm256_movemask_epi8(_mm256_cmpeq_epi8(v, bs)) as u32;
+            // control = (0x20 > v) AND (v >= 0)
+            let ctrl_bits = _mm256_movemask_epi8(
+                _mm256_and_si256(_mm256_cmpgt_epi8(ctrl_thresh, v), _mm256_cmpgt_epi8(v, non_neg))
+            ) as u32;
+            Self { quote_bits: q_bits, backslash_bits: bs_bits, control_bits: ctrl_bits }
+        }
     }
 
     fn has_quote_first(&self) -> bool {
@@ -147,7 +151,7 @@ enum JsonValue {
 struct JsonParser<'a> {
     input: &'a [u8],
     pos: usize,
-    nonspace: NonspaceBitmap,
+    nonspace: NonspaceBitmap,   // TODO: wire caching in later task (currently compute_nonspace_bits called directly in skip_whitespace; field kept for exact Task 5 skeleton compliance)
 }
 
 impl<'a> JsonParser<'a> {
