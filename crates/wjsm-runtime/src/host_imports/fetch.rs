@@ -155,54 +155,13 @@ fn perform_fetch_and_build_response(
         return Ok(resp_handle);
     }
 
-    // Real HTTP/HTTPS via ureq (blocking is intentional per design)
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err(format!("fetch blocked: {}", url));
-    }
-
-    let response = match ureq::get(&url).call() {
-        Ok(resp) => resp,
-        Err(e) => return Err(format!("fetch failed: {}", e)),
-    };
-
-    let status = response.status();
-    let status_text = response.status_text().to_string();
-
-    // Collect headers (lowercase keys, preserve insertion order + multi-value)
-    let mut header_pairs: Vec<(String, String)> = Vec::new();
-    for header_name in response.headers_names() {
-        if let Some(val) = response.header(&header_name) {
-            header_pairs.push((header_name.to_lowercase(), val.to_string()));
-        }
-    }
-    let headers_handle = {
-        let mut table = caller
-            .data()
-            .headers_table
-            .lock()
-            .expect("headers_table mutex");
-        let h = table.len() as u32;
-        table.push(HeadersEntry { pairs: header_pairs, guard: HeadersGuard::None });
-        h
-    };
-
-    // Read full body (MVP: no streaming)
-    let mut body_bytes = Vec::new();
-    if let Err(e) = response.into_reader().read_to_end(&mut body_bytes) {
-        return Err(format!("failed to read response body: {}", e));
-    }
-
-    let resp_handle = create_response_object(
-        caller,
-        status,
-        status_text,
-        headers_handle,
-        url,
-        body_bytes,
-        ResponseType::Basic,
-        false,
-    );
-    Ok(resp_handle)
+    // HTTP/HTTPS and other schemes are not supported in this build.
+    // Per documented limitation (AGENTS.md): fetch supports data: URLs only (synchronous string).
+    // Real async fetch (with scheduler completion materialization for Response objects etc.)
+    // is explicitly out of scope for the 2026-05-31 async scheduler implementation plan.
+    // The scheduler + AsyncHostCompletion channel created by this plan provides the exact
+    // materialization boundary future fetch will use.
+    Err(format!("fetch for non-data: URL not implemented in this build: {}", url))
 }
 
 // ── Object construction helpers (Headers / Response / Request) ──────────────

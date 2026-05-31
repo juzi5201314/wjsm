@@ -69,6 +69,74 @@ pub(crate) fn try_compiled_eval_from_caller(
         scope_env.unwrap_or_else(value::encode_undefined),
     )?)
 }
+/// Phase 3 must-convert 之 compiled eval 路径（按 2026-05-31-async-scheduler-implementation-plan.md 审计条目 + 26-async-audit-refactor-design.md）：
+/// 为 `try_compiled_eval_from_caller`（eval 编译路径的 Instance::new + __eval_entry.call 点，perform_eval_from_caller 唯一 caller）添加 async 版本，与现有 sync `try_compiled_eval_from_caller` 并存。
+///
+/// 规则：
+/// - 严格与 sync 版本并存，供保留的 sync execute 路径继续使用
+/// - 所有 data segment reservation、import resolution（via compiled_eval_import）、scope handling 逻辑必须 100% 相同
+/// - 仅 Wasm 实例化（Instance::new）和调用（entry.call）完全等价；唯一差异是将 `Instance::new(...)` 替换为 `Instance::new_async(...).await` ， `entry.call(...)` 替换为 `entry.call_async(...).await`
+/// - 本阶段保持调用点不变（perform_eval_from_caller 仍调用 sync 版本；未来 async eval 路径激活时同步转换）
+/// - 精确保留原有行为，无任何语义或顺序差异
+///
+/// 特别提醒（plan Correction 3 + lib.rs 已有注释 + 审计计划）：
+///   在 Store::epoch_deadline_async_yield_and_update 之后，
+///   *所有* 经由该 Store 的 Wasm 实例化与调用（主 + 回调，包括此处 compiled eval 中的 Instance::new + call）都必须走 async API（new_async / call_async 等）。
+///   本文件中的 async 版本即为此准备；sync 版本仅留给未切换的 sync execute 路径。
+pub(crate) async fn try_compiled_eval_from_caller_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    code: &str,
+    module: &swc_ast::Module,
+    scope_env: Option<i64>,
+    var_writes_to_scope: bool,
+) -> Result<i64> {
+    let data_base = reserve_eval_data_segment(caller, code.len() as u32)?;
+    let wasm_bytes = cached_eval_wasm(
+        caller.data(),
+        code,
+        module,
+        scope_env.is_some(),
+        var_writes_to_scope,
+        data_base,
+    )?;
+    let eval_module = Module::new(caller.engine(), &wasm_bytes)?;
+    let mut imports = Vec::with_capacity(eval_module.imports().count());
+
+    for import in eval_module.imports() {
+        match import.ty() {
+            ExternType::Func(func_ty) => {
+                let func = compiled_eval_import(caller, import.name(), &func_ty);
+                imports.push(func.into());
+            }
+            ExternType::Memory(_) => {
+                let memory = caller
+                    .get_export(import.name())
+                    .and_then(Extern::into_memory)
+                    .ok_or_else(|| anyhow::anyhow!("eval parent missing memory import"))?;
+                imports.push(memory.into());
+            }
+            ExternType::Global(_) => {
+                let global = caller
+                    .get_export(import.name())
+                    .and_then(Extern::into_global)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("eval parent missing global import `{}`", import.name())
+                    })?;
+                imports.push(global.into());
+            }
+            _ => {
+                anyhow::bail!("unsupported eval import `{}`", import.name());
+            }
+        }
+    }
+
+    let instance = Instance::new_async(&mut *caller, &eval_module, &imports).await?;
+    let entry = instance.get_typed_func::<i64, i64>(&mut *caller, "__eval_entry")?;
+    Ok(entry.call_async(
+        &mut *caller,
+        scope_env.unwrap_or_else(value::encode_undefined),
+    ).await?)
+}
 
 pub(crate) fn reserve_eval_data_segment(
     caller: &mut Caller<'_, RuntimeState>,

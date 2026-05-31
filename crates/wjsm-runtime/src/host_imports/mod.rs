@@ -45,4 +45,7 @@ pub(crate) use fetch::define_fetch;
 pub(crate) use fetch::call_headers_method_from_caller;
 pub(crate) use fetch::call_response_method_from_caller;
 pub(crate) use fetch::call_request_method_from_caller;
+pub(crate) use fetch::construct_headers;
+pub(crate) use fetch::construct_request;
+pub(crate) use fetch::construct_response;
 pub(crate) use weakref_finalization::define_weakref_finalization;
