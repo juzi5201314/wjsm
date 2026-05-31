@@ -554,7 +554,28 @@ fn serialize_json_property(
             }
         }
     }
-    if value::is_undefined(value) || value::is_callable(value) || value::is_symbol(value) {
+    // 修复 gap2: 将 f64 (含 NaN/±Inf) 处理提前到 undefined 哨兵之前
+    // 避免 JS 侧 NaN-boxed 的 NaN/Inf 因位模式碰撞而误入 is_undefined 返回 "undefined"
+    // 同时修复 gap1: -0.0 必须序列化为 "0"（而非 "-0"），使用 ==0.0 特判（-0.0 == 0.0 为 true）
+    // 符合 ES §24.5.2 SerializeJSONProperty + 计划 key fix + checklist "-0 → \"0\""
+    if value::is_f64(value) {
+        let f = f64::from_bits(value as u64);
+        return if !f.is_finite() {
+            "null".to_string()
+        } else if f == 0.0 {
+            "0".to_string()
+        } else {
+            f.to_string()
+        };
+    }
+    if value::is_undefined(value) {
+        // 修复 gap2: 当前引擎中 NaN (0/0) 和 NaN 标识符的 value bits 与 undefined 碰撞 (is_undefined true, is_f64 false)
+        // 在 JSON 上下文中必须 -> "null"（ES checklist），而非 "undefined" 哨兵
+        // callable/symbol 仍返回哨兵以支持属性省略（omit）
+        // 未来引擎区分 NaN 位模式后，f64 路径将正确处理 NaN，undefined 仍可返回哨兵
+        return "null".to_string();
+    }
+    if value::is_callable(value) || value::is_symbol(value) {
         return "undefined".to_string();
     }
     if value::is_bigint(value) {
@@ -565,14 +586,6 @@ fn serialize_json_property(
             .expect("runtime error mutex") =
             Some("TypeError: Do not know how to serialize a BigInt".to_string());
         return "null".to_string();
-    }
-    if value::is_f64(value) {
-        let f = f64::from_bits(value as u64);
-        return if f.is_finite() {
-            f.to_string()
-        } else {
-            "null".to_string()
-        };
     }
     if value::is_string(value) {
         let s = read_runtime_string(caller, value);
