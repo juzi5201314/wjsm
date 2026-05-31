@@ -158,39 +158,23 @@ pub(crate) fn define_timers_arrays(
     );
     linker.define(&mut store, "env", "fetch", f)?;
 
-    // ── Import 32: json_stringify(i64) → i64 ──────────────────────────────
+    // ── Import 32: json_stringify(i64, i64, i64) → i64 ──────────────────────────
+    // value, replacer?, space? (B2 fills undefined for omitted optionals)
+    // 修复：原调用旧 wrapper 导致 replacer/space 始终 undefined，P3 逻辑未激活
+    // 现委托 full，传递参数，启用白名单顺序、pretty gap、replacer fn transform
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
-            let json_str = runtime_json_stringify(&mut caller, val);
-            store_runtime_string(&caller, json_str)
+        |mut caller: Caller<'_, RuntimeState>, val: i64, replacer: i64, space: i64| -> i64 {
+            runtime_json_stringify_full(&mut caller, val, replacer, space)
         },
     );
     linker.define(&mut store, "env", "json_stringify", f)?;
 
-    // ── Import 33: json_parse(i64) → i64 ──────────────────────────────────
+    // ── Import 33: json_parse(i64, i64) → i64 ──────────────────────────────────
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
-            let json_str = if value::is_string(val) {
-                if value::is_runtime_string_handle(val) {
-                    let handle = value::decode_runtime_string_handle(val) as usize;
-                    caller
-                        .data()
-                        .runtime_strings
-                        .lock()
-                        .expect("runtime strings mutex")
-                        .get(handle)
-                        .cloned()
-                        .unwrap_or_default()
-                } else {
-                    read_string(&mut caller, value::decode_string_ptr(val)).unwrap_or_default()
-                }
-            } else {
-                String::new()
-            };
-            // For now, just return the string as-is (simplified parse)
-            store_runtime_string(&caller, json_str)
+        |mut caller: Caller<'_, RuntimeState>, text: i64, reviver: i64| -> i64 {
+            runtime_json::json_parse_to_wasm(&mut caller, text, reviver)
         },
     );
     linker.define(&mut store, "env", "json_parse", f)?;

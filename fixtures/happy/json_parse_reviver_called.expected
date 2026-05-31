@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+parse-hits: 2
+a: 1
+--- stderr ---

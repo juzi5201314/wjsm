@@ -1,5 +1,4 @@
-exit_code: 2
+exit_code: 0
 --- stdout ---
-{"a":1,"self":null}
+{"a":1,"broken":true}
 --- stderr ---
-Runtime error: TypeError: Converting circular structure to JSON

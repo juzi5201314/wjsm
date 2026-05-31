@@ -98,6 +98,9 @@ impl Lowerer {
         );
 
         // 如果有捕获变量，使用共享 env 对象 + CreateClosure
+        // 为捕获闭包准备 store_block：当 ensure_shared_env 因已有 env 而返回不同 continuation block 时，
+        // CreateClosure 的 dest 产生于 closure_block，必须在此 block 上 StoreVar 才能保证 def dominates use，否则 store 读到未初始化值 → 闭包变量为 undefined（shared_mutable / 工厂返回方法等场景）。
+        let mut store_block = outer_block;
         let callee_val = if captured.is_empty() {
             // 非闭包函数：直接使用 FunctionRef
             func_ref_val
@@ -105,6 +108,7 @@ impl Lowerer {
             let mut closure_block = outer_block;
             let env_val = self.ensure_shared_env(closure_block, &captured, fn_decl.span())?;
             closure_block = self.resolve_store_block(closure_block);
+            store_block = closure_block;  // 关键：必须用 resolve 后的 block 存 StoreVar，保证 CreateClosure 的 dest dominate 后续对 callee_val 的使用
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
                 closure_block,
@@ -123,15 +127,15 @@ impl Lowerer {
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
         let ir_name = format!("${scope_id}.{name}");
         self.current_function.append_instruction(
-            outer_block,
+            store_block,
             Instruction::StoreVar {
                 name: ir_name,
                 value: callee_val,
             },
         );
-        self.append_eval_var_leak_if_needed(&name, VarKind::Var, callee_val, outer_block);
+        self.append_eval_var_leak_if_needed(&name, VarKind::Var, callee_val, store_block);
 
-        Ok(StmtFlow::Open(outer_block))
+        Ok(StmtFlow::Open(store_block))
     }
 
     pub(crate) fn lower_async_gen_fn_decl(

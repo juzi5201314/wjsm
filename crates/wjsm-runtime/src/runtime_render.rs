@@ -378,189 +378,392 @@ pub(crate) fn urlencoding_decode(input: &str) -> String {
     result
 }
 
-/// 简单的 JSON.stringify 实现（简化版，仅支持基本类型）
-pub(crate) fn runtime_json_stringify(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
-    let mut stack = Vec::new();
-    runtime_json_stringify_inner(caller, val, &mut stack)
+/// JSON 字符串字面量转义（ES §24.5.2 QuoteJSONString）
+/// - 补充平面字符直接输出 UTF-8（不使用 surrogate pair，review key fix 1）
+/// - 仅转义 " \ 和控制字符，其余 unicode 直接保留（合法 JSON）
+fn json_escape_string(s: &str) -> String {
+    let mut result = String::with_capacity(s.len() + 2);
+    result.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => result.push_str("\\\""),
+            '\\' => result.push_str("\\\\"),
+            '\u{0008}' => result.push_str("\\b"),
+            '\u{000C}' => result.push_str("\\f"),
+            '\n' => result.push_str("\\n"),
+            '\r' => result.push_str("\\r"),
+            '\t' => result.push_str("\\t"),
+            c if (c as u32) < 0x20 => result.push_str(&format!("\\u{:04x}", c as u32)),
+            _ => result.push(c),
+        }
+    }
+    result.push('"');
+    result
 }
 
-fn runtime_json_stringify_inner(
+/// 构建 space 参数对应的 gap 缩进串（ES §24.5.2 steps 3-6）
+/// Number 走 ToIntegerOrInfinity（trunc as i32）；String 按 UTF-16 code unit 截断到 10。
+fn build_space_string(caller: &mut Caller<'_, RuntimeState>, space: i64) -> String {
+    if value::is_f64(space) {
+        let n = f64::from_bits(space as u64);
+        let i = n.trunc() as i32;
+        if i > 0 {
+            let w = i.min(10).max(0) as usize;
+            " ".repeat(w)
+        } else {
+            String::new()
+        }
+    } else if value::is_string(space) {
+        let s = read_runtime_string(caller, space);
+        truncate_utf16_prefix(&s, 10)
+    } else {
+        String::new()
+    }
+}
+
+/// 从 replacer 数组构建白名单（ES §24.5.2 step 4）
+/// 返回 Some(Vec) 表示显式 property list；None 表示未提供数组 replacer。
+fn build_replacer_whitelist(
+    caller: &mut Caller<'_, RuntimeState>,
+    replacer: i64,
+) -> Option<Vec<String>> {
+    if !value::is_array(replacer) {
+        return None;
+    }
+    let Some(ptr) = resolve_array_ptr(caller, replacer) else {
+        return Some(Vec::new());
+    };
+    let len = read_array_length(caller, ptr).unwrap_or(0);
+    let mut list = Vec::new();
+    for i in 0..len {
+        let Some(elem) = read_array_elem(caller, ptr, i) else {
+            continue;
+        };
+        if value::is_symbol(elem) {
+            continue;
+        }
+        if value::is_string(elem) || value::is_f64(elem) {
+            let key = if value::is_string(elem) {
+                read_runtime_string(caller, elem)
+            } else {
+                let f = f64::from_bits(elem as u64);
+                if f.is_finite() {
+                    if f.fract() == 0.0 && f.abs() <= 9007199254740991.0 {
+                        (f as i64).to_string()
+                    } else {
+                        f.to_string()
+                    }
+                } else {
+                    continue;
+                }
+            };
+            if !list.contains(&key) {
+                list.push(key);
+            }
+        }
+    }
+    Some(list)
+}
+
+/// 获取并调用对象的 toJSON 方法（ES §24.5.2 SerializeJSONProperty 步骤 2）
+fn get_to_json(caller: &mut Caller<'_, RuntimeState>, key: &str, value: i64) -> i64 {
+    if !value::is_object(value) && !value::is_array(value) {
+        return value;
+    }
+    let ptr_opt = if value::is_array(value) {
+        resolve_handle_idx(caller, value::decode_array_handle(value) as usize)
+    } else {
+        resolve_handle(caller, value)
+    };
+    let Some(ptr) = ptr_opt else { return value; };
+    let to_json = read_object_property_by_name(caller, ptr, "toJSON")
+        .unwrap_or_else(value::encode_undefined);
+    if !is_callable_in_runtime(caller, to_json) {
+        return value;
+    }
+    let key_str = store_runtime_string(caller, key.to_string());
+    match call_wasm_callback(caller, to_json, value, &[key_str]) {
+        Ok(v) => v,
+        Err(_) => value::encode_undefined(),
+    }
+}
+
+/// 完整的 JSON.stringify（ES §24.5.2），返回 boxed JS 值。
+pub(crate) fn runtime_json_stringify_full(
     caller: &mut Caller<'_, RuntimeState>,
     val: i64,
+    replacer: i64,
+    space: i64,
+) -> i64 {
+    let gap = build_space_string(caller, space);
+    let property_list = build_replacer_whitelist(caller, replacer);
+    let replacer_is_fn = is_callable_in_runtime(caller, replacer);
+    let replacer_fn = if replacer_is_fn { Some(replacer) } else { None };
+    let mut stack = Vec::new();
+    let json = serialize_json_property(
+        caller,
+        "",
+        val,
+        replacer_is_fn,
+        replacer_fn,
+        property_list.as_deref(),
+        &mut stack,
+        &gap,
+        "",
+    );
+    if json == "undefined" {
+        value::encode_undefined()
+    } else {
+        store_runtime_string(caller, json)
+    }
+}
+
+/// 序列化 JSON 属性（核心递归 impl，含 cycle、toJSON、replacer、pretty-print）
+fn serialize_json_property(
+    caller: &mut Caller<'_, RuntimeState>,
+    key: &str,
+    val: i64,
+    replacer_is_fn: bool,
+    replacer_fn: Option<i64>,
+    property_list: Option<&[String]>,
     stack: &mut Vec<i64>,
+    gap: &str,
+    current_indent: &str,
 ) -> String {
-    if value::is_f64(val) {
-        let f = f64::from_bits(val as u64);
-        if f.is_finite() {
-            f.to_string()
-        } else {
-            "null".to_string()
+    let mut value = get_to_json(caller, key, val);
+    let mut replacer_returned_undefined = false;
+    if let Some(rf) = replacer_fn.filter(|_| replacer_is_fn) {
+        let key_str = store_runtime_string(caller, key.to_string());
+        match call_wasm_callback(caller, rf, value, &[key_str, value]) {
+            Ok(new_val) => {
+                replacer_returned_undefined = value::is_undefined(new_val);
+                value = new_val;
+            }
+            Err(_) => {
+                replacer_returned_undefined = true;
+                value = value::encode_undefined();
+            }
         }
-    } else if value::is_string(val) {
-        let s = if value::is_runtime_string_handle(val) {
-            let handle = value::decode_runtime_string_handle(val) as usize;
-            caller
-                .data()
-                .runtime_strings
-                .lock()
-                .expect("runtime strings mutex")
-                .get(handle)
-                .cloned()
-                .unwrap_or_default()
+    }
+    if value::is_f64(value) {
+        let f = f64::from_bits(value as u64);
+        return if !f.is_finite() {
+            "null".to_string()
+        } else if f == 0.0 {
+            "0".to_string()
         } else {
-            read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
+            f.to_string()
         };
-        format!("\"{}\"", s.escape_default())
-    } else if value::is_bool(val) {
-        value::decode_bool(val).to_string()
-    } else if value::is_null(val) {
-        "null".to_string()
-    } else if value::is_undefined(val) || value::is_callable(val) {
-        "undefined".to_string()
-    } else if value::is_bigint(val) {
-        // JSON.stringify on BigInt throws TypeError
+    }
+    if value::is_undefined(value) {
+        if replacer_returned_undefined || key.is_empty() {
+            return "undefined".to_string();
+        }
+        return "null".to_string();
+    }
+    if value::is_callable(value) || value::is_symbol(value) {
+        return "undefined".to_string();
+    }
+    if value::is_bigint(value) {
         *caller
             .data()
             .runtime_error
             .lock()
             .expect("runtime error mutex") =
             Some("TypeError: Do not know how to serialize a BigInt".to_string());
-        "null".to_string()
-    } else if value::is_symbol(val) {
-        // JSON.stringify 返回 undefined for Symbol values
-        "undefined".to_string()
-    } else if value::is_array(val) {
-        if stack.contains(&val) {
-            set_runtime_error(
-                caller.data(),
-                "TypeError: Converting circular structure to JSON".to_string(),
-            );
-            return "null".to_string();
-        }
-        stack.push(val);
-        // 数组序列化：先提取所有元素，再递归序列化（避免 borrow 冲突）
-        let handle_idx = value::decode_array_handle(val) as usize;
-        let Some(ptr) = resolve_handle_idx(caller, handle_idx) else {
-            stack.pop();
-            return "null".to_string();
-        };
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            stack.pop();
-            return "null".to_string();
-        };
-        let elems: Vec<i64> = {
-            let data = memory.data(&*caller);
-            if ptr + 16 > data.len() {
-                stack.pop();
-                return "null".to_string();
-            }
-            // offset 8-11: length（由 set_array_elem 维护）
-            let len =
-                u32::from_le_bytes([data[ptr + 8], data[ptr + 9], data[ptr + 10], data[ptr + 11]])
-                    as usize;
-            let mut v = Vec::with_capacity(len);
-            for i in 0..len {
-                let off = ptr + 16 + i * 8;
-                if off + 8 > data.len() {
-                    v.push(value::encode_null());
-                } else {
-                    v.push(i64::from_le_bytes(data[off..off + 8].try_into().unwrap()));
-                }
-            }
-            v
-        };
-        let mut parts = Vec::with_capacity(elems.len());
-        for elem in elems {
-            let s = runtime_json_stringify_inner(caller, elem, stack);
-            // JSON.stringify 规范：数组中的 undefined/function/symbol → null
-            if s == "undefined" {
-                parts.push("null".to_string());
-            } else {
-                parts.push(s);
-            }
-        }
-        stack.pop();
-        format!("[{}]", parts.join(","))
-    } else if value::is_object(val) {
-        if stack.contains(&val) {
-            set_runtime_error(
-                caller.data(),
-                "TypeError: Converting circular structure to JSON".to_string(),
-            );
-            return "null".to_string();
-        }
-        stack.push(val);
-        // 对象序列化：先提取所有属性信息，再递归序列化（避免 borrow 冲突）
-        let Some(ptr) = resolve_handle(caller, val) else {
-            stack.pop();
-            return "null".to_string();
-        };
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            stack.pop();
-            return "null".to_string();
-        };
-        // 从堆内存提取属性槽（name_id, prop_val）
-        let slots: Vec<(u32, i64)> = {
-            let data = memory.data(&*caller);
-            if ptr + 16 > data.len() {
-                stack.pop();
-                return "null".to_string();
-            }
-            let num_props = u32::from_le_bytes([
-                data[ptr + 12],
-                data[ptr + 13],
-                data[ptr + 14],
-                data[ptr + 15],
-            ]) as usize;
-            let mut s = Vec::with_capacity(num_props);
-            for i in 0..num_props {
-                let slot_off = ptr + 16 + i * 32;
-                if slot_off + 32 > data.len() {
-                    continue;
-                }
-                // flags 在 slot 偏移 +4，检查 FLAG_ENUMERABLE (bit 1)
-                let flags = i32::from_le_bytes([
-                    data[slot_off + 4],
-                    data[slot_off + 5],
-                    data[slot_off + 6],
-                    data[slot_off + 7],
-                ]);
-                if (flags & 2) == 0 {
-                    continue;
-                }
-                // name_id 在 slot 偏移 +0
-                let name_id = u32::from_le_bytes([
-                    data[slot_off],
-                    data[slot_off + 1],
-                    data[slot_off + 2],
-                    data[slot_off + 3],
-                ]);
-                // value 在 slot 偏移 +8（8 字节 i64）
-                let prop_val =
-                    i64::from_le_bytes(data[slot_off + 8..slot_off + 16].try_into().unwrap());
-                // 跳过 undefined（按 JSON.stringify 规范）
-                if value::is_undefined(prop_val) {
-                    continue;
-                }
-                s.push((name_id, prop_val));
-            }
-            s
-        };
-        let mut pairs = Vec::with_capacity(slots.len());
-        for (name_id, prop_val) in slots {
-            let name_bytes = read_string_bytes(caller, name_id);
-            let name = String::from_utf8_lossy(&name_bytes);
-            let val_str = runtime_json_stringify_inner(caller, prop_val, stack);
-            if val_str == "undefined" {
-                continue; // 函数、symbol 等
-            }
-            pairs.push(format!("\"{}\":{}", name.escape_default(), val_str));
-        }
-        stack.pop();
-        format!("{{{}}}", pairs.join(","))
-    } else {
-        "null".to_string()
+        return "null".to_string();
     }
+    if value::is_string(value) {
+        let s = read_runtime_string(caller, value);
+        return json_escape_string(&s);
+    }
+    if value::is_bool(value) {
+        return value::decode_bool(value).to_string();
+    }
+    if value::is_null(value) {
+        return "null".to_string();
+    }
+
+    let next_indent = if gap.is_empty() {
+        String::new()
+    } else {
+        format!("{}{}", current_indent, gap)
+    };
+
+    if value::is_array(value) {
+        if stack.contains(&value) {
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Converting circular structure to JSON".to_string(),
+            );
+            return "null".to_string();
+        }
+        stack.push(value);
+        let handle_idx = value::decode_array_handle(value) as usize;
+        let ptr = match resolve_handle_idx(caller, handle_idx) {
+            Some(ptr) => ptr,
+            None => {
+                stack.pop();
+                return "null".to_string();
+            }
+        };
+        let len = read_array_length(caller, ptr).unwrap_or(0);
+        let mut parts = Vec::with_capacity(len as usize);
+        for i in 0..len {
+            let elem = read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
+            let s = serialize_json_property(
+                caller,
+                &i.to_string(),
+                elem,
+                replacer_is_fn,
+                replacer_fn,
+                property_list,
+                stack,
+                gap,
+                &next_indent,
+            );
+            parts.push(if s == "undefined" { "null".to_string() } else { s });
+        }
+        stack.pop();
+        return if parts.is_empty() {
+            "[]".to_string()
+        } else if gap.is_empty() {
+            format!("[{}]", parts.join(","))
+        } else {
+            let inner = parts.join(&format!(",\n{}", next_indent));
+            format!("[\n{}{}\n{}]", next_indent, inner, current_indent)
+        };
+    }
+
+    if value::is_object(value) {
+        if stack.contains(&value) {
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Converting circular structure to JSON".to_string(),
+            );
+            return "null".to_string();
+        }
+        stack.push(value);
+        let ptr = match resolve_handle(caller, value) {
+            Some(ptr) => ptr,
+            None => {
+                stack.pop();
+                return "null".to_string();
+            }
+        };
+        let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
+            stack.pop();
+            return "null".to_string();
+        };
+        {
+            let data = memory.data(&*caller);
+            if ptr + 16 > data.len() {
+                stack.pop();
+                return "null".to_string();
+            }
+        }
+
+        let mut pairs = Vec::new();
+        if let Some(property_list) = property_list {
+            for name in property_list {
+                if let Some(prop_val) = read_object_property_by_name(caller, ptr, name) {
+                    if value::is_undefined(prop_val) {
+                        continue;
+                    }
+                    let s = serialize_json_property(
+                        caller,
+                        name,
+                        prop_val,
+                        replacer_is_fn,
+                        replacer_fn,
+                        Some(property_list),
+                        stack,
+                        gap,
+                        &next_indent,
+                    );
+                    if s != "undefined" {
+                        let colon = if gap.is_empty() { ":" } else { ": " };
+                        pairs.push(format!("{}{}{}", json_escape_string(name), colon, s));
+                    }
+                }
+            }
+        } else {
+            let slots: Vec<(u32, i64)> = {
+                let data = memory.data(&*caller);
+                let num_props = u32::from_le_bytes([
+                    data[ptr + 12],
+                    data[ptr + 13],
+                    data[ptr + 14],
+                    data[ptr + 15],
+                ]) as usize;
+                let mut slots = Vec::with_capacity(num_props);
+                for i in 0..num_props {
+                    let slot_off = ptr + 16 + i * 32;
+                    if slot_off + 32 > data.len() {
+                        continue;
+                    }
+                    let flags = i32::from_le_bytes([
+                        data[slot_off + 4],
+                        data[slot_off + 5],
+                        data[slot_off + 6],
+                        data[slot_off + 7],
+                    ]);
+                    if (flags & 2) == 0 {
+                        continue;
+                    }
+                    let name_id = u32::from_le_bytes([
+                        data[slot_off],
+                        data[slot_off + 1],
+                        data[slot_off + 2],
+                        data[slot_off + 3],
+                    ]);
+                    let prop_val =
+                        i64::from_le_bytes(data[slot_off + 8..slot_off + 16].try_into().unwrap());
+                    if value::is_undefined(prop_val) {
+                        continue;
+                    }
+                    slots.push((name_id, prop_val));
+                }
+                slots
+            };
+            for (name_id, prop_val) in slots {
+                let name_bytes = read_string_bytes(caller, name_id);
+                let name = String::from_utf8_lossy(&name_bytes).to_string();
+                let s = serialize_json_property(
+                    caller,
+                    &name,
+                    prop_val,
+                    replacer_is_fn,
+                    replacer_fn,
+                    None,
+                    stack,
+                    gap,
+                    &next_indent,
+                );
+                if s != "undefined" {
+                    let colon = if gap.is_empty() { ":" } else { ": " };
+                    pairs.push(format!("{}{}{}", json_escape_string(&name), colon, s));
+                }
+            }
+        }
+
+        stack.pop();
+        return if pairs.is_empty() {
+            "{}".to_string()
+        } else if gap.is_empty() {
+            format!("{{{}}}", pairs.join(","))
+        } else {
+            let inner = pairs.join(&format!(",\n{}", next_indent));
+            format!("{{\n{}{}\n{}}}", next_indent, inner, current_indent)
+        };
+    }
+
+    "null".to_string()
+}
+
+/// 简单的 JSON.stringify 实现（单参向后兼容包装器）
+pub(crate) fn runtime_json_stringify(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
+    runtime_json_stringify_full(caller, val, value::encode_undefined(), value::encode_undefined())
 }
 
 pub(crate) fn read_string(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Result<String> {

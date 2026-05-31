@@ -24,6 +24,7 @@ mod runtime_combinators;
 mod runtime_eval;
 mod runtime_heap;
 mod runtime_host_helpers;
+mod runtime_json;
 mod runtime_microtask;
 mod runtime_promises;
 
@@ -43,6 +44,7 @@ use runtime_heap::*;
 use runtime_host_helpers::*;
 use runtime_microtask::*;
 use runtime_promises::*;
+use runtime_json::*;
 use runtime_render::*;
 use runtime_values::*;
 

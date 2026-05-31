@@ -739,8 +739,7 @@ pub(crate) fn define_core(
     linker.define(&mut store, "env", "op_in", f)?;
 
     fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, prop: i64) -> i64 {
-        // 检查 object 是否有 prop 属性
-        if !value::is_object(object) && !value::is_function(object) {
+        if !value::is_object(object) && !value::is_function(object) && !value::is_array(object) {
             *caller
                 .data()
                 .runtime_error
@@ -790,6 +789,15 @@ pub(crate) fn define_core(
             Some(p) => p,
             None => return value::encode_bool(false),
         };
+
+        if value::is_array(object) {
+            if prop_str == "length" {
+                return value::encode_bool(true);
+            }
+            if let Ok(index) = prop_str.parse::<u32>() {
+                return value::encode_bool(array_elem_present(caller, ptr, index));
+            }
+        }
 
         // 搜索属性，遍历原型链
         loop {
