@@ -5,7 +5,7 @@
 //! - StringBlock: parallel quote/backslash/control detection (32 bytes at once, AVX2)
 //! - NonspaceBitmap: cached 64-byte whitespace bitmap for skip_whitespace
 
-use wasmtime::Caller;
+use wasmtime::{AsContextMut, Caller};
 use crate::*;
 
 // ── SIMD helpers ──────────────────────────────
@@ -478,6 +478,214 @@ impl<'a> JsonParser<'a> {
             self.skip_whitespace();
             let value = self.parse_value()?;
             pairs.push((key, value));
+        }
+    }
+}
+/// Delete an object property by name_id using swap-remove.
+/// Based on the same pattern as `reflect_delete_property_impl`.
+fn delete_property_by_name_id<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    obj: i64,
+    name_id: u32,
+) {
+    let obj_ptr = match resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize) {
+        Some(p) => p,
+        None => return,
+    };
+    let Some((slot_offset, flags, _val)) = find_property_slot_by_name_id_with_env(ctx, env, obj_ptr, name_id)
+    else { return };
+    // 只删除 configurable 属性
+    if (flags & constants::FLAG_CONFIGURABLE) == 0 { return; }
+    let data = env.memory.data_mut(&mut *ctx);
+    if obj_ptr + 16 > data.len() || slot_offset + 32 > data.len() { return; }
+    let num_props = u32::from_le_bytes([
+        data[obj_ptr + 12], data[obj_ptr + 13], data[obj_ptr + 14], data[obj_ptr + 15],
+    ]) as usize;
+    if num_props == 0 { return; }
+    let last_slot_offset = obj_ptr + 16 + (num_props - 1) * 32;
+    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props as u32 - 1).to_le_bytes());
+    if slot_offset != last_slot_offset {
+        data.copy_within(last_slot_offset..last_slot_offset + 32, slot_offset);
+    }
+}
+
+fn build_wasm_value(caller: &mut Caller<'_, RuntimeState>, json_value: &JsonValue) -> i64 {
+    match json_value {
+        JsonValue::Null => value::encode_null(),
+        JsonValue::Bool(b) => value::encode_bool(*b),
+        JsonValue::Number(n) => value::encode_f64(*n),
+        JsonValue::String(s) => store_runtime_string(caller, s.clone()),
+        JsonValue::Array(elements) => {
+            let arr = alloc_array(caller, elements.len() as u32);
+            if let Some(ptr) = resolve_array_ptr(caller, arr) {
+                for (i, elem) in elements.iter().enumerate() {
+                    let elem_val = build_wasm_value(caller, elem);
+                    write_array_elem(caller, ptr, i as u32, elem_val);
+                }
+                write_array_length(caller, ptr, elements.len() as u32);
+            }
+            arr
+        }
+        JsonValue::Object(properties) => {
+            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            let obj = alloc_host_object(caller, &env, properties.len() as u32);
+            let obj_ptr = resolve_handle(caller, obj);
+            if let Some(ptr) = obj_ptr {
+                for (key, val) in properties {
+                    let val_encoded = build_wasm_value(caller, val);
+                    let name_id = find_memory_c_string_with_env(caller, &env, key)
+                        .or_else(|| alloc_heap_c_string_with_env(caller, &env, key));
+                    if let Some(nid) = name_id {
+                        let flags = constants::FLAG_CONFIGURABLE
+                            | constants::FLAG_ENUMERABLE
+                            | constants::FLAG_WRITABLE;
+                        write_object_property_by_name_id(caller, ptr, obj, nid, val_encoded, flags);
+                    }
+                }
+            }
+            obj
+        }
+    }
+}
+
+fn apply_reviver(
+    caller: &mut Caller<'_, RuntimeState>,
+    reviver: i64,
+    holder: i64,
+    key: &str,
+    val: i64,
+) -> i64 {
+    if value::is_array(val) {
+        if let Some(ptr) = resolve_array_ptr(caller, val) {
+            let len = match read_array_length(caller, ptr) {
+                Some(n) => n,
+                None => return value::encode_undefined(),
+            };
+            for i in 0..len {
+                let elem_val = match read_array_elem(caller, ptr, i) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let new_val = apply_reviver(caller, reviver, val, &i.to_string(), elem_val);
+                // ⚠️ Deviation: dense arrays don't support holes.
+                // ES §24.5.1 says "delete the element" (creating a hole),
+                // but wjsm dense arrays can't represent holes.
+                // We write undefined instead, which differs for `in`/enumeration.
+                write_array_elem(caller, ptr, i as u32, new_val);
+            }
+        }
+    } else if value::is_object(val) {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        if let Some(obj_ptr) = resolve_handle(caller, val) {
+            let mut props: Vec<(u32, i64)> = Vec::new();
+            {
+                let data = env.memory.data(&*caller);
+                if obj_ptr + 16 <= data.len() {
+                    let num_props = u32::from_le_bytes([
+                        data[obj_ptr + 12], data[obj_ptr + 13],
+                        data[obj_ptr + 14], data[obj_ptr + 15],
+                    ]) as usize;
+                    for i in 0..num_props {
+                        let slot_off = obj_ptr + 16 + i * 32;
+                        if slot_off + 32 > data.len() { continue; }
+                        let name_id = u32::from_le_bytes([
+                            data[slot_off], data[slot_off + 1],
+                            data[slot_off + 2], data[slot_off + 3],
+                        ]);
+                        let prop_val = i64::from_le_bytes([
+                            data[slot_off + 8], data[slot_off + 9],
+                            data[slot_off + 10], data[slot_off + 11],
+                            data[slot_off + 12], data[slot_off + 13],
+                            data[slot_off + 14], data[slot_off + 15],
+                        ]);
+                        props.push((name_id, prop_val));
+                    }
+                }
+            }
+            for (name_id, prop_val) in &props {
+                let name_bytes = read_string_bytes_mem(caller, &env.memory, *name_id);
+                let name = String::from_utf8_lossy(&name_bytes);
+                let new_val = apply_reviver(caller, reviver, val, &name, *prop_val);
+                if value::is_undefined(new_val) {
+                    delete_property_by_name_id(caller, &env, val, *name_id);
+                } else {
+                    let obj_ptr2 = resolve_handle(caller, val).unwrap_or(0);
+                    if obj_ptr2 != 0 {
+                        write_object_property_by_name_id(
+                            caller, obj_ptr2, val, *name_id, new_val,
+                            constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    // ES §24.5.1: Call(reviver, holder, «key, value»)
+    let key_str = store_runtime_string(caller, key.to_string());
+    call_wasm_callback(caller, reviver, holder, &[key_str, val])
+        .unwrap_or_else(|_| value::encode_undefined())
+}
+
+pub fn json_parse_to_wasm(
+    caller: &mut Caller<'_, RuntimeState>,
+    text: i64,
+    reviver: i64,
+) -> i64 {
+    let text_str = if value::is_string(text) {
+        if value::is_runtime_string_handle(text) {
+            let handle = value::decode_runtime_string_handle(text) as usize;
+            caller.data().runtime_strings.lock()
+                .expect("runtime strings mutex")
+                .get(handle).cloned().unwrap_or_default()
+        } else {
+            read_string(caller, value::decode_string_ptr(text)).unwrap_or_default()
+        }
+    } else {
+        // 非字符串输入：使用 eval_to_string（比 render_value 更接近 ES ToString）
+        eval_to_string(caller, text)
+    };
+
+    let mut parser = JsonParser::new(text_str.as_bytes());
+    match parser.parse_value() {
+        Ok(json_value) => {
+            // ES 规范：解析完 value 后，剩余内容必须全是空白
+            parser.skip_whitespace();
+            if parser.pos < parser.input.len() {
+                set_runtime_error(caller.data(), "SyntaxError: Unexpected trailing content".to_string());
+                return value::encode_undefined();
+            }
+
+            let wasm_value = build_wasm_value(caller, &json_value);
+
+            if is_callable_in_runtime(caller, reviver) {
+                let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                let root = alloc_host_object(caller, &env, 1);
+                // 设置 root[""] = wasm_value
+                let empty_name_id = find_memory_c_string_with_env(caller, &env, "")
+                    .or_else(|| alloc_heap_c_string_with_env(caller, &env, ""));
+                if let Some(nid) = empty_name_id {
+                    let root_ptr = resolve_handle(caller, root);
+                    if let Some(ptr) = root_ptr {
+                        write_object_property_by_name_id(
+                            caller, ptr, root, nid, wasm_value,
+                            constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE,
+                        );
+                    }
+                }
+                // ES §24.5.1: 遍历后调用 reviver("", value)，this=root
+                // 直接使用 apply_reviver 的返回值，不从 heap 重新读取
+                let result = apply_reviver(caller, reviver, root, "", wasm_value);
+                result
+            } else {
+                wasm_value
+            }
+        }
+        Err(e) => {
+            // ⚠️ Deviation: 使用 set_runtime_error(string) 而非创建 Error 对象
+            // 创建真正的 SyntaxError 对象需要重新设计 runtime error 机制
+            set_runtime_error(caller.data(), format!("SyntaxError: {}", e));
+            value::encode_undefined()
         }
     }
 }
