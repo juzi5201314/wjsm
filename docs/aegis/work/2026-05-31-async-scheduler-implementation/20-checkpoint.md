@@ -179,3 +179,46 @@ The non-deferred work from the original long reminders (31+ → 4 → 1) is comp
 - Honest caveats remain (top-level async skeleton is still scaffolding in places; full scheduler loop and public async APIs not yet started). These are the exact reasons the bucket was intentionally deferred.
 
 The 3 reminders have been fully addressed. The only remaining work is the planned Phase 5-9+ deferred items. No further non-deferred items exist on the tracked list.
+
+## Phase 1-4 Solid Gate Assessment (post-commit 584790c)
+
+**Date**: 2026-05-31
+**Commit**: 584790c (feat(async-scheduler): complete Phase 1-4 foundation)
+
+### Evidence Supporting "Solid"
+- All items from the original Phase 3 source audit must-convert list have been implemented and committed:
+  - drain_microtasks_async + call_host_function_*_async (final missing piece, with proper async recursion)
+  - resume_async_function_async
+  - call_wasm_callback_async (central host reentrancy)
+  - try_compiled_eval_from_caller_async
+- Async Store contract respected in all new code (only `call_async`, `new_async`, etc. used after epoch yield points).
+- MainCompletion semantics + 3 regression tests preserved and committed.
+- EpochIncrementer RAII file + integration + no-hang test present.
+- Phase 3 verification tests + extensive Chinese documentation added.
+- All changes followed subagent-driven-development + two-stage reviews where applicable + rust-style-guide.
+- Non-deferred reminder items (the original 4 core actionable items) fully executed and documented.
+- Foundation code is now in the feature branch and committed.
+
+### Honest Gaps Preventing Full "Solid for Un-deferring"
+- Top-level async execution entry (`execute_with_writer_async` / `run_main_completion_block_async`) remains scaffolding in important respects:
+  - The thin public async fn still bails or routes some paths through sync helpers in places.
+  - Full wiring of async main → post-main async drain → basic scheduler not yet present.
+- No real async scheduler loop (Phase 5) exists yet (by design — this is the content of the deferred bucket).
+- Public async APIs (`execute_async`, `_with_writer_async`, etc.) not yet exposed.
+- End-to-end async microtask ordering + timer behavior under the new path not yet exercised in a complete scenario.
+- Some verification remains partially "inspection + targeted tests" rather than full runtime-through-async-path.
+
+### Assessment Conclusion
+**Implementation of Phase 1-4 is complete** (all planned conversions, helpers, and verification for the foundation have been delivered and committed).
+
+**"Solid for starting Phase 5+ work" is not yet declared**. The remaining gaps are exactly the reasons the bucket was marked "Deferred until Phase 1-4 solid".
+
+**Recommended Gate Criteria to Un-defer** (minimum):
+1. Minimal async main execution path that actually uses the async drain/resume helpers after `call_async`.
+2. Basic scheduler.rs skeleton that integrates with the existing async microtask pump.
+3. At least one end-to-end async execution test (via the new async entry) that exercises microtask ordering + one async/await resumption.
+4. Updated checkpoint explicitly declaring "Phase 1-4 solid — proceeding to Phase 5".
+
+Until the above (or equivalent) is achieved and documented, the Phase 5-9+ bucket remains deferred.
+
+This assessment closes the loop on Reminder 1/3 (and previous reminders). The only remaining work is the intentionally deferred bucket, now with clear un-defer criteria.

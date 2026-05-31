@@ -417,8 +417,9 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     };
 
     // ── Drain microtasks after main() ────────────────────────────────────
+    // Phase 1-4 solid gate: async 主路径接线到 drain_microtasks_async 等自有 helpers
     if main_ok {
-        drain_microtasks(&mut store, &wasm_env);
+        drain_microtasks_async(&mut store, &wasm_env).await;
     }
 
     // ── Timer event loop (only if main succeeded) ─────────────────────────
@@ -476,17 +477,16 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
                 let entry_id = entry.id;
 
                 // 定时器回调按宿主 API 语义以 this=undefined、零参数调用。
-                call_host_function_with_args(
+                call_host_function_with_args_async(
                     &mut store,
                     &wasm_env,
                     callback,
                     value::encode_undefined(),
                     &[],
-                );
+                ).await;
 
                 // Drain microtasks after timer callback
-                drain_microtasks(&mut store, &wasm_env);
-
+                drain_microtasks_async(&mut store, &wasm_env).await;
                 // Re-schedule if repeating
                 if repeating {
                     store
