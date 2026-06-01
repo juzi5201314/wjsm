@@ -1,6 +1,6 @@
 use super::*;
 use std::io::Write;
-use std::time::Instant;
+ 
 use wasmtime::{Instance, Store};
 
 pub(crate) fn create_async_generator_method(
@@ -365,8 +365,8 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     output: Arc<Mutex<Vec<u8>>>,
     runtime_error: Arc<Mutex<Option<String>>>,
     writer: W,
+    completion_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion>,
 ) -> anyhow::Result<W> {
-    // ── Run main ──
     let main = instance.get_typed_func::<(), i64>(&mut store, "main")?;
     let main_result = main.call_async(&mut store, ()).await;
     let main_ok = match main_result {
@@ -422,90 +422,12 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
         drain_microtasks_async(&mut store, &wasm_env).await;
     }
 
-    // ── Timer event loop (only if main succeeded) ─────────────────────────
-    // Poll timers; fire expired callbacks via the WASM function table.
+    // ── Post-main scheduler（Phase 5 委托给 scheduler.rs，Phase 6 传入 rx） ─────────────────────────
+    // 仅 async 路径；sync 路径的阻塞 loop 保持 100% 不动。
+    // 初始 drain 已在上方完成；scheduler 内部负责后续 timer fire + per-callback drain + completion 处理。
     if main_ok {
-        let mut timer_iterations = 0u32;
-        const MAX_TIMER_ITERATIONS: u32 = 1000;
-        loop {
-            timer_iterations += 1;
-            if timer_iterations > MAX_TIMER_ITERATIONS {
-                writeln!(
-                    store.data().output.lock().expect("output mutex"),
-                    "Internal error: timer event loop exceeded max iterations"
-                )
-                .ok();
-                break;
-            }
-            let now = Instant::now();
-            let mut _entry_to_fire: Option<TimerEntry> = None;
-
-            {
-                let mut timers = store.data().timers.lock().expect("timers mutex");
-                let mut cancelled = store
-                    .data()
-                    .cancelled_timers
-                    .lock()
-                    .expect("cancelled_timers mutex");
-
-                // Remove cancelled timers
-                timers.retain(|t| !cancelled.contains(&t.id));
-                cancelled.clear();
-
-                if timers.is_empty() {
-                    break;
-                }
-
-                // Find earliest expired timer
-                if let Some(idx) = timers.iter().position(|t| t.deadline <= now) {
-                    _entry_to_fire = Some(timers.remove(idx));
-                } else {
-                    // Sleep until next timer
-                    let next = timers.iter().min_by_key(|t| t.deadline).unwrap().deadline;
-                    let dur = next.saturating_duration_since(Instant::now());
-                    if !dur.is_zero() {
-                        std::thread::sleep(dur);
-                    }
-                    continue;
-                }
-            }
-
-            if let Some(entry) = _entry_to_fire {
-                let callback = entry.callback;
-                let repeating = entry.repeating;
-                let interval = entry.interval;
-                let entry_id = entry.id;
-
-                // 定时器回调按宿主 API 语义以 this=undefined、零参数调用。
-                call_host_function_with_args_async(
-                    &mut store,
-                    &wasm_env,
-                    callback,
-                    value::encode_undefined(),
-                    &[],
-                ).await;
-
-                // Drain microtasks after timer callback
-                drain_microtasks_async(&mut store, &wasm_env).await;
-                // Re-schedule if repeating
-                if repeating {
-                    store
-                        .data()
-                        .timers
-                        .lock()
-                        .expect("timers mutex")
-                        .push(TimerEntry {
-                            id: entry_id,
-                            deadline: Instant::now() + interval,
-                            callback,
-                            repeating: true,
-                            interval,
-                        });
-                }
-            }
-        }
+        crate::scheduler::run_post_main_scheduler_async(&mut store, &wasm_env, completion_rx).await?;
     }
-    // ── Collect output ────────────────────────────────────────────────────
     let bytes = output
         .lock()
         .expect("runtime output buffer mutex should not be poisoned")
