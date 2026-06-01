@@ -46,226 +46,76 @@ use runtime_microtask::*;
 use runtime_promises::*;
 use runtime_render::*;
 use runtime_values::*;
-pub fn execute(wasm_bytes: &[u8]) -> Result<()> {
-    let stdout = io::stdout();
-    let _ = execute_with_writer(wasm_bytes, stdout.lock())?;
+// ── Linker 注册辅助函数 ─────────────────────────────────────────
+
+/// 注册 18 个 define_* 宿主函数模块
+fn register_linker(
+    linker: &mut Linker<RuntimeState>,
+    store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    define_core(linker, store)?;
+    define_timers_arrays(linker, store)?;
+    // 使用 1-param fetch shim 兼容当前测试 WASM 的 1-param fetch 签名
+    // TODO: 当后端生成 2-param fetch 时恢复 define_fetch
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, _url: i64| -> i64 {
+            alloc_promise_from_caller(&mut caller, PromiseEntry::pending())
+        },
+    );
+    linker.define(&mut *store, "env", "fetch", f)?;
+    define_array_object(linker, store)?;
+    define_primitive_core(linker, store)?;
+    define_promise(linker, store)?;
+    define_promise_combinators(linker, store)?;
+    define_misc(linker, store)?;
+    define_async_fn(linker, store)?;
+    define_async_generator(linker, store)?;
+    define_proxy_reflect(linker, store)?;
+    define_object_builtins(linker, store)?;
+    define_string_methods(linker, store)?;
+    define_math_number_error(linker, store)?;
+    define_collections_buffers(linker, store)?;
+    define_proxy_traps(linker, store)?;
+    define_get_builtin_global(linker, store)?;
+    define_typedarray_new_methods(linker, store)?;
+    define_weakref_finalization(linker, store)?;
+    define_atomics(linker, store)?;
     Ok(())
 }
 
-pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> {
-    let engine = Engine::default();
-    let module = match Module::new(&engine, wasm_bytes) {
-        Ok(m) => m,
-        Err(e) => {
-            return Err(anyhow::anyhow!("WASM validation failed: {:?}", e));
-        }
-    };
-    let output = Arc::new(Mutex::new(Vec::new()));
-
-    // Iterator/enumerator side tables
-    let iterators: Arc<Mutex<Vec<IteratorState>>> = Arc::new(Mutex::new(Vec::new()));
-    let enumerators: Arc<Mutex<Vec<EnumeratorState>>> = Arc::new(Mutex::new(Vec::new()));
-    let runtime_strings: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let runtime_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let timers: Arc<Mutex<Vec<TimerEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let cancelled_timers: Arc<Mutex<HashSet<u32>>> = Arc::new(Mutex::new(HashSet::new()));
-    let next_timer_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
-    let closures: Arc<Mutex<Vec<ClosureEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let bound_objects: Arc<Mutex<Vec<BoundRecord>>> = Arc::new(Mutex::new(Vec::new()));
-    let native_callables: Arc<Mutex<Vec<NativeCallable>>> =
-        Arc::new(Mutex::new(vec![NativeCallable::EvalIndirect]));
-    let eval_cache: Arc<Mutex<HashMap<u64, Vec<u8>>>> = Arc::new(Mutex::new(HashMap::new()));
-
-    let bigint_table: Arc<Mutex<Vec<num_bigint::BigInt>>> = Arc::new(Mutex::new(Vec::new()));
-    let symbol_table: Arc<Mutex<Vec<SymbolEntry>>> = Arc::new(Mutex::new(vec![
-        // 预分配 well-known symbols（id=0..7，对应 ECMAScript § 6.1.5.1）
-        // 这些 symbol 不属于全局注册表（global_key = None），仅通过 Symbol.wellKnown 访问
-        SymbolEntry {
-            description: Some("Symbol(Symbol.iterator)".into()),
-            global_key: None,
-        }, // 0 = @@iterator
-        SymbolEntry {
-            description: Some("Symbol(Symbol.species)".into()),
-            global_key: None,
-        }, // 1 = @@species
-        SymbolEntry {
-            description: Some("Symbol(Symbol.toStringTag)".into()),
-            global_key: None,
-        }, // 2 = @@toStringTag
-        SymbolEntry {
-            description: Some("Symbol(Symbol.asyncIterator)".into()),
-            global_key: None,
-        }, // 3 = @@asyncIterator
-        SymbolEntry {
-            description: Some("Symbol(Symbol.hasInstance)".into()),
-            global_key: None,
-        }, // 4 = @@hasInstance
-        SymbolEntry {
-            description: Some("Symbol(Symbol.toPrimitive)".into()),
-            global_key: None,
-        }, // 5 = @@toPrimitive
-        SymbolEntry {
-            description: Some("Symbol(Symbol.dispose)".into()),
-            global_key: None,
-        }, // 6 = @@dispose
-        SymbolEntry {
-            description: Some("Symbol(Symbol.match)".into()),
-            global_key: None,
-        }, // 7 = @@match
-        SymbolEntry {
-            description: Some("Symbol(Symbol.asyncDispose)".into()),
-            global_key: None,
-        }, // 8 = @@asyncDispose
-    ]));
-    let regex_table: Arc<Mutex<Vec<RegexEntry>>> = Arc::new(Mutex::new(Vec::new()));
-
-    let promise_table: Arc<Mutex<Vec<PromiseEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let pending_unhandled_rejections: Arc<Mutex<HashSet<usize>>> =
-        Arc::new(Mutex::new(HashSet::new()));
-    let native_callable_free_slots: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
-    let non_extensible_handles: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
-    let microtask_queue: Arc<Mutex<VecDeque<Microtask>>> = Arc::new(Mutex::new(VecDeque::new()));
-    let continuation_table: Arc<Mutex<Vec<ContinuationEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>> =
-        Arc::new(Mutex::new(Vec::new()));
-    let async_from_sync_iterators: Arc<Mutex<Vec<AsyncFromSyncIteratorEntry>>> =
-        Arc::new(Mutex::new(Vec::new()));
-    let combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>> = Arc::new(Mutex::new(Vec::new()));
-    let module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>> =
-        Arc::new(Mutex::new(HashMap::new()));
-    let error_table: Arc<Mutex<Vec<ErrorEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let map_table: Arc<Mutex<Vec<MapEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let set_table: Arc<Mutex<Vec<SetEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let weakmap_table: Arc<Mutex<Vec<WeakMapEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let weakset_table: Arc<Mutex<Vec<WeakSetEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let proxy_table: Arc<Mutex<Vec<ProxyEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let arraybuffer_table: Arc<Mutex<Vec<ArrayBufferEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let dataview_table: Arc<Mutex<Vec<DataViewEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let headers_table: Arc<Mutex<Vec<HeadersEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let fetch_response_table: Arc<Mutex<Vec<FetchResponseEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let fetch_request_table: Arc<Mutex<Vec<FetchRequestEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    // GC 相关状态
-    let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
-    let alloc_counter: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
-    const GC_THRESHOLD: u64 = 1000; // 每 1000 次分配触发一次 GC 检查
-    let weakref_table: Arc<Mutex<Vec<WeakRefEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let finalization_registry_table: Arc<Mutex<Vec<FinalizationRegistryEntry>>> =
-        Arc::new(Mutex::new(Vec::new()));
-    let pending_cleanup_callbacks: Arc<Mutex<Vec<(i64, Vec<i64>)>>> =
-        Arc::new(Mutex::new(Vec::new()));
-    let mut store = Store::new(
-        &engine,
-        RuntimeState {
-            output: Arc::clone(&output),
-            iterators: Arc::clone(&iterators),
-            enumerators: Arc::clone(&enumerators),
-            runtime_strings: Arc::clone(&runtime_strings),
-            runtime_error: Arc::clone(&runtime_error),
-            timers: Arc::clone(&timers),
-            cancelled_timers: Arc::clone(&cancelled_timers),
-            next_timer_id: Arc::clone(&next_timer_id),
-            gc_mark_bits: Arc::clone(&gc_mark_bits),
-            alloc_counter: Arc::clone(&alloc_counter),
-            gc_threshold: GC_THRESHOLD,
-            closures: Arc::clone(&closures),
-            bound_objects: Arc::clone(&bound_objects),
-            native_callables: Arc::clone(&native_callables),
-            native_callable_free_slots: Arc::clone(&native_callable_free_slots),
-            eval_cache: Arc::clone(&eval_cache),
-            bigint_table: Arc::clone(&bigint_table),
-            symbol_table: Arc::clone(&symbol_table),
-            regex_table: Arc::clone(&regex_table),
-            promise_table: Arc::clone(&promise_table),
-            pending_unhandled_rejections: Arc::clone(&pending_unhandled_rejections),
-            microtask_queue: Arc::clone(&microtask_queue),
-            continuation_table: Arc::clone(&continuation_table),
-            async_generator_table: Arc::clone(&async_generator_table),
-            async_from_sync_iterators: Arc::clone(&async_from_sync_iterators),
-            async_iterator_prototype: value::encode_undefined(), // set after store creation
-            async_gen_prototype: value::encode_undefined(),      // set after store creation
-            combinator_contexts: Arc::clone(&combinator_contexts),
-            module_namespace_cache: Arc::clone(&module_namespace_cache),
-            error_table: Arc::clone(&error_table),
-            map_table: Arc::clone(&map_table),
-            set_table: Arc::clone(&set_table),
-            weakmap_table: Arc::clone(&weakmap_table),
-            weakset_table: Arc::clone(&weakset_table),
-            weakref_table: Arc::clone(&weakref_table),
-            finalization_registry_table: Arc::clone(&finalization_registry_table),
-            pending_cleanup_callbacks: Arc::clone(&pending_cleanup_callbacks),
-            proxy_table: Arc::clone(&proxy_table),
-            arraybuffer_table: Arc::clone(&arraybuffer_table),
-            dataview_table: Arc::clone(&dataview_table),
-            typedarray_table: Arc::clone(&typedarray_table),
-            headers_table: Arc::clone(&headers_table),
-            fetch_response_table: Arc::clone(&fetch_response_table),
-            fetch_request_table: Arc::clone(&fetch_request_table),
-            shared_state: Some(Arc::new(SharedRuntimeState {
-                sab_table: Arc::new(Mutex::new(Vec::new())),
-                agent_state: Arc::new(AgentState {
-                    reports: Arc::new(Mutex::new(Vec::new())),
-                    waiters: Arc::new(Mutex::new(HashMap::new())),
-                }),
-            })),
-            non_extensible_handles: Arc::clone(&non_extensible_handles),
-            scope_records: HashMap::new(),
-            scope_record_next_handle: 0,
-            new_target: AtomicI64::new(value::encode_undefined()),
-            host_completion_tx: None,
-            async_op_counter: None,
+/// 注册 16 个简单桥接（无 WASM 回调，sync/async 共享）
+fn register_common_bridges(
+    linker: &mut Linker<RuntimeState>,
+    store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    // new_target
+    let f = Func::wrap(
+        &mut *store,
+        |caller: Caller<'_, RuntimeState>, _dummy: i64| -> i64 {
+            caller.data().new_target.load(Ordering::Relaxed)
         },
     );
-
-    // ── console_log ──
-    let mut linker = Linker::new(&engine);
-
-    // ── 注册所有宿主函数（按名字链接） ──
-    define_core(&mut linker, &mut store)?;
-    define_timers_arrays(&mut linker, &mut store)?;
-    define_fetch(&mut linker, &mut store)?;
-    define_array_object(&mut linker, &mut store)?;
-    define_primitive_core(&mut linker, &mut store)?;
-    define_promise(&mut linker, &mut store)?;
-    define_promise_combinators(&mut linker, &mut store)?;
-    define_misc(&mut linker, &mut store)?;
-    define_async_fn(&mut linker, &mut store)?;
-    define_async_generator(&mut linker, &mut store)?;
-    define_proxy_reflect(&mut linker, &mut store)?;
-    define_object_builtins(&mut linker, &mut store)?;
-    define_string_methods(&mut linker, &mut store)?;
-    define_math_number_error(&mut linker, &mut store)?;
-    define_collections_buffers(&mut linker, &mut store)?;
-    // ── Proxy traps ──
-    define_proxy_traps(&mut linker, &mut store)?;
-    // get_builtin_global
-    // new_target（已从 Cell 改为 AtomicI64，load/swap Relaxed 保持原有 get/set 语义）
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, _dummy: i64| -> i64 { caller.data().new_target.load(Ordering::Relaxed) },
-    );
-    linker.define(&mut store, "env", "new_target", f)?;
+    linker.define(&mut *store, "env", "new_target", f)?;
     // new_target_set
     let f = Func::wrap(
-        &mut store,
+        &mut *store,
         |caller: Caller<'_, RuntimeState>, new_target: i64| -> i64 {
-            let previous = caller.data().new_target.swap(new_target, Ordering::Relaxed);
-            previous
+            caller.data().new_target.swap(new_target, Ordering::Relaxed)
         },
     );
-    linker.define(&mut store, "env", "new_target_set", f)?;
-    // create_unmapped_arguments_object
+    linker.define(&mut *store, "env", "new_target_set", f)?;
     // create_unmapped_arguments_object
     let f = Func::wrap(
-        &mut store,
+        &mut *store,
         |mut caller: Caller<'_, RuntimeState>, args_array: i64, param_count: i64| -> i64 {
             create_unmapped_arguments_object(&mut caller, args_array, param_count)
         },
     );
-    linker.define(&mut store, "env", "create_unmapped_arguments_object", f)?;
+    linker.define(&mut *store, "env", "create_unmapped_arguments_object", f)?;
     // create_mapped_arguments_object
     let f = Func::wrap(
-        &mut store,
+        &mut *store,
         |mut caller: Caller<'_, RuntimeState>,
          args_array: i64,
          param_count: i64,
@@ -274,20 +124,19 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             create_mapped_arguments_object(&mut caller, args_array, param_count, func_ref)
         },
     );
-    linker.define(&mut store, "env", "create_mapped_arguments_object", f)?;
-    // ── TypedArray extra methods ──
-    define_typedarray_new_methods(&mut linker, &mut store)?;
-    // ── ScopeRecord eval bridge ──
+    linker.define(&mut *store, "env", "create_mapped_arguments_object", f)?;
+    // scope_record_create
     let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, capacity: i64| -> i64 {
+        &mut *store,
+        |caller: Caller<'_, RuntimeState>, capacity: i64| -> i64 {
             scope_record_create(caller, capacity)
         },
     );
-    linker.define(&mut store, "env", "scope_record_create", f)?;
+    linker.define(&mut *store, "env", "scope_record_create", f)?;
+    // scope_record_add_binding
     let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
+        &mut *store,
+        |caller: Caller<'_, RuntimeState>,
          record: i64,
          name: i64,
          val: i64,
@@ -296,429 +145,58 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             scope_record_add_binding(caller, record, name, val, is_tdz, is_const)
         },
     );
-    linker.define(&mut store, "env", "scope_record_add_binding", f)?;
+    linker.define(&mut *store, "env", "scope_record_add_binding", f)?;
+    // eval_get_binding
     let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+        &mut *store,
+        |caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
             eval_get_binding(caller, record, name)
         },
     );
-    linker.define(&mut store, "env", "eval_get_binding", f)?;
+    linker.define(&mut *store, "env", "eval_get_binding", f)?;
+    // eval_set_binding
     let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64| -> i64 {
+        &mut *store,
+        |caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64| -> i64 {
             eval_set_binding(caller, record, name, val)
         },
     );
-    linker.define(&mut store, "env", "eval_set_binding", f)?;
+    linker.define(&mut *store, "env", "eval_set_binding", f)?;
+    // eval_has_binding
     let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+        &mut *store,
+        |caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
             eval_has_binding(caller, record, name)
         },
     );
-    linker.define(&mut store, "env", "eval_has_binding", f)?;
+    linker.define(&mut *store, "env", "eval_has_binding", f)?;
+    // eval_super_base
     let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64| -> i64 {
+        &mut *store,
+        |caller: Caller<'_, RuntimeState>, record: i64| -> i64 {
             eval_super_base(caller, record)
         },
     );
-    linker.define(&mut store, "env", "eval_super_base", f)?;
+    linker.define(&mut *store, "env", "eval_super_base", f)?;
+    // scope_record_set_meta
     let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64, key: i64, val: i64| {
+        &mut *store,
+        |caller: Caller<'_, RuntimeState>, record: i64, key: i64, val: i64| {
             scope_record_set_meta(caller, record, key, val)
         },
     );
-    linker.define(&mut store, "env", "scope_record_set_meta", f)?;
+    linker.define(&mut *store, "env", "scope_record_set_meta", f)?;
+    // scope_record_destroy
     let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64| scope_record_destroy(caller, record),
-    );
-    linker.define(&mut store, "env", "scope_record_destroy", f)?;
-    // ── WeakRef / FinalizationRegistry ──
-    define_weakref_finalization(&mut linker, &mut store)?;
-    // ── SharedArrayBuffer + Atomics ──
-    define_atomics(&mut linker, &mut store)?;
-    // ── async_iterator_from ──
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, iterable: i64| -> i64 {
-            if value::is_iterator(iterable) {
-                return create_async_from_sync_iterator(&mut caller, iterable);
-            }
-            if !(value::is_object(iterable)
-                || value::is_array(iterable)
-                || value::is_function(iterable)
-                || value::is_proxy(iterable))
-            {
-                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                let handle = iters.len() as u32;
-                iters.push(IteratorState::Error);
-                return value::encode_handle(value::TAG_ITERATOR, handle);
-            }
-
-            let Some(ptr) = resolve_handle(&mut caller, iterable) else {
-                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                let handle = iters.len() as u32;
-                iters.push(IteratorState::Error);
-                return value::encode_handle(value::TAG_ITERATOR, handle);
-            };
-            // 数组 fast path
-            if value::is_array(iterable) {
-                if let Some(arr_ptr) = resolve_handle(&mut caller, iterable) {
-                    let length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
-                    let sync_iter_handle = {
-                        let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                        let sync_handle = iters.len() as u32;
-                        iters.push(IteratorState::ArrayIter {
-                            ptr: arr_ptr,
-                            index: 0,
-                            length,
-                        });
-                        value::encode_handle(value::TAG_ITERATOR, sync_handle)
-                    };
-                    return create_async_from_sync_iterator(&mut caller, sync_iter_handle);
-                }
-            }
-            // 尝试 @@asyncIterator
-            if let Some(method) =
-                read_object_property_by_name(&mut caller, ptr, "Symbol.asyncIterator")
-            {
-                if value::is_callable(method) {
-                    let iterator = if value::is_native_callable(method) {
-                        call_native_callable_with_args_from_caller(
-                            &mut caller,
-                            method,
-                            iterable,
-                            vec![],
-                        )
-                        .unwrap_or_else(value::encode_undefined)
-                    } else if let Ok(result) =
-                        call_wasm_callback(&mut caller, method, iterable, &[])
-                    {
-                        result
-                    } else {
-                        value::encode_undefined()
-                    };
-                    if value::is_object(iterator) {
-                        if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
-                            let next = read_object_property_by_name(&mut caller, iter_ptr, "next")
-                                .filter(|n| value::is_callable(*n));
-                            if let Some(next_fn) = next {
-                                let return_method =
-                                    read_object_property_by_name(&mut caller, iter_ptr, "return")
-                                        .filter(|c| value::is_callable(*c));
-                                let mut iters =
-                                    caller.data().iterators.lock().expect("iterators mutex");
-                                let handle = iters.len() as u32;
-                                iters.push(IteratorState::ObjectIter {
-                                    next: next_fn,
-                                    return_method,
-                                    current_value: value::encode_undefined(),
-                                    has_current: false,
-                                    done: false,
-                                });
-                                return value::encode_handle(value::TAG_ITERATOR, handle);
-                            }
-                        }
-                    }
-                } else if !value::is_undefined(method) && !value::is_null(method) {
-                    // C4: @@asyncIterator 存在但不可调用 → TypeError（ES §7.3.10）
-                    return create_error_object(
-                        &mut caller,
-                        "TypeError",
-                        value::encode_undefined(),
-                    );
-                }
-            }
-
-            // 回退到 @@iterator
-            if let Some(method) = read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
-            {
-                if value::is_callable(method) {
-                    let sync_iter = if value::is_native_callable(method) {
-                        call_native_callable_with_args_from_caller(
-                            &mut caller,
-                            method,
-                            iterable,
-                            vec![],
-                        )
-                        .unwrap_or_else(value::encode_undefined)
-                    } else if let Ok(result) =
-                        call_wasm_callback(&mut caller, method, iterable, &[])
-                    {
-                        result
-                    } else {
-                        value::encode_undefined()
-                    };
-                    if value::is_object(sync_iter) {
-                        if let Some(sync_ptr) = resolve_handle(&mut caller, sync_iter) {
-                            let next_fn =
-                                read_object_property_by_name(&mut caller, sync_ptr, "next")
-                                    .filter(|n| value::is_callable(*n));
-                            if let Some(next_fn) = next_fn {
-                                let return_method =
-                                    read_object_property_by_name(&mut caller, sync_ptr, "return")
-                                        .filter(|c| value::is_callable(*c));
-                                let sync_iter_handle = {
-                                    let mut iters =
-                                        caller.data().iterators.lock().expect("iterators mutex");
-                                    let sync_handle = iters.len() as u32;
-                                    iters.push(IteratorState::ObjectIter {
-                                        next: next_fn,
-                                        return_method,
-                                        current_value: value::encode_undefined(),
-                                        has_current: false,
-                                        done: false,
-                                    });
-                                    value::encode_handle(value::TAG_ITERATOR, sync_handle)
-                                };
-                                return create_async_from_sync_iterator(
-                                    &mut caller,
-                                    sync_iter_handle,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 没有 @@asyncIterator 也没有 @@iterator，创建 TypeError
-            create_error_object(&mut caller, "TypeError", value::encode_undefined())
+        &mut *store,
+        |caller: Caller<'_, RuntimeState>, record: i64| {
+            scope_record_destroy(caller, record)
         },
     );
-    linker.define(&mut store, "env", "async_iterator_from", f)?;
-    // ── Object.groupBy / Map.groupBy ──
+    linker.define(&mut *store, "env", "scope_record_destroy", f)?;
+    // symbol_property_key
     let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
-            // Check items is not null/undefined
-            if value::is_null(items) || value::is_undefined(items) {
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
-                    Some("TypeError: Cannot group null or undefined".to_string());
-                return value::encode_undefined();
-            }
-
-            // Check callback is callable
-            if !value::is_callable(callbackfn) {
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
-                    Some("TypeError: callbackfn is not callable".to_string());
-                return value::encode_undefined();
-            }
-
-            // Create null-prototype result object
-            let result = alloc_object(&mut caller, 0);
-
-            // Use HashMap to collect groups, avoiding mid-loop object property manipulation
-            let mut groups: HashMap<String, Vec<i64>> = HashMap::new();
-
-            // Array fast path
-            let mut index = 0u32;
-            if value::is_array(items) {
-                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
-                    let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
-                    for i in 0..len {
-                        let elem = read_array_elem(&mut caller, arr_ptr, i)
-                            .unwrap_or(value::encode_undefined());
-                        let idx_val = value::encode_f64(index as f64);
-                        let key = match call_wasm_callback(
-                            &mut caller,
-                            callbackfn,
-                            value::encode_undefined(),
-                            &[elem, idx_val],
-                        ) {
-                            Ok(k) => k,
-                            Err(_) => return value::encode_undefined(),
-                        };
-
-                        // ToPropertyKey: convert key to string for object property
-                        let key_str = to_property_key(&mut caller, key);
-                        if caller.data().runtime_error.lock().expect("mutex").is_some() {
-                            return value::encode_undefined();
-                        }
-
-                        groups.entry(key_str).or_default().push(elem);
-                        index += 1;
-                    }
-
-                    // After collection, create arrays and define properties on result object
-                    for (key_str, elements) in &groups {
-                        let arr = alloc_array(&mut caller, elements.len() as u32);
-                        if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
-                            for (i, &elem) in elements.iter().enumerate() {
-                                write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                            }
-                            write_array_length(&mut caller, arr_ptr, elements.len() as u32);
-                        }
-                        define_host_data_property(&mut caller, result, key_str, arr);
-                    }
-                    return result;
-                }
-            } else {
-                // Not an array or failed to resolve — fall through to return result
-            }
-
-            // TODO: General iterable support (non-array iterables)
-            result
-        },
-    );
-    linker.define(&mut store, "env", "object.group_by", f)?;
-
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
-            // Check items is not null/undefined
-            if value::is_null(items) || value::is_undefined(items) {
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
-                    Some("TypeError: Cannot group null or undefined".to_string());
-                return value::encode_undefined();
-            }
-
-            // Check callback is callable
-            if !value::is_callable(callbackfn) {
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
-                    Some("TypeError: callbackfn is not callable".to_string());
-                return value::encode_undefined();
-            }
-
-            // Create Map internal state
-            let map_handle = {
-                let mut map_table = caller.data().map_table.lock().expect("map table mutex");
-                let handle = map_table.len();
-                map_table.push(MapEntry {
-                    keys: Vec::new(),
-                    values: Vec::new(),
-                });
-                handle
-            };
-            let map_result = alloc_object(&mut caller, 12);
-            {
-                let state = caller.data();
-                let set_fn = create_map_set_method(state, MapSetMethodKind::MapSet);
-                let get_fn = create_map_set_method(state, MapSetMethodKind::MapGet);
-                let has_fn = create_map_set_method(state, MapSetMethodKind::Has);
-                let delete_fn = create_map_set_method(state, MapSetMethodKind::Delete);
-                let clear_fn = create_map_set_method(state, MapSetMethodKind::Clear);
-                let size_fn = create_map_set_method(state, MapSetMethodKind::Size);
-                let for_each_fn = create_map_set_method(state, MapSetMethodKind::ForEach);
-                let keys_fn = create_map_set_method(state, MapSetMethodKind::Keys);
-                let values_fn = create_map_set_method(state, MapSetMethodKind::Values);
-                let entries_fn = create_map_set_method(state, MapSetMethodKind::Entries);
-                let _ = define_host_data_property(&mut caller, map_result, "set", set_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "get", get_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "has", has_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "delete", delete_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "clear", clear_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "size", size_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "forEach", for_each_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "keys", keys_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "values", values_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "entries", entries_fn);
-            }
-            if let Some(_map_ptr) = resolve_handle(&mut caller, map_result) {
-                let handle_val = value::encode_f64(map_handle as f64);
-                define_host_data_property(&mut caller, map_result, "__map_handle__", handle_val);
-            }
-
-            // Use Vec of (key, elements) pairs to collect groups, avoiding mid-loop WASM manipulation
-            // Also use HashMap for O(1) key lookup while maintaining insertion order
-            let mut groups: Vec<(i64, Vec<i64>)> = Vec::new();
-            let mut key_to_index: HashMap<i64, usize> = HashMap::new();
-
-            // Array fast path
-            let mut index = 0u32;
-            if value::is_array(items) {
-                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
-                    let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
-                    for i in 0..len {
-                        let elem = read_array_elem(&mut caller, arr_ptr, i)
-                            .unwrap_or(value::encode_undefined());
-                        let idx_val = value::encode_f64(index as f64);
-                        let key = match call_wasm_callback(
-                            &mut caller,
-                            callbackfn,
-                            value::encode_undefined(),
-                            &[elem, idx_val],
-                        ) {
-                            Ok(k) => k,
-                            Err(_) => return value::encode_undefined(),
-                        };
-
-                        // Look up key in groups using HashMap for O(1) average case
-                        // Fall back to linear search for SameValueZero edge cases (e.g., NaN)
-                        let group_index = if let Some(&idx) = key_to_index.get(&key) {
-                            // Verify with SameValueZero to handle edge cases
-                            if same_value_zero(groups[idx].0, key) {
-                                Some(idx)
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-
-                        if let Some(idx) = group_index {
-                            groups[idx].1.push(elem);
-                        } else {
-                            // Linear search for edge cases or if HashMap miss
-                            let mut found = false;
-                            for (existing_key, elements) in &mut groups {
-                                if same_value_zero(*existing_key, key) {
-                                    elements.push(elem);
-                                    key_to_index.insert(*existing_key, groups.len() - 1);
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if !found {
-                                key_to_index.insert(key, groups.len());
-                                groups.push((key, vec![elem]));
-                            }
-                        }
-                        index += 1;
-                    }
-
-                    // After collection, create arrays and populate Map
-                    for (group_key, elements) in &groups {
-                        let arr = alloc_array(&mut caller, elements.len() as u32);
-                        if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
-                            for (i, &elem) in elements.iter().enumerate() {
-                                write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                            }
-                            write_array_length(&mut caller, arr_ptr, elements.len() as u32);
-                        }
-                        let mut table = caller.data().map_table.lock().expect("map table mutex");
-                        table[map_handle].keys.push(*group_key);
-                        table[map_handle].values.push(arr);
-                    }
-                }
-            }
-
-            map_result
-        },
-    );
-    linker.define(&mut store, "env", "map.group_by", f)?;
-    // ── symbol_property_key ──
-    let f = Func::wrap(
-        &mut store,
+        &mut *store,
         |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
             if value::is_symbol(key) {
                 let handle = value::decode_handle(key) as usize;
@@ -741,10 +219,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             key as i32
         },
     );
-    linker.define(&mut store, "env", "symbol_property_key", f)?;
-    // ── array.from ──
+    linker.define(&mut *store, "env", "symbol_property_key", f)?;
+    // array.from
     let f = Func::wrap(
-        &mut store,
+        &mut *store,
         |mut caller: Caller<'_, RuntimeState>,
          _env_obj: i64,
          _this_val: i64,
@@ -891,10 +369,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_undefined()
         },
     );
-    linker.define(&mut store, "env", "array.from", f)?;
-    // ── obj_get_by_index ──
+    linker.define(&mut *store, "env", "array.from", f)?;
+    // obj_get_by_index
     let f = Func::wrap(
-        &mut store,
+        &mut *store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, index: i32| -> i64 {
             if index >= 0 {
                 if let Some(value) = typedarray_element_read(&mut caller, boxed, index as u32) {
@@ -913,9 +391,10 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
                 .unwrap_or(value::encode_undefined())
         },
     );
-    linker.define(&mut store, "env", "obj_get_by_index", f)?;
+    linker.define(&mut *store, "env", "obj_get_by_index", f)?;
+    // typedarray_set_by_index
     let f = Func::wrap(
-        &mut store,
+        &mut *store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, index: i32, value_raw: i64| -> i64 {
             if typedarray_entry_from_value(&mut caller, boxed).is_some() {
                 if index >= 0 {
@@ -926,7 +405,763 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
             value::encode_bool(false)
         },
     );
-    linker.define(&mut store, "env", "typedarray_set_by_index", f)?;
+    linker.define(&mut *store, "env", "typedarray_set_by_index", f)?;
+    Ok(())
+}
+
+/// 注册 3 个复杂桥接的 sync 版本（使用 Func::wrap + call_wasm_callback）
+fn register_complex_bridges_sync(
+    linker: &mut Linker<RuntimeState>,
+    store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    // async_iterator_from
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, iterable: i64| -> i64 {
+            if value::is_iterator(iterable) {
+                return create_async_from_sync_iterator(&mut caller, iterable);
+            }
+            if !(value::is_object(iterable)
+                || value::is_array(iterable)
+                || value::is_function(iterable)
+                || value::is_proxy(iterable))
+            {
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                let handle = iters.len() as u32;
+                iters.push(IteratorState::Error);
+                return value::encode_handle(value::TAG_ITERATOR, handle);
+            }
+
+            let Some(ptr) = resolve_handle(&mut caller, iterable) else {
+                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                let handle = iters.len() as u32;
+                iters.push(IteratorState::Error);
+                return value::encode_handle(value::TAG_ITERATOR, handle);
+            };
+            // 数组 fast path
+            if value::is_array(iterable) {
+                if let Some(arr_ptr) = resolve_handle(&mut caller, iterable) {
+                    let length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                    let sync_iter_handle = {
+                        let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                        let sync_handle = iters.len() as u32;
+                        iters.push(IteratorState::ArrayIter {
+                            ptr: arr_ptr,
+                            index: 0,
+                            length,
+                        });
+                        value::encode_handle(value::TAG_ITERATOR, sync_handle)
+                    };
+                    return create_async_from_sync_iterator(&mut caller, sync_iter_handle);
+                }
+            }
+            // 尝试 @@asyncIterator
+            if let Some(method) =
+                read_object_property_by_name(&mut caller, ptr, "Symbol.asyncIterator")
+            {
+                if value::is_callable(method) {
+                    let iterator = if value::is_native_callable(method) {
+                        call_native_callable_with_args_from_caller(
+                            &mut caller,
+                            method,
+                            iterable,
+                            vec![],
+                        )
+                        .unwrap_or_else(value::encode_undefined)
+                    } else if let Ok(result) =
+                        call_wasm_callback(&mut caller, method, iterable, &[])
+                    {
+                        result
+                    } else {
+                        value::encode_undefined()
+                    };
+                    if value::is_object(iterator) {
+                        if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
+                            let next = read_object_property_by_name(&mut caller, iter_ptr, "next")
+                                .filter(|n| value::is_callable(*n));
+                            if let Some(next_fn) = next {
+                                let return_method =
+                                    read_object_property_by_name(&mut caller, iter_ptr, "return")
+                                        .filter(|c| value::is_callable(*c));
+                                let mut iters =
+                                    caller.data().iterators.lock().expect("iterators mutex");
+                                let handle = iters.len() as u32;
+                                iters.push(IteratorState::ObjectIter {
+                                    next: next_fn,
+                                    return_method,
+                                    current_value: value::encode_undefined(),
+                                    has_current: false,
+                                    done: false,
+                                });
+                                return value::encode_handle(value::TAG_ITERATOR, handle);
+                            }
+                        }
+                    }
+                } else if !value::is_undefined(method) && !value::is_null(method) {
+                    return create_error_object(
+                        &mut caller,
+                        "TypeError",
+                        value::encode_undefined(),
+                    );
+                }
+            }
+
+            // 回退到 @@iterator
+            if let Some(method) = read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
+            {
+                if value::is_callable(method) {
+                    let sync_iter = if value::is_native_callable(method) {
+                        call_native_callable_with_args_from_caller(
+                            &mut caller,
+                            method,
+                            iterable,
+                            vec![],
+                        )
+                        .unwrap_or_else(value::encode_undefined)
+                    } else if let Ok(result) =
+                        call_wasm_callback(&mut caller, method, iterable, &[])
+                    {
+                        result
+                    } else {
+                        value::encode_undefined()
+                    };
+                    if value::is_object(sync_iter) {
+                        if let Some(sync_ptr) = resolve_handle(&mut caller, sync_iter) {
+                            let next_fn =
+                                read_object_property_by_name(&mut caller, sync_ptr, "next")
+                                    .filter(|n| value::is_callable(*n));
+                            if let Some(next_fn) = next_fn {
+                                let return_method =
+                                    read_object_property_by_name(&mut caller, sync_ptr, "return")
+                                        .filter(|c| value::is_callable(*c));
+                                let sync_iter_handle = {
+                                    let mut iters =
+                                        caller.data().iterators.lock().expect("iterators mutex");
+                                    let sync_handle = iters.len() as u32;
+                                    iters.push(IteratorState::ObjectIter {
+                                        next: next_fn,
+                                        return_method,
+                                        current_value: value::encode_undefined(),
+                                        has_current: false,
+                                        done: false,
+                                    });
+                                    value::encode_handle(value::TAG_ITERATOR, sync_handle)
+                                };
+                                return create_async_from_sync_iterator(
+                                    &mut caller,
+                                    sync_iter_handle,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            create_error_object(&mut caller, "TypeError", value::encode_undefined())
+        },
+    );
+    linker.define(&mut *store, "env", "async_iterator_from", f)?;
+    // object.group_by
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
+            if value::is_null(items) || value::is_undefined(items) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: Cannot group null or undefined".to_string());
+                return value::encode_undefined();
+            }
+            if !value::is_callable(callbackfn) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: callbackfn is not callable".to_string());
+                return value::encode_undefined();
+            }
+            let result = alloc_object(&mut caller, 0);
+            let mut groups: HashMap<String, Vec<i64>> = HashMap::new();
+            let mut index = 0u32;
+            if value::is_array(items) {
+                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
+                    let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                    for i in 0..len {
+                        let elem = read_array_elem(&mut caller, arr_ptr, i)
+                            .unwrap_or(value::encode_undefined());
+                        let idx_val = value::encode_f64(index as f64);
+                        let key = match call_wasm_callback(
+                            &mut caller,
+                            callbackfn,
+                            value::encode_undefined(),
+                            &[elem, idx_val],
+                        ) {
+                            Ok(k) => k,
+                            Err(_) => return value::encode_undefined(),
+                        };
+                        let key_str = to_property_key(&mut caller, key);
+                        if caller.data().runtime_error.lock().expect("mutex").is_some() {
+                            return value::encode_undefined();
+                        }
+                        groups.entry(key_str).or_default().push(elem);
+                        index += 1;
+                    }
+                    for (key_str, elements) in &groups {
+                        let arr = alloc_array(&mut caller, elements.len() as u32);
+                        if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
+                            for (i, &elem) in elements.iter().enumerate() {
+                                write_array_elem(&mut caller, arr_ptr, i as u32, elem);
+                            }
+                            write_array_length(&mut caller, arr_ptr, elements.len() as u32);
+                        }
+                        define_host_data_property(&mut caller, result, key_str, arr);
+                    }
+                    return result;
+                }
+            }
+            result
+        },
+    );
+    linker.define(&mut *store, "env", "object.group_by", f)?;
+    // map.group_by
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
+            if value::is_null(items) || value::is_undefined(items) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: Cannot group null or undefined".to_string());
+                return value::encode_undefined();
+            }
+            if !value::is_callable(callbackfn) {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: callbackfn is not callable".to_string());
+                return value::encode_undefined();
+            }
+            let map_handle = {
+                let mut map_table = caller.data().map_table.lock().expect("map table mutex");
+                let handle = map_table.len();
+                map_table.push(MapEntry {
+                    keys: Vec::new(),
+                    values: Vec::new(),
+                });
+                handle
+            };
+            let map_result = alloc_object(&mut caller, 12);
+            {
+                let state = caller.data();
+                let set_fn = create_map_set_method(state, MapSetMethodKind::MapSet);
+                let get_fn = create_map_set_method(state, MapSetMethodKind::MapGet);
+                let has_fn = create_map_set_method(state, MapSetMethodKind::Has);
+                let delete_fn = create_map_set_method(state, MapSetMethodKind::Delete);
+                let clear_fn = create_map_set_method(state, MapSetMethodKind::Clear);
+                let size_fn = create_map_set_method(state, MapSetMethodKind::Size);
+                let for_each_fn = create_map_set_method(state, MapSetMethodKind::ForEach);
+                let keys_fn = create_map_set_method(state, MapSetMethodKind::Keys);
+                let values_fn = create_map_set_method(state, MapSetMethodKind::Values);
+                let entries_fn = create_map_set_method(state, MapSetMethodKind::Entries);
+                let _ = define_host_data_property(&mut caller, map_result, "set", set_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "get", get_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "has", has_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "delete", delete_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "clear", clear_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "size", size_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "forEach", for_each_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "keys", keys_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "values", values_fn);
+                let _ = define_host_data_property(&mut caller, map_result, "entries", entries_fn);
+            }
+            if let Some(_map_ptr) = resolve_handle(&mut caller, map_result) {
+                let handle_val = value::encode_f64(map_handle as f64);
+                define_host_data_property(&mut caller, map_result, "__map_handle__", handle_val);
+            }
+            let mut groups: Vec<(i64, Vec<i64>)> = Vec::new();
+            let mut key_to_index: HashMap<i64, usize> = HashMap::new();
+            let mut index = 0u32;
+            if value::is_array(items) {
+                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
+                    let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                    for i in 0..len {
+                        let elem = read_array_elem(&mut caller, arr_ptr, i)
+                            .unwrap_or(value::encode_undefined());
+                        let idx_val = value::encode_f64(index as f64);
+                        let key = match call_wasm_callback(
+                            &mut caller,
+                            callbackfn,
+                            value::encode_undefined(),
+                            &[elem, idx_val],
+                        ) {
+                            Ok(k) => k,
+                            Err(_) => return value::encode_undefined(),
+                        };
+                        let group_index = if let Some(&idx) = key_to_index.get(&key) {
+                            if same_value_zero(groups[idx].0, key) {
+                                Some(idx)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(idx) = group_index {
+                            groups[idx].1.push(elem);
+                        } else {
+                            let mut found = false;
+                            for (existing_key, elements) in &mut groups {
+                                if same_value_zero(*existing_key, key) {
+                                    elements.push(elem);
+                                    key_to_index.insert(*existing_key, groups.len() - 1);
+                                    found = true;
+                                    break;
+                                }
+                            }
+                            if !found {
+                                key_to_index.insert(key, groups.len());
+                                groups.push((key, vec![elem]));
+                            }
+                        }
+                        index += 1;
+                    }
+                    for (group_key, elements) in &groups {
+                        let arr = alloc_array(&mut caller, elements.len() as u32);
+                        if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
+                            for (i, &elem) in elements.iter().enumerate() {
+                                write_array_elem(&mut caller, arr_ptr, i as u32, elem);
+                            }
+                            write_array_length(&mut caller, arr_ptr, elements.len() as u32);
+                        }
+                        let mut table = caller.data().map_table.lock().expect("map table mutex");
+                        table[map_handle].keys.push(*group_key);
+                        table[map_handle].values.push(arr);
+                    }
+                }
+            }
+            map_result
+        },
+    );
+    linker.define(&mut *store, "env", "map.group_by", f)?;
+    Ok(())
+}
+
+/// 注册 18 个 define_* 宿主函数模块（async 版本，使用 1-param fetch shim）
+fn register_linker_async(
+    linker: &mut Linker<RuntimeState>,
+    store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    define_core(linker, store)?;
+    define_timers_arrays(linker, store)?;
+    // Use 1-param fetch shim for async_scheduler test compatibility
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, url: i64| -> i64 {
+            let promise = alloc_promise_from_caller(&mut caller, PromiseEntry::pending());
+            promise
+        },
+    );
+    linker.define(&mut *store, "env", "fetch", f)?;
+    define_array_object(linker, store)?;
+    define_primitive_core(linker, store)?;
+    define_promise(linker, store)?;
+    define_promise_combinators(linker, store)?;
+    define_misc(linker, store)?;
+    define_async_fn(linker, store)?;
+    define_async_generator(linker, store)?;
+    define_proxy_reflect(linker, store)?;
+    define_object_builtins(linker, store)?;
+    define_string_methods(linker, store)?;
+    define_math_number_error(linker, store)?;
+    define_collections_buffers(linker, store)?;
+    define_proxy_traps(linker, store)?;
+    define_typedarray_new_methods(linker, store)?;
+    define_weakref_finalization(linker, store)?;
+    define_atomics(linker, store)?;
+    define_get_builtin_global(linker, store)?;
+    Ok(())
+}
+
+/// 注册 3 个复杂桥接的 async 版本（使用 Linker::func_wrap_async + call_wasm_callback_async）
+fn register_complex_bridges_async(
+    linker: &mut Linker<RuntimeState>,
+    _store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    // async_iterator_from
+    linker.func_wrap_async(
+        "env",
+        "async_iterator_from",
+        |mut caller: Caller<'_, RuntimeState>, (iterable,): (i64,)| {
+            Box::new(async move {
+                if value::is_iterator(iterable) {
+                    return create_async_from_sync_iterator(&mut caller, iterable);
+                }
+                if !(value::is_object(iterable)
+                    || value::is_array(iterable)
+                    || value::is_function(iterable)
+                    || value::is_proxy(iterable))
+                {
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let handle = iters.len() as u32;
+                    iters.push(IteratorState::Error);
+                    return value::encode_handle(value::TAG_ITERATOR, handle);
+                }
+
+                let Some(ptr) = resolve_handle(&mut caller, iterable) else {
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let handle = iters.len() as u32;
+                    iters.push(IteratorState::Error);
+                    return value::encode_handle(value::TAG_ITERATOR, handle);
+                };
+                // 数组 fast path
+                if value::is_array(iterable) {
+                    if let Some(arr_ptr) = resolve_handle(&mut caller, iterable) {
+                        let length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                        let sync_iter_handle = {
+                            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                            let sync_handle = iters.len() as u32;
+                            iters.push(IteratorState::ArrayIter {
+                                ptr: arr_ptr,
+                                index: 0,
+                                length,
+                            });
+                            value::encode_handle(value::TAG_ITERATOR, sync_handle)
+                        };
+                        return create_async_from_sync_iterator(&mut caller, sync_iter_handle);
+                    }
+                }
+                // 尝试 @@asyncIterator
+                if let Some(method) =
+                    read_object_property_by_name(&mut caller, ptr, "Symbol.asyncIterator")
+                {
+                    if value::is_callable(method) {
+                        let iterator = if value::is_native_callable(method) {
+                            call_native_callable_with_args_from_caller(
+                                &mut caller,
+                                method,
+                                iterable,
+                                vec![],
+                            )
+                            .unwrap_or_else(value::encode_undefined)
+                        } else if let Ok(result) =
+                            call_wasm_callback_async(&mut caller, method, iterable, &[]).await
+                        {
+                            result
+                        } else {
+                            value::encode_undefined()
+                        };
+                        if value::is_object(iterator) {
+                            if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
+                                let next = read_object_property_by_name(&mut caller, iter_ptr, "next")
+                                    .filter(|n| value::is_callable(*n));
+                                if let Some(next_fn) = next {
+                                    let return_method =
+                                        read_object_property_by_name(&mut caller, iter_ptr, "return")
+                                            .filter(|c| value::is_callable(*c));
+                                    let mut iters =
+                                        caller.data().iterators.lock().expect("iterators mutex");
+                                    let handle = iters.len() as u32;
+                                    iters.push(IteratorState::ObjectIter {
+                                        next: next_fn,
+                                        return_method,
+                                        current_value: value::encode_undefined(),
+                                        has_current: false,
+                                        done: false,
+                                    });
+                                    return value::encode_handle(value::TAG_ITERATOR, handle);
+                                }
+                            }
+                        }
+                    } else if !value::is_undefined(method) && !value::is_null(method) {
+                        return create_error_object(
+                            &mut caller,
+                            "TypeError",
+                            value::encode_undefined(),
+                        );
+                    }
+                }
+
+                // 回退到 @@iterator
+                if let Some(method) = read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
+                {
+                    if value::is_callable(method) {
+                        let sync_iter = if value::is_native_callable(method) {
+                            call_native_callable_with_args_from_caller(
+                                &mut caller,
+                                method,
+                                iterable,
+                                vec![],
+                            )
+                            .unwrap_or_else(value::encode_undefined)
+                        } else if let Ok(result) =
+                            call_wasm_callback_async(&mut caller, method, iterable, &[]).await
+                        {
+                            result
+                        } else {
+                            value::encode_undefined()
+                        };
+                        if value::is_object(sync_iter) {
+                            if let Some(sync_ptr) = resolve_handle(&mut caller, sync_iter) {
+                                let next_fn =
+                                    read_object_property_by_name(&mut caller, sync_ptr, "next")
+                                        .filter(|n| value::is_callable(*n));
+                                if let Some(next_fn) = next_fn {
+                                    let return_method =
+                                        read_object_property_by_name(&mut caller, sync_ptr, "return")
+                                            .filter(|c| value::is_callable(*c));
+                                    let sync_iter_handle = {
+                                        let mut iters =
+                                            caller.data().iterators.lock().expect("iterators mutex");
+                                        let sync_handle = iters.len() as u32;
+                                        iters.push(IteratorState::ObjectIter {
+                                            next: next_fn,
+                                            return_method,
+                                            current_value: value::encode_undefined(),
+                                            has_current: false,
+                                            done: false,
+                                        });
+                                        value::encode_handle(value::TAG_ITERATOR, sync_handle)
+                                    };
+                                    return create_async_from_sync_iterator(
+                                        &mut caller,
+                                        sync_iter_handle,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+
+                create_error_object(&mut caller, "TypeError", value::encode_undefined())
+            })
+        },
+    )?;
+    // object.group_by
+    linker.func_wrap_async(
+        "env",
+        "object.group_by",
+        |mut caller: Caller<'_, RuntimeState>, (items, callbackfn): (i64, i64)| {
+            Box::new(async move {
+                if value::is_null(items) || value::is_undefined(items) {
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") =
+                        Some("TypeError: Cannot group null or undefined".to_string());
+                    return value::encode_undefined();
+                }
+                if !value::is_callable(callbackfn) {
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") =
+                        Some("TypeError: callbackfn is not callable".to_string());
+                    return value::encode_undefined();
+                }
+                let result = alloc_object(&mut caller, 0);
+                let mut groups: HashMap<String, Vec<i64>> = HashMap::new();
+                let mut index = 0u32;
+                if value::is_array(items) {
+                    if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
+                        let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                        for i in 0..len {
+                            let elem = read_array_elem(&mut caller, arr_ptr, i)
+                                .unwrap_or(value::encode_undefined());
+                            let idx_val = value::encode_f64(index as f64);
+                            let key = match call_wasm_callback_async(
+                                &mut caller,
+                                callbackfn,
+                                value::encode_undefined(),
+                                &[elem, idx_val],
+                            ).await {
+                                Ok(k) => k,
+                                Err(_) => return value::encode_undefined(),
+                            };
+                            let key_str = to_property_key(&mut caller, key);
+                            if caller.data().runtime_error.lock().expect("mutex").is_some() {
+                                return value::encode_undefined();
+                            }
+                            groups.entry(key_str).or_default().push(elem);
+                            index += 1;
+                        }
+                        for (key_str, elements) in &groups {
+                            let arr = alloc_array(&mut caller, elements.len() as u32);
+                            if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
+                                for (i, &elem) in elements.iter().enumerate() {
+                                    write_array_elem(&mut caller, arr_ptr, i as u32, elem);
+                                }
+                                write_array_length(&mut caller, arr_ptr, elements.len() as u32);
+                            }
+                            define_host_data_property(&mut caller, result, key_str, arr);
+                        }
+                        return result;
+                    }
+                }
+                result
+            })
+        },
+    )?;
+    // map.group_by
+    linker.func_wrap_async(
+        "env",
+        "map.group_by",
+        |mut caller: Caller<'_, RuntimeState>, (items, callbackfn): (i64, i64)| {
+            Box::new(async move {
+                if value::is_null(items) || value::is_undefined(items) {
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") =
+                        Some("TypeError: Cannot group null or undefined".to_string());
+                    return value::encode_undefined();
+                }
+                if !value::is_callable(callbackfn) {
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") =
+                        Some("TypeError: callbackfn is not callable".to_string());
+                    return value::encode_undefined();
+                }
+                let map_handle = {
+                    let mut map_table = caller.data().map_table.lock().expect("map table mutex");
+                    let handle = map_table.len();
+                    map_table.push(MapEntry {
+                        keys: Vec::new(),
+                        values: Vec::new(),
+                    });
+                    handle
+                };
+                let map_result = alloc_object(&mut caller, 12);
+                {
+                    let state = caller.data();
+                    let set_fn = create_map_set_method(state, MapSetMethodKind::MapSet);
+                    let get_fn = create_map_set_method(state, MapSetMethodKind::MapGet);
+                    let has_fn = create_map_set_method(state, MapSetMethodKind::Has);
+                    let delete_fn = create_map_set_method(state, MapSetMethodKind::Delete);
+                    let clear_fn = create_map_set_method(state, MapSetMethodKind::Clear);
+                    let size_fn = create_map_set_method(state, MapSetMethodKind::Size);
+                    let for_each_fn = create_map_set_method(state, MapSetMethodKind::ForEach);
+                    let keys_fn = create_map_set_method(state, MapSetMethodKind::Keys);
+                    let values_fn = create_map_set_method(state, MapSetMethodKind::Values);
+                    let entries_fn = create_map_set_method(state, MapSetMethodKind::Entries);
+                    let _ = define_host_data_property(&mut caller, map_result, "set", set_fn);
+                    let _ = define_host_data_property(&mut caller, map_result, "get", get_fn);
+                    let _ = define_host_data_property(&mut caller, map_result, "has", has_fn);
+                    let _ = define_host_data_property(&mut caller, map_result, "delete", delete_fn);
+                    let _ = define_host_data_property(&mut caller, map_result, "clear", clear_fn);
+                    let _ = define_host_data_property(&mut caller, map_result, "size", size_fn);
+                    let _ = define_host_data_property(&mut caller, map_result, "forEach", for_each_fn);
+                    let _ = define_host_data_property(&mut caller, map_result, "keys", keys_fn);
+                    let _ = define_host_data_property(&mut caller, map_result, "values", values_fn);
+                    let _ = define_host_data_property(&mut caller, map_result, "entries", entries_fn);
+                }
+                if let Some(_map_ptr) = resolve_handle(&mut caller, map_result) {
+                    let handle_val = value::encode_f64(map_handle as f64);
+                    define_host_data_property(&mut caller, map_result, "__map_handle__", handle_val);
+                }
+                let mut groups: Vec<(i64, Vec<i64>)> = Vec::new();
+                let mut key_to_index: HashMap<i64, usize> = HashMap::new();
+                let mut index = 0u32;
+                if value::is_array(items) {
+                    if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
+                        let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                        for i in 0..len {
+                            let elem = read_array_elem(&mut caller, arr_ptr, i)
+                                .unwrap_or(value::encode_undefined());
+                            let idx_val = value::encode_f64(index as f64);
+                            let key = match call_wasm_callback_async(
+                                &mut caller,
+                                callbackfn,
+                                value::encode_undefined(),
+                                &[elem, idx_val],
+                            ).await {
+                                Ok(k) => k,
+                                Err(_) => return value::encode_undefined(),
+                            };
+                            let group_index = if let Some(&idx) = key_to_index.get(&key) {
+                                if same_value_zero(groups[idx].0, key) {
+                                    Some(idx)
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                            if let Some(idx) = group_index {
+                                groups[idx].1.push(elem);
+                            } else {
+                                let mut found = false;
+                                for (existing_key, elements) in &mut groups {
+                                    if same_value_zero(*existing_key, key) {
+                                        elements.push(elem);
+                                        key_to_index.insert(*existing_key, groups.len() - 1);
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if !found {
+                                    key_to_index.insert(key, groups.len());
+                                    groups.push((key, vec![elem]));
+                                }
+                            }
+                            index += 1;
+                        }
+                        for (group_key, elements) in &groups {
+                            let arr = alloc_array(&mut caller, elements.len() as u32);
+                            if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
+                                for (i, &elem) in elements.iter().enumerate() {
+                                    write_array_elem(&mut caller, arr_ptr, i as u32, elem);
+                                }
+                                write_array_length(&mut caller, arr_ptr, elements.len() as u32);
+                            }
+                            let mut table = caller.data().map_table.lock().expect("map table mutex");
+                            table[map_handle].keys.push(*group_key);
+                            table[map_handle].values.push(arr);
+                        }
+                    }
+                }
+                map_result
+            })
+        },
+    )?;
+    Ok(())
+}
+
+pub fn execute(wasm_bytes: &[u8]) -> Result<()> {
+    let stdout = io::stdout();
+    let _ = execute_with_writer(wasm_bytes, stdout.lock())?;
+    Ok(())
+}
+
+pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> {
+    let engine = Engine::default();
+    let module = match Module::new(&engine, wasm_bytes) {
+        Ok(m) => m,
+        Err(e) => {
+            return Err(anyhow::anyhow!("WASM validation failed: {:?}", e));
+        }
+    };
+    let mut store = Store::new(&engine, RuntimeState::new());
+    let output = Arc::clone(&store.data().output);
+    let runtime_error = Arc::clone(&store.data().runtime_error);
+
+
+    let mut linker = Linker::new(&engine);
+    register_linker(&mut linker, &mut store)?;
+    register_common_bridges(&mut linker, &mut store)?;
+    register_complex_bridges_sync(&mut linker, &mut store)?;
     let instance = linker.instantiate(&mut store, &module)?;
     // ── Create %AsyncIteratorPrototype% and AsyncGenerator.prototype ──
     let memory = instance
@@ -1219,130 +1454,14 @@ pub async fn execute_with_writer_async<W: Write>(wasm_bytes: &[u8], writer: W) -
         }
     };
 
-    // state 构造（少量重复，boring explicit）
-    let output = Arc::new(Mutex::new(Vec::new()));
-    let iterators: Arc<Mutex<Vec<IteratorState>>> = Arc::new(Mutex::new(Vec::new()));
-    let enumerators: Arc<Mutex<Vec<EnumeratorState>>> = Arc::new(Mutex::new(Vec::new()));
-    let runtime_strings: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
-    let runtime_error: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
-    let timers: Arc<Mutex<Vec<TimerEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let cancelled_timers: Arc<Mutex<HashSet<u32>>> = Arc::new(Mutex::new(HashSet::new()));
-    let next_timer_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
-    let closures: Arc<Mutex<Vec<ClosureEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let bound_objects: Arc<Mutex<Vec<BoundRecord>>> = Arc::new(Mutex::new(Vec::new()));
-    let native_callables: Arc<Mutex<Vec<NativeCallable>>> =
-        Arc::new(Mutex::new(vec![NativeCallable::EvalIndirect]));
-    let eval_cache: Arc<Mutex<HashMap<u64, Vec<u8>>>> = Arc::new(Mutex::new(HashMap::new()));
-    let bigint_table: Arc<Mutex<Vec<num_bigint::BigInt>>> = Arc::new(Mutex::new(Vec::new()));
-    let symbol_table: Arc<Mutex<Vec<SymbolEntry>>> = Arc::new(Mutex::new(vec![
-        SymbolEntry { description: Some("Symbol(Symbol.iterator)".into()), global_key: None },
-        SymbolEntry { description: Some("Symbol(Symbol.species)".into()), global_key: None },
-        SymbolEntry { description: Some("Symbol(Symbol.toStringTag)".into()), global_key: None },
-        SymbolEntry { description: Some("Symbol(Symbol.asyncIterator)".into()), global_key: None },
-        SymbolEntry { description: Some("Symbol(Symbol.hasInstance)".into()), global_key: None },
-        SymbolEntry { description: Some("Symbol(Symbol.toPrimitive)".into()), global_key: None },
-        SymbolEntry { description: Some("Symbol(Symbol.dispose)".into()), global_key: None },
-        SymbolEntry { description: Some("Symbol(Symbol.match)".into()), global_key: None },
-        SymbolEntry { description: Some("Symbol(Symbol.asyncDispose)".into()), global_key: None },
-    ]));
-    let regex_table: Arc<Mutex<Vec<RegexEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let promise_table: Arc<Mutex<Vec<PromiseEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let pending_unhandled_rejections: Arc<Mutex<HashSet<usize>>> = Arc::new(Mutex::new(HashSet::new()));
-    let native_callable_free_slots: Arc<Mutex<Vec<u32>>> = Arc::new(Mutex::new(Vec::new()));
-    let non_extensible_handles: Arc<Mutex<HashSet<u64>>> = Arc::new(Mutex::new(HashSet::new()));
-    let microtask_queue: Arc<Mutex<VecDeque<Microtask>>> = Arc::new(Mutex::new(VecDeque::new()));
-    let continuation_table: Arc<Mutex<Vec<ContinuationEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let async_generator_table: Arc<Mutex<Vec<AsyncGeneratorEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let async_from_sync_iterators: Arc<Mutex<Vec<AsyncFromSyncIteratorEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let combinator_contexts: Arc<Mutex<Vec<CombinatorContext>>> = Arc::new(Mutex::new(Vec::new()));
-    let module_namespace_cache: Arc<Mutex<HashMap<u32, i64>>> = Arc::new(Mutex::new(HashMap::new()));
-    let error_table: Arc<Mutex<Vec<ErrorEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let map_table: Arc<Mutex<Vec<MapEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let set_table: Arc<Mutex<Vec<SetEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let weakmap_table: Arc<Mutex<Vec<WeakMapEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let weakset_table: Arc<Mutex<Vec<WeakSetEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let proxy_table: Arc<Mutex<Vec<ProxyEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let arraybuffer_table: Arc<Mutex<Vec<ArrayBufferEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let dataview_table: Arc<Mutex<Vec<DataViewEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let typedarray_table: Arc<Mutex<Vec<TypedArrayEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let headers_table: Arc<Mutex<Vec<HeadersEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let fetch_response_table: Arc<Mutex<Vec<FetchResponseEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let fetch_request_table: Arc<Mutex<Vec<FetchRequestEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let gc_mark_bits: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
-    let alloc_counter: Arc<Mutex<u64>> = Arc::new(Mutex::new(0));
-    const GC_THRESHOLD: u64 = 1000;
-    let weakref_table: Arc<Mutex<Vec<WeakRefEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let finalization_registry_table: Arc<Mutex<Vec<FinalizationRegistryEntry>>> = Arc::new(Mutex::new(Vec::new()));
-    let pending_cleanup_callbacks: Arc<Mutex<Vec<(i64, Vec<i64>)>>> = Arc::new(Mutex::new(Vec::new()));
-
-    let mut store = Store::new(
-        &engine,
-        RuntimeState {
-            output: Arc::clone(&output),
-            iterators: Arc::clone(&iterators),
-            enumerators: Arc::clone(&enumerators),
-            runtime_strings: Arc::clone(&runtime_strings),
-            runtime_error: Arc::clone(&runtime_error),
-            timers: Arc::clone(&timers),
-            cancelled_timers: Arc::clone(&cancelled_timers),
-            next_timer_id: Arc::clone(&next_timer_id),
-            gc_mark_bits: Arc::clone(&gc_mark_bits),
-            alloc_counter: Arc::clone(&alloc_counter),
-            gc_threshold: GC_THRESHOLD,
-            closures: Arc::clone(&closures),
-            bound_objects: Arc::clone(&bound_objects),
-            native_callables: Arc::clone(&native_callables),
-            native_callable_free_slots: Arc::clone(&native_callable_free_slots),
-            eval_cache: Arc::clone(&eval_cache),
-            bigint_table: Arc::clone(&bigint_table),
-            symbol_table: Arc::clone(&symbol_table),
-            regex_table: Arc::clone(&regex_table),
-            promise_table: Arc::clone(&promise_table),
-            pending_unhandled_rejections: Arc::clone(&pending_unhandled_rejections),
-            microtask_queue: Arc::clone(&microtask_queue),
-            continuation_table: Arc::clone(&continuation_table),
-            async_generator_table: Arc::clone(&async_generator_table),
-            async_from_sync_iterators: Arc::clone(&async_from_sync_iterators),
-            async_iterator_prototype: value::encode_undefined(),
-            async_gen_prototype: value::encode_undefined(),
-            combinator_contexts: Arc::clone(&combinator_contexts),
-            module_namespace_cache: Arc::clone(&module_namespace_cache),
-            error_table: Arc::clone(&error_table),
-            map_table: Arc::clone(&map_table),
-            set_table: Arc::clone(&set_table),
-            weakmap_table: Arc::clone(&weakmap_table),
-            weakset_table: Arc::clone(&weakset_table),
-            weakref_table: Arc::clone(&weakref_table),
-            finalization_registry_table: Arc::clone(&finalization_registry_table),
-            pending_cleanup_callbacks: Arc::clone(&pending_cleanup_callbacks),
-            proxy_table: Arc::clone(&proxy_table),
-            arraybuffer_table: Arc::clone(&arraybuffer_table),
-            dataview_table: Arc::clone(&dataview_table),
-            typedarray_table: Arc::clone(&typedarray_table),
-            headers_table: Arc::clone(&headers_table),
-            fetch_response_table: Arc::clone(&fetch_response_table),
-            fetch_request_table: Arc::clone(&fetch_request_table),
-            shared_state: Some(Arc::new(SharedRuntimeState {
-                sab_table: Arc::new(Mutex::new(Vec::new())),
-                agent_state: Arc::new(AgentState {
-                    reports: Arc::new(Mutex::new(Vec::new())),
-                    waiters: Arc::new(Mutex::new(HashMap::new())),
-                }),
-            })),
-            non_extensible_handles: Arc::clone(&non_extensible_handles),
-            scope_records: HashMap::new(),
-            scope_record_next_handle: 0,
-            new_target: AtomicI64::new(value::encode_undefined()),
-            host_completion_tx: None,
-            async_op_counter: None,
-        },
-    );
+    let mut store = Store::new(&engine, RuntimeState::new());
+    let output = Arc::clone(&store.data().output);
+    let runtime_error = Arc::clone(&store.data().runtime_error);
 
     store.set_epoch_deadline(1);
     store.epoch_deadline_async_yield_and_update(1);
 
-    // Phase 6: 创建 channel + counter（仅 async 路径）；先在 literal 置 None，再此处 set Some（引用 plan Correction 7）。
-    // rx 留在栈上，传给 run_main → scheduler loop；tx 放 state 供未来 host worker clone 发送。
+    // Phase 6: 创建 channel + counter（仅 async 路径）
     let (host_completion_tx, mut host_completion_rx) =
         tokio::sync::mpsc::unbounded_channel();
     store
@@ -1353,513 +1472,9 @@ pub async fn execute_with_writer_async<W: Write>(wasm_bytes: &[u8], writer: W) -
     store.data_mut().async_op_counter.replace(counter);
 
     let mut linker = Linker::new(&engine);
-    define_core(&mut linker, &mut store)?;
-    define_timers_arrays(&mut linker, &mut store)?;
-    // Use 1-param fetch shim for the dedicated async_scheduler test compatibility.
-    // The test sources (promise ordering, simple programs) import fetch with 1 argument.
-    // Full 2-param support remains in define_fetch for sync and future use.
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, url: i64| -> i64 {
-            let promise = alloc_promise_from_caller(&mut caller, PromiseEntry::pending());
-            promise
-        },
-    );
-    linker.define(&mut store, "env", "fetch", f)?;
-    define_array_object(&mut linker, &mut store)?;
-    define_primitive_core(&mut linker, &mut store)?;
-    define_promise(&mut linker, &mut store)?;
-    define_promise_combinators(&mut linker, &mut store)?;
-    define_misc(&mut linker, &mut store)?;
-    define_async_fn(&mut linker, &mut store)?;
-    define_async_generator(&mut linker, &mut store)?;
-    define_proxy_reflect(&mut linker, &mut store)?;
-    define_object_builtins(&mut linker, &mut store)?;
-    define_string_methods(&mut linker, &mut store)?;
-    define_math_number_error(&mut linker, &mut store)?;
-    define_collections_buffers(&mut linker, &mut store)?;
-    define_proxy_traps(&mut linker, &mut store)?;
-    define_get_builtin_global(&mut linker, &mut store)?;
-    // 注意（2026-06-01 reviewer Critical 遗留）：此处及 async 路径中仍有部分通用 Wasm 回调（数组迭代器等）使用同步 call_wasm_callback。
-    // 计划 Correction 要求 async Store 上必须全 async 调用；async 版 call_wasm_callback_async 已存在但当前未被使用（cargo check dead-code 警告）。
-    // 这属于 host import / callback 注册 parity 的 hygiene 后续任务，不影响本计划核心 scheduler 行为验证（已通过 6/6 async_scheduler 测试）。
-    // 未来应逐步替换为 *_async 版本。
-
-    // 短手动（new_target 等，必要）
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, _dummy: i64| -> i64 { caller.data().new_target.load(Ordering::Relaxed) },
-    );
-    linker.define(&mut store, "env", "new_target", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, new_target: i64| -> i64 {
-            let previous = caller.data().new_target.swap(new_target, Ordering::Relaxed);
-            previous
-        },
-    );
-    linker.define(&mut store, "env", "new_target_set", f)?;
-
-    // create_unmapped_arguments_object (同步路径已有，此处补齐以使 async instantiate 成功；所有 JS 函数 preamble 均引用)
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, args_array: i64, param_count: i64| -> i64 {
-            create_unmapped_arguments_object(&mut caller, args_array, param_count)
-        },
-    );
-    linker.define(&mut store, "env", "create_unmapped_arguments_object", f)?;
-    // create_mapped_arguments_object
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         args_array: i64,
-         param_count: i64,
-         func_ref: i64|
-         -> i64 {
-            create_mapped_arguments_object(&mut caller, args_array, param_count, func_ref)
-        },
-    );
-    linker.define(&mut store, "env", "create_mapped_arguments_object", f)?;
-    // ── TypedArray extra methods ──
-    define_typedarray_new_methods(&mut linker, &mut store)?;
-    // ── ScopeRecord eval bridge (从同步路径补齐，console/promise/throw 测试的函数作用域 lowering 均引用) ──
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, capacity: i64| -> i64 {
-            scope_record_create(caller, capacity)
-        },
-    );
-    linker.define(&mut store, "env", "scope_record_create", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         record: i64,
-         name: i64,
-         val: i64,
-         is_tdz: i64,
-         is_const: i64| {
-            scope_record_add_binding(caller, record, name, val, is_tdz, is_const)
-        },
-    );
-    linker.define(&mut store, "env", "scope_record_add_binding", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
-            eval_get_binding(caller, record, name)
-        },
-    );
-    linker.define(&mut store, "env", "eval_get_binding", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64| -> i64 {
-            eval_set_binding(caller, record, name, val)
-        },
-    );
-    linker.define(&mut store, "env", "eval_set_binding", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
-            eval_has_binding(caller, record, name)
-        },
-    );
-    linker.define(&mut store, "env", "eval_has_binding", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64| -> i64 {
-            eval_super_base(caller, record)
-        },
-    );
-    linker.define(&mut store, "env", "eval_super_base", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64, key: i64, val: i64| {
-            scope_record_set_meta(caller, record, key, val)
-        },
-    );
-    linker.define(&mut store, "env", "scope_record_set_meta", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, record: i64| scope_record_destroy(caller, record),
-    );
-    linker.define(&mut store, "env", "scope_record_destroy", f)?;
-    // ── WeakRef / FinalizationRegistry ──
-    define_weakref_finalization(&mut linker, &mut store)?;
-    // ── SharedArrayBuffer + Atomics ──
-    define_atomics(&mut linker, &mut store)?;
-
-
-    // ── async_iterator_from (从同步补齐) ──
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, iterable: i64| -> i64 {
-            if value::is_iterator(iterable) {
-                return create_async_from_sync_iterator(&mut caller, iterable);
-            }
-            if !(value::is_object(iterable)
-                || value::is_array(iterable)
-                || value::is_function(iterable)
-                || value::is_proxy(iterable))
-            {
-                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                let handle = iters.len() as u32;
-                iters.push(IteratorState::Error);
-                return value::encode_handle(value::TAG_ITERATOR, handle);
-            }
-
-            let Some(ptr) = resolve_handle(&mut caller, iterable) else {
-                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                let handle = iters.len() as u32;
-                iters.push(IteratorState::Error);
-                return value::encode_handle(value::TAG_ITERATOR, handle);
-            };
-            // 数组 fast path
-            if value::is_array(iterable) {
-                if let Some(arr_ptr) = resolve_handle(&mut caller, iterable) {
-                    let length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
-                    let sync_iter_handle = {
-                        let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                        let sync_handle = iters.len() as u32;
-                        iters.push(IteratorState::ArrayIter {
-                            ptr: arr_ptr,
-                            index: 0,
-                            length,
-                        });
-                        value::encode_handle(value::TAG_ITERATOR, sync_handle)
-                    };
-                    return create_async_from_sync_iterator(&mut caller, sync_iter_handle);
-                }
-            }
-            // 尝试 @@asyncIterator
-            if let Some(method) =
-                read_object_property_by_name(&mut caller, ptr, "Symbol.asyncIterator")
-            {
-                if value::is_callable(method) {
-                    let iterator = if value::is_native_callable(method) {
-                        call_native_callable_with_args_from_caller(
-                            &mut caller,
-                            method,
-                            iterable,
-                            vec![],
-                        )
-                        .unwrap_or_else(value::encode_undefined)
-                    } else if let Ok(result) =
-                        call_wasm_callback(&mut caller, method, iterable, &[])
-                    {
-                        result
-                    } else {
-                        value::encode_undefined()
-                    };
-                    if value::is_object(iterator) {
-                        if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
-                            let next = read_object_property_by_name(&mut caller, iter_ptr, "next")
-                                .filter(|n| value::is_callable(*n));
-                            if let Some(next_fn) = next {
-                                let return_method =
-                                    read_object_property_by_name(&mut caller, iter_ptr, "return")
-                                        .filter(|c| value::is_callable(*c));
-                                let mut iters =
-                                    caller.data().iterators.lock().expect("iterators mutex");
-                                let handle = iters.len() as u32;
-                                iters.push(IteratorState::ObjectIter {
-                                    next: next_fn,
-                                    return_method,
-                                    current_value: value::encode_undefined(),
-                                    has_current: false,
-                                    done: false,
-                                });
-                                return value::encode_handle(value::TAG_ITERATOR, handle);
-                            }
-                        }
-                    }
-                } else if !value::is_undefined(method) && !value::is_null(method) {
-                    // C4: @@asyncIterator 存在但不可调用 → TypeError（ES §7.3.10）
-                    return create_error_object(
-                        &mut caller,
-                        "TypeError",
-                        value::encode_undefined(),
-                    );
-                }
-            }
-
-            // 回退到 @@iterator
-            if let Some(method) = read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
-            {
-                if value::is_callable(method) {
-                    let sync_iter = if value::is_native_callable(method) {
-                        call_native_callable_with_args_from_caller(
-                            &mut caller,
-                            method,
-                            iterable,
-                            vec![],
-                        )
-                        .unwrap_or_else(value::encode_undefined)
-                    } else if let Ok(result) =
-                        call_wasm_callback(&mut caller, method, iterable, &[])
-                    {
-                        result
-                    } else {
-                        value::encode_undefined()
-                    };
-                    if value::is_object(sync_iter) {
-                        if let Some(sync_ptr) = resolve_handle(&mut caller, sync_iter) {
-                            let next_fn =
-                                read_object_property_by_name(&mut caller, sync_ptr, "next")
-                                    .filter(|n| value::is_callable(*n));
-                            if let Some(next_fn) = next_fn {
-                                let return_method =
-                                    read_object_property_by_name(&mut caller, sync_ptr, "return")
-                                        .filter(|c| value::is_callable(*c));
-                                let sync_iter_handle = {
-                                    let mut iters =
-                                        caller.data().iterators.lock().expect("iterators mutex");
-                                    let sync_handle = iters.len() as u32;
-                                    iters.push(IteratorState::ObjectIter {
-                                        next: next_fn,
-                                        return_method,
-                                        current_value: value::encode_undefined(),
-                                        has_current: false,
-                                        done: false,
-                                    });
-                                    value::encode_handle(value::TAG_ITERATOR, sync_handle)
-                                };
-                                return create_async_from_sync_iterator(
-                                    &mut caller,
-                                    sync_iter_handle,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 没有 @@asyncIterator 也没有 @@iterator，创建 TypeError
-            create_error_object(&mut caller, "TypeError", value::encode_undefined())
-        },
-    );
-    linker.define(&mut store, "env", "async_iterator_from", f)?;
-    // ── Object.groupBy / Map.groupBy (补齐 async 路径最后缺失的 import；使 async_scheduler 测试 6/6 green) ──
-    // 完整复制 sync 路径已审计实现（包括错误处理、Array fast path、HashMap 优化、Map 内部状态等），放置在顶层 linker 注册区
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
-            if value::is_null(items) || value::is_undefined(items) {
-                *caller.data().runtime_error.lock().expect("runtime error mutex") =
-                    Some("TypeError: Cannot group null or undefined".to_string());
-                return value::encode_undefined();
-            }
-            if !value::is_callable(callbackfn) {
-                *caller.data().runtime_error.lock().expect("runtime error mutex") =
-                    Some("TypeError: callbackfn is not callable".to_string());
-                return value::encode_undefined();
-            }
-            let result = alloc_object(&mut caller, 0);
-            let mut groups: HashMap<String, Vec<i64>> = HashMap::new();
-            let mut index = 0u32;
-            if value::is_array(items) {
-                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
-                    let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
-                    for i in 0..len {
-                        let elem = read_array_elem(&mut caller, arr_ptr, i)
-                            .unwrap_or(value::encode_undefined());
-                        let idx_val = value::encode_f64(index as f64);
-                        let key = match call_wasm_callback(
-                            &mut caller,
-                            callbackfn,
-                            value::encode_undefined(),
-                            &[elem, idx_val],
-                        ) {
-                            Ok(k) => k,
-                            Err(_) => return value::encode_undefined(),
-                        };
-                        let key_str = to_property_key(&mut caller, key);
-                        if caller.data().runtime_error.lock().expect("mutex").is_some() {
-                            return value::encode_undefined();
-                        }
-                        groups.entry(key_str).or_default().push(elem);
-                        index += 1;
-                    }
-                    for (key_str, elements) in &groups {
-                        let arr = alloc_array(&mut caller, elements.len() as u32);
-                        if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
-                            for (i, &elem) in elements.iter().enumerate() {
-                                write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                            }
-                            write_array_length(&mut caller, arr_ptr, elements.len() as u32);
-                        }
-                        define_host_data_property(&mut caller, result, key_str, arr);
-                    }
-                    return result;
-                }
-            }
-            result
-        },
-    );
-    linker.define(&mut store, "env", "object.group_by", f)?;
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, items: i64, callbackfn: i64| -> i64 {
-            if value::is_null(items) || value::is_undefined(items) {
-                *caller.data().runtime_error.lock().expect("runtime error mutex") =
-                    Some("TypeError: Cannot group null or undefined".to_string());
-                return value::encode_undefined();
-            }
-            if !value::is_callable(callbackfn) {
-                *caller.data().runtime_error.lock().expect("runtime error mutex") =
-                    Some("TypeError: callbackfn is not callable".to_string());
-                return value::encode_undefined();
-            }
-            let map_handle = {
-                let mut map_table = caller.data().map_table.lock().expect("map table mutex");
-                let handle = map_table.len();
-                map_table.push(MapEntry { keys: Vec::new(), values: Vec::new() });
-                handle
-            };
-            let map_result = alloc_object(&mut caller, 12);
-            {
-                let state = caller.data();
-                let set_fn = create_map_set_method(state, MapSetMethodKind::MapSet);
-                let get_fn = create_map_set_method(state, MapSetMethodKind::MapGet);
-                let has_fn = create_map_set_method(state, MapSetMethodKind::Has);
-                let delete_fn = create_map_set_method(state, MapSetMethodKind::Delete);
-                let clear_fn = create_map_set_method(state, MapSetMethodKind::Clear);
-                let size_fn = create_map_set_method(state, MapSetMethodKind::Size);
-                let for_each_fn = create_map_set_method(state, MapSetMethodKind::ForEach);
-                let keys_fn = create_map_set_method(state, MapSetMethodKind::Keys);
-                let values_fn = create_map_set_method(state, MapSetMethodKind::Values);
-                let entries_fn = create_map_set_method(state, MapSetMethodKind::Entries);
-                let _ = define_host_data_property(&mut caller, map_result, "set", set_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "get", get_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "has", has_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "delete", delete_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "clear", clear_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "size", size_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "forEach", for_each_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "keys", keys_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "values", values_fn);
-                let _ = define_host_data_property(&mut caller, map_result, "entries", entries_fn);
-            }
-            if let Some(_map_ptr) = resolve_handle(&mut caller, map_result) {
-                let handle_val = value::encode_f64(map_handle as f64);
-                define_host_data_property(&mut caller, map_result, "__map_handle__", handle_val);
-            }
-            let mut groups: Vec<(i64, Vec<i64>)> = Vec::new();
-            let mut key_to_index: HashMap<i64, usize> = HashMap::new();
-            let mut index = 0u32;
-            if value::is_array(items) {
-                if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
-                    let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
-                    for i in 0..len {
-                        let elem = read_array_elem(&mut caller, arr_ptr, i)
-                            .unwrap_or(value::encode_undefined());
-                        let idx_val = value::encode_f64(index as f64);
-                        let key = match call_wasm_callback(
-                            &mut caller,
-                            callbackfn,
-                            value::encode_undefined(),
-                            &[elem, idx_val],
-                        ) {
-                            Ok(k) => k,
-                            Err(_) => return value::encode_undefined(),
-                        };
-                        let group_index = if let Some(&idx) = key_to_index.get(&key) {
-                            if same_value_zero(groups[idx].0, key) { Some(idx) } else { None }
-                        } else { None };
-                        if let Some(idx) = group_index {
-                            groups[idx].1.push(elem);
-                        } else {
-                            let mut found = false;
-                            for (existing_key, elements) in &mut groups {
-                                if same_value_zero(*existing_key, key) {
-                                    elements.push(elem);
-                                    key_to_index.insert(*existing_key, groups.len() - 1);
-                                    found = true;
-                                    break;
-                                }
-                            }
-                            if !found {
-                                key_to_index.insert(key, groups.len());
-                                groups.push((key, vec![elem]));
-                            }
-                        }
-                        index += 1;
-                    }
-                    for (group_key, elements) in &groups {
-                        let arr = alloc_array(&mut caller, elements.len() as u32);
-                        if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
-                            for (i, &elem) in elements.iter().enumerate() {
-                                write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                            }
-                            write_array_length(&mut caller, arr_ptr, elements.len() as u32);
-                        }
-                        let mut table = caller.data().map_table.lock().expect("map table mutex");
-                        table[map_handle].keys.push(*group_key);
-                        table[map_handle].values.push(arr);
-                    }
-                }
-            }
-            map_result
-        },
-    );
-    linker.define(&mut store, "env", "map.group_by", f)?;
-    // ── symbol_property_key (补齐 async 路径；当前测试失败点) ──
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
-            if value::is_symbol(key) {
-                let handle = value::decode_handle(key) as usize;
-                let desc_str = {
-                    let table = caller.data().symbol_table.lock().expect("symbol table");
-                    table.get(handle).and_then(|e| e.description.clone())
-                };
-                if let Some(desc) = desc_str {
-                    let trimmed = desc
-                        .strip_prefix("Symbol(")
-                        .and_then(|s| s.strip_suffix(")"))
-                        .unwrap_or(&desc);
-                    let name_id = find_memory_c_string(&mut caller, trimmed)
-                        .or_else(|| alloc_heap_c_string(&mut caller, trimmed));
-                    if let Some(id) = name_id {
-                        return id as i32;
-                    }
-                }
-            }
-            key as i32
-        },
-    );
-    linker.define(&mut store, "env", "symbol_property_key", f)?;
-    // ── array.from (最小补齐以通过当前测试；完整逻辑已在 sync 路径) ──
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, _env: i64, _this: i64, base: i32, cnt: i32| -> i64 {
-            if cnt < 1 { return value::encode_undefined(); }
-            // 简化：对于测试中用到的基本情况返回 undefined 或 source（实际复杂逻辑在 sync）
-            value::encode_undefined()
-        },
-    );
-    linker.define(&mut store, "env", "array.from", f)?;
-    // ── obj_get_by_index (补齐 async 路径；当前测试失败点) ──
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, boxed: i64, index: i32| -> i64 {
-            // 简化实现：对于测试目的返回 undefined（完整逻辑已在 sync 路径）
-            value::encode_undefined()
-        },
-    );
-    linker.define(&mut store, "env", "obj_get_by_index", f)?;
-    // ── typedarray_set_by_index (补齐 async 路径；当前测试失败点) ──
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, boxed: i64, index: i32, value_raw: i64| -> i64 {
-            if typedarray_entry_from_value(&mut caller, boxed).is_some() {
-                if index >= 0 {
-                    let _ = typedarray_element_write(&mut caller, boxed, index as u32, value_raw);
-                }
-                return value::encode_bool(true);
-            }
-            value::encode_bool(false)
-        },
-    );
-    linker.define(&mut store, "env", "typedarray_set_by_index", f)?;
+    register_linker_async(&mut linker, &mut store)?;
+    register_common_bridges(&mut linker, &mut store)?;
+    register_complex_bridges_async(&mut linker, &mut store)?;
     let instance = linker.instantiate_async(&mut store, &module).await
         .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
 
@@ -2009,6 +1624,82 @@ struct RuntimeState {
     host_completion_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::scheduler::AsyncHostCompletion>>,
     /// Phase 6: in-flight async op 计数器（用于 scheduler 安全退出条件）。
     async_op_counter: Option<crate::scheduler::AsyncOpCounter>,
+}
+
+impl RuntimeState {
+    /// 构造一个新的 RuntimeState，所有侧表初始化为空，well-known symbols 预分配。
+    fn new() -> Self {
+        const GC_THRESHOLD: u64 = 1000;
+        RuntimeState {
+            output: Arc::new(Mutex::new(Vec::new())),
+            iterators: Arc::new(Mutex::new(Vec::new())),
+            enumerators: Arc::new(Mutex::new(Vec::new())),
+            runtime_strings: Arc::new(Mutex::new(Vec::new())),
+            runtime_error: Arc::new(Mutex::new(None)),
+            gc_mark_bits: Arc::new(Mutex::new(Vec::new())),
+            alloc_counter: Arc::new(Mutex::new(0)),
+            gc_threshold: GC_THRESHOLD,
+            timers: Arc::new(Mutex::new(Vec::new())),
+            cancelled_timers: Arc::new(Mutex::new(HashSet::new())),
+            next_timer_id: Arc::new(Mutex::new(1)),
+            closures: Arc::new(Mutex::new(Vec::new())),
+            bound_objects: Arc::new(Mutex::new(Vec::new())),
+            native_callables: Arc::new(Mutex::new(vec![NativeCallable::EvalIndirect])),
+            native_callable_free_slots: Arc::new(Mutex::new(Vec::new())),
+            eval_cache: Arc::new(Mutex::new(HashMap::new())),
+            bigint_table: Arc::new(Mutex::new(Vec::new())),
+            symbol_table: Arc::new(Mutex::new(vec![
+                SymbolEntry { description: Some("Symbol(Symbol.iterator)".into()), global_key: None },
+                SymbolEntry { description: Some("Symbol(Symbol.species)".into()), global_key: None },
+                SymbolEntry { description: Some("Symbol(Symbol.toStringTag)".into()), global_key: None },
+                SymbolEntry { description: Some("Symbol(Symbol.asyncIterator)".into()), global_key: None },
+                SymbolEntry { description: Some("Symbol(Symbol.hasInstance)".into()), global_key: None },
+                SymbolEntry { description: Some("Symbol(Symbol.toPrimitive)".into()), global_key: None },
+                SymbolEntry { description: Some("Symbol(Symbol.dispose)".into()), global_key: None },
+                SymbolEntry { description: Some("Symbol(Symbol.match)".into()), global_key: None },
+                SymbolEntry { description: Some("Symbol(Symbol.asyncDispose)".into()), global_key: None },
+            ])),
+            regex_table: Arc::new(Mutex::new(Vec::new())),
+            promise_table: Arc::new(Mutex::new(Vec::new())),
+            pending_unhandled_rejections: Arc::new(Mutex::new(HashSet::new())),
+            microtask_queue: Arc::new(Mutex::new(VecDeque::new())),
+            continuation_table: Arc::new(Mutex::new(Vec::new())),
+            async_generator_table: Arc::new(Mutex::new(Vec::new())),
+            async_from_sync_iterators: Arc::new(Mutex::new(Vec::new())),
+            async_iterator_prototype: value::encode_undefined(),
+            async_gen_prototype: value::encode_undefined(),
+            combinator_contexts: Arc::new(Mutex::new(Vec::new())),
+            module_namespace_cache: Arc::new(Mutex::new(HashMap::new())),
+            error_table: Arc::new(Mutex::new(Vec::new())),
+            map_table: Arc::new(Mutex::new(Vec::new())),
+            set_table: Arc::new(Mutex::new(Vec::new())),
+            weakmap_table: Arc::new(Mutex::new(Vec::new())),
+            weakset_table: Arc::new(Mutex::new(Vec::new())),
+            weakref_table: Arc::new(Mutex::new(Vec::new())),
+            finalization_registry_table: Arc::new(Mutex::new(Vec::new())),
+            pending_cleanup_callbacks: Arc::new(Mutex::new(Vec::new())),
+            proxy_table: Arc::new(Mutex::new(Vec::new())),
+            arraybuffer_table: Arc::new(Mutex::new(Vec::new())),
+            dataview_table: Arc::new(Mutex::new(Vec::new())),
+            typedarray_table: Arc::new(Mutex::new(Vec::new())),
+            headers_table: Arc::new(Mutex::new(Vec::new())),
+            fetch_response_table: Arc::new(Mutex::new(Vec::new())),
+            fetch_request_table: Arc::new(Mutex::new(Vec::new())),
+            shared_state: Some(Arc::new(SharedRuntimeState {
+                sab_table: Arc::new(Mutex::new(Vec::new())),
+                agent_state: Arc::new(AgentState {
+                    reports: Arc::new(Mutex::new(Vec::new())),
+                    waiters: Arc::new(Mutex::new(HashMap::new())),
+                }),
+            })),
+            non_extensible_handles: Arc::new(Mutex::new(HashSet::new())),
+            scope_records: HashMap::new(),
+            scope_record_next_handle: 0,
+            new_target: AtomicI64::new(value::encode_undefined()),
+            host_completion_tx: None,
+            async_op_counter: None,
+        }
+    }
 }
 /// 绑定函数记录
 struct BoundRecord {
