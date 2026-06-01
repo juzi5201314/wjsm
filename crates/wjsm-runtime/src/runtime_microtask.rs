@@ -1,6 +1,6 @@
 use super::*;
+use std::sync::atomic::Ordering;
 use wasmtime::Store;
-
 pub(crate) fn clear_pending_unhandled_rejection(state: &RuntimeState, handle: usize) {
     state
         .pending_unhandled_rejections
@@ -263,7 +263,7 @@ pub(crate) fn call_host_function_with_args<
     let previous_new_target = ctx
         .state_mut()
         .new_target
-        .replace(value::encode_undefined());
+        .swap(value::encode_undefined(), Ordering::Relaxed);
     let mut results = [Val::I64(0)];
     let call_result = func.call(
         &mut *ctx,
@@ -275,7 +275,7 @@ pub(crate) fn call_host_function_with_args<
         ],
         &mut results,
     );
-    ctx.state_mut().new_target.set(previous_new_target);
+    ctx.state_mut().new_target.store(previous_new_target, Ordering::Relaxed);
     let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
 
     if let Err(err) = call_result {
@@ -577,7 +577,7 @@ pub(crate) async fn call_host_function_with_args_async<
     let previous_new_target = ctx
         .state_mut()
         .new_target
-        .replace(value::encode_undefined());
+        .swap(value::encode_undefined(), Ordering::Relaxed);
     let mut results = [Val::I64(0)];
     // 唯一差异：与本 crate 其他 Phase 3 async 转换（resume、call_wasm_callback）一致
     let call_result = func
@@ -592,7 +592,7 @@ pub(crate) async fn call_host_function_with_args_async<
             &mut results,
         )
         .await;
-    ctx.state_mut().new_target.set(previous_new_target);
+    ctx.state_mut().new_target.store(previous_new_target, Ordering::Relaxed);
     let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
 
     if let Err(err) = call_result {

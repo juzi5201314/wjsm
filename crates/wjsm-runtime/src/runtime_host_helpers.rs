@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::atomic::Ordering;
 use crate::wasm_env::WasmEnv;
 
 pub(crate) fn read_shadow_arg_with_env<C: AsContext>(
@@ -145,7 +146,7 @@ pub(crate) fn call_wasm_callback(
         .as_func()
         .flatten()
         .ok_or_else(|| anyhow::anyhow!("table entry not a function"))?;
-    let previous_new_target = caller.data().new_target.replace(value::encode_undefined());
+    let previous_new_target = caller.data().new_target.swap(value::encode_undefined(), Ordering::Relaxed);
     let mut results = [Val::I64(0)];
     let call_result = func.call(
         &mut *caller,
@@ -158,7 +159,7 @@ pub(crate) fn call_wasm_callback(
         &mut results,
     );
     // 恢复调用上下文（无论 call 成功与否）
-    caller.data().new_target.set(previous_new_target);
+    caller.data().new_target.store(previous_new_target, Ordering::Relaxed);
     let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
     call_result?;
     Ok(results[0].unwrap_i64())
@@ -306,7 +307,7 @@ pub(crate) async fn call_wasm_callback_async(
         .as_func()
         .flatten()
         .ok_or_else(|| anyhow::anyhow!("table entry not a function"))?;
-    let previous_new_target = caller.data().new_target.replace(value::encode_undefined());
+    let previous_new_target = caller.data().new_target.swap(value::encode_undefined(), Ordering::Relaxed);
     let mut results = [Val::I64(0)];
     let call_result = func.call_async(
         &mut *caller,
@@ -319,7 +320,7 @@ pub(crate) async fn call_wasm_callback_async(
         &mut results,
     ).await;
     // 恢复调用上下文（无论 call 成功与否）
-    caller.data().new_target.set(previous_new_target);
+    caller.data().new_target.store(previous_new_target, Ordering::Relaxed);
     let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
     call_result?;
     Ok(results[0].unwrap_i64())

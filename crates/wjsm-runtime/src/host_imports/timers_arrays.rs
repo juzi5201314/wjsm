@@ -123,20 +123,24 @@ pub(crate) fn define_timers_arrays(
     linker.define(&mut store, "env", "clear_interval", f)?;
 
 
-    // ── Import 32: json_stringify(i64) → i64 ──────────────────────────────
+    // ── Import 32: json_stringify(i64, i64, i64) → i64 (val, replacer, space) ──
+    // Current minimal impl only uses val; replacer/space ignored for compatibility.
+    // This matches the signature emitted by backend for JSON.stringify calls with args.
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, val: i64, _replacer: i64, _space: i64| -> i64 {
             let json_str = runtime_json_stringify(&mut caller, val);
             store_runtime_string(&caller, json_str)
         },
     );
     linker.define(&mut store, "env", "json_stringify", f)?;
 
-    // ── Import 33: json_parse(i64) → i64 ──────────────────────────────────
+    // ── Import 33: json_parse(i64, i64) → i64 (input, reviver) ──────────────
+    // Current minimal impl (stub) only uses input; reviver ignored.
+    // Matches the 2-param signature expected by test WASM modules.
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, val: i64, _reviver: i64| -> i64 {
             let json_str = if value::is_string(val) {
                 if value::is_runtime_string_handle(val) {
                     let handle = value::decode_runtime_string_handle(val) as usize;
@@ -154,7 +158,7 @@ pub(crate) fn define_timers_arrays(
             } else {
                 String::new()
             };
-            // For now, just return the string as-is (simplified parse)
+            // For now, just return the string as-is (simplified parse per existing stub behavior)
             store_runtime_string(&caller, json_str)
         },
     );
