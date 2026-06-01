@@ -1480,8 +1480,17 @@ impl Lowerer {
             }
         }
 
-        let obj_val = self.lower_expr(&member.obj, block)?;
+        let mut current_block = block;
+        let obj_val = self.lower_expr_then_continue(&member.obj, &mut current_block)?;
+        self.lower_member_expr_from_object(member, obj_val, &mut current_block)
+    }
 
+    pub(crate) fn lower_member_expr_from_object(
+        &mut self,
+        member: &swc_ast::MemberExpr,
+        obj_val: ValueId,
+        block: &mut BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
         let key = match &member.prop {
             swc_ast::MemberProp::Ident(ident) => {
                 let key_const = self
@@ -1489,7 +1498,7 @@ impl Lowerer {
                     .add_constant(Constant::String(ident.sym.to_string()));
                 let key_dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    *block,
                     Instruction::Const {
                         dest: key_dest,
                         constant: key_const,
@@ -1497,13 +1506,15 @@ impl Lowerer {
                 );
                 key_dest
             }
-            swc_ast::MemberProp::Computed(computed) => self.lower_expr(&computed.expr, block)?,
+            swc_ast::MemberProp::Computed(computed) => {
+                self.lower_expr_then_continue(&computed.expr, block)?
+            }
             swc_ast::MemberProp::PrivateName(name) => {
                 let field_name = format!("#{}", name.name);
                 let key_const = self.module.add_constant(Constant::String(field_name));
                 let key_dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    *block,
                     Instruction::Const {
                         dest: key_dest,
                         constant: key_const,
@@ -1511,13 +1522,14 @@ impl Lowerer {
                 );
                 let dest = self.alloc_value();
                 self.current_function.append_instruction(
-                    block,
+                    *block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
                         builtin: Builtin::PrivateGet,
                         args: vec![obj_val, key_dest],
                     },
                 );
+                self.expr_merge_block = Some(*block);
                 return Ok(dest);
             }
         };
@@ -1549,26 +1561,27 @@ impl Lowerer {
                         let idx_const = self.module.add_constant(Constant::Number(idx as f64));
                         let idx_val = self.alloc_value();
                         self.current_function.append_instruction(
-                            block,
+                            *block,
                             Instruction::Const {
                                 dest: idx_val,
                                 constant: idx_const,
                             },
                         );
                         self.current_function.append_instruction(
-                            block,
+                            *block,
                             Instruction::CallBuiltin {
                                 dest: Some(dest),
                                 builtin: Builtin::SymbolWellKnown,
                                 args: vec![idx_val],
                             },
                         );
+                        self.expr_merge_block = Some(*block);
                         return Ok(dest);
                     }
                 }
                 // 默认走 GetProp 路径
                 self.current_function.append_instruction(
-                    block,
+                    *block,
                     Instruction::GetProp {
                         dest,
                         object: obj_val,
@@ -1586,7 +1599,7 @@ impl Lowerer {
                 );
                 if use_get_elem {
                     self.current_function.append_instruction(
-                        block,
+                        *block,
                         Instruction::GetElem {
                             dest,
                             object: obj_val,
@@ -1595,7 +1608,7 @@ impl Lowerer {
                     );
                 } else {
                     self.current_function.append_instruction(
-                        block,
+                        *block,
                         Instruction::GetProp {
                             dest,
                             object: obj_val,
@@ -1606,6 +1619,7 @@ impl Lowerer {
             }
             _ => unreachable!(),
         }
+        self.expr_merge_block = Some(*block);
         Ok(dest)
     }
 

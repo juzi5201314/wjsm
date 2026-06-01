@@ -1,5 +1,5 @@
 exit_code: 0
 --- stdout ---
-parse-result: {"a":1,"b":[2,3]}
-type: string
+parse-result: [object Object]
+type: object
 --- stderr ---

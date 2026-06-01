@@ -361,12 +361,6 @@ module {
       %29 = load var $0.$shared_env
       %30 = const c78
       %31 = stricteq %29, %30
-      store var $0.a, %40
-      %41 = const c82
-      %42 = load var $0.a
-      %44 = const c83
-      %45 = const c84
-      %46 = call builtin.promise.then(%43, %44, %45)
       branch %31, bb1, bb2
     bb1:
       %32 = new_object(capacity=2)
@@ -387,7 +381,13 @@ module {
       %39 = phi [(bb1, %32), (bb2, %29)]
       store var $0.$shared_env, %39
       %40 = call builtin.create_closure(%28, %39)
+      store var $0.a, %40
+      %41 = const c82
+      %42 = load var $0.a
       %43 = call %42, this=%41
+      %44 = const c83
+      %45 = const c84
+      %46 = call builtin.promise.then(%43, %44, %45)
       %47 = is_exception %46
       branch %47, bb5, bb4
     bb4:

@@ -589,8 +589,6 @@ impl Compiler {
             | Builtin::ArrayReverse
             | Builtin::ArrayInitLength
             | Builtin::ArrayGetLength => {
-                // Single arg: (i64) -> i64 or Two arg: (i64, i64) -> i64
-                // These all take the array as the first arg
                 for arg in args {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 }
@@ -604,6 +602,42 @@ impl Compiler {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 } else {
                     self.emit(WasmInstruction::Drop);
+                }
+                Ok(())
+            }
+            Builtin::ArrayIndexOf | Builtin::ArraySlice => {
+                for arg in args.iter().take(3) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                for _ in args.len()..3 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            Builtin::ArrayFill => {
+                for arg in args.iter().take(4) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                for _ in args.len()..4 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
                 }
                 Ok(())
             }
@@ -798,38 +832,6 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Builtin::ArrayIndexOf | Builtin::ArraySlice | Builtin::ArrayFill => {
-                // 3+ arg functions: (i64, i64, i64) -> i64 etc
-                for arg in args {
-                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
-                }
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
-                self.emit(WasmInstruction::Call(func_idx));
-                if let Some(d) = dest {
-                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
-                }
-                Ok(())
-            }
-            // ── Atomics 4-arg builtins: (i64, i64, i64, i64) -> i64 ──
-            Builtin::AtomicsCompareExchange | Builtin::AtomicsWait => {
-                for arg in args {
-                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
-                }
-                let func_idx = self
-                    .builtin_func_indices
-                    .get(builtin)
-                    .copied()
-                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
-                self.emit(WasmInstruction::Call(func_idx));
-                if let Some(d) = dest {
-                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
-                }
-                Ok(())
-            }
             // ── Map/Set multi-arg builtins ──
             Builtin::MapProtoSet
             | Builtin::MapProtoGet
@@ -858,7 +860,9 @@ impl Compiler {
             | Builtin::AtomicsOr
             | Builtin::AtomicsXor
             | Builtin::AtomicsExchange
+            | Builtin::AtomicsCompareExchange
             | Builtin::AtomicsNotify
+            | Builtin::AtomicsWait
             | Builtin::AtomicsWaitAsync
             // ── DataView constructor ──
             | Builtin::DataViewConstructor
@@ -991,12 +995,9 @@ impl Compiler {
             | Builtin::TypedArrayProtoSome
             | Builtin::TypedArrayProtoEvery
             | Builtin::TypedArrayProtoSort => self.compile_proto_method_call(dest, builtin, args),
-            // ── Date constructor (shadow stack, variadic args) ──
-            Builtin::DateConstructor => {
-                self.compile_proto_method_call(dest, builtin, args)
-            }
             // ── Array prototype method calls (Type 12 imports) ─────────────
             Builtin::ArrayShift
+            | Builtin::ArrayUnshiftVa
             | Builtin::ArraySort
             | Builtin::ArrayAt
             | Builtin::ArrayCopyWithin
@@ -1010,12 +1011,12 @@ impl Compiler {
             | Builtin::ArraySome
             | Builtin::ArrayEvery
             | Builtin::ArrayFlatMap
-            | Builtin::ArrayFlat
             | Builtin::ArraySpliceVa
             | Builtin::ArrayConcatVa
-            | Builtin::ArrayUnshiftVa => self.compile_proto_method_call(dest, builtin, args),
-            Builtin::ArrayIsArray => self.compile_proto_method_call(dest, builtin, args),
-            Builtin::ArrayFrom => self.compile_proto_method_call(dest, builtin, args),
+            | Builtin::ArrayFlat
+            | Builtin::ArrayIsArray
+            | Builtin::ArrayFrom
+            | Builtin::DateConstructor => self.compile_proto_method_call(dest, builtin, args),
             Builtin::AbortShadowStackOverflow => {
                 bail!("AbortShadowStackOverflow should not appear in compile_builtin_call");
             }
@@ -1972,7 +1973,10 @@ impl Compiler {
                 Ok(())
             }
             // ── WeakRef / FinalizationRegistry builtins ──
-            Builtin::WeakRefConstructor => {
+            Builtin::WeakRefConstructor
+            | Builtin::HeadersConstructor
+            | Builtin::RequestConstructor
+            | Builtin::ResponseConstructor => {
                 // Type 12: constructor - env=undefined, this=undefined, shadow_args=all args
                 self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                 self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));

@@ -132,10 +132,12 @@ pub(crate) async fn try_compiled_eval_from_caller_async(
 
     let instance = Instance::new_async(&mut *caller, &eval_module, &imports).await?;
     let entry = instance.get_typed_func::<i64, i64>(&mut *caller, "__eval_entry")?;
-    Ok(entry.call_async(
-        &mut *caller,
-        scope_env.unwrap_or_else(value::encode_undefined),
-    ).await?)
+    Ok(entry
+        .call_async(
+            &mut *caller,
+            scope_env.unwrap_or_else(value::encode_undefined),
+        )
+        .await?)
 }
 
 pub(crate) fn reserve_eval_data_segment(

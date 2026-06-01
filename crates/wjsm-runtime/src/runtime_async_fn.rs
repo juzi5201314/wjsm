@@ -1,6 +1,6 @@
 use super::*;
 use std::io::Write;
- 
+
 use wasmtime::{Instance, Store};
 
 pub(crate) fn create_async_generator_method(
@@ -426,7 +426,8 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     // 仅 async 路径；sync 路径的阻塞 loop 保持 100% 不动。
     // 初始 drain 已在上方完成；scheduler 内部负责后续 timer fire + per-callback drain + completion 处理。
     if main_ok {
-        crate::scheduler::run_post_main_scheduler_async(&mut store, &wasm_env, completion_rx).await?;
+        crate::scheduler::run_post_main_scheduler_async(&mut store, &wasm_env, completion_rx)
+            .await?;
     }
     let bytes = output
         .lock()

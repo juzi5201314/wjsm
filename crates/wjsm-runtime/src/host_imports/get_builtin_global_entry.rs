@@ -48,6 +48,9 @@ pub(crate) fn define_get_builtin_global(
                     }
                     "Date" => native_callables.push(NativeCallable::DateConstructorGlobal),
                     "Promise" => native_callables.push(NativeCallable::PromiseConstructor),
+                    "Headers" => native_callables.push(NativeCallable::HeadersConstructor),
+                    "Request" => native_callables.push(NativeCallable::RequestConstructor),
+                    "Response" => native_callables.push(NativeCallable::ResponseConstructor),
                     "ArrayBuffer" => {
                         native_callables.push(NativeCallable::ArrayBufferConstructorGlobal)
                     }

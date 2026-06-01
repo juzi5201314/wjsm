@@ -209,46 +209,43 @@ module {
       %24 = call %23, this=%22
       store var $0.g, %24
       %25 = load var $0.g
-      %26 = load var $0.g
-      %27 = const c39
-      %28 = get_prop %26, %27
-      %29 = call %28, this=%25
-      %30 = const c41
-      %31 = const c42
-      %32 = call builtin.promise.then(%29, %30, %31)
-      %33 = is_exception %32
-      branch %33, bb2, bb1
+      %26 = const c39
+      %27 = get_prop %25, %26
+      %28 = call %27, this=%25
+      %29 = const c41
+      %30 = const c42
+      %31 = call builtin.promise.then(%28, %29, %30)
+      %32 = is_exception %31
+      branch %32, bb2, bb1
     bb1:
-      %35 = load var $0.g
-      %36 = load var $0.g
-      %37 = const c43
-      %38 = get_prop %36, %37
-      %39 = call %38, this=%35
-      %40 = const c45
-      %41 = const c46
-      %42 = call builtin.promise.then(%39, %40, %41)
-      %43 = is_exception %42
-      branch %43, bb4, bb3
+      %34 = load var $0.g
+      %35 = const c43
+      %36 = get_prop %34, %35
+      %37 = call %36, this=%34
+      %38 = const c45
+      %39 = const c46
+      %40 = call builtin.promise.then(%37, %38, %39)
+      %41 = is_exception %40
+      branch %41, bb4, bb3
     bb2:
-      %34 = call builtin.exception_value(%32)
-      throw %34
+      %33 = call builtin.exception_value(%31)
+      throw %33
     bb3:
-      %45 = load var $0.g
-      %46 = load var $0.g
-      %47 = const c47
-      %48 = get_prop %46, %47
-      %49 = call %48, this=%45
-      %50 = const c49
-      %51 = const c50
-      %52 = call builtin.promise.then(%49, %50, %51)
-      %53 = is_exception %52
-      branch %53, bb6, bb5
+      %43 = load var $0.g
+      %44 = const c47
+      %45 = get_prop %43, %44
+      %46 = call %45, this=%43
+      %47 = const c49
+      %48 = const c50
+      %49 = call builtin.promise.then(%46, %47, %48)
+      %50 = is_exception %49
+      branch %50, bb6, bb5
     bb4:
-      %44 = call builtin.exception_value(%42)
-      throw %44
+      %42 = call builtin.exception_value(%40)
+      throw %42
     bb5:
       return
     bb6:
-      %54 = call builtin.exception_value(%52)
-      throw %54
+      %51 = call builtin.exception_value(%49)
+      throw %51
 }

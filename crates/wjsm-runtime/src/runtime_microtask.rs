@@ -275,7 +275,9 @@ pub(crate) fn call_host_function_with_args<
         ],
         &mut results,
     );
-    ctx.state_mut().new_target.store(previous_new_target, Ordering::Relaxed);
+    ctx.state_mut()
+        .new_target
+        .store(previous_new_target, Ordering::Relaxed);
     let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
 
     if let Err(err) = call_result {
@@ -319,10 +321,7 @@ pub(crate) fn call_host_function_from_caller(
 /// - 中文 header 引用 2026-05-31 plan、async Store contract（Correction 3：yield 后所有 Wasm entry 必须 async API）、原始 must-convert 列表
 ///
 /// 完成此项后，Phase 3 must-convert audit 列表（eval、resume、host reentrant、microtask+call_host）全部落地，'Phase 1-4 solid' 可被诚实评估。
-pub(crate) async fn drain_microtasks_async(
-    ctx: &mut Store<RuntimeState>,
-    env: &WasmEnv,
-) {
+pub(crate) async fn drain_microtasks_async(ctx: &mut Store<RuntimeState>, env: &WasmEnv) {
     loop {
         let task = {
             let mut queue = ctx
@@ -393,7 +392,10 @@ pub(crate) async fn drain_microtasks_async(
             }) => {
                 let (resolve, reject) =
                     create_promise_resolving_functions(ctx.state_mut(), promise);
-                if call_host_function_async(ctx, env, then, resolve).await.is_none() {
+                if call_host_function_async(ctx, env, then, resolve)
+                    .await
+                    .is_none()
+                {
                     settle_promise(ctx.state_mut(), promise, PromiseSettlement::Reject(reject));
                 }
                 let _ = thenable;
@@ -501,13 +503,16 @@ pub(crate) async fn drain_microtasks_from_caller_async(
     drain_microtasks(caller, &env);
 }
 
-pub(crate) async fn call_host_function_async<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+pub(crate) async fn call_host_function_async<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
     ctx: &mut C,
     env: &WasmEnv,
     handler: i64,
     argument: i64,
 ) -> Option<i64> {
-    call_host_function_with_args_async(ctx, env, handler, value::encode_undefined(), &[argument]).await
+    call_host_function_with_args_async(ctx, env, handler, value::encode_undefined(), &[argument])
+        .await
 }
 
 pub(crate) async fn call_host_function_with_args_async<
@@ -532,7 +537,14 @@ pub(crate) async fn call_host_function_with_args_async<
             )
         };
         combined_args.extend_from_slice(args);
-        return Box::pin(call_host_function_with_args_async(ctx, env, target_func, bound_this, &combined_args)).await;
+        return Box::pin(call_host_function_with_args_async(
+            ctx,
+            env,
+            target_func,
+            bound_this,
+            &combined_args,
+        ))
+        .await;
     }
 
     let (func_idx, env_obj) = {
@@ -592,7 +604,9 @@ pub(crate) async fn call_host_function_with_args_async<
             &mut results,
         )
         .await;
-    ctx.state_mut().new_target.store(previous_new_target, Ordering::Relaxed);
+    ctx.state_mut()
+        .new_target
+        .store(previous_new_target, Ordering::Relaxed);
     let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
 
     if let Err(err) = call_result {

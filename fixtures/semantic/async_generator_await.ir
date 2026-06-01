@@ -252,32 +252,30 @@ module {
       %25 = call %23, this=%22, args=[%24]
       store var $0.g, %25
       %26 = load var $0.g
-      %27 = load var $0.g
-      %28 = const c49
-      %29 = get_prop %27, %28
-      %30 = call %29, this=%26
-      %31 = const c51
-      %32 = const c52
-      %33 = call builtin.promise.then(%30, %31, %32)
-      %34 = is_exception %33
-      branch %34, bb2, bb1
+      %27 = const c49
+      %28 = get_prop %26, %27
+      %29 = call %28, this=%26
+      %30 = const c51
+      %31 = const c52
+      %32 = call builtin.promise.then(%29, %30, %31)
+      %33 = is_exception %32
+      branch %33, bb2, bb1
     bb1:
-      %36 = load var $0.g
-      %37 = load var $0.g
-      %38 = const c53
-      %39 = get_prop %37, %38
-      %40 = call %39, this=%36
-      %41 = const c55
-      %42 = const c56
-      %43 = call builtin.promise.then(%40, %41, %42)
-      %44 = is_exception %43
-      branch %44, bb4, bb3
+      %35 = load var $0.g
+      %36 = const c53
+      %37 = get_prop %35, %36
+      %38 = call %37, this=%35
+      %39 = const c55
+      %40 = const c56
+      %41 = call builtin.promise.then(%38, %39, %40)
+      %42 = is_exception %41
+      branch %42, bb4, bb3
     bb2:
-      %35 = call builtin.exception_value(%33)
-      throw %35
+      %34 = call builtin.exception_value(%32)
+      throw %34
     bb3:
       return
     bb4:
-      %45 = call builtin.exception_value(%43)
-      throw %45
+      %43 = call builtin.exception_value(%41)
+      throw %43
 }

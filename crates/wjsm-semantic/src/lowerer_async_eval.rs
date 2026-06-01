@@ -1237,6 +1237,7 @@ impl Lowerer {
                 name: format!("${}.$resume_val", self.async_resume_val_scope_id),
             },
         );
+        self.await_continue_block = Some(continue_block);
 
         Ok(result)
     }
@@ -1414,7 +1415,11 @@ impl Lowerer {
                 && let Some(builtin) = builtin_from_global_ident(&ident.sym)
                 && matches!(
                     builtin,
-                    Builtin::WeakRefConstructor | Builtin::FinalizationRegistryConstructor
+                    Builtin::WeakRefConstructor
+                        | Builtin::FinalizationRegistryConstructor
+                        | Builtin::HeadersConstructor
+                        | Builtin::RequestConstructor
+                        | Builtin::ResponseConstructor
                 )
             {
                 let mut arg_vals = Vec::new();
@@ -1607,11 +1612,12 @@ impl Lowerer {
         if let Some(args) = &new_expr.args
             && let Some(first_arg) = args.first()
         {
-            let callback_val = self.lower_expr(&first_arg.expr, block)?;
+            let mut call_block = block;
+            let callback_val = self.lower_expr_then_continue(&first_arg.expr, &mut call_block)?;
 
             let resolve_fn = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                call_block,
                 Instruction::CallBuiltin {
                     dest: Some(resolve_fn),
                     builtin: Builtin::PromiseCreateResolveFunction,
@@ -1621,7 +1627,7 @@ impl Lowerer {
 
             let reject_fn = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                call_block,
                 Instruction::CallBuiltin {
                     dest: Some(reject_fn),
                     builtin: Builtin::PromiseCreateRejectFunction,
@@ -1632,7 +1638,7 @@ impl Lowerer {
             let undef_const = self.module.add_constant(Constant::Undefined);
             let undef_val = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                call_block,
                 Instruction::Const {
                     dest: undef_val,
                     constant: undef_const,
@@ -1640,7 +1646,7 @@ impl Lowerer {
             );
 
             self.current_function.append_instruction(
-                block,
+                call_block,
                 Instruction::Call {
                     dest: None,
                     callee: callback_val,
@@ -1685,6 +1691,38 @@ impl Lowerer {
                 args,
             },
         );
+        if matches!(builtin, Builtin::JsonParse) {
+            let is_exc = self.alloc_value();
+            self.current_function.append_instruction(
+                call_block,
+                Instruction::IsException {
+                    dest: is_exc,
+                    value: dest,
+                },
+            );
+            let continue_block = self.current_function.new_block();
+            let exc_block = self.current_function.new_block();
+            self.current_function.set_terminator(
+                call_block,
+                Terminator::Branch {
+                    condition: is_exc,
+                    true_block: exc_block,
+                    false_block: continue_block,
+                },
+            );
+            let thrown_val = self.alloc_value();
+            self.current_function.append_instruction(
+                exc_block,
+                Instruction::CallBuiltin {
+                    dest: Some(thrown_val),
+                    builtin: Builtin::ExceptionValue,
+                    args: vec![dest],
+                },
+            );
+            self.emit_throw_value(exc_block, thrown_val)?;
+            self.expr_merge_block = Some(continue_block);
+            return Ok(dest);
+        }
         self.expr_merge_block = Some(call_block);
         Ok(dest)
     }

@@ -1443,9 +1443,37 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         | NativeCallable::StringConstructor
         | NativeCallable::BooleanConstructor
         | NativeCallable::NumberConstructor
-        | NativeCallable::SymbolConstructor
         | NativeCallable::BigIntConstructor
         | NativeCallable::RegExpConstructor => Some(value::encode_undefined()),
+        NativeCallable::SymbolConstructor => Some({
+            let desc = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            let description = if value::is_undefined(desc) {
+                None
+            } else if value::is_string(desc) {
+                Some(get_string_value(caller, desc))
+            } else {
+                Some(
+                    render_value(caller, desc)
+                        .unwrap_or_default()
+                        .trim_matches('"')
+                        .to_string(),
+                )
+            };
+            let mut table = caller
+                .data()
+                .symbol_table
+                .lock()
+                .expect("symbol_table mutex");
+            let handle = table.len() as u32;
+            table.push(SymbolEntry {
+                description,
+                global_key: None,
+            });
+            value::encode_symbol_handle(handle)
+        }),
         NativeCallable::ErrorConstructor
         | NativeCallable::TypeErrorConstructor
         | NativeCallable::RangeErrorConstructor
@@ -1668,10 +1696,6 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             settle_promise(caller.data(), promise, PromiseSettlement::Reject(arg));
             Some(promise)
         }
-        // ── Fetch API (Headers/Response/Request) — pre-existing helpers wired for baseline compilability.
-        // These variants were added to NativeCallable and registered by attach_*_methods / global constructors,
-        // but the match was never updated. This completes the intended (documented as partial) surface
-        // without implementing new fetch behavior. Real async fetch is out of scope for the scheduler plan.
         NativeCallable::HeadersMethod { kind, .. } => {
             call_headers_method_from_caller(caller, this_val, kind, &args)
         }
@@ -1681,15 +1705,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::RequestMethod { kind, .. } => {
             call_request_method_from_caller(caller, this_val, kind, &args)
         }
-        NativeCallable::HeadersConstructor => {
-            construct_headers(caller, this_val, &args)
-        }
-        NativeCallable::ResponseConstructor => {
-            construct_response(caller, this_val, &args)
-        }
-        NativeCallable::RequestConstructor => {
-            construct_request(caller, this_val, &args)
-        }
+        NativeCallable::HeadersConstructor => construct_headers(caller, this_val, &args),
+        NativeCallable::ResponseConstructor => construct_response(caller, this_val, &args),
+        NativeCallable::RequestConstructor => construct_request(caller, this_val, &args),
     }
 }
 /// 创建 AsyncFromSyncIterator：将同步迭代器包装为异步迭代器协议。
@@ -2002,12 +2020,9 @@ pub(crate) fn fr_unregister_impl(
     let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
     let handle_val = obj_ptr
         .and_then(|p| read_object_property_by_name(caller, p, "__finalization_registry_handle__"));
-    let handle = handle_val
-        .map(|v| value::decode_f64(v) as usize)
-        .unwrap_or(0);
-    if handle == 0 {
+    let Some(handle) = handle_val.map(|v| value::decode_f64(v) as usize) else {
         return value::encode_bool(false);
-    }
+    };
     let mut table = caller
         .data()
         .finalization_registry_table
@@ -2057,12 +2072,9 @@ pub(crate) fn fr_register_impl_with_args(
     let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
     let handle_val = obj_ptr
         .and_then(|p| read_object_property_by_name(caller, p, "__finalization_registry_handle__"));
-    let handle = handle_val
-        .map(|v| value::decode_f64(v) as usize)
-        .unwrap_or(0);
-    if handle == 0 {
+    let Some(handle) = handle_val.map(|v| value::decode_f64(v) as usize) else {
         return value::encode_undefined();
-    }
+    };
     {
         let mut table = caller
             .data()

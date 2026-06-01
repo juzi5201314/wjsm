@@ -2,7 +2,6 @@
 // new Response(), new Response(body), new Response(body, init) 
 // status, ok, statusText, headers, bodyUsed lifecycle, text()
 
-(async () => {
   const r1 = new Response();
   console.log("r1 status:", r1.status);
   console.log("r1 ok:", r1.ok);
@@ -22,4 +21,3 @@
   // null body status with body tested in error fixture
 
   console.log("done response ctor");
-})();

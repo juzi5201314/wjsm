@@ -129,31 +129,30 @@ module {
       throw %38
     bb5:
       %46 = load var $0.obj
-      %47 = load var $0.obj
-      %48 = const c25
-      %49 = get_prop %47, %48
-      %50 = const c26
-      %51 = call %49, this=%46, args=[%50]
-      %52 = is_exception %51
-      branch %52, bb8, bb7
+      %47 = const c25
+      %48 = get_prop %46, %47
+      %49 = const c26
+      %50 = call %48, this=%46, args=[%49]
+      %51 = is_exception %50
+      branch %51, bb8, bb7
     bb6:
       %45 = call builtin.exception_value(%43)
       throw %45
     bb7:
-      %54 = load var $0.obj
-      %55 = const c27
-      %56 = get_prop %54, %55
-      %57 = const c29
-      %58 = const c30
-      %59 = call builtin.promise.then(%56, %57, %58)
-      %60 = is_exception %59
-      branch %60, bb10, bb9
+      %53 = load var $0.obj
+      %54 = const c27
+      %55 = get_prop %53, %54
+      %56 = const c29
+      %57 = const c30
+      %58 = call builtin.promise.then(%55, %56, %57)
+      %59 = is_exception %58
+      branch %59, bb10, bb9
     bb8:
-      %53 = call builtin.exception_value(%51)
-      throw %53
+      %52 = call builtin.exception_value(%50)
+      throw %52
     bb9:
       return
     bb10:
-      %61 = call builtin.exception_value(%59)
-      throw %61
+      %60 = call builtin.exception_value(%58)
+      throw %60
 }

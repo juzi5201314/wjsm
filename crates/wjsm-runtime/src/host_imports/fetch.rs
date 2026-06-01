@@ -1,23 +1,22 @@
+use crate::*;
 use anyhow::Result;
 use wasmtime::{Caller, Func, Linker, Store};
-use crate::*;
 // ── Public registration ─────────────────────────────────────────────────────
 
 pub(crate) fn define_fetch(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    // Import 31 (updated ABI): fetch(i64, i64) → i64
+    // Import 31: fetch(i64) → i64
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, input: i64, init: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, input: i64| -> i64 {
             // Create pending Promise immediately (return its handle)
             let promise = alloc_promise_from_caller(&mut caller, PromiseEntry::pending());
             let _promise_handle = value::decode_object_handle(promise) as usize;
-            // Parse input (string URL or Request object)
+            // Current backend ABI passes only input; constructors handle init objects.
             let (method, url, headers_handle, body_opt, _redirect) =
-                parse_fetch_input(&mut caller, input, init);
-
+                parse_fetch_input(&mut caller, input, value::encode_undefined());
             // Perform the actual work synchronously (design decision)
             let settle_result = perform_fetch_and_build_response(
                 &mut caller,
@@ -39,11 +38,7 @@ pub(crate) fn define_fetch(
                 Err(type_error_msg) => {
                     // Reject with a TypeError (network failure or bad input)
                     let err = alloc_type_error_from_caller(&mut caller, &type_error_msg);
-                    settle_promise(
-                        caller.data_mut(),
-                        promise,
-                        PromiseSettlement::Reject(err),
-                    );
+                    settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
                 }
             }
 
@@ -51,6 +46,69 @@ pub(crate) fn define_fetch(
         },
     );
     linker.define(&mut store, "env", "fetch", f)?;
+
+    let headers_constructor = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let args: Vec<i64> = (0..args_count.max(0))
+                .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
+                .collect();
+            construct_headers(&mut caller, this_val, &args).unwrap_or_else(value::encode_undefined)
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "headers_constructor",
+        headers_constructor,
+    )?;
+
+    let request_constructor = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let args: Vec<i64> = (0..args_count.max(0))
+                .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
+                .collect();
+            construct_request(&mut caller, this_val, &args).unwrap_or_else(value::encode_undefined)
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "request_constructor",
+        request_constructor,
+    )?;
+
+    let response_constructor = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let args: Vec<i64> = (0..args_count.max(0))
+                .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
+                .collect();
+            construct_response(&mut caller, this_val, &args).unwrap_or_else(value::encode_undefined)
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "response_constructor",
+        response_constructor,
+    )?;
     Ok(())
 }
 
@@ -61,15 +119,13 @@ fn parse_fetch_input(
     input: i64,
     init: i64,
 ) -> (String, String, u32, Option<Vec<u8>>, RedirectMode) {
-    // Minimal MVP: support string URL (data: or http/https).
-    // Request object and full init parsing (method, headers, body, redirect) are stubbed
-    // to "GET" + default headers for the first cut; the side table entries exist for future.
+    // fetch() 当前后端 ABI 只传入 input；Request 对象在此处按其公开 url 退化处理。
+    // 构造器负责解析 RequestInit / ResponseInit / HeadersInit 的完整字段。
 
     let url = if value::is_string(input) {
         extract_string_from_value(caller, input)
     } else if value::is_object(input) {
-        // Treat as Request-like: read .url
-        // For MVP we only support the simple string case in fixtures.
+        // 兼容 fetch(new Request(...))：从 Request-like 对象读取 .url。
         extract_string_property(caller, input, "url").unwrap_or_default()
     } else {
         String::new()
@@ -81,7 +137,6 @@ fn parse_fetch_input(
     let body = None;
     let redirect = RedirectMode::Follow;
 
-    // If init is an object, we could parse method/headers/body here (future).
     let _ = init;
 
     (method, url, headers_handle, body, redirect)
@@ -151,6 +206,7 @@ fn perform_fetch_and_build_response(
             bytes,
             ResponseType::Basic,
             false,
+            None,
         );
         return Ok(resp_handle);
     }
@@ -161,7 +217,10 @@ fn perform_fetch_and_build_response(
     // is explicitly out of scope for the 2026-05-31 async scheduler implementation plan.
     // The scheduler + AsyncHostCompletion channel created by this plan provides the exact
     // materialization boundary future fetch will use.
-    Err(format!("fetch for non-data: URL not implemented in this build: {}", url))
+    Err(format!(
+        "fetch for non-data: URL not implemented in this build: {}",
+        url
+    ))
 }
 
 // ── Object construction helpers (Headers / Response / Request) ──────────────
@@ -173,7 +232,10 @@ fn create_empty_headers(caller: &mut Caller<'_, RuntimeState>) -> u32 {
         .lock()
         .expect("headers_table mutex");
     let h = table.len() as u32;
-    table.push(HeadersEntry { pairs: Vec::new(), guard: HeadersGuard::None });
+    table.push(HeadersEntry {
+        pairs: Vec::new(),
+        guard: HeadersGuard::None,
+    });
     h
 }
 
@@ -186,6 +248,7 @@ fn create_response_object(
     body: Vec<u8>,
     response_type: ResponseType,
     redirected: bool,
+    target_obj: Option<i64>,
 ) -> i64 {
     let mut table = caller
         .data()
@@ -206,7 +269,9 @@ fn create_response_object(
     drop(table);
 
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 12);
+    let obj = target_obj
+        .filter(|obj| value::is_object(*obj))
+        .unwrap_or_else(|| alloc_host_object(caller, &env, 12));
 
     // Hidden handle for native methods
     let handle_val = value::encode_f64(handle as f64);
@@ -233,7 +298,8 @@ fn create_response_object(
 
     // body / bodyUsed
     let _ = define_host_data_property_from_caller(caller, obj, "body", value::encode_null());
-    let _ = define_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(false));
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(false));
 
     // headers object
     let headers_obj = create_headers_object_from_handle(caller, headers_handle);
@@ -245,11 +311,7 @@ fn create_response_object(
     obj
 }
 
-fn init_headers_object(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-    handle: u32,
-) {
+fn init_headers_object(caller: &mut Caller<'_, RuntimeState>, obj: i64, handle: u32) {
     let handle_val = value::encode_f64(handle as f64);
     let _ = define_host_data_property_from_caller(caller, obj, "__headers_handle__", handle_val);
     attach_headers_methods(caller, obj, handle);
@@ -271,6 +333,7 @@ fn create_request_object(
     headers_handle: u32,
     body: Option<Vec<u8>>,
     redirect: RedirectMode,
+    target_obj: Option<i64>,
 ) -> i64 {
     let mut table = caller
         .data()
@@ -297,7 +360,9 @@ fn create_request_object(
     });
     drop(table);
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 8);
+    let obj = target_obj
+        .filter(|obj| value::is_object(*obj))
+        .unwrap_or_else(|| alloc_host_object(caller, &env, 8));
     let handle_val = value::encode_f64(handle as f64);
     let _ = define_host_data_property_from_caller(caller, obj, "__request_handle__", handle_val);
 
@@ -316,7 +381,13 @@ fn create_request_object(
     let _ = define_host_data_property_from_caller(caller, obj, "redirect", redirect_val);
 
     let _ = define_host_data_property_from_caller(caller, obj, "body", value::encode_null());
-
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(false));
+    define_request_string_property(caller, obj, "cache", "default");
+    define_request_string_property(caller, obj, "credentials", "same-origin");
+    define_request_string_property(caller, obj, "integrity", "");
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "keepalive", value::encode_bool(false));
     let headers_obj = create_headers_object_from_handle(caller, headers_handle);
     let _ = define_host_data_property_from_caller(caller, obj, "headers", headers_obj);
 
@@ -422,7 +493,11 @@ pub(crate) fn call_headers_method_from_caller(
             if values.is_empty() {
                 Some(value::encode_null())
             } else {
-                let joined = values.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ");
+                let joined = values
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 Some(store_runtime_string(caller, joined))
             }
         }
@@ -474,9 +549,7 @@ pub(crate) fn call_headers_method_from_caller(
             let it = alloc_host_object(caller, &env, 2);
             Some(it)
         }
-        HeadersMethodKind::ForEach => {
-            Some(value::encode_undefined())
-        }
+        HeadersMethodKind::ForEach => Some(value::encode_undefined()),
     }
 }
 pub(crate) fn call_response_method_from_caller(
@@ -487,7 +560,17 @@ pub(crate) fn call_response_method_from_caller(
 ) -> Option<i64> {
     let handle = get_response_handle_from_object(caller, this_val)?;
     // Extract everything we need while the lock is held, then drop the guard immediately.
-    let (status, status_text, headers_handle, url, body, response_type, redirected, was_body_used, is_consuming) = {
+    let (
+        status,
+        status_text,
+        headers_handle,
+        url,
+        body,
+        response_type,
+        redirected,
+        was_body_used,
+        is_consuming,
+    ) = {
         let mut table = caller
             .data()
             .fetch_response_table
@@ -497,11 +580,11 @@ pub(crate) fn call_response_method_from_caller(
             Some(e) => e,
             None => return None,
         };
-        let is_consuming = matches!(kind, ResponseMethodKind::Text | ResponseMethodKind::Json | ResponseMethodKind::ArrayBuffer);
+        let is_consuming = matches!(
+            kind,
+            ResponseMethodKind::Text | ResponseMethodKind::Json | ResponseMethodKind::ArrayBuffer
+        );
         let was_body_used = entry.body_used;
-        if is_consuming && was_body_used {
-            return Some(value::encode_undefined()); // sentinel
-        }
         if is_consuming {
             entry.body_used = true;
         }
@@ -534,9 +617,15 @@ pub(crate) fn call_response_method_from_caller(
         }
         ResponseMethodKind::Json => {
             let body_str = String::from_utf8_lossy(&body).to_string();
-            let val = store_runtime_string(caller, body_str);
+            let text = store_runtime_string(caller, body_str);
+            let parsed = json_parse_to_wasm(caller, text, value::encode_undefined());
             let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
-            settle_promise(caller.data_mut(), p, PromiseSettlement::Fulfill(val));
+            if value::is_exception(parsed) {
+                let reason = exception_value_from_table(caller, parsed);
+                settle_promise(caller.data_mut(), p, PromiseSettlement::Reject(reason));
+            } else {
+                settle_promise(caller.data_mut(), p, PromiseSettlement::Fulfill(parsed));
+            }
             Some(p)
         }
         ResponseMethodKind::ArrayBuffer => {
@@ -570,13 +659,19 @@ pub(crate) fn call_response_method_from_caller(
                 body,
                 response_type,
                 redirected,
+                None,
             );
             Some(new_resp)
         }
     };
     if is_consuming {
         // Sync the public property after successful consume (side table already updated under lock)
-        let _ = define_host_data_property_from_caller(caller, this_val, "bodyUsed", value::encode_bool(true));
+        let _ = set_host_data_property_from_caller(
+            caller,
+            this_val,
+            "bodyUsed",
+            value::encode_bool(true),
+        );
     }
     result
 }
@@ -615,25 +710,379 @@ pub(crate) fn call_request_method_from_caller(
                 });
                 nh
             };
-            let req = create_request_object(
-                caller,
-                method,
-                url,
-                new_headers,
-                body,
-                redirect,
-            );
+            let req = create_request_object(caller, method, url, new_headers, body, redirect, None);
+            if let Some(url_val) = object_property(caller, this_val, "url") {
+                let _ = set_host_data_property_from_caller(caller, req, "url", url_val);
+            }
             Some(req)
         }
     }
 }
+fn exception_value_from_table(caller: &mut Caller<'_, RuntimeState>, exception: i64) -> i64 {
+    let idx = value::decode_handle(exception) as usize;
+    let errors = caller.data().error_table.lock().expect("error table mutex");
+    errors
+        .get(idx)
+        .map(|entry| entry.value)
+        .unwrap_or_else(value::encode_undefined)
+}
+
+fn type_error_exception(caller: &mut Caller<'_, RuntimeState>, message: &str) -> i64 {
+    let error_obj = alloc_type_error_from_caller(caller, message);
+    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let idx = errors.len() as u32;
+    errors.push(ErrorEntry {
+        name: "TypeError".to_string(),
+        message: message.to_string(),
+        value: error_obj,
+    });
+    value::encode_exception(idx)
+}
+
+fn js_string_from_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    raw: i64,
+) -> std::result::Result<String, i64> {
+    if value::is_symbol(raw) {
+        return Err(type_error_exception(
+            caller,
+            "Cannot convert a Symbol value to a string",
+        ));
+    }
+    if value::is_string(raw) {
+        return Ok(get_string_value(caller, raw));
+    }
+    Ok(render_value(caller, raw)
+        .unwrap_or_default()
+        .trim_matches('"')
+        .to_string())
+}
+
+fn object_property(caller: &mut Caller<'_, RuntimeState>, obj: i64, name: &str) -> Option<i64> {
+    let ptr = resolve_handle(caller, obj)?;
+    read_object_property_by_name(caller, ptr, name)
+}
+
+fn string_property(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+) -> std::result::Result<Option<String>, i64> {
+    let Some(raw) = object_property(caller, obj, name) else {
+        return Ok(None);
+    };
+    if value::is_undefined(raw) {
+        return Ok(None);
+    }
+    Ok(Some(js_string_from_value(caller, raw)?))
+}
+
+fn number_property(caller: &mut Caller<'_, RuntimeState>, obj: i64, name: &str) -> Option<f64> {
+    let raw = object_property(caller, obj, name)?;
+    value::is_f64(raw).then(|| value::decode_f64(raw))
+}
+
+fn bool_property(caller: &mut Caller<'_, RuntimeState>, obj: i64, name: &str) -> Option<bool> {
+    let raw = object_property(caller, obj, name)?;
+    Some(!value::is_falsy(raw))
+}
+
+fn valid_header_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.as_bytes().iter().all(|byte| {
+            matches!(
+                *byte,
+                b'0'..=b'9'
+                    | b'A'..=b'Z'
+                    | b'a'..=b'z'
+                    | b'!'
+                    | b'#'
+                    | b'$'
+                    | b'%'
+                    | b'&'
+                    | b'\''
+                    | b'*'
+                    | b'+'
+                    | b'-'
+                    | b'.'
+                    | b'^'
+                    | b'_'
+                    | b'`'
+                    | b'|'
+                    | b'~'
+            )
+        })
+}
+
+fn valid_header_value(value_raw: &str) -> bool {
+    !value_raw
+        .bytes()
+        .any(|byte| matches!(byte, b'\r' | b'\n' | 0))
+}
+
+fn append_header_pair(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle: u32,
+    name: String,
+    value_raw: String,
+) -> std::result::Result<(), i64> {
+    if !valid_header_name(&name) {
+        return Err(type_error_exception(caller, "invalid header name"));
+    }
+    if !valid_header_value(&value_raw) {
+        return Err(type_error_exception(caller, "invalid header value"));
+    }
+    let mut table = caller
+        .data()
+        .headers_table
+        .lock()
+        .expect("headers_table mutex");
+    if let Some(entry) = table.get_mut(handle as usize) {
+        entry.pairs.push((name.to_ascii_lowercase(), value_raw));
+    }
+    Ok(())
+}
+
+fn set_header_pair(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle: u32,
+    name: String,
+    value_raw: String,
+) -> std::result::Result<(), i64> {
+    if !valid_header_name(&name) {
+        return Err(type_error_exception(caller, "invalid header name"));
+    }
+    if !valid_header_value(&value_raw) {
+        return Err(type_error_exception(caller, "invalid header value"));
+    }
+    let lower = name.to_ascii_lowercase();
+    let mut table = caller
+        .data()
+        .headers_table
+        .lock()
+        .expect("headers_table mutex");
+    if let Some(entry) = table.get_mut(handle as usize) {
+        entry.pairs.retain(|(key, _)| key != &lower);
+        entry.pairs.push((lower, value_raw));
+    }
+    Ok(())
+}
+
+fn clone_headers_handle(caller: &mut Caller<'_, RuntimeState>, source: u32) -> u32 {
+    let pairs = {
+        let table = caller
+            .data()
+            .headers_table
+            .lock()
+            .expect("headers_table mutex");
+        table
+            .get(source as usize)
+            .map(|entry| entry.pairs.clone())
+            .unwrap_or_default()
+    };
+    let mut table = caller
+        .data()
+        .headers_table
+        .lock()
+        .expect("headers_table mutex");
+    let handle = table.len() as u32;
+    table.push(HeadersEntry {
+        pairs,
+        guard: HeadersGuard::None,
+    });
+    handle
+}
+
+fn copy_headers_into(caller: &mut Caller<'_, RuntimeState>, target: u32, source: u32) {
+    let pairs = {
+        let table = caller
+            .data()
+            .headers_table
+            .lock()
+            .expect("headers_table mutex");
+        table
+            .get(source as usize)
+            .map(|entry| entry.pairs.clone())
+            .unwrap_or_default()
+    };
+    let mut table = caller
+        .data()
+        .headers_table
+        .lock()
+        .expect("headers_table mutex");
+    if let Some(entry) = table.get_mut(target as usize) {
+        entry.pairs.extend(pairs);
+    }
+}
+
+fn fill_headers_from_init(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle: u32,
+    init: i64,
+) -> std::result::Result<(), i64> {
+    if value::is_undefined(init) || value::is_null(init) {
+        return Ok(());
+    }
+    if let Some(source) = get_headers_handle_from_object(caller, init) {
+        copy_headers_into(caller, handle, source);
+        return Ok(());
+    }
+    if value::is_array(init) {
+        let Some(arr_ptr) = resolve_array_ptr(caller, init) else {
+            return Err(type_error_exception(caller, "invalid Headers init"));
+        };
+        let len = read_array_length(caller, arr_ptr).unwrap_or(0);
+        for i in 0..len {
+            let entry = read_array_elem(caller, arr_ptr, i).unwrap_or_else(value::encode_undefined);
+            if !value::is_array(entry) {
+                return Err(type_error_exception(
+                    caller,
+                    "Headers sequence entry must be an array",
+                ));
+            }
+            let Some(entry_ptr) = resolve_array_ptr(caller, entry) else {
+                return Err(type_error_exception(
+                    caller,
+                    "Headers sequence entry must be an array",
+                ));
+            };
+            if read_array_length(caller, entry_ptr).unwrap_or(0) != 2 {
+                return Err(type_error_exception(
+                    caller,
+                    "Headers sequence entry must have length 2",
+                ));
+            }
+            let name_raw =
+                read_array_elem(caller, entry_ptr, 0).unwrap_or_else(value::encode_undefined);
+            let value_raw =
+                read_array_elem(caller, entry_ptr, 1).unwrap_or_else(value::encode_undefined);
+            let name = js_string_from_value(caller, name_raw)?;
+            let value_str = js_string_from_value(caller, value_raw)?;
+            append_header_pair(caller, handle, name, value_str)?;
+        }
+        return Ok(());
+    }
+    if value::is_object(init) {
+        for key in enumerate_object_keys(caller, init) {
+            let raw = object_property(caller, init, &key).unwrap_or_else(value::encode_undefined);
+            let value_str = js_string_from_value(caller, raw)?;
+            set_header_pair(caller, handle, key, value_str)?;
+        }
+    }
+    Ok(())
+}
+
+fn create_headers_from_init(
+    caller: &mut Caller<'_, RuntimeState>,
+    init: i64,
+) -> std::result::Result<u32, i64> {
+    let handle = create_empty_headers(caller);
+    fill_headers_from_init(caller, handle, init)?;
+    Ok(handle)
+}
+
+fn body_bytes_from_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    raw: i64,
+) -> std::result::Result<Option<Vec<u8>>, i64> {
+    if value::is_undefined(raw) || value::is_null(raw) {
+        return Ok(None);
+    }
+    Ok(Some(js_string_from_value(caller, raw)?.into_bytes()))
+}
+
+fn valid_method(method: &str) -> bool {
+    valid_header_name(method)
+}
+
+fn forbidden_method(method: &str) -> bool {
+    matches!(method, "CONNECT" | "TRACE" | "TRACK")
+}
+
+fn url_has_credentials(url: &str) -> bool {
+    let Some(scheme_end) = url.find("://") else {
+        return false;
+    };
+    let rest = &url[scheme_end + 3..];
+    let authority_end = rest
+        .find(|ch| matches!(ch, '/' | '?' | '#'))
+        .unwrap_or(rest.len());
+    rest[..authority_end].contains('@')
+}
+
+fn parse_redirect_mode(
+    caller: &mut Caller<'_, RuntimeState>,
+    raw: &str,
+) -> std::result::Result<RedirectMode, i64> {
+    match raw {
+        "follow" => Ok(RedirectMode::Follow),
+        "error" => Ok(RedirectMode::Error),
+        "manual" => Ok(RedirectMode::Manual),
+        _ => Err(type_error_exception(
+            caller,
+            "invalid Request redirect mode",
+        )),
+    }
+}
+
+fn valid_request_cache(raw: &str) -> bool {
+    matches!(
+        raw,
+        "default" | "no-store" | "reload" | "no-cache" | "force-cache" | "only-if-cached"
+    )
+}
+
+fn valid_request_credentials(raw: &str) -> bool {
+    matches!(raw, "omit" | "same-origin" | "include")
+}
+
+fn define_request_string_property(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+    value_raw: &str,
+) {
+    let val = store_runtime_string(caller, value_raw.to_string());
+    let _ = set_host_data_property_from_caller(caller, obj, name, val);
+}
+
+fn define_request_init_properties(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    cache: &str,
+    credentials: &str,
+    integrity: &str,
+    keepalive: bool,
+) {
+    define_request_string_property(caller, obj, "cache", cache);
+    define_request_string_property(caller, obj, "credentials", credentials);
+    define_request_string_property(caller, obj, "integrity", integrity);
+    let _ =
+        set_host_data_property_from_caller(caller, obj, "keepalive", value::encode_bool(keepalive));
+}
+
+fn null_body_status(status: u16) -> bool {
+    matches!(status, 101..=103 | 204 | 205 | 304)
+}
+
+fn valid_status_text(status_text: &str) -> bool {
+    !status_text
+        .bytes()
+        .any(|byte| matches!(byte, b'\r' | b'\n'))
+}
+
 // ── Constructor implementations (for NativeCallable *Constructor via ConstructCall / generic new) ──
 pub(crate) fn construct_headers(
     caller: &mut Caller<'_, RuntimeState>,
     this_val: i64,
-    _args: &[i64],
+    args: &[i64],
 ) -> Option<i64> {
     let handle = create_empty_headers(caller);
+    if let Some(init) = args.first().copied()
+        && let Err(exception) = fill_headers_from_init(caller, handle, init)
+    {
+        return Some(exception);
+    }
     let obj = if value::is_object(this_val) {
         this_val
     } else {
@@ -641,58 +1090,251 @@ pub(crate) fn construct_headers(
         alloc_host_object(caller, &env, 8)
     };
     init_headers_object(caller, obj, handle);
-    // Basic props if needed
     Some(obj)
 }
+
 pub(crate) fn construct_request(
     caller: &mut Caller<'_, RuntimeState>,
     this_val: i64,
-    _args: &[i64],
+    args: &[i64],
 ) -> Option<i64> {
-    // Minimal: create empty request with defaults; full init in later iteration
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = if value::is_object(this_val) { this_val } else { alloc_host_object(caller, &env, 8) };
-    // For full semantics we would parse args[0] as input, args[1] as init and fill side table + props.
-    // For now, to unblock fixtures, create via helper (which pushes entry) and copy its props? Simplified: use create and ignore pre this for MVP ctor cutover.
-    let h = create_empty_headers(caller);
-    let req = create_request_object(
-        caller,
-        "GET".to_string(),
-        String::new(),
-        h,
-        None,
-        RedirectMode::Follow,
-    );
+    let input = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    if value::is_undefined(input) {
+        return Some(type_error_exception(caller, "Request input is required"));
+    }
+
+    let (mut method, url, mut headers, mut body, redirect) =
+        if let Some(request_handle) = get_request_handle_from_object(caller, input) {
+            let copied = {
+                let table = caller
+                    .data()
+                    .fetch_request_table
+                    .lock()
+                    .expect("fetch_request_table mutex");
+                table.get(request_handle as usize).map(|entry| {
+                    (
+                        entry.method.clone(),
+                        entry.url.clone(),
+                        entry.headers_handle,
+                        entry.body.clone(),
+                        entry.redirect,
+                    )
+                })
+            };
+            let Some((method, url, headers_handle, body, redirect)) = copied else {
+                return Some(type_error_exception(caller, "invalid Request object"));
+            };
+            (
+                method,
+                url,
+                clone_headers_handle(caller, headers_handle),
+                body,
+                redirect,
+            )
+        } else {
+            let url = match js_string_from_value(caller, input) {
+                Ok(url) => url,
+                Err(exception) => return Some(exception),
+            };
+            (
+                "GET".to_string(),
+                url,
+                create_empty_headers(caller),
+                None,
+                RedirectMode::Follow,
+            )
+        };
+
+    if url_has_credentials(&url) {
+        return Some(type_error_exception(
+            caller,
+            "Request URL contains credentials",
+        ));
+    }
+
+    let mut redirect = redirect;
+    let mut cache = "default".to_string();
+    let mut credentials = "same-origin".to_string();
+    let mut integrity = String::new();
+    let mut keepalive = false;
+    let copied_request = get_request_handle_from_object(caller, input).is_some();
+    if copied_request {
+        if let Ok(Some(copy_cache)) = string_property(caller, input, "cache") {
+            cache = copy_cache;
+        }
+        if let Ok(Some(copy_credentials)) = string_property(caller, input, "credentials") {
+            credentials = copy_credentials;
+        }
+        if let Ok(Some(copy_integrity)) = string_property(caller, input, "integrity") {
+            integrity = copy_integrity;
+        }
+        if let Some(copy_keepalive) = bool_property(caller, input, "keepalive") {
+            keepalive = copy_keepalive;
+        }
+    }
+
+    if let Some(init) = args.get(1).copied()
+        && value::is_object(init)
+    {
+        match string_property(caller, init, "method") {
+            Ok(Some(init_method)) => {
+                let upper = init_method.to_ascii_uppercase();
+                if !valid_method(&upper) || forbidden_method(&upper) {
+                    return Some(type_error_exception(caller, "invalid Request method"));
+                }
+                method = upper;
+            }
+            Ok(None) => {}
+            Err(exception) => return Some(exception),
+        }
+        if let Some(init_headers) = object_property(caller, init, "headers")
+            && !value::is_undefined(init_headers)
+        {
+            match create_headers_from_init(caller, init_headers) {
+                Ok(handle) => headers = handle,
+                Err(exception) => return Some(exception),
+            }
+        }
+        if let Some(init_body) = object_property(caller, init, "body") {
+            match body_bytes_from_value(caller, init_body) {
+                Ok(parsed_body) => body = parsed_body,
+                Err(exception) => return Some(exception),
+            }
+        }
+        match string_property(caller, init, "redirect") {
+            Ok(Some(init_redirect)) => match parse_redirect_mode(caller, &init_redirect) {
+                Ok(mode) => redirect = mode,
+                Err(exception) => return Some(exception),
+            },
+            Ok(None) => {}
+            Err(exception) => return Some(exception),
+        }
+        match string_property(caller, init, "cache") {
+            Ok(Some(init_cache)) => {
+                if !valid_request_cache(&init_cache) {
+                    return Some(type_error_exception(caller, "invalid Request cache mode"));
+                }
+                cache = init_cache;
+            }
+            Ok(None) => {}
+            Err(exception) => return Some(exception),
+        }
+        match string_property(caller, init, "credentials") {
+            Ok(Some(init_credentials)) => {
+                if !valid_request_credentials(&init_credentials) {
+                    return Some(type_error_exception(
+                        caller,
+                        "invalid Request credentials mode",
+                    ));
+                }
+                credentials = init_credentials;
+            }
+            Ok(None) => {}
+            Err(exception) => return Some(exception),
+        }
+        match string_property(caller, init, "integrity") {
+            Ok(Some(init_integrity)) => integrity = init_integrity,
+            Ok(None) => {}
+            Err(exception) => return Some(exception),
+        }
+        if let Some(init_keepalive) = bool_property(caller, init, "keepalive") {
+            keepalive = init_keepalive;
+        }
+    }
+
+    if body.is_some() && matches!(method.as_str(), "GET" | "HEAD") {
+        return Some(type_error_exception(
+            caller,
+            "Request with GET/HEAD method cannot have body",
+        ));
+    }
+
+    let req = create_request_object(caller, method, url, headers, body, redirect, Some(this_val));
+    define_request_init_properties(caller, req, &cache, &credentials, &integrity, keepalive);
+    if copied_request && let Some(url_val) = object_property(caller, input, "url") {
+        let _ = set_host_data_property_from_caller(caller, req, "url", url_val);
+    }
     Some(req)
 }
+
 pub(crate) fn construct_response(
     caller: &mut Caller<'_, RuntimeState>,
     this_val: i64,
-    _args: &[i64],
+    args: &[i64],
 ) -> Option<i64> {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = if value::is_object(this_val) { this_val } else { alloc_host_object(caller, &env, 12) };
-    // Similar, create via helper for now
-    let h = create_empty_headers(caller);
+    let body_arg = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    let body = match body_bytes_from_value(caller, body_arg) {
+        Ok(body) => body,
+        Err(exception) => return Some(exception),
+    };
+    let mut status = 200u16;
+    let mut status_text = String::new();
+    let mut headers = create_empty_headers(caller);
+
+    if let Some(init) = args.get(1).copied()
+        && value::is_object(init)
+    {
+        if let Some(init_status) = number_property(caller, init, "status") {
+            if !init_status.is_finite()
+                || init_status.fract() != 0.0
+                || !(200.0..=599.0).contains(&init_status)
+            {
+                return Some(type_error_exception(
+                    caller,
+                    "Response status must be 200-599",
+                ));
+            }
+            status = init_status as u16;
+        }
+        match string_property(caller, init, "statusText") {
+            Ok(Some(init_status_text)) => {
+                if !valid_status_text(&init_status_text) {
+                    return Some(type_error_exception(caller, "invalid Response statusText"));
+                }
+                status_text = init_status_text;
+            }
+            Ok(None) => {}
+            Err(exception) => return Some(exception),
+        }
+        if let Some(init_headers) = object_property(caller, init, "headers")
+            && !value::is_undefined(init_headers)
+        {
+            match create_headers_from_init(caller, init_headers) {
+                Ok(handle) => headers = handle,
+                Err(exception) => return Some(exception),
+            }
+        }
+    }
+
+    if body.is_some() && null_body_status(status) {
+        return Some(type_error_exception(
+            caller,
+            "Response with null-body status cannot have body",
+        ));
+    }
+
     let resp = create_response_object(
         caller,
-        200,
-        "OK".to_string(),
-        h,
+        status,
+        status_text,
+        headers,
         String::new(),
-        Vec::new(),
+        body.unwrap_or_default(),
         ResponseType::Basic,
         false,
+        Some(this_val),
     );
     Some(resp)
 }
 // ── Small helpers ───────────────────────────────────────────────────────────
-// ── Small helpers ───────────────────────────────────────────────────────────
 
-fn get_headers_handle_from_object(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-) -> Option<u32> {
+fn get_headers_handle_from_object(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<u32> {
     if !value::is_object(obj) {
         return None;
     }
@@ -700,10 +1342,7 @@ fn get_headers_handle_from_object(
     let prop = read_object_property_by_name(caller, ptr, "__headers_handle__")?;
     Some(value::decode_f64(prop) as u32)
 }
-fn get_response_handle_from_object(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-) -> Option<u32> {
+fn get_response_handle_from_object(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<u32> {
     if !value::is_object(obj) {
         return None;
     }
@@ -711,10 +1350,7 @@ fn get_response_handle_from_object(
     let prop = read_object_property_by_name(caller, ptr, "__response_handle__")?;
     Some(value::decode_f64(prop) as u32)
 }
-fn get_request_handle_from_object(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-) -> Option<u32> {
+fn get_request_handle_from_object(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<u32> {
     if !value::is_object(obj) {
         return None;
     }

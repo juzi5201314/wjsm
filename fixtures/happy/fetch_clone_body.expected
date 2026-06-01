@@ -1,0 +1,15 @@
+exit_code: 0
+--- stdout ---
+orig bodyUsed before: false
+clone1 bodyUsed init: false
+headers different objects: true
+req clone url same: true
+req clone bodyUsed init: false
+orig text: clonetest
+orig bodyUsed after: true
+clone bodyUsed after orig consume: false
+clone text: clonetest
+clone bodyUsed after its consume: true
+second on orig error name: TypeError
+clone body test done
+--- stderr ---

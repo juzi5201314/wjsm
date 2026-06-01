@@ -1,6 +1,6 @@
 exit_code: 0
 --- stdout ---
-0
+caught
 [trace] trace-after-catch
 still-running
 --- stderr ---

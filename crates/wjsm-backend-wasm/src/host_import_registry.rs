@@ -12,6 +12,15 @@ use wjsm_ir::Builtin;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SpecialHostImport {
     ArrayFrom,
+    ArrayProtoPush,
+    ArrayProtoPop,
+    ArrayProtoIncludes,
+    ArrayProtoIndexOf,
+    ArrayProtoJoin,
+    ArrayProtoSlice,
+    ArrayProtoFill,
+    ArrayProtoReverse,
+    ArrayProtoFlat,
     ClosureCreate,
     ClosureGetFunc,
     ClosureGetEnv,
@@ -354,31 +363,33 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
     HostImportSpec {
         name: "arr_proto_push",
         type_idx: 12,
-        key: None,
+        key: Some(HostImportKey::Special(SpecialHostImport::ArrayProtoPush)),
         group: Some(HostImportGroup::ArrayPrototypeMethod),
     },
     HostImportSpec {
         name: "arr_proto_pop",
         type_idx: 12,
-        key: None,
+        key: Some(HostImportKey::Special(SpecialHostImport::ArrayProtoPop)),
         group: Some(HostImportGroup::ArrayPrototypeMethod),
     },
     HostImportSpec {
         name: "arr_proto_includes",
         type_idx: 12,
-        key: None,
+        key: Some(HostImportKey::Special(
+            SpecialHostImport::ArrayProtoIncludes,
+        )),
         group: Some(HostImportGroup::ArrayPrototypeMethod),
     },
     HostImportSpec {
         name: "arr_proto_index_of",
         type_idx: 12,
-        key: None,
+        key: Some(HostImportKey::Special(SpecialHostImport::ArrayProtoIndexOf)),
         group: Some(HostImportGroup::ArrayPrototypeMethod),
     },
     HostImportSpec {
         name: "arr_proto_join",
         type_idx: 12,
-        key: None,
+        key: Some(HostImportKey::Special(SpecialHostImport::ArrayProtoJoin)),
         group: Some(HostImportGroup::ArrayPrototypeMethod),
     },
     HostImportSpec {
@@ -390,25 +401,25 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
     HostImportSpec {
         name: "arr_proto_slice",
         type_idx: 12,
-        key: None,
+        key: Some(HostImportKey::Special(SpecialHostImport::ArrayProtoSlice)),
         group: Some(HostImportGroup::ArrayPrototypeMethod),
     },
     HostImportSpec {
         name: "arr_proto_fill",
         type_idx: 12,
-        key: None,
+        key: Some(HostImportKey::Special(SpecialHostImport::ArrayProtoFill)),
         group: Some(HostImportGroup::ArrayPrototypeMethod),
     },
     HostImportSpec {
         name: "arr_proto_reverse",
         type_idx: 12,
-        key: None,
+        key: Some(HostImportKey::Special(SpecialHostImport::ArrayProtoReverse)),
         group: Some(HostImportGroup::ArrayPrototypeMethod),
     },
     HostImportSpec {
         name: "arr_proto_flat",
         type_idx: 12,
-        key: None,
+        key: Some(HostImportKey::Special(SpecialHostImport::ArrayProtoFlat)),
         group: Some(HostImportGroup::ArrayPrototypeMethod),
     },
     HostImportSpec {
@@ -2211,6 +2222,24 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         name: "weakref_constructor",
         type_idx: 12,
         key: Some(HostImportKey::Builtin(Builtin::WeakRefConstructor)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "headers_constructor",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::HeadersConstructor)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "request_constructor",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::RequestConstructor)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "response_constructor",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::ResponseConstructor)),
         group: None,
     },
     HostImportSpec {
