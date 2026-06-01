@@ -162,11 +162,6 @@ module {
       %35 = load var $0.$shared_env
       %36 = const c29
       %37 = stricteq %35, %36
-      %47 = call builtin.promise.create_resolve_function(%33)
-      %48 = call builtin.promise.create_reject_function(%33)
-      %49 = const c33
-      call %46, this=%49, args=[%47, %48]
-      store var $0.p2, %33
       branch %37, bb1, bb2
     bb1:
       %38 = new_object(capacity=2)
@@ -187,6 +182,11 @@ module {
       %45 = phi [(bb1, %38), (bb2, %35)]
       store var $0.$shared_env, %45
       %46 = call builtin.create_closure(%34, %45)
+      %47 = call builtin.promise.create_resolve_function(%33)
+      %48 = call builtin.promise.create_reject_function(%33)
+      %49 = const c33
+      call %46, this=%49, args=[%47, %48]
+      store var $0.p2, %33
       %50 = const c34
       %51 = new_array(capacity=4)
       %52 = load var $0.p1

@@ -49,7 +49,10 @@ pub(crate) fn define_misc(
          args_count: i32|
          -> i64 {
             let new_target_val = caller.data().new_target.load(Ordering::Relaxed);
-            caller.data().new_target.store(value::encode_undefined(), Ordering::Relaxed);
+            caller
+                .data()
+                .new_target
+                .store(value::encode_undefined(), Ordering::Relaxed);
 
             if value::is_proxy(callable) {
                 let handle = value::decode_proxy_handle(callable) as usize;
@@ -114,7 +117,10 @@ pub(crate) fn define_misc(
                                 };
                             }
                         }
-                        caller.data().new_target.store(new_target_val, Ordering::Relaxed);
+                        caller
+                            .data()
+                            .new_target
+                            .store(new_target_val, Ordering::Relaxed);
                         let result = resolve_and_call(
                             &mut caller,
                             entry.target,
@@ -122,7 +128,10 @@ pub(crate) fn define_misc(
                             args_base,
                             args_count,
                         );
-                        caller.data().new_target.store(value::encode_undefined(), Ordering::Relaxed);
+                        caller
+                            .data()
+                            .new_target
+                            .store(value::encode_undefined(), Ordering::Relaxed);
                         return result;
                     } else {
                         // 普通函数调用
@@ -171,7 +180,10 @@ pub(crate) fn define_misc(
             }
 
             if !value::is_undefined(new_target_val) {
-                caller.data().new_target.store(new_target_val, Ordering::Relaxed);
+                caller
+                    .data()
+                    .new_target
+                    .store(new_target_val, Ordering::Relaxed);
             }
             let args = (0..args_count.max(0))
                 .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
@@ -179,7 +191,10 @@ pub(crate) fn define_misc(
             let result =
                 call_native_callable_with_args_from_caller(&mut caller, callable, this_val, args)
                     .unwrap_or_else(value::encode_undefined);
-            caller.data().new_target.store(value::encode_undefined(), Ordering::Relaxed);
+            caller
+                .data()
+                .new_target
+                .store(value::encode_undefined(), Ordering::Relaxed);
             result
         },
     );

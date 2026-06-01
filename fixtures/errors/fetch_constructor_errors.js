@@ -1,7 +1,6 @@
 // fetch_constructor_errors
 // invalid header name/value, Headers sequence bad length, Request bad URL/credentials/forbidden method/GET+body, Response bad status + body on null-body status
 
-(async () => {
   // Headers invalid
   try {
     new Headers({ "Bad Name": "v" });
@@ -60,4 +59,3 @@
   } catch (e) { console.log("bad statusText:", e.name); }
 
   console.log("error fixture done");
-})();

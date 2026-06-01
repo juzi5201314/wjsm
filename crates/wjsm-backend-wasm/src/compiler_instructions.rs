@@ -1154,11 +1154,17 @@ impl Compiler {
         builtin: &Builtin,
         args: &[ValueId],
     ) -> Result<()> {
-        let import_idx = self
-            .builtin_func_indices
-            .get(builtin)
-            .copied()
-            .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+        let import_idx = if matches!(builtin, Builtin::ArrayFlat) {
+            self.special_host_import_indices
+                .get(&SpecialHostImport::ArrayProtoFlat)
+                .copied()
+                .with_context(|| format!("no WASM func index for builtin {builtin}"))?
+        } else {
+            self.builtin_func_indices
+                .get(builtin)
+                .copied()
+                .with_context(|| format!("no WASM func index for builtin {builtin}"))?
+        };
         // 确定 this_val 和影子栈参数
         // ArrayIsArray: this_val=undefined, 所有 args 走影子栈
         // FuncCall/FuncBind: env_obj=func, this_val=args[1], shadow_args=args[2..]

@@ -98,6 +98,7 @@ impl Lowerer {
         );
 
         // 如果有捕获变量，使用共享 env 对象 + CreateClosure
+        let mut after_decl_block = outer_block;
         let callee_val = if captured.is_empty() {
             // 非闭包函数：直接使用 FunctionRef
             func_ref_val
@@ -114,6 +115,7 @@ impl Lowerer {
                     args: vec![func_ref_val, env_val],
                 },
             );
+            after_decl_block = closure_block;
             closure_val
         };
 
@@ -123,15 +125,15 @@ impl Lowerer {
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
         let ir_name = format!("${scope_id}.{name}");
         self.current_function.append_instruction(
-            outer_block,
+            after_decl_block,
             Instruction::StoreVar {
                 name: ir_name,
                 value: callee_val,
             },
         );
-        self.append_eval_var_leak_if_needed(&name, VarKind::Var, callee_val, outer_block);
+        self.append_eval_var_leak_if_needed(&name, VarKind::Var, callee_val, after_decl_block);
 
-        Ok(StmtFlow::Open(outer_block))
+        Ok(StmtFlow::Open(after_decl_block))
     }
 
     pub(crate) fn lower_async_gen_fn_decl(
@@ -699,6 +701,7 @@ impl Lowerer {
                 constant: wrapper_ref_const,
             },
         );
+        let mut after_decl_block = outer_block;
         let callee_val = if captured.is_empty() {
             wrapper_ref_val
         } else {
@@ -714,6 +717,7 @@ impl Lowerer {
                     args: vec![wrapper_ref_val, env_val],
                 },
             );
+            after_decl_block = closure_block;
             closure_val
         };
         let (scope_id, _) = self
@@ -722,14 +726,14 @@ impl Lowerer {
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
         let ir_name = format!("${scope_id}.{name}");
         self.current_function.append_instruction(
-            outer_block,
+            after_decl_block,
             Instruction::StoreVar {
                 name: ir_name,
                 value: callee_val,
             },
         );
 
-        Ok(StmtFlow::Open(outer_block))
+        Ok(StmtFlow::Open(after_decl_block))
     }
 
     pub(crate) fn lower_async_fn_decl(
@@ -1342,6 +1346,7 @@ impl Lowerer {
             },
         );
 
+        let mut after_decl_block = outer_block;
         let callee_val = if captured.is_empty() {
             wrapper_ref_val
         } else {
@@ -1357,6 +1362,7 @@ impl Lowerer {
                     args: vec![wrapper_ref_val, env_val],
                 },
             );
+            after_decl_block = closure_block;
             closure_val
         };
 
@@ -1366,13 +1372,13 @@ impl Lowerer {
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
         let ir_name = format!("${scope_id}.{name}");
         self.current_function.append_instruction(
-            outer_block,
+            after_decl_block,
             Instruction::StoreVar {
                 name: ir_name,
                 value: callee_val,
             },
         );
 
-        Ok(StmtFlow::Open(outer_block))
+        Ok(StmtFlow::Open(after_decl_block))
     }
 }

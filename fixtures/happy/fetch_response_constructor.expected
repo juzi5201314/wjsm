@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+r1 status: 200
+r1 ok: true
+r1 statusText: ""
+r1 bodyUsed init: false
+r2 status: 201
+r2 ok: true
+r2 statusText: "Created"
+r2 has header: true
+r2 text: hello
+r2 bodyUsed after consume: true
+done response ctor
+--- stderr ---

@@ -1,0 +1,14 @@
+exit_code: 0
+--- stdout ---
+bad header name: TypeError
+bad header name seq: TypeError
+seq entry len: TypeError
+bad header value: TypeError
+url creds: TypeError
+forbidden method: TypeError
+get body: TypeError
+bad status: TypeError
+status with body: TypeError
+bad statusText: TypeError
+error fixture done
+--- stderr ---

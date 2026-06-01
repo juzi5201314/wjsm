@@ -16,13 +16,16 @@
 use anyhow::Result;
 use std::io::Write;
 use std::sync::Arc;
-use tokio::{sync::mpsc::UnboundedReceiver, time::{sleep_until, Instant as TokioInstant}};
+use tokio::{
+    sync::mpsc::UnboundedReceiver,
+    time::{Instant as TokioInstant, sleep_until},
+};
 use wasmtime::Store;
 
+use crate::runtime_builtins::PromiseSettlement;
 use crate::runtime_microtask::{call_host_function_with_args_async, drain_microtasks_async};
 use crate::value;
 use crate::{RuntimeState, TimerEntry, WasmEnv};
-use crate::runtime_builtins::PromiseSettlement;
 /// - SettleValue：简单值 settle（worker 可 Send 的数据）
 /// - Materialize：闭包仅在 scheduler owner 执行（&mut Store + &WasmEnv），可分配 runtime string/object；worker 永远不触碰 Store/heap
 /// AsyncOpCounter/Guard：Arc<AtomicUsize> + SeqCst，drop 时 underflow panic 防 leak。
@@ -33,7 +36,8 @@ pub(crate) enum AsyncHostCompletion {
     },
     Materialize {
         promise: i64,
-        materialize: Box<dyn FnOnce(&mut Store<RuntimeState>, &WasmEnv) -> PromiseSettlement + Send>,
+        materialize:
+            Box<dyn FnOnce(&mut Store<RuntimeState>, &WasmEnv) -> PromiseSettlement + Send>,
     },
 }
 
@@ -51,7 +55,9 @@ impl AsyncOpCounter {
 
     pub(crate) fn begin(&self) -> AsyncOpGuard {
         self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        AsyncOpGuard { counter: self.clone() }
+        AsyncOpGuard {
+            counter: self.clone(),
+        }
     }
 
     pub(crate) fn count(&self) -> usize {
@@ -61,14 +67,11 @@ impl AsyncOpCounter {
 
 impl Drop for AsyncOpGuard {
     fn drop(&mut self) {
-        self.counter
+        let previous = self
+            .counter
             .0
-            .fetch_update(
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-                |count| count.checked_sub(1),
-            )
-            .expect("async op counter underflow");
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        assert!(previous > 0, "async op counter underflow");
     }
 }
 /// 替换原来 run_main_completion_block_async 里 `if main_ok { timer loop }` 的阻塞实现。
@@ -93,10 +96,16 @@ pub(crate) async fn run_post_main_scheduler_async(
         completion: AsyncHostCompletion,
     ) {
         match completion {
-            AsyncHostCompletion::SettleValue { promise, settlement } => {
+            AsyncHostCompletion::SettleValue {
+                promise,
+                settlement,
+            } => {
                 crate::runtime_promises::settle_promise(store.data(), promise, settlement);
             }
-            AsyncHostCompletion::Materialize { promise, materialize } => {
+            AsyncHostCompletion::Materialize {
+                promise,
+                materialize,
+            } => {
                 let settlement = materialize(store, env);
                 crate::runtime_promises::settle_promise(store.data(), promise, settlement);
             }
@@ -128,6 +137,9 @@ pub(crate) async fn run_post_main_scheduler_async(
                 .as_ref()
                 .map_or(0, |c| c.count());
             if timers_empty && count == 0 {
+                while let Ok(completion) = completion_rx.try_recv() {
+                    process_one_completion(store, env, completion);
+                }
                 break;
             }
             if timers_empty && count > 0 {
@@ -180,7 +192,8 @@ pub(crate) async fn run_post_main_scheduler_async(
                 callback,
                 value::encode_undefined(),
                 &[],
-            ).await;
+            )
+            .await;
 
             // Drain microtasks after timer callback（严格 per-callback，不 batch）
             drain_microtasks_async(store, env).await;

@@ -345,10 +345,14 @@ impl Lowerer {
                         if let Some(promise_proto_builtin) =
                             builtin_from_promise_proto_method(&prop_ident.sym)
                         {
-                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut call_block = block;
+                            this_val =
+                                self.lower_expr_then_continue(&member_expr.obj, &mut call_block)?;
                             let mut builtin_args = vec![this_val];
                             for arg in &call.args {
-                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                                builtin_args.push(
+                                    self.lower_expr_then_continue(&arg.expr, &mut call_block)?,
+                                );
                             }
                             if builtin_args.len() < 3
                                 && matches!(promise_proto_builtin, Builtin::PromiseThen)
@@ -356,7 +360,7 @@ impl Lowerer {
                                 let undef_const = self.module.add_constant(Constant::Undefined);
                                 let undef_val = self.alloc_value();
                                 self.current_function.append_instruction(
-                                    block,
+                                    call_block,
                                     Instruction::Const {
                                         dest: undef_val,
                                         constant: undef_const,
@@ -366,7 +370,7 @@ impl Lowerer {
                             }
                             let dest = self.alloc_value();
                             self.current_function.append_instruction(
-                                block,
+                                call_block,
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin: promise_proto_builtin,
@@ -437,9 +441,16 @@ impl Lowerer {
                         }
                     }
 
-                    // obj.method() → obj 是 this，method 是 callee（未被拦截时）
-                    this_val = self.lower_expr(&member_expr.obj, block)?;
-                    callee_val = self.lower_member_expr(member_expr, block)?;
+                    // obj.method() → obj 是 this，method 是 callee（未被拦截时）。
+                    // obj 可能因捕获绑定读取产生分支/phi，后续取属性必须接在继续块上。
+                    let mut member_block = block;
+                    this_val =
+                        self.lower_expr_then_continue(&member_expr.obj, &mut member_block)?;
+                    callee_val = self.lower_member_expr_from_object(
+                        member_expr,
+                        this_val,
+                        &mut member_block,
+                    )?;
                 } else {
                     // 普通调用 → this = undefined
                     let undef_const = self.module.add_constant(Constant::Undefined);

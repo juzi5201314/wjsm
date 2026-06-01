@@ -110,7 +110,8 @@ impl Lowerer {
         if let swc_ast::AssignTarget::Simple(simple) = &assign.left
             && let swc_ast::SimpleAssignTarget::Member(member_expr) = simple
         {
-            let obj_val = self.lower_expr(&member_expr.obj, block)?;
+            let mut current_block = block;
+            let obj_val = self.lower_expr_then_continue(&member_expr.obj, &mut current_block)?;
             let key = match &member_expr.prop {
                 swc_ast::MemberProp::Ident(ident) => {
                     let key_const = self
@@ -118,7 +119,7 @@ impl Lowerer {
                         .add_constant(Constant::String(ident.sym.to_string()));
                     let key_dest = self.alloc_value();
                     self.current_function.append_instruction(
-                        block,
+                        current_block,
                         Instruction::Const {
                             dest: key_dest,
                             constant: key_const,
@@ -127,42 +128,45 @@ impl Lowerer {
                     key_dest
                 }
                 swc_ast::MemberProp::Computed(computed) => {
-                    self.lower_expr(&computed.expr, block)?
+                    self.lower_expr_then_continue(&computed.expr, &mut current_block)?
                 }
                 swc_ast::MemberProp::PrivateName(name) => {
                     let field_name = format!("#{}", name.name);
                     let key_const = self.module.add_constant(Constant::String(field_name));
                     let key_dest = self.alloc_value();
                     self.current_function.append_instruction(
-                        block,
+                        current_block,
                         Instruction::Const {
                             dest: key_dest,
                             constant: key_const,
                         },
                     );
                     if assign.op == swc_ast::AssignOp::Assign {
-                        let value_val = self.lower_expr(assign.right.as_ref(), block)?;
+                        let value_val = self
+                            .lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
                         let dest = self.alloc_value();
                         self.current_function.append_instruction(
-                            block,
+                            current_block,
                             Instruction::CallBuiltin {
                                 dest: Some(dest),
                                 builtin: Builtin::PrivateSet,
                                 args: vec![obj_val, key_dest, value_val],
                             },
                         );
+                        self.expr_merge_block = Some(current_block);
                         return Ok(value_val);
                     }
                     let old_val = self.alloc_value();
                     self.current_function.append_instruction(
-                        block,
+                        current_block,
                         Instruction::CallBuiltin {
                             dest: Some(old_val),
                             builtin: Builtin::PrivateGet,
                             args: vec![obj_val, key_dest],
                         },
                     );
-                    let rhs_val = self.lower_expr(assign.right.as_ref(), block)?;
+                    let rhs_val =
+                        self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
                     let bin_op = assign_op_to_binary(assign.op).ok_or_else(|| {
                         self.error(assign.span, "unsupported compound assignment operator")
                     })?;
@@ -170,7 +174,7 @@ impl Lowerer {
                     match bin_op {
                         BinaryOp::Mod => {
                             self.current_function.append_instruction(
-                                block,
+                                current_block,
                                 Instruction::CallBuiltin {
                                     dest: Some(result),
                                     builtin: Builtin::F64Mod,
@@ -180,7 +184,7 @@ impl Lowerer {
                         }
                         BinaryOp::Exp => {
                             self.current_function.append_instruction(
-                                block,
+                                current_block,
                                 Instruction::CallBuiltin {
                                     dest: Some(result),
                                     builtin: Builtin::F64Exp,
@@ -190,7 +194,7 @@ impl Lowerer {
                         }
                         _ => {
                             self.current_function.append_instruction(
-                                block,
+                                current_block,
                                 Instruction::Binary {
                                     dest: result,
                                     op: bin_op,
@@ -202,13 +206,14 @@ impl Lowerer {
                     }
                     let dest = self.alloc_value();
                     self.current_function.append_instruction(
-                        block,
+                        current_block,
                         Instruction::CallBuiltin {
                             dest: Some(dest),
                             builtin: Builtin::PrivateSet,
                             args: vec![obj_val, key_dest, result],
                         },
                     );
+                    self.expr_merge_block = Some(current_block);
                     return Ok(result);
                 }
             };
@@ -216,11 +221,12 @@ impl Lowerer {
             let is_computed = matches!(&member_expr.prop, swc_ast::MemberProp::Computed(_));
             if assign.op == swc_ast::AssignOp::Assign {
                 // 简单赋值: obj.x = value 或 arr[computed] = value
-                let value_val = self.lower_expr(assign.right.as_ref(), block)?;
+                let value_val =
+                    self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
                 match &member_expr.prop {
                     swc_ast::MemberProp::Computed(_) => {
                         self.current_function.append_instruction(
-                            block,
+                            current_block,
                             Instruction::SetElem {
                                 object: obj_val,
                                 index: key,
@@ -230,7 +236,7 @@ impl Lowerer {
                     }
                     _ => {
                         self.current_function.append_instruction(
-                            block,
+                            current_block,
                             Instruction::SetProp {
                                 object: obj_val,
                                 key,
@@ -239,6 +245,7 @@ impl Lowerer {
                         );
                     }
                 }
+                self.expr_merge_block = Some(current_block);
                 return Ok(value_val);
             }
 
@@ -249,7 +256,7 @@ impl Lowerer {
                     | swc_ast::AssignOp::OrAssign
                     | swc_ast::AssignOp::NullishAssign
             ) {
-                return self.lower_logical_assign_member(assign, block, obj_val, key);
+                return self.lower_logical_assign_member(assign, current_block, obj_val, key);
             }
 
             // 算术/位运算复合赋值
@@ -260,7 +267,7 @@ impl Lowerer {
             // 用 GetElem/GetProp 读取当前值（取决于是否为 computed 成员）
             let loaded = self.alloc_value();
             self.current_function.append_instruction(
-                block,
+                current_block,
                 if is_computed {
                     Instruction::GetElem {
                         dest: loaded,
@@ -276,14 +283,14 @@ impl Lowerer {
                 },
             );
 
-            let rhs = self.lower_expr(assign.right.as_ref(), block)?;
+            let rhs = self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
             let dest = self.alloc_value();
 
             // Mod 和 Exp 需要使用 CallBuiltin
             match bin_op {
                 BinaryOp::Mod => {
                     self.current_function.append_instruction(
-                        block,
+                        current_block,
                         Instruction::CallBuiltin {
                             dest: Some(dest),
                             builtin: Builtin::F64Mod,
@@ -293,7 +300,7 @@ impl Lowerer {
                 }
                 BinaryOp::Exp => {
                     self.current_function.append_instruction(
-                        block,
+                        current_block,
                         Instruction::CallBuiltin {
                             dest: Some(dest),
                             builtin: Builtin::F64Exp,
@@ -303,7 +310,7 @@ impl Lowerer {
                 }
                 _ => {
                     self.current_function.append_instruction(
-                        block,
+                        current_block,
                         Instruction::Binary {
                             dest,
                             op: bin_op,
@@ -326,7 +333,9 @@ impl Lowerer {
                     value: dest,
                 }
             };
-            self.current_function.append_instruction(block, instr);
+            self.current_function
+                .append_instruction(current_block, instr);
+            self.expr_merge_block = Some(current_block);
 
             return Ok(dest);
         }

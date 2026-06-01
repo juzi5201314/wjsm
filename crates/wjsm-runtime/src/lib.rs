@@ -9,8 +9,8 @@ use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::time::Duration;
-use tokio::time::Instant;
 use swc_core::ecma::ast as swc_ast;
+use tokio::time::Instant;
 use wasmtime::Func;
 use wasmtime::*;
 /// 影子栈大小（必须与后端保持一致）
@@ -24,6 +24,7 @@ mod runtime_combinators;
 mod runtime_eval;
 mod runtime_heap;
 mod runtime_host_helpers;
+mod runtime_json;
 mod runtime_microtask;
 mod runtime_promises;
 mod scheduler;
@@ -42,6 +43,7 @@ use runtime_combinators::*;
 use runtime_eval::*;
 use runtime_heap::*;
 use runtime_host_helpers::*;
+use runtime_json::*;
 use runtime_microtask::*;
 use runtime_promises::*;
 use runtime_render::*;
@@ -55,15 +57,7 @@ fn register_linker(
 ) -> Result<()> {
     define_core(linker, store)?;
     define_timers_arrays(linker, store)?;
-    // 使用 1-param fetch shim 兼容当前测试 WASM 的 1-param fetch 签名
-    // TODO: 当后端生成 2-param fetch 时恢复 define_fetch
-    let f = Func::wrap(
-        &mut *store,
-        |mut caller: Caller<'_, RuntimeState>, _url: i64| -> i64 {
-            alloc_promise_from_caller(&mut caller, PromiseEntry::pending())
-        },
-    );
-    linker.define(&mut *store, "env", "fetch", f)?;
+    define_fetch(linker, store)?;
     define_array_object(linker, store)?;
     define_primitive_core(linker, store)?;
     define_promise(linker, store)?;
@@ -173,9 +167,7 @@ fn register_common_bridges(
     // eval_super_base
     let f = Func::wrap(
         &mut *store,
-        |caller: Caller<'_, RuntimeState>, record: i64| -> i64 {
-            eval_super_base(caller, record)
-        },
+        |caller: Caller<'_, RuntimeState>, record: i64| -> i64 { eval_super_base(caller, record) },
     );
     linker.define(&mut *store, "env", "eval_super_base", f)?;
     // scope_record_set_meta
@@ -189,9 +181,7 @@ fn register_common_bridges(
     // scope_record_destroy
     let f = Func::wrap(
         &mut *store,
-        |caller: Caller<'_, RuntimeState>, record: i64| {
-            scope_record_destroy(caller, record)
-        },
+        |caller: Caller<'_, RuntimeState>, record: i64| scope_record_destroy(caller, record),
     );
     linker.define(&mut *store, "env", "scope_record_destroy", f)?;
     // symbol_property_key
@@ -753,22 +743,14 @@ fn register_complex_bridges_sync(
     Ok(())
 }
 
-/// 注册 18 个 define_* 宿主函数模块（async 版本，使用 1-param fetch shim）
+/// 注册 18 个 define_* 宿主函数模块（async 版本）
 fn register_linker_async(
     linker: &mut Linker<RuntimeState>,
     store: &mut Store<RuntimeState>,
 ) -> Result<()> {
     define_core(linker, store)?;
     define_timers_arrays(linker, store)?;
-    // Use 1-param fetch shim for async_scheduler test compatibility
-    let f = Func::wrap(
-        &mut *store,
-        |mut caller: Caller<'_, RuntimeState>, url: i64| -> i64 {
-            let promise = alloc_promise_from_caller(&mut caller, PromiseEntry::pending());
-            promise
-        },
-    );
-    linker.define(&mut *store, "env", "fetch", f)?;
+    define_fetch(linker, store)?;
     define_array_object(linker, store)?;
     define_primitive_core(linker, store)?;
     define_promise(linker, store)?;
@@ -825,7 +807,8 @@ fn register_complex_bridges_async(
                     if let Some(arr_ptr) = resolve_handle(&mut caller, iterable) {
                         let length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
                         let sync_iter_handle = {
-                            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                            let mut iters =
+                                caller.data().iterators.lock().expect("iterators mutex");
                             let sync_handle = iters.len() as u32;
                             iters.push(IteratorState::ArrayIter {
                                 ptr: arr_ptr,
@@ -859,12 +842,16 @@ fn register_complex_bridges_async(
                         };
                         if value::is_object(iterator) {
                             if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
-                                let next = read_object_property_by_name(&mut caller, iter_ptr, "next")
-                                    .filter(|n| value::is_callable(*n));
+                                let next =
+                                    read_object_property_by_name(&mut caller, iter_ptr, "next")
+                                        .filter(|n| value::is_callable(*n));
                                 if let Some(next_fn) = next {
-                                    let return_method =
-                                        read_object_property_by_name(&mut caller, iter_ptr, "return")
-                                            .filter(|c| value::is_callable(*c));
+                                    let return_method = read_object_property_by_name(
+                                        &mut caller,
+                                        iter_ptr,
+                                        "return",
+                                    )
+                                    .filter(|c| value::is_callable(*c));
                                     let mut iters =
                                         caller.data().iterators.lock().expect("iterators mutex");
                                     let handle = iters.len() as u32;
@@ -889,7 +876,8 @@ fn register_complex_bridges_async(
                 }
 
                 // 回退到 @@iterator
-                if let Some(method) = read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
+                if let Some(method) =
+                    read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
                 {
                     if value::is_callable(method) {
                         let sync_iter = if value::is_native_callable(method) {
@@ -913,12 +901,18 @@ fn register_complex_bridges_async(
                                     read_object_property_by_name(&mut caller, sync_ptr, "next")
                                         .filter(|n| value::is_callable(*n));
                                 if let Some(next_fn) = next_fn {
-                                    let return_method =
-                                        read_object_property_by_name(&mut caller, sync_ptr, "return")
-                                            .filter(|c| value::is_callable(*c));
+                                    let return_method = read_object_property_by_name(
+                                        &mut caller,
+                                        sync_ptr,
+                                        "return",
+                                    )
+                                    .filter(|c| value::is_callable(*c));
                                     let sync_iter_handle = {
-                                        let mut iters =
-                                            caller.data().iterators.lock().expect("iterators mutex");
+                                        let mut iters = caller
+                                            .data()
+                                            .iterators
+                                            .lock()
+                                            .expect("iterators mutex");
                                         let sync_handle = iters.len() as u32;
                                         iters.push(IteratorState::ObjectIter {
                                             next: next_fn,
@@ -982,7 +976,9 @@ fn register_complex_bridges_async(
                                 callbackfn,
                                 value::encode_undefined(),
                                 &[elem, idx_val],
-                            ).await {
+                            )
+                            .await
+                            {
                                 Ok(k) => k,
                                 Err(_) => return value::encode_undefined(),
                             };
@@ -1062,14 +1058,21 @@ fn register_complex_bridges_async(
                     let _ = define_host_data_property(&mut caller, map_result, "delete", delete_fn);
                     let _ = define_host_data_property(&mut caller, map_result, "clear", clear_fn);
                     let _ = define_host_data_property(&mut caller, map_result, "size", size_fn);
-                    let _ = define_host_data_property(&mut caller, map_result, "forEach", for_each_fn);
+                    let _ =
+                        define_host_data_property(&mut caller, map_result, "forEach", for_each_fn);
                     let _ = define_host_data_property(&mut caller, map_result, "keys", keys_fn);
                     let _ = define_host_data_property(&mut caller, map_result, "values", values_fn);
-                    let _ = define_host_data_property(&mut caller, map_result, "entries", entries_fn);
+                    let _ =
+                        define_host_data_property(&mut caller, map_result, "entries", entries_fn);
                 }
                 if let Some(_map_ptr) = resolve_handle(&mut caller, map_result) {
                     let handle_val = value::encode_f64(map_handle as f64);
-                    define_host_data_property(&mut caller, map_result, "__map_handle__", handle_val);
+                    define_host_data_property(
+                        &mut caller,
+                        map_result,
+                        "__map_handle__",
+                        handle_val,
+                    );
                 }
                 let mut groups: Vec<(i64, Vec<i64>)> = Vec::new();
                 let mut key_to_index: HashMap<i64, usize> = HashMap::new();
@@ -1086,7 +1089,9 @@ fn register_complex_bridges_async(
                                 callbackfn,
                                 value::encode_undefined(),
                                 &[elem, idx_val],
-                            ).await {
+                            )
+                            .await
+                            {
                                 Ok(k) => k,
                                 Err(_) => return value::encode_undefined(),
                             };
@@ -1126,7 +1131,8 @@ fn register_complex_bridges_async(
                                 }
                                 write_array_length(&mut caller, arr_ptr, elements.len() as u32);
                             }
-                            let mut table = caller.data().map_table.lock().expect("map table mutex");
+                            let mut table =
+                                caller.data().map_table.lock().expect("map table mutex");
                             table[map_handle].keys.push(*group_key);
                             table[map_handle].values.push(arr);
                         }
@@ -1156,7 +1162,6 @@ pub fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> 
     let mut store = Store::new(&engine, RuntimeState::new());
     let output = Arc::clone(&store.data().output);
     let runtime_error = Arc::clone(&store.data().runtime_error);
-
 
     let mut linker = Linker::new(&engine);
     register_linker(&mut linker, &mut store)?;
@@ -1462,8 +1467,7 @@ pub async fn execute_with_writer_async<W: Write>(wasm_bytes: &[u8], writer: W) -
     store.epoch_deadline_async_yield_and_update(1);
 
     // Phase 6: 创建 channel + counter（仅 async 路径）
-    let (host_completion_tx, mut host_completion_rx) =
-        tokio::sync::mpsc::unbounded_channel();
+    let (host_completion_tx, mut host_completion_rx) = tokio::sync::mpsc::unbounded_channel();
     store
         .data_mut()
         .host_completion_tx
@@ -1475,22 +1479,53 @@ pub async fn execute_with_writer_async<W: Write>(wasm_bytes: &[u8], writer: W) -
     register_linker_async(&mut linker, &mut store)?;
     register_common_bridges(&mut linker, &mut store)?;
     register_complex_bridges_async(&mut linker, &mut store)?;
-    let instance = linker.instantiate_async(&mut store, &module).await
+    let instance = linker
+        .instantiate_async(&mut store, &module)
+        .await
         .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
 
     // post 原型（boring dupe 小段）
-    let memory = instance.get_export(&mut store, "memory").and_then(|e| e.into_memory()).expect("memory");
-    let heap_ptr_global = instance.get_export(&mut store, "__heap_ptr").and_then(|e| e.into_global()).expect("heap");
-    let obj_table_ptr_global = instance.get_export(&mut store, "__obj_table_ptr").and_then(|e| e.into_global()).expect("obj_table_ptr");
-    let obj_table_count_global = instance.get_export(&mut store, "__obj_table_count").and_then(|e| e.into_global()).expect("obj_table_count");
-    let func_table = instance.get_export(&mut store, "__table").and_then(|e| e.into_table()).expect("table");
-    let shadow_sp_global = instance.get_export(&mut store, "__shadow_sp").and_then(|e| e.into_global()).expect("shadow");
-    let array_proto_handle_global = instance.get_export(&mut store, "__array_proto_handle").and_then(|e| e.into_global()).expect("array_proto");
-    let object_proto_handle_global = instance.get_export(&mut store, "__object_proto_handle").and_then(|e| e.into_global()).expect("object_proto");
+    let memory = instance
+        .get_export(&mut store, "memory")
+        .and_then(|e| e.into_memory())
+        .expect("memory");
+    let heap_ptr_global = instance
+        .get_export(&mut store, "__heap_ptr")
+        .and_then(|e| e.into_global())
+        .expect("heap");
+    let obj_table_ptr_global = instance
+        .get_export(&mut store, "__obj_table_ptr")
+        .and_then(|e| e.into_global())
+        .expect("obj_table_ptr");
+    let obj_table_count_global = instance
+        .get_export(&mut store, "__obj_table_count")
+        .and_then(|e| e.into_global())
+        .expect("obj_table_count");
+    let func_table = instance
+        .get_export(&mut store, "__table")
+        .and_then(|e| e.into_table())
+        .expect("table");
+    let shadow_sp_global = instance
+        .get_export(&mut store, "__shadow_sp")
+        .and_then(|e| e.into_global())
+        .expect("shadow");
+    let array_proto_handle_global = instance
+        .get_export(&mut store, "__array_proto_handle")
+        .and_then(|e| e.into_global())
+        .expect("array_proto");
+    let object_proto_handle_global = instance
+        .get_export(&mut store, "__object_proto_handle")
+        .and_then(|e| e.into_global())
+        .expect("object_proto");
     let wasm_env = wasm_env::WasmEnv {
-        memory, func_table, shadow_sp: shadow_sp_global, heap_ptr: heap_ptr_global,
-        obj_table_ptr: obj_table_ptr_global, obj_table_count: obj_table_count_global,
-        object_proto_handle: object_proto_handle_global, array_proto_handle: array_proto_handle_global,
+        memory,
+        func_table,
+        shadow_sp: shadow_sp_global,
+        heap_ptr: heap_ptr_global,
+        obj_table_ptr: obj_table_ptr_global,
+        obj_table_count: obj_table_count_global,
+        object_proto_handle: object_proto_handle_global,
+        array_proto_handle: array_proto_handle_global,
     };
     let async_iterator_proto = alloc_host_object(&mut store, &wasm_env, 2);
     let async_iterator_symbol_async_iterator = {
@@ -1499,24 +1534,52 @@ pub async fn execute_with_writer_async<W: Write>(wasm_bytes: &[u8], writer: W) -
         table.push(NativeCallable::AsyncIteratorProtoSymbolAsyncIterator);
         value::encode_native_callable_idx(handle)
     };
-    let _ = define_host_data_property_with_env(&mut store, &wasm_env, async_iterator_proto, "Symbol.asyncIterator", async_iterator_symbol_async_iterator);
-    let async_iterator_tag = store_runtime_string_in_state(store.data(), "AsyncIterator".to_string());
-    let _ = define_host_data_property_with_env(&mut store, &wasm_env, async_iterator_proto, "Symbol.toStringTag", async_iterator_tag);
+    let _ = define_host_data_property_with_env(
+        &mut store,
+        &wasm_env,
+        async_iterator_proto,
+        "Symbol.asyncIterator",
+        async_iterator_symbol_async_iterator,
+    );
+    let async_iterator_tag =
+        store_runtime_string_in_state(store.data(), "AsyncIterator".to_string());
+    let _ = define_host_data_property_with_env(
+        &mut store,
+        &wasm_env,
+        async_iterator_proto,
+        "Symbol.toStringTag",
+        async_iterator_tag,
+    );
     let async_gen_proto = alloc_host_object(&mut store, &wasm_env, 2);
     let async_gen_handle = value::decode_object_handle(async_gen_proto);
     let async_iterator_handle = value::decode_object_handle(async_iterator_proto);
-    let obj_ptr = resolve_handle_idx_with_env(&mut store, &wasm_env, async_gen_handle as usize).expect("obj_ptr");
+    let obj_ptr = resolve_handle_idx_with_env(&mut store, &wasm_env, async_gen_handle as usize)
+        .expect("obj_ptr");
     let data = memory.data_mut(&mut store);
     data[obj_ptr..obj_ptr + 4].copy_from_slice(&async_iterator_handle.to_le_bytes());
     let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
-    let _ = define_host_data_property_with_env(&mut store, &wasm_env, async_gen_proto, "Symbol.toStringTag", async_gen_tag);
+    let _ = define_host_data_property_with_env(
+        &mut store,
+        &wasm_env,
+        async_gen_proto,
+        "Symbol.toStringTag",
+        async_gen_tag,
+    );
     store.data_mut().async_iterator_prototype = async_iterator_proto;
     store.data_mut().async_gen_prototype = async_gen_proto;
 
     // 委托（Phase 6 传入 rx 供 scheduler 接收 completion）
-    run_main_completion_block_async(&instance, store, wasm_env, output, runtime_error, writer, &mut host_completion_rx).await
+    run_main_completion_block_async(
+        &instance,
+        store,
+        wasm_env,
+        output,
+        runtime_error,
+        writer,
+        &mut host_completion_rx,
+    )
+    .await
 }
-
 
 struct RuntimeState {
     output: Arc<Mutex<Vec<u8>>>,
@@ -1621,7 +1684,8 @@ struct RuntimeState {
 
     /// Phase 6: host completion channel tx（Option 便于 sync 路径保持 None；创建后 set Some）。
     /// 引用 plan Correction 7：worker 只通过 tx 发送可 Send 的 SettleValue 或 Materialize 闭包，绝不触碰 Store/heap。
-    host_completion_tx: Option<tokio::sync::mpsc::UnboundedSender<crate::scheduler::AsyncHostCompletion>>,
+    host_completion_tx:
+        Option<tokio::sync::mpsc::UnboundedSender<crate::scheduler::AsyncHostCompletion>>,
     /// Phase 6: in-flight async op 计数器（用于 scheduler 安全退出条件）。
     async_op_counter: Option<crate::scheduler::AsyncOpCounter>,
 }
@@ -1649,15 +1713,42 @@ impl RuntimeState {
             eval_cache: Arc::new(Mutex::new(HashMap::new())),
             bigint_table: Arc::new(Mutex::new(Vec::new())),
             symbol_table: Arc::new(Mutex::new(vec![
-                SymbolEntry { description: Some("Symbol(Symbol.iterator)".into()), global_key: None },
-                SymbolEntry { description: Some("Symbol(Symbol.species)".into()), global_key: None },
-                SymbolEntry { description: Some("Symbol(Symbol.toStringTag)".into()), global_key: None },
-                SymbolEntry { description: Some("Symbol(Symbol.asyncIterator)".into()), global_key: None },
-                SymbolEntry { description: Some("Symbol(Symbol.hasInstance)".into()), global_key: None },
-                SymbolEntry { description: Some("Symbol(Symbol.toPrimitive)".into()), global_key: None },
-                SymbolEntry { description: Some("Symbol(Symbol.dispose)".into()), global_key: None },
-                SymbolEntry { description: Some("Symbol(Symbol.match)".into()), global_key: None },
-                SymbolEntry { description: Some("Symbol(Symbol.asyncDispose)".into()), global_key: None },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.iterator)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.species)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.toStringTag)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.asyncIterator)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.hasInstance)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.toPrimitive)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.dispose)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.match)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.asyncDispose)".into()),
+                    global_key: None,
+                },
             ])),
             regex_table: Arc::new(Mutex::new(Vec::new())),
             promise_table: Arc::new(Mutex::new(Vec::new())),
@@ -2967,9 +3058,8 @@ mod tests {
     fn execute_with_writer_async_prints_string_fixture() -> Result<()> {
         let rt = Runtime::new()?;
         let wasm_bytes = compile_source(r#"console.log("Hello, Async Runtime!");"#)?;
-        let output = rt.block_on(async {
-            execute_with_writer_async(&wasm_bytes, Vec::new()).await
-        })?;
+        let output =
+            rt.block_on(async { execute_with_writer_async(&wasm_bytes, Vec::new()).await })?;
         assert_eq!(String::from_utf8(output)?, "Hello, Async Runtime!\n");
         Ok(())
     }
@@ -2979,12 +3069,13 @@ mod tests {
         // 使用 async execute（已 wiring get_builtin_global），触发 setTimeout 回调 + console.log。
         // 证明：无阻塞 sleep、无 MAX 超限、per-callback drain 工作、语义与 sync 一致。
         let rt = Runtime::new()?;
-        let wasm_bytes = compile_source(r#"
+        let wasm_bytes = compile_source(
+            r#"
             setTimeout(() => { console.log("async-timer-fired"); }, 0);
-        "#)?;
-        let output = rt.block_on(async {
-            execute_with_writer_async(&wasm_bytes, Vec::new()).await
-        })?;
+        "#,
+        )?;
+        let output =
+            rt.block_on(async { execute_with_writer_async(&wasm_bytes, Vec::new()).await })?;
         let s = String::from_utf8(output)?;
         assert!(
             s.contains("async-timer-fired"),
@@ -2998,8 +3089,8 @@ mod tests {
     // 使用 channel 直接模拟（不依赖真实 wasm 主流程），证明 channel 形状 + 处理路径正确
     #[test]
     fn async_host_completion_manual_enqueue_settle_and_materialize() -> Result<()> {
-        use super::scheduler::{AsyncHostCompletion, AsyncOpCounter};
         use super::runtime_builtins::PromiseSettlement;
+        use super::scheduler::{AsyncHostCompletion, AsyncOpCounter};
 
         let counter = AsyncOpCounter::new();
         let _guard = counter.begin();
@@ -3010,22 +3101,33 @@ mod tests {
         tx.send(AsyncHostCompletion::SettleValue {
             promise: 100,
             settlement: PromiseSettlement::Fulfill(999),
-        }).expect("send settle");
+        })
+        .expect("send settle");
 
         // 手动 enqueue Materialize（闭包在 owner 执行，可分配）
-        let mat: Box<dyn FnOnce(&mut wasmtime::Store<super::RuntimeState>, &super::WasmEnv) -> PromiseSettlement + Send> = Box::new(|_store, _env| {
+        let mat: Box<
+            dyn FnOnce(
+                    &mut wasmtime::Store<super::RuntimeState>,
+                    &super::WasmEnv,
+                ) -> PromiseSettlement
+                + Send,
+        > = Box::new(|_store, _env| {
             // 真实会 alloc runtime string/object，此处模拟
             PromiseSettlement::Fulfill(888)
         });
         tx.send(AsyncHostCompletion::Materialize {
             promise: 101,
             materialize: mat,
-        }).expect("send mat");
+        })
+        .expect("send mat");
 
         // 模拟 scheduler loop drain (while try_recv)
         let c1 = rx.try_recv().expect("c1");
         match c1 {
-            AsyncHostCompletion::SettleValue { promise, settlement: PromiseSettlement::Fulfill(v) } => {
+            AsyncHostCompletion::SettleValue {
+                promise,
+                settlement: PromiseSettlement::Fulfill(v),
+            } => {
                 assert_eq!(promise, 100);
                 assert_eq!(v, 999);
             }
@@ -3038,6 +3140,7 @@ mod tests {
             }
             _ => panic!("bad mat"),
         }
+        drop(_guard);
         assert_eq!(counter.count(), 0);
         Ok(())
     }

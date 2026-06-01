@@ -1,0 +1,17 @@
+exit_code: 0
+--- stdout ---
+r1 method: GET
+r1 url data: true
+r1 redirect: follow
+r2 method: POST
+r2 has custom header: true
+r2 redirect: manual
+r2 cache: no-store
+r2 credentials: omit
+r2 integrity: sha256-xxx
+r2 keepalive: true
+r3 method from copy: POST
+r3 url same as r2: true
+r3 headers independent: true
+done request ctor
+--- stderr ---
