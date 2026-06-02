@@ -1,8 +1,7 @@
-// replacer as function — documents current behavior.
-// If not fully implemented, fixture records actual output (may differ from spec).
+// replacer function should omit object properties when it returns undefined.
 const data = { a: 1, b: 2, c: 3 };
-const result = JSON.stringify(data, (key, value) => {
-  if (key === "b") return undefined;
+const result = JSON.stringify(data, (_key, value) => {
+  if (value === 2) return undefined;
   return value;
 });
 console.log(result);

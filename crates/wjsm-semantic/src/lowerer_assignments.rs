@@ -806,6 +806,11 @@ impl Lowerer {
                 ],
             },
         );
+        // 必须设置 expr_merge_block，否则上层 lower_expr_stmt/return 调用 resolve_store_block(原始 block) 时，
+        // 因 captured 路径在 ensure_shared_env/resolve_store_block 后才在 continuation block 上挂 Branch + merge，
+        // 导致 heuristic 可能看不到 Phi merge 或选中 stale pre-branch block，后续 return hits / 赋值结果 会用错 block → undefined。
+        // 其他 short-circuit 路径（lower_logical 等）均在 Phi 后设置，此处对称补齐。
+        self.expr_merge_block = Some(merge);
         Ok(result)
     }
 

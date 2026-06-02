@@ -1,4 +1,5 @@
 exit_code: 0
 --- stdout ---
-undefined
+caught-name: TypeError
+caught-type: object
 --- stderr ---

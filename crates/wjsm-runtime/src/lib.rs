@@ -46,6 +46,7 @@ use runtime_host_helpers::*;
 use runtime_json::*;
 use runtime_microtask::*;
 use runtime_promises::*;
+use runtime_json::*;
 use runtime_render::*;
 use runtime_values::*;
 // ── Linker 注册辅助函数 ─────────────────────────────────────────

@@ -1,0 +1,5 @@
+exit_code: 2
+--- stdout ---
+Uncaught exception: [object Object]
+--- stderr ---
+Runtime error: Uncaught exception: [object Object]
