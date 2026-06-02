@@ -1,21 +1,27 @@
 use super::*;
 use crate::wasm_env::WasmEnv;
 
-pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
+fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     capacity: u32,
+    proto: u32,
 ) -> i64 {
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let size = 16 + capacity * 32;
+    let size = 16u32.saturating_add(capacity.saturating_mul(32));
     let new_heap_ptr = heap_ptr.saturating_add(size);
-    let proto = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
     {
         let data = env.memory.data_mut(&mut *ctx);
         let ptr = heap_ptr as usize;
         if new_heap_ptr as usize > data.len() {
+            return value::encode_undefined();
+        }
+        let slot_addr = obj_table_ptr as usize + obj_table_count as usize * 4;
+        // obj_table 槽位耗尽时必须直接返回 undefined，不递增 obj_table_count、
+        // 不前进 heap_ptr，保持 handle->slot 映射与 obj_table_count 一致。
+        if slot_addr + 4 > data.len() {
             return value::encode_undefined();
         }
         data[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());
@@ -23,10 +29,7 @@ pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
         data[ptr + 5..ptr + 8].fill(0);
         data[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes());
         data[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
-        let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
-        if slot_addr + 4 <= data.len() {
-            data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
-        }
+        data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
     }
     let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
     let _ = env
@@ -35,37 +38,21 @@ pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
     value::encode_object_handle(obj_table_count)
 }
 
+pub(crate) fn alloc_host_object<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    capacity: u32,
+) -> i64 {
+    let proto = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1) as u32;
+    alloc_host_object_impl(ctx, env, capacity, proto)
+}
+
 pub(crate) fn alloc_host_null_proto_object<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     capacity: u32,
 ) -> i64 {
-    let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let size = 16 + capacity * 32;
-    let new_heap_ptr = heap_ptr.saturating_add(size);
-    {
-        let data = env.memory.data_mut(&mut *ctx);
-        let ptr = heap_ptr as usize;
-        if new_heap_ptr as usize > data.len() {
-            return value::encode_undefined();
-        }
-        data[ptr..ptr + 4].copy_from_slice(&(-1i32 as u32).to_le_bytes());
-        data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
-        data[ptr + 5..ptr + 8].fill(0);
-        data[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes());
-        data[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes());
-        let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
-        if slot_addr + 4 <= data.len() {
-            data[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
-        }
-    }
-    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
-    let _ = env
-        .obj_table_count
-        .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
-    value::encode_object_handle(obj_table_count)
+    alloc_host_object_impl(ctx, env, capacity, u32::MAX)
 }
 
 pub(crate) fn create_error_object(
