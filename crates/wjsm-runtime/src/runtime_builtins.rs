@@ -1490,18 +1490,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             } else if value::is_string(desc) {
                 Some(get_string_value(caller, desc))
             } else {
-                Some(
-                    render_value(caller, desc)
-                        .unwrap_or_default()
-                        .trim_matches('"')
-                        .to_string(),
-                )
+                Some(render_value(caller, desc).unwrap_or_default().trim_matches('"').to_string())
             };
-            let mut table = caller
-                .data()
-                .symbol_table
-                .lock()
-                .expect("symbol_table mutex");
+            let mut table = caller.data().symbol_table.lock().expect("symbol_table mutex");
             let handle = table.len() as u32;
             table.push(SymbolEntry {
                 description,

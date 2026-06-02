@@ -1,7 +1,6 @@
-exit_code: 2
+exit_code: 0
 --- stdout ---
-in1: false
+in1: true
 keys: 0,1,2
 join: 1|2|3
 --- stderr ---
-Runtime error: TypeError: cannot use 'in' operator on non-object

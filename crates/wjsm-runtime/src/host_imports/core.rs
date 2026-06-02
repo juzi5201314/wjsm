@@ -33,9 +33,11 @@ fn array_to_string_bytes(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec
     out
 }
 
+
+/// `in` 操作符核心实现：检查属性是否在对象及其原型链上
+/// 被 define_core_async 中的异步 op_in 通过 `use super::core::op_in_impl` 调用
 pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, prop: i64) -> i64 {
-    // 检查 object 是否有 prop 属性
-    if !value::is_object(object) && !value::is_function(object) {
+    if !value::is_object(object) && !value::is_function(object) && !value::is_array(object) {
         *caller
             .data()
             .runtime_error
@@ -85,6 +87,15 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
         Some(p) => p,
         None => return value::encode_bool(false),
     };
+
+    if value::is_array(object) {
+        if prop_str == "length" {
+            return value::encode_bool(true);
+        }
+        if let Ok(index) = prop_str.parse::<u32>() {
+            return value::encode_bool(array_elem_present(caller, ptr, index));
+        }
+    }
 
     // 搜索属性，遍历原型链
     loop {
@@ -149,9 +160,7 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
             return value::encode_bool(false);
         }
     }
-    }
-
-
+}
 pub(crate) fn define_core(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -609,6 +618,7 @@ pub(crate) fn define_core(
         },
     );
     linker.define(&mut store, "env", "typeof", f)?;
+
 
     // ── Import 15: op_instanceof(i64, i64) ────────────────────────────
     let f = Func::wrap(
