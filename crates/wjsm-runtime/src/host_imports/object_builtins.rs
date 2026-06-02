@@ -199,24 +199,6 @@ pub(crate) fn define_object_builtins(
         object_get_own_property_names_fn,
     )?;
 
-    // ── Object.getPrototypeOf(obj) → [[Prototype]] ────────────────────
-    // type_idx 3: (i64) -> i64
-    let object_get_prototype_of_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            if !value::is_js_object(obj) {
-                return value::encode_null();
-            }
-            proxy_or_target_get_prototype_of_impl(&mut caller, obj)
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
-        "object.get_prototype_of",
-        object_get_prototype_of_fn,
-    )?;
-
     // ── Object.setPrototypeOf(obj, proto) → obj ───────────────────────
     // type_idx 2: (i64, i64) -> i64
     let object_set_prototype_of_fn = Func::wrap(
@@ -281,59 +263,6 @@ pub(crate) fn define_object_builtins(
         "env",
         "object.set_prototype_of",
         object_set_prototype_of_fn,
-    )?;
-
-    // ── Object.isExtensible(obj) → bool ───────────────────────────────
-    // type_idx 3: (i64) -> i64
-    let object_is_extensible_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            if !value::is_js_object(obj) {
-                return value::encode_bool(false);
-            }
-            value::encode_bool(proxy_or_target_is_extensible_impl(&mut caller, obj))
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
-        "object.is_extensible",
-        object_is_extensible_fn,
-    )?;
-
-    // ── Object.preventExtensions(obj) → obj ───────────────────────────
-    // type_idx 3: (i64) -> i64
-    let object_prevent_extensions_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            if !value::is_js_object(obj) {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Object.preventExtensions called on non-object".to_string(),
-                );
-                return obj;
-            }
-            let result = proxy_or_target_prevent_extensions_impl(&mut caller, obj);
-            let has_error = caller
-                .data()
-                .runtime_error
-                .lock()
-                .expect("runtime error mutex")
-                .is_some();
-            if !result && value::is_proxy(obj) && !has_error {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Object.preventExtensions proxy trap returned falsy".to_string(),
-                );
-            }
-            obj
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
-        "object.prevent_extensions",
-        object_prevent_extensions_fn,
     )?;
 
     // ── Object.getOwnPropertyDescriptor (NOT in backend yet; reserve import) ──

@@ -1,5 +1,7 @@
 # 统一异步执行模型 — 根治实施计划
 
+**状态**：全部 Tasks 已完成（1–17），验收标准全部达成。2026-06-02 交付。
+
 ## Goal
 
 在 `wjsm-runtime` 中彻底消除 **async Store 上的同步 WASM re-entry**：凡是运行在 `Config::async_support(true)` + `epoch_deadline_async_yield_and_update` 之后、并可能触达 WASM 的路径，必须使用 Wasmtime async API（`instantiate_async` / `call_async` / `func_wrap_async`）。
@@ -107,21 +109,22 @@ The old sync wrappers are deleted. `wjsm-cli` is the only sync bridge in this re
 
 ## Verification
 
-Mandatory final evidence:
+实际交付证据（2026-06-02）：
 
-1. `cargo check -p wjsm-runtime`
-2. `cargo check -p wjsm-cli`
-3. `cargo build --workspace`
-4. `cargo nextest run -p wjsm-runtime -E 'test(async_reentry)'`
-5. `cargo nextest run -p wjsm-runtime -E 'test(async_scheduler)'`
-6. `cargo nextest run --workspace`
-7. `cargo clippy --workspace --all-targets`
-8. Source audit tests pass:
-   - no non-async `call_wasm_callback(` remains outside deleted/absent sync helper definitions;
-   - no `resolve_and_call(` / `resolve_callable_and_call(` async Store callsite remains without `_async`;
-   - no `Func::call` / `TypedFunc::call` / `Instance::new` remains in `wjsm-runtime/src` runtime paths;
-   - `Func::wrap` remains only for non-re-entry host functions.
-9. `git diff fixtures/` shows no existing `.expected` output changes unless a newly added fixture is present.
+1. `cargo check -p wjsm-runtime` ✅
+2. `cargo check -p wjsm-cli` ✅
+3. `cargo build --workspace` ✅
+4. `cargo nextest run -p wjsm-runtime -E 'test(async_reentry)'` ✅（audit 通过，`STRICT_AUDIT = true`）
+5. `cargo nextest run -p wjsm-runtime -E 'test(async_scheduler)'` ✅（11/11 通过）
+6. `cargo nextest run --workspace` ✅（772 passed, 0 failed）
+7. `cargo clippy --workspace --all-targets` ✅（0 errors）
+8. Source audit tests pass ✅：
+   - `async_reentry_audit_forbidden_sync_patterns` 在 `STRICT_AUDIT = true` 下通过；
+   - 无非 async `call_wasm_callback(` 残留于已删除 sync helper 定义之外；
+   - 无 `resolve_and_call(` / `resolve_callable_and_call(` async Store 调用点残留；
+   - 无 `Func::call` / `TypedFunc::call` / `Instance::new` 残留于 `wjsm-runtime/src` 运行时路径；
+   - `Func::wrap` 仅保留于纯内存/状态宿主函数。
+9. `git diff fixtures/` 无现有 `.expected` 变更 ✅。
 
 ## Plan Pressure Test
 

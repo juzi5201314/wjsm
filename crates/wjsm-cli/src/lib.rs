@@ -31,6 +31,18 @@ const EXIT_RUNTIME_ERROR: u8 = 2;
 const EXIT_USAGE_ERROR: u8 = 3;
 
 // ============================================================================
+// Runtime bridge (sync CLI -> async Store)
+// ============================================================================
+
+fn block_on_wasm_execute(wasm: &[u8]) -> Result<()> {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to create Tokio runtime for WASM execution")?
+        .block_on(runtime::execute(wasm))
+}
+
+// ============================================================================
 // CLI Structure
 // ============================================================================
 
@@ -412,7 +424,7 @@ fn cmd_run(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<E
         compile_from_file_input(input, root, cli.target, script)?
     };
 
-    if let Err(e) = runtime::execute(&wasm) {
+    if let Err(e) = block_on_wasm_execute(&wasm) {
         eprintln!("Runtime error: {:#}", e);
         return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
     }
@@ -520,7 +532,7 @@ fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
     )?;
 
     if let Some(wasm) = &result.wasm
-        && let Err(e) = runtime::execute(wasm)
+        && let Err(e) = block_on_wasm_execute(wasm)
     {
         eprintln!("Runtime error: {:#}", e);
         return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));

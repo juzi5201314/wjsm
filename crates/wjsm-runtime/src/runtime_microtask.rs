@@ -1,190 +1,11 @@
 use super::*;
 use std::sync::atomic::Ordering;
-use wasmtime::Store;
 pub(crate) fn clear_pending_unhandled_rejection(state: &RuntimeState, handle: usize) {
     state
         .pending_unhandled_rejections
         .lock()
         .expect("pending_unhandled_rejections mutex")
         .remove(&handle);
-}
-
-pub(crate) fn drain_microtasks<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
-    ctx: &mut C,
-    env: &WasmEnv,
-) {
-    loop {
-        let task = {
-            let mut queue = ctx
-                .state_mut()
-                .microtask_queue
-                .lock()
-                .expect("microtask queue mutex");
-            queue.pop_front()
-        };
-        match task {
-            Some(Microtask::PromiseReaction {
-                promise,
-                reaction_type,
-                handler,
-                argument,
-            }) => {
-                if handle_combinator_reaction(ctx, env, handler, argument) {
-                    continue;
-                }
-                if value::is_callable(handler) {
-                    let call_arg = match reaction_type {
-                        ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
-                            value::encode_undefined()
-                        }
-                        _ => argument,
-                    };
-                    match call_host_function(ctx, env, handler, call_arg) {
-                        Some(result) => match reaction_type {
-                            ReactionType::Fulfill | ReactionType::Reject => {
-                                resolve_promise(ctx, env, promise, result);
-                            }
-                            ReactionType::FinallyFulfill => {
-                                settle_promise(
-                                    ctx.state_mut(),
-                                    promise,
-                                    PromiseSettlement::Fulfill(argument),
-                                );
-                            }
-                            ReactionType::FinallyReject => {
-                                settle_promise(
-                                    ctx.state_mut(),
-                                    promise,
-                                    PromiseSettlement::Reject(argument),
-                                );
-                            }
-                        },
-                        None => {
-                            let err = runtime_error_value(
-                                ctx.state_mut(),
-                                "TypeError: promise reaction handler failed".to_string(),
-                            );
-                            settle_promise(
-                                ctx.state_mut(),
-                                promise,
-                                PromiseSettlement::Reject(err),
-                            );
-                        }
-                    }
-                } else {
-                    let settlement = passive_reaction_settlement(reaction_type, argument);
-                    settle_promise(ctx.state_mut(), promise, settlement);
-                }
-            }
-            Some(Microtask::PromiseResolveThenable {
-                promise,
-                thenable,
-                then,
-            }) => {
-                let (resolve, reject) =
-                    create_promise_resolving_functions(ctx.state_mut(), promise);
-                if call_host_function(ctx, env, then, resolve).is_none() {
-                    settle_promise(ctx.state_mut(), promise, PromiseSettlement::Reject(reject));
-                }
-                let _ = thenable;
-            }
-            Some(Microtask::MicrotaskCallback { callback }) => {
-                if value::is_callable(callback) {
-                    let _ = call_host_function_with_args(
-                        ctx,
-                        env,
-                        callback,
-                        value::encode_undefined(),
-                        &[],
-                    );
-                }
-            }
-            Some(Microtask::AsyncResume {
-                fn_table_idx,
-                continuation,
-                state,
-                resume_val,
-                is_rejected,
-            }) => {
-                resume_async_function(
-                    ctx,
-                    env,
-                    fn_table_idx,
-                    continuation,
-                    state,
-                    resume_val,
-                    is_rejected,
-                );
-            }
-            Some(Microtask::CleanupFinalizationRegistry {
-                callback,
-                held_value,
-            }) => {
-                ctx.state_mut()
-                    .pending_cleanup_callbacks
-                    .lock()
-                    .expect("pending_cleanup_callbacks mutex")
-                    .push((callback, vec![held_value]));
-            }
-            None => break,
-        }
-    }
-    {
-        let mut c_table = ctx
-            .state_mut()
-            .continuation_table
-            .lock()
-            .expect("continuation table mutex");
-        c_table.retain(|entry| !entry.completed);
-    }
-    let unhandled: Vec<i64> = {
-        let rejections = std::mem::take(
-            &mut *ctx
-                .state_mut()
-                .pending_unhandled_rejections
-                .lock()
-                .expect("pending_unhandled_rejections mutex"),
-        );
-        let table = ctx
-            .state_mut()
-            .promise_table
-            .lock()
-            .expect("promise table mutex");
-        rejections
-            .iter()
-            .filter_map(|&h| {
-                let entry = table.get(h).filter(|e| e.is_promise)?;
-                if entry.handled {
-                    return None;
-                }
-                match entry.state {
-                    PromiseState::Rejected(reason) => Some(reason),
-                    _ => None,
-                }
-            })
-            .collect()
-    };
-    for reason in unhandled {
-        let msg = if value::is_string(reason) {
-            String::from("<string>")
-        } else if value::is_f64(reason) {
-            format!("{}", f64::from_bits(reason as u64))
-        } else if value::is_object(reason) {
-            String::from("Object")
-        } else {
-            format!("0x{:016x}", reason as u64)
-        };
-        eprintln!("UnhandledPromiseRejectionWarning: {msg}");
-    }
-}
-
-#[inline]
-pub(crate) fn drain_microtasks_from_caller(
-    caller: &mut Caller<'_, RuntimeState>,
-    _func_table: &Table,
-) {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    drain_microtasks(caller, &env);
 }
 
 pub(crate) fn call_host_function<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
@@ -321,7 +142,10 @@ pub(crate) fn call_host_function_from_caller(
 /// - 中文 header 引用 2026-05-31 plan、async Store contract（Correction 3：yield 后所有 Wasm entry 必须 async API）、原始 must-convert 列表
 ///
 /// 完成此项后，Phase 3 must-convert audit 列表（eval、resume、host reentrant、microtask+call_host）全部落地，'Phase 1-4 solid' 可被诚实评估。
-pub(crate) async fn drain_microtasks_async(ctx: &mut Store<RuntimeState>, env: &WasmEnv) {
+pub(crate) async fn drain_microtasks_async<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
     loop {
         let task = {
             let mut queue = ctx
@@ -498,9 +322,7 @@ pub(crate) async fn drain_microtasks_from_caller_async(
     _func_table: &Table,
 ) {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    // Thin async variant for symmetry. Because drain_microtasks_async is Store-specialized (to match resume_async_function_async sig from prior conversion),
-    // this thin currently delegates to sync drain (caller contexts remain sync-only until async host import registration). Dead-code ok; documents extension point.
-    drain_microtasks(caller, &env);
+    drain_microtasks_async(caller, &env).await;
 }
 
 pub(crate) async fn call_host_function_async<
@@ -628,7 +450,13 @@ pub(crate) async fn call_host_function_from_caller_async(
     argument: i64,
 ) -> Option<i64> {
     if value::is_native_callable(handler) {
-        return call_native_callable_from_caller(caller, handler, Some(argument));
+        return call_native_callable_with_args_from_caller_async(
+            caller,
+            handler,
+            value::encode_undefined(),
+            vec![argument],
+        )
+        .await;
     }
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     call_host_function_async(caller, &env, handler, argument).await

@@ -171,10 +171,11 @@ pub(crate) async fn run_post_main_scheduler_async(
             // Find earliest expired timer
             if let Some(idx) = timers.iter().position(|t| t.deadline <= now) {
                 _entry_to_fire = Some(timers.remove(idx));
-            } else {
+            } else if let Some(next) = timers.iter().min_by_key(|t| t.deadline) {
                 // Sleep until next timer (使用 sleep_until 而非 sleep，避免不必要唤醒)
-                let next = timers.iter().min_by_key(|t| t.deadline).unwrap().deadline;
-                sleep_until(next).await;
+                sleep_until(next.deadline).await;
+                continue;
+            } else {
                 continue;
             }
         }

@@ -247,48 +247,6 @@ pub(crate) fn grow_object(
     Some(heap_ptr)
 }
 
-/// 自顶向下迭代 merge sort，稳定 O(n log n)
-pub(crate) fn merge_sort_by<T: Copy>(
-    slice: &mut [T],
-    cmp: &mut dyn FnMut(&T, &T) -> std::cmp::Ordering,
-) {
-    let n = slice.len();
-    if n <= 1 {
-        return;
-    }
-    let mut buf: Vec<T> = Vec::with_capacity(n);
-    let mut width = 1;
-    while width < n {
-        let mut i = 0;
-        while i < n {
-            let mid = (i + width).min(n);
-            let end = (i + 2 * width).min(n);
-            let mut left = i;
-            let mut right = mid;
-            while left < mid && right < end {
-                if cmp(&slice[left], &slice[right]) != std::cmp::Ordering::Greater {
-                    buf.push(slice[left]);
-                    left += 1;
-                } else {
-                    buf.push(slice[right]);
-                    right += 1;
-                }
-            }
-            while left < mid {
-                buf.push(slice[left]);
-                left += 1;
-            }
-            while right < end {
-                buf.push(slice[right]);
-                right += 1;
-            }
-            slice[i..end].copy_from_slice(&buf[..end - i]);
-            buf.clear();
-            i += 2 * width;
-        }
-        width *= 2;
-    }
-}
 
 /// 沿原型链递归查找属性（带 visited set 防环路）
 pub(crate) fn read_object_property_by_name_proto_walk_with_env<
@@ -1015,8 +973,8 @@ pub(crate) fn get_string_value(caller: &mut Caller<'_, RuntimeState>, val: i64) 
     }
 }
 
-/// 解析并调用函数（支持 TAG_FUNCTION / TAG_CLOSURE / TAG_BOUND）
-pub(crate) fn resolve_and_call(
+
+pub(crate) async fn resolve_and_call_async(
     caller: &mut Caller<'_, RuntimeState>,
     func: i64,
     this_val: i64,
@@ -1041,7 +999,6 @@ pub(crate) fn resolve_and_call(
         };
 
         let total_count = bound_args_ref.len() as i32 + args_count;
-        // 读取当前 shadow_sp
         let shadow_sp_global = caller
             .get_export("__shadow_sp")
             .and_then(|e| e.into_global())
@@ -1049,7 +1006,6 @@ pub(crate) fn resolve_and_call(
         let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
         let ptr = shadow_sp;
 
-        // Push bound_args at position 0
         for (i, arg) in bound_args_ref.iter().enumerate() {
             memory
                 .write(
@@ -1059,7 +1015,6 @@ pub(crate) fn resolve_and_call(
                 )
                 .unwrap();
         }
-        // Copy call args after
         for i in 0..args_count {
             let mut buf = [0u8; 8];
             memory
@@ -1078,14 +1033,22 @@ pub(crate) fn resolve_and_call(
                 .unwrap();
         }
 
-        // 递归解析 target_func
-        resolve_callable_and_call(caller, target_func, bound_this, ptr, total_count)
+        Box::pin(resolve_callable_and_call_async(
+            caller,
+            target_func,
+            bound_this,
+            ptr,
+            total_count,
+        ))
+        .await
     } else {
-        resolve_callable_and_call(caller, func, this_val, args_base, args_count)
+
+        Box::pin(resolve_callable_and_call_async(caller, func, this_val, args_base, args_count))
+            .await
     }
 }
 
-pub(crate) fn resolve_callable_and_call(
+pub(crate) async fn resolve_callable_and_call_async(
     caller: &mut Caller<'_, RuntimeState>,
     callee: i64,
     this_val: i64,
@@ -1103,9 +1066,9 @@ pub(crate) fn resolve_callable_and_call(
             value::encode_undefined(),
         )
     } else if value::is_bound(callee) {
-        return resolve_and_call(caller, callee, this_val, args_base, args_count);
+        return Box::pin(resolve_and_call_async(caller, callee, this_val, args_base, args_count))
+            .await;
     } else if value::is_proxy(callee) {
-        // Proxy apply trap: 查找 handler.apply，如果存在则调用
         let handle = value::decode_proxy_handle(callee) as usize;
         let entry = {
             let table = caller.data().proxy_table.lock().unwrap();
@@ -1127,12 +1090,10 @@ pub(crate) fn resolve_callable_and_call(
                 );
                 return value::encode_undefined();
             }
-            // 查找 apply trap
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "apply")
                     .unwrap_or_else(value::encode_undefined);
                 if !value::is_undefined(trap) && !value::is_null(trap) {
-                    // 收集 shadow stack 参数到数组
                     let args_arr =
                         crate::runtime_host_helpers::alloc_array(caller, args_count as u32);
                     let memory = caller
@@ -1150,27 +1111,27 @@ pub(crate) fn resolve_callable_and_call(
                             arg_val,
                         );
                     }
-                    return call_wasm_callback(
+                    return call_wasm_callback_async(
                         caller,
                         trap,
                         entry.handler,
                         &[entry.target, this_val, args_arr],
                     )
+                    .await
                     .unwrap_or_else(|_| value::encode_undefined());
                 }
             }
-            // 无 apply trap，转发到 target
-            return resolve_callable_and_call(
+            return Box::pin(resolve_callable_and_call_async(
                 caller,
                 entry.target,
                 this_val,
                 args_base,
                 args_count,
-            );
+            ))
+            .await;
         }
         return value::encode_undefined();
     } else if value::is_native_callable(callee) {
-        // 从影子栈读取参数
         let memory = caller
             .get_export("memory")
             .and_then(|e| e.into_memory())
@@ -1181,12 +1142,13 @@ pub(crate) fn resolve_callable_and_call(
             let _ = memory.read(&mut *caller, (args_base + i * 8) as usize, &mut buf);
             collected_args.push(i64::from_le_bytes(buf));
         }
-        return call_native_callable_with_args_from_caller(
+        return call_native_callable_with_args_from_caller_async(
             caller,
             callee,
             this_val,
             collected_args,
         )
+        .await
         .unwrap_or_else(value::encode_undefined);
     } else {
         return value::encode_undefined();
@@ -1202,29 +1164,28 @@ pub(crate) fn resolve_callable_and_call(
         return value::encode_undefined();
     };
     let mut results = [Val::I64(0)];
-    let _ = func.call(
-        &mut *caller,
-        &[
-            Val::I64(env_obj),
-            Val::I64(this_val),
-            Val::I32(args_base),
-            Val::I32(args_count),
-        ],
-        &mut results,
-    );
+    let _ = func
+        .call_async(
+            &mut *caller,
+            &[
+                Val::I64(env_obj),
+                Val::I64(this_val),
+                Val::I32(args_base),
+                Val::I32(args_count),
+            ],
+            &mut results,
+        )
+        .await;
     results[0].unwrap_i64()
 }
 
-pub(crate) fn func_apply_impl(
+pub(crate) async fn func_apply_impl_async(
     caller: &mut Caller<'_, RuntimeState>,
     func: i64,
     this_val: i64,
     _args_array: i64,
 ) -> i64 {
-    // args_array 是一个数组对象，需要展开其元素到 shadow stack
-    // 简化实现：直接使用 func_call 语义但只支持固定参数
-    // 完整实现需要读取数组元素
-    resolve_and_call(caller, func, this_val, 0, 0)
+    Box::pin(resolve_and_call_async(caller, func, this_val, 0, 0)).await
 }
 
 pub(crate) fn func_bind_impl(

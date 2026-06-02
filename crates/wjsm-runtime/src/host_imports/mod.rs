@@ -4,16 +4,29 @@ mod async_generator;
 mod misc;
 mod promise;
 mod promise_combinators;
+mod reentrant_async;
 mod proxy_reflect;
+mod proxy_reflect_async;
 
 pub(crate) use async_fn::define_async_fn;
 pub(crate) use async_generator::define_async_generator;
 pub(crate) use misc::define_misc;
+pub(crate) use reentrant_async::define_array_object_async;
+pub(crate) use reentrant_async::define_typedarray_new_methods_async;
+pub(crate) use reentrant_async::define_misc_async;
+pub(crate) use reentrant_async::define_timers_arrays_async;
+pub(crate) use reentrant_async::define_proxy_traps_async;
+pub(crate) use reentrant_async::define_primitive_core_async;
 pub(crate) use promise::define_promise;
 pub(crate) use promise_combinators::define_promise_combinators;
 pub(crate) use proxy_reflect::define_proxy_reflect;
+pub(crate) use proxy_reflect_async::define_proxy_reflect_async;
 mod object_builtins;
 pub(crate) use object_builtins::define_object_builtins;
+mod object_builtins_async;
+pub(crate) use object_builtins_async::define_object_builtins_async;
+mod core_async;
+pub(crate) use core_async::define_core_async;
 
 // 原 include! 裸块文件 → 模块声明
 mod array_object;
