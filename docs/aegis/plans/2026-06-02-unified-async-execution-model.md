@@ -1,840 +1,797 @@
-# 统一异步执行模型 — 实现计划
+# 统一异步执行模型 — 根治实施计划
 
 ## Goal
 
-消除 `wjsm-runtime` 中 async store 上的 sync WASM re-entry panic 风险。将所有直接执行 WASM re-entry（`call_wasm_callback` / `func.call()`）的 `Func::wrap` 回调转为 `func_wrap_async`，并为间接 re-entry 的 runtime helpers 创建 async 版本。
+在 `wjsm-runtime` 中彻底消除 **async Store 上的同步 WASM re-entry**：凡是运行在 `Config::async_support(true)` + `epoch_deadline_async_yield_and_update` 之后、并可能触达 WASM 的路径，必须使用 Wasmtime async API（`instantiate_async` / `call_async` / `func_wrap_async`）。
+
+本计划的完成状态不是“减少 panic 风险”，而是：
+
+1. `wjsm-runtime` 的公共执行入口统一为 async-only。
+2. CLI 作为同步命令行边界，显式创建 Tokio runtime 并 `block_on` async runtime API。
+3. async Store 可达路径中不存在 `Func::call` / `Instance::new` / sync `call_wasm_callback` / sync `resolve_and_call` / sync microtask drain。
+4. 仍使用 `Func::wrap` 的宿主函数必须是纯 Rust / 纯内存 / 纯状态操作，不做任何 WASM re-entry。
+5. 新增行为回归测试和源码审计测试，防止以后再次把 sync re-entry 挂回 async Store。
 
 ## Architecture
 
-**Scope 修正**（vs spec 2026-06-02）：
+### Re-grounded corrections
 
-Spec 认为 `read_object_property_by_name` 需要 async 化并级联 ~130 个 `.await`。**经验证这是错误的**：`read_object_property_by_name_with_env`（`runtime_values.rs:375`）是纯 slot 查找 + 原型链遍历，不调用 `call_wasm_callback`，不做 getter/proxy dispatch。Getter dispatch 在 `reflect_get_impl_with_receiver`（`runtime_host_helpers.rs:1639`），Proxy trap dispatch 在 `proxy_or_target_*_impl` — 这些是独立的 helper，不是 property read 的一部分。
+本计划替代同名旧计划中的范围判断。对照当前源码重新核实后，真实情况如下：
 
-**实际 scope**：
+1. **`read_object_property_by_name_with_env` 不需要 async 化。**
+   `runtime_values.rs:375-449` 与 `read_object_property_by_name_proto_walk_with_env` 只读取对象 slot 和原型链内存字段，不触发 getter，不触发 Proxy trap，不调用 `call_wasm_callback`。旧 spec 中“`read_object_property_by_name` 会触发 getter/Proxy，需级联 130+ `.await`”是错误权威，执行时必须修订 spec。
 
-| 类别 | 数量 | 说明 |
+2. **`register_common_bridges` 当前没有 re-entry。**
+   `lib.rs:82-400` 是简单桥接；`lib.rs:402-744` 的 4 个 `call_wasm_callback` 属于 `register_complex_bridges_sync`，async 路径已经有 `register_complex_bridges_async`。旧审查报告把这 4 个点归到 `register_common_bridges` 不准确。执行时仍要删除 sync complex 版本，避免源码审计残留。
+
+3. **直接 `call_wasm_callback` 不是完整风险集合。**
+   还必须覆盖：
+   - `resolve_and_call` / `resolve_callable_and_call` → `func.call` + Proxy apply trap；
+   - `func_apply_impl` → `resolve_and_call`；
+   - `perform_eval_from_caller` → `Instance::new` + `entry.call`；
+   - `drain_microtasks_from_caller` / `call_host_function_with_args` → `func.call`；
+   - `resume_async_function` → `func.call`；
+   - native callable dispatch 中的 `EvalIndirect` / `EvalFunction`。
+
+4. **`queue_microtask` 本身不是 re-entry。**
+   `misc.rs:21-33` 只 enqueue，安全；真正危险点是 `drain_microtasks` import（`misc.rs:35-41`）以及 post-main/timer microtask drain。
+
+5. **`JSON.stringify` 当前没有 toJSON callback re-entry。**
+   当前 `json_stringify` import 调 `runtime_json_stringify`，未执行 `toJSON` / replacer callback。真实 JSON re-entry 是：
+   - `runtime_json.rs:645`：`json_parse_to_string` 对非字符串对象做 `toString` / `valueOf` callback；
+   - `runtime_json.rs:785`：JSON.parse reviver callback。
+
+### Target model
+
+```text
+wjsm-cli (sync CLI boundary)
+  -> Tokio Runtime::block_on(...)
+    -> wjsm_runtime::execute(...).await
+      -> async Store only
+      -> register_linker(...) registers:
+         - Func::wrap for non-re-entry host fns only
+         - func_wrap_async for all direct/indirect WASM re-entry fns
+      -> instantiate_async
+      -> main.call_async
+      -> drain_microtasks_async / scheduler async callbacks
+```
+
+### Async-only public contract
+
+`wjsm-runtime` after completion exposes:
+
+```rust
+pub async fn execute(wasm_bytes: &[u8]) -> anyhow::Result<()>;
+pub async fn execute_with_writer<W: std::io::Write>(wasm_bytes: &[u8], writer: W) -> anyhow::Result<W>;
+```
+
+The old sync wrappers are deleted. `wjsm-cli` is the only sync bridge in this repository.
+
+### Re-entry inventory to eliminate
+
+| Class | Current concrete sites | Required owner after plan |
 |---|---|---|
-| 直接 `call_wasm_callback` 的 `Func::wrap` 回调 | ~48 | 需转 `func_wrap_async` |
-| 含 `call_wasm_callback`/`func.call()` 的 runtime helpers | 8 | 需创建 `_async` 版本 |
-| 纯操作回调（无 re-entry） | ~450 | **不变**，保持 `Func::wrap` |
-| `read_object_property_by_name` 调用点 | 0 变更 | 纯 slot 查找，无需 async |
-
-**关键约束**：Wasmtime 允许在同一 async store/linker 上混合注册 `Func::wrap`（sync）和 `func_wrap_async`（async）宿主函数。仅当 sync 回调尝试 WASM re-entry（`func.call()`）时才 panic。不做 re-entry 的 sync 回调完全安全。
+| Direct callback helper | `call_wasm_callback` in `array_object`, `typedarray_new_methods`, `proxy_reflect`, `misc`, `core`, `runtime_host_helpers`, `runtime_json`, `runtime_values`, `register_complex_bridges_sync` | `call_wasm_callback_async(...).await`; then delete sync helper |
+| Function dispatch helper | `resolve_and_call`, `resolve_callable_and_call`, `func_apply_impl` in `runtime_values.rs` and callsites in host imports | async equivalents; all async host callbacks use async equivalents; delete sync re-entry helpers |
+| Eval compiled WASM | `try_compiled_eval_from_caller`, `perform_eval_from_caller`, eval direct/indirect imports, native eval callables | async eval equivalents; eval imports and native callable async path use them |
+| Microtask host callback | `drain_microtasks_from_caller`, `call_host_function_with_args`, `resume_async_function` | generic async microtask/resume path usable from `Store` and `Caller`; sync versions deleted after sync runtime removal |
+| Proxy/Reflect helper dispatch | `reflect_get_impl_with_receiver`, `define_property_internal`, `proxy_or_target_*`, local Proxy/Reflect helpers | async helper variants or full async conversion of owning host callbacks |
+| Top-level sync execution | `execute`, `execute_with_writer`, `register_linker`, `register_complex_bridges_sync`, sync timer loop | deleted or renamed from async equivalents |
 
 ## Tech Stack
 
-- **wasmtime** `func_wrap_async` + `Box::new(async move { ... })` — 已有模式（`register_complex_bridges_async`）
-- **tokio** — CLI 层 `block_on` 桥接（`wjsm-runtime` 已依赖 tokio）
+- `wasmtime` async APIs: `Linker::func_wrap_async`, `Instance::new_async`, `TypedFunc::call_async`, `Func::call_async`.
+- `tokio` runtime at CLI boundary only.
+- Existing `wjsm-runtime` async scheduler (`scheduler.rs`, `drain_microtasks_async`, `call_host_function_with_args_async`) as the canonical post-main/timer owner.
+- Rust 2024, default rustfmt.
 
 ## Baseline / Authority Refs
 
-- Spec: `docs/aegis/specs/2026-06-02-unified-async-execution-model-design.md`
-- 已有 async 模式: `register_complex_bridges_async`（`lib.rs:774`）— `func_wrap_async` + `call_wasm_callback_async`
-- 已有 async helpers: `call_wasm_callback_async`（`runtime_host_helpers.rs:187`）、`drain_microtasks_async`、`call_host_function_with_args_async`
+- Current plan file: `docs/aegis/plans/2026-06-02-unified-async-execution-model.md`.
+- Design spec to repair during execution: `docs/aegis/specs/2026-06-02-unified-async-execution-model-design.md`.
+- Current async scheduler authority to update during execution: `docs/async-scheduler.md`.
+- Existing async primitives:
+  - `call_wasm_callback_async` in `runtime_host_helpers.rs`.
+  - `try_compiled_eval_from_caller_async` in `runtime_eval.rs`.
+  - `resume_async_function_async` and `run_main_completion_block_async` in `runtime_async_fn.rs`.
+  - `drain_microtasks_async`, `call_host_function_with_args_async` in `runtime_microtask.rs`.
+  - `register_complex_bridges_async` in `lib.rs`.
 
 ## Compatibility Boundary
 
-- **不变**：所有 fixture `.expected` 文件、WASM codegen、IR、语义分析、模块系统
-- **公共 API 变更**：`execute_with_writer` sync → async（唯一公共入口）
-- **内部变更**：`register_linker_async` → `register_linker`（重命名），sync 路径删除
+- **Behavioral compatibility:** existing fixture `.expected` outputs must not change.
+- **Allowed test additions:** add targeted async re-entry runtime tests and fixture coverage for previously untested panic-prone paths.
+- **Breaking API change:** `wjsm_runtime::execute` / `execute_with_writer` become async. All in-repo callers must be updated in the same plan.
+- **No changes:** parser, semantic IR, backend codegen, module bundler semantics.
+- **Allowed docs changes:** update `docs/async-scheduler.md` and the 2026-06-02 spec to remove stale sync-wrapper and property-read claims.
 
 ## Verification
 
-- `cargo build --workspace` — 编译通过
-- `cargo nextest run --workspace` — 全测试通过
-- `Func::wrap` 在 `host_imports/` 中匹配数 < 原始数（仅 re-entry 回调被转换）
-- `call_wasm_callback(` 在 `Func::wrap` 回调闭包体内零匹配
-- `func.call(` 在 async 路径零匹配（仅 `func.call_async(`）
-- 所有 `.expected` fixture 输出不变
+Mandatory final evidence:
 
----
+1. `cargo check -p wjsm-runtime`
+2. `cargo check -p wjsm-cli`
+3. `cargo build --workspace`
+4. `cargo nextest run -p wjsm-runtime -E 'test(async_reentry)'`
+5. `cargo nextest run -p wjsm-runtime -E 'test(async_scheduler)'`
+6. `cargo nextest run --workspace`
+7. `cargo clippy --workspace --all-targets`
+8. Source audit tests pass:
+   - no non-async `call_wasm_callback(` remains outside deleted/absent sync helper definitions;
+   - no `resolve_and_call(` / `resolve_callable_and_call(` async Store callsite remains without `_async`;
+   - no `Func::call` / `TypedFunc::call` / `Instance::new` remains in `wjsm-runtime/src` runtime paths;
+   - `Func::wrap` remains only for non-re-entry host functions.
+9. `git diff fixtures/` shows no existing `.expected` output changes unless a newly added fixture is present.
 
 ## Plan Pressure Test
 
-```
+```text
 - Owner / contract / retirement:
-  - wjsm-runtime 是唯一 owner
-  - 旧 sync 路径（execute_with_writer sync、register_linker sync）被删除
-  - 新 async-only 路径取代
+  - wjsm-runtime owns Store execution and host re-entry.
+  - wjsm-cli owns sync-to-async command-line bridge.
+  - Old sync runtime execution path is deleted, not kept as fallback.
 - Verification scope:
-  - cargo build + nextest 全通过
-  - fixture 输出不变
-  - grep 验证无遗漏 re-entry
+  - Runtime async behavior tests hit array callbacks, Function.call/apply, Proxy/Reflect traps, proxy_traps imports, eval/native eval, JSON.parse callback paths, microtasks, and timers.
+  - Source audit test blocks future sync re-entry regressions.
+  - Workspace build/test/clippy prove integration.
 - Task executability:
-  - 每个 define_* 模块独立可验证（cargo check）
-  - Runtime helpers 先建后转
-- Pressure result: proceed
+  - Helper layer first, then host import modules, then public API cutover, then docs/retirement.
+  - Each task has a local compile/test command before the next layer.
+- Pressure result: proceed with full root-cause conversion, not the previous minimal callback-only plan.
 ```
 
 ## Plan-Time Complexity Check
 
-```
-- Target files: 18 host_imports/*.rs + ~6 runtime_*.rs + lib.rs + wjsm-cli
+```text
+- Target files:
+  - Runtime helpers: runtime_host_helpers.rs, runtime_values.rs, runtime_eval.rs, runtime_builtins.rs, runtime_microtask.rs, runtime_async_fn.rs, runtime_json.rs, runtime_render.rs only if needed by async JSON wiring.
+  - Host imports: array_object.rs, typedarray_new_methods.rs, proxy_reflect.rs, proxy_traps.rs, misc.rs, primitive_core.rs, core.rs, timers_arrays.rs.
+  - Runtime entry: lib.rs.
+  - CLI: crates/wjsm-cli/Cargo.toml, crates/wjsm-cli/src/lib.rs.
+  - Tests/docs: wjsm-runtime tests, docs/async-scheduler.md, 2026-06-02 spec.
 - Existing size / shape signals:
-  - collections_buffers.rs: ~2400 行（最大模块）
-  - proxy_reflect.rs: ~1400 行
-  - array_object.rs: ~1800 行
-- Owner fit: 变更在现有模块内，不新增文件
-- Add-in-place risk: 低 — 机械模式替换，不改变逻辑
-- Better file boundary: N/A（in-place edit）
-- Recommendation: edit-in-place
+  - proxy_reflect.rs and array_object.rs are large but single-owner host import modules.
+  - runtime_eval.rs has sync/async duplicate structure already; extend it deliberately.
+  - runtime_microtask.rs has async version but caller wrapper is still wrong; refactor owner rather than patching around it.
+- Owner fit:
+  - No new runtime abstraction owner is needed; async twins live beside existing helpers until sync helpers are retired in the same plan.
+- Add-in-place risk:
+  - Moderate due nested helper functions in proxy_reflect/proxy_traps. Safer than splitting because local helpers capture module invariants.
+- Better file boundary:
+  - Add test-only audit file; do not create new runtime module.
+- Recommendation:
+  - Edit in place, then delete retired sync owner code after all callsites are async.
 ```
 
 ---
 
-## 转换模式参考
+## Conversion Patterns
 
-### Pattern A: `Func::wrap` → `func_wrap_async`（单个回调）
+### Pattern A: sync host import with re-entry → `func_wrap_async`
 
-**Before**（sync 回调，含 WASM re-entry）：
-```rust
-let f = Func::wrap(
-    &mut store,
-    |mut caller: Caller<'_, RuntimeState>, _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
-        // ... 纯 Rust 逻辑 ...
-        call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val])
-            .unwrap_or(value::encode_undefined());
-        // ...
-        value::encode_undefined()
-    },
-);
-linker.define(&mut store, "env", "arr_proto_for_each", f)?;
-```
-
-**After**（async 回调）：
 ```rust
 linker.func_wrap_async(
-    "env", "arr_proto_for_each",
-    |mut caller: Caller<'_, RuntimeState>, (_env_obj, this_val, args_base, args_count): (i64, i64, i32, i32)| -> i64 {
+    "env",
+    "host_name",
+    |mut caller: Caller<'_, RuntimeState>, (arg0, arg1): (i64, i32)| {
         Box::new(async move {
-            // ... 纯 Rust 逻辑（不变）...
-            call_wasm_callback_async(&mut caller, cb, this_arg, &[elem, idx_val, this_val]).await
-                .unwrap_or(value::encode_undefined());
-            // ...
-            value::encode_undefined()
+            let result = call_wasm_callback_async(&mut caller, callback, this_val, &[arg0]).await;
+            result.unwrap_or_else(|_| value::encode_undefined())
         })
     },
 )?;
 ```
 
-**关键变化**：
-1. `Func::wrap(&mut store, |caller, p1, p2, ...| { ... })` → `linker.func_wrap_async("env", "name", |caller, (p1, p2, ...): (T1, T2, ...)| { Box::new(async move { ... }) })`
-2. 参数从独立参数变为 tuple
-3. `call_wasm_callback(...)` → `call_wasm_callback_async(...).await`
-4. 删除 `let f = ...; linker.define(...)` 中间变量
-5. 如果回调内调用 `define_property_internal` → `define_property_internal_async(...).await`
-6. 如果回调内调用 `reflect_get_impl_with_receiver` → `reflect_get_impl_with_receiver_async(...).await`
+Rules:
 
-### Pattern B: Runtime helper → async 版本
+- Remove `let f = Func::wrap(...); linker.define(..., f)?;` for that host function.
+- Tuple all parameters in the async closure.
+- Preserve return types and error behavior exactly.
+- Do not convert neighboring pure `Func::wrap` callbacks.
 
-**Before**（sync helper，含 `call_wasm_callback`）：
+### Pattern B: function dispatch helper async pair
+
+Create async equivalents before converting callsites:
+
 ```rust
-pub(crate) fn reflect_get_impl_with_receiver(
-    caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64, receiver: i64,
-) -> i64 {
-    // ... slot 查找 ...
-    // getter dispatch:
-    return call_wasm_callback(caller, getter, receiver, &[])
-        .unwrap_or_else(|_| value::encode_undefined());
-}
+pub(crate) async fn resolve_and_call_async(... ) -> i64;
+pub(crate) async fn resolve_callable_and_call_async(... ) -> i64;
+pub(crate) async fn func_apply_impl_async(... ) -> i64;
 ```
 
-**After**（新增 async 版本，sync 版本保留）：
+Rules:
+
+- Bound function recursion must recurse into async helper.
+- Proxy apply trap must use `call_wasm_callback_async(...).await`.
+- Table dispatch must use `func.call_async(...).await`.
+- Native callable branch must call `call_native_callable_with_args_from_caller_async(...).await`.
+
+### Pattern C: native callable async dispatch
+
+Create:
+
 ```rust
-pub(crate) async fn reflect_get_impl_with_receiver_async(
-    caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64, receiver: i64,
-) -> i64 {
-    // ... slot 查找（不变）...
-    // getter dispatch:
-    return call_wasm_callback_async(caller, getter, receiver, &[]).await
-        .unwrap_or_else(|_| value::encode_undefined());
-}
-// sync 版本保留（给不 re-enter 的 Func::wrap 回调用）
+pub(crate) async fn call_native_callable_with_args_from_caller_async(...) -> Option<i64>;
+pub(crate) async fn call_native_callable_from_caller_async(...) -> Option<i64>;
 ```
 
-### Pattern C: `call_wasm_callback_async` bound 函数修复
+Rules:
 
-**Before**（line 286，async 版本中仍用 sync 调用）：
+- Non-re-entry native callables keep identical logic.
+- `EvalIndirect` must call `perform_eval_from_caller_async(...).await`.
+- `EvalFunction` must call `call_eval_function_from_caller_async(...).await`.
+- Promise resolving and table mutation branches must remain synchronous Rust inside the async function; do not spawn.
+
+### Pattern D: eval async chain
+
+Create async mirrors for every eval function that can reach `perform_eval_from_caller` recursively:
+
 ```rust
-return call_wasm_callback(&mut *caller, bound_func, bound_this, &combined_args);
+perform_eval_from_caller_async
+call_eval_function_from_caller_async
+eval_call_function_async
+eval_function_block_async
+eval_function_stmt_async
+eval_expr_async
+eval_call_async
 ```
 
-**After**：
+Rules:
+
+- `try_compiled_eval_from_caller_async` already exists; use it.
+- Direct eval inside eval AST (`eval_call`) must call async perform eval, not sync perform eval.
+- Keep parser/lowering/error behavior identical.
+
+### Pattern E: microtask async generic owner
+
+Refactor async microtask helpers so they work from both `Store<RuntimeState>` and `Caller<'_, RuntimeState>`:
+
 ```rust
-return call_wasm_callback_async(&mut *caller, bound_func, bound_this, &combined_args).await;
+pub(crate) async fn resume_async_function_async<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(...);
+pub(crate) async fn drain_microtasks_async<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(...);
+pub(crate) async fn drain_microtasks_from_caller_async(...);
 ```
+
+Rules:
+
+- `drain_microtasks_from_caller_async` must not delegate to sync `drain_microtasks`.
+- All Promise reaction / thenable / microtask callback / AsyncResume branches use async helpers.
+- Scheduler continues to call the same `drain_microtasks_async`; type signature becomes generic, behavior unchanged.
 
 ---
 
 ## Tasks
 
-### Task 1: Runtime helpers — 创建 async 版本
+### Task 1: Add failing async re-entry regression and audit tests
+
+**Files**:
+- Modify: `crates/wjsm-runtime/tests/async_scheduler.rs`
+- Create: `crates/wjsm-runtime/tests/async_reentry_audit.rs`
+
+**Why**: Prove the bug class on the live async execution path before changing implementation, and permanently prevent forbidden sync re-entry from returning.
+
+**Impact/Compatibility**: Test-only. Existing fixtures unchanged.
+
+**Steps**:
+
+- [ ] Add helper `run_async_source(source: &str) -> Result<String>` in `async_scheduler.rs` if not already available.
+- [ ] Add async behavior tests with names prefixed `async_reentry_`:
+  - `async_reentry_array_callbacks`: `map`, `filter`, `reduce`, `sort` callbacks.
+  - `async_reentry_function_call_and_apply`: `Function.prototype.call` and `apply`.
+  - `async_reentry_proxy_reflect_traps`: `Reflect.get`, `Reflect.has`, `Reflect.apply`, `Reflect.construct`, `Reflect.ownKeys`, `Reflect.defineProperty` on proxies.
+  - `async_reentry_proxy_trap_imports`: property get/set/delete through proxy internal trap imports.
+  - `async_reentry_eval_direct_indirect_and_native`: direct eval, indirect eval, eval function native callable.
+  - `async_reentry_json_parse_callbacks`: non-string object coercion and reviver.
+  - `async_reentry_microtask_and_timer_callbacks`: queueMicrotask, Promise.then, timer callback.
+- [ ] Create `async_reentry_audit.rs` source audit test that recursively reads `crates/wjsm-runtime/src` and fails if non-comment source contains forbidden sync patterns after retirement:
+  - `call_wasm_callback(` not followed by `_async` and not the deleted function definition;
+  - `resolve_and_call(` or `resolve_callable_and_call(` without `_async` outside deleted definitions;
+  - `.call(` on Wasmtime funcs;
+  - `Instance::new(` in eval/runtime execution code;
+  - `drain_microtasks_from_caller(` in host imports.
+- [ ] Run and confirm RED before implementation:
+  - `cargo nextest run -p wjsm-runtime -E 'test(async_reentry)'`
+  - `cargo nextest run -p wjsm-runtime -E 'test(async_reentry_audit)'`
+- [ ] Commit tests after RED evidence is captured in the commit message.
+
+**Verification**: The behavior tests or audit test fail before implementation; failure is the async Store sync re-entry issue, not unsupported JS syntax.
+
+---
+
+### Task 2: Complete async helper layer and eliminate helper-level sync recursion
 
 **Files**:
 - Modify: `crates/wjsm-runtime/src/runtime_host_helpers.rs`
 - Modify: `crates/wjsm-runtime/src/runtime_values.rs`
+- Modify: `crates/wjsm-runtime/src/runtime_builtins.rs`
 
-**Why**: 建立 async re-entry 基础设施。所有后续 `define_*` 转换依赖这些 async helpers。
+**Why**: Host import conversion needs safe async primitives before callsites can move.
 
-**Impact**: 新增 ~7 个 async 函数。sync 版本保留（给 non-re-entry 回调用）。
+**Impact/Compatibility**: Internal helper additions first; no public API change yet.
 
 **Steps**:
 
-- [ ] **Step 1**: 修复 `call_wasm_callback_async` 中 bound 函数的 sync re-entry（line 286）
+- [ ] Fix `call_wasm_callback_async` bound branch: line 286 currently calls sync `call_wasm_callback`; replace with recursive `call_wasm_callback_async(...).await`.
+- [ ] Add `resolve_callable_and_call_async` mirroring `resolve_callable_and_call`:
+  - proxy apply trap uses `call_wasm_callback_async(...).await`;
+  - recursive proxy target forwarding uses `_async`;
+  - native callable branch uses `call_native_callable_with_args_from_caller_async(...).await`;
+  - table dispatch uses `func.call_async(...).await`.
+- [ ] Add `resolve_and_call_async` mirroring `resolve_and_call` and using `resolve_callable_and_call_async(...).await` for bound and non-bound branches.
+- [ ] Add `func_apply_impl_async` and keep argument behavior identical to sync `func_apply_impl`.
+- [ ] Add `call_native_callable_with_args_from_caller_async` and `call_native_callable_from_caller_async` in `runtime_builtins.rs`; only eval branches await, all other branches remain identical.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Commit.
 
-将 `call_wasm_callback_async` 函数体内 line 286 的：
-```rust
-return call_wasm_callback(&mut *caller, bound_func, bound_this, &combined_args);
-```
-替换为：
-```rust
-return call_wasm_callback_async(&mut *caller, bound_func, bound_this, &combined_args).await;
-```
-
-- [ ] **Step 2**: 创建 `resolve_callable_and_call_async` in `runtime_values.rs`
-
-复制 `resolve_callable_and_call`（line 1088-1220）为 `resolve_callable_and_call_async`，将：
-  - `call_wasm_callback(caller, ...)` → `call_wasm_callback_async(caller, ...).await`
-  - `func.call(&mut *caller, ...)` (line 1205) → `func.call_async(&mut *caller, ...).await`
-
-- [ ] **Step 3**: 创建 `reflect_get_impl_with_receiver_async` in `runtime_host_helpers.rs`
-
-复制 `reflect_get_impl_with_receiver`（line 1639-1748）为 `_async` 版本，将：
-  - `call_wasm_callback(caller, getter, receiver, &[])` (line 1738) → `call_wasm_callback_async(caller, getter, receiver, &[]).await`
-
-- [ ] **Step 4**: 创建 `define_property_internal_async` in `runtime_host_helpers.rs`
-
-复制 `define_property_internal`（line 1211-1240）+ 其内部 `define_property_on_target` 为 `_async` 版本，将：
-  - `call_wasm_callback(caller, trap, ...)` (line 1272) → `call_wasm_callback_async(caller, trap, ...).await`
-
-- [ ] **Step 5**: 创建 `proxy_or_target_get_prototype_of_impl_async` in `runtime_host_helpers.rs`
-
-复制 line 796-870 为 `_async`，将 line 812 的 `call_wasm_callback` → `call_wasm_callback_async(...).await`。
-
-- [ ] **Step 6**: 创建 `proxy_or_target_is_extensible_impl_async` in `runtime_host_helpers.rs`
-
-复制 line 872-920 为 `_async`，将 line 889 的 `call_wasm_callback` → `call_wasm_callback_async(...).await`。
-
-- [ ] **Step 7**: 创建 `proxy_or_target_prevent_extensions_impl_async` in `runtime_host_helpers.rs`
-
-复制 line 922-960 为 `_async`，将 line 940 的 `call_wasm_callback` → `call_wasm_callback_async(...).await`。
-
-- [ ] **Step 8**: 验证编译
-
-```bash
-cargo check -p wjsm-runtime
-```
-
-**Verification**: `cargo check -p wjsm-runtime` passes. 新增的 `_async` 函数存在但尚未被调用（dead code warnings 可暂时 `#[allow(dead_code)]`）。
-
-- [ ] **Step 9**: Commit
-
-```bash
-git add -A && git commit -m "feat: add async versions of re-entry runtime helpers
-
-- resolve_callable_and_call_async
-- reflect_get_impl_with_receiver_async
-- define_property_internal_async (+ define_property_on_target_async)
-- proxy_or_target_get_prototype_of_impl_async
-- proxy_or_target_is_extensible_impl_async
-- proxy_or_target_prevent_extensions_impl_async
-- Fix call_wasm_callback_async bound function dispatch to use async
-
-Co-authored-by: CommandCodeBot <noreply@commandcode.ai>"
-```
+**Verification**: `cargo check -p wjsm-runtime` passes; audit test still fails because callsites remain sync.
 
 ---
 
-### Task 2: Convert `host_imports/array_object.rs` re-entry callbacks
+### Task 3: Complete async eval chain
+
+**Files**:
+- Modify: `crates/wjsm-runtime/src/runtime_eval.rs`
+- Modify: `crates/wjsm-runtime/src/runtime_builtins.rs` if async native callable signatures need adjustment
+
+**Why**: Eval is a compiled WASM re-entry path. Existing `try_compiled_eval_from_caller_async` is unused by sync `perform_eval_from_caller` and native callable eval branches.
+
+**Impact/Compatibility**: Internal async mirror functions; sync functions remain until retirement.
+
+**Steps**:
+
+- [ ] Add `perform_eval_from_caller_async` with identical validation/parsing/error behavior to `perform_eval_from_caller`, but call `try_compiled_eval_from_caller_async(...).await`.
+- [ ] Add async mirrors for interpreted eval function execution:
+  - `call_eval_function_from_caller_async`
+  - `eval_call_function_async`
+  - `eval_function_block_async`
+  - `eval_function_stmt_async`
+  - `eval_expr_async`
+  - `eval_call_async`
+- [ ] In `eval_call_async`, direct nested `eval(...)` calls must call `perform_eval_from_caller_async(...).await`.
+- [ ] Keep sync eval functions untouched until public sync runtime path is deleted.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Run `cargo nextest run -p wjsm-runtime -E 'test(async_reentry_eval)'` and confirm failures now move from compile/panic risk toward remaining callsites only.
+- [ ] Commit.
+
+**Verification**: `cargo check -p wjsm-runtime` passes; async eval helpers compile and are used by async native callable dispatch.
+
+---
+
+### Task 4: Make microtask and async resume helpers truly async from Caller and Store
+
+**Files**:
+- Modify: `crates/wjsm-runtime/src/runtime_microtask.rs`
+- Modify: `crates/wjsm-runtime/src/runtime_async_fn.rs`
+- Modify: `crates/wjsm-runtime/src/scheduler.rs` only for signature fallout
+
+**Why**: `drain_microtasks_from_caller_async` currently delegates to sync `drain_microtasks`, which still calls `func.call`. That is unsafe if the `drain_microtasks` host import runs on async Store.
+
+**Impact/Compatibility**: Internal signature refactor; behavior stays identical.
+
+**Steps**:
+
+- [ ] Change `resume_async_function_async` to generic `C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess` so it accepts `Store` and `Caller`.
+- [ ] Change `drain_microtasks_async` to generic over the same bound.
+- [ ] Replace the body of `drain_microtasks_from_caller_async` so it calls `drain_microtasks_async(caller, &env).await`, not sync `drain_microtasks`.
+- [ ] Ensure `call_host_function_async` / `call_host_function_with_args_async` remain generic and use `func.call_async` only.
+- [ ] Update `scheduler.rs` callsites for the new generic signatures.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Commit.
+
+**Verification**: `cargo check -p wjsm-runtime` passes; source audit no longer flags async microtask wrapper delegating to sync drain.
+
+---
+
+### Task 5: Convert `array_object.rs` re-entry callbacks, including Function call/apply
 
 **Files**:
 - Modify: `crates/wjsm-runtime/src/host_imports/array_object.rs`
 
-**Why**: 11 个回调直接调用 `call_wasm_callback`（forEach, map, filter, reduce, reduceRight, sort, find, findIndex, some, every, flatMap）。
+**Why**: Array callbacks and Function call/apply are direct user callback dispatch from async Store.
 
-**Impact**: 仅转换含 `call_wasm_callback` 的回调。其余 ~30 个回调（push, pop, includes, indexOf, join, concat, slice, fill, reverse, flat, shift, unshift, at, copyWithin, splice, isArray, ...）保持 `Func::wrap`。
-
-**Steps**:
-
-- [ ] **Step 1**: 识别需转换的 11 个回调
-
-搜索 `call_wasm_callback` 在文件中的位置。每个匹配位于一个 `Func::wrap` 回调内。需转换的回调名：
-1. `arr_proto_sort_fn` (line ~509)
-2. `arr_proto_for_each_fn` (line ~683)
-3. `arr_proto_map_fn` (line ~730)
-4. `arr_proto_filter_fn` (line ~771)
-5. `arr_proto_reduce_fn` (line ~834)
-6. `arr_proto_reduce_right_fn` (line ~891)
-7. `arr_proto_find_fn` (line ~932)
-8. `arr_proto_find_index_fn` (line ~968)
-9. `arr_proto_some_fn` (line ~1009)
-10. `arr_proto_every_fn` (line ~1045)
-11. `arr_proto_flat_map_fn` (line ~1092)
-
-- [ ] **Step 2**: 对每个回调应用 Pattern A 转换
-
-对每个回调，执行以下变换：
-1. `let VAR = Func::wrap(&mut store, |CALLER, PARAMS| -> RET { BODY });`
-   → `linker.func_wrap_async("env", "NAME", |CALLER, (PARAMS): (TYPES)| { Box::new(async move { BODY_ASYNC }) })?;`
-2. 回调体内 `call_wasm_callback(` → `call_wasm_callback_async(`，并在调用处加 `.await`
-3. 删除 `linker.define(&mut store, "env", "NAME", VAR)?;`（被 `func_wrap_async` 替代）
-
-示例 — `arr_proto_for_each_fn`（完整转换）：
-
-**Before**:
-```rust
-let arr_proto_for_each_fn = Func::wrap(
-    &mut store,
-    |mut caller: Caller<'_, RuntimeState>,
-     _env_obj: i64, this_val: i64, args_base: i32, args_count: i32| -> i64 {
-        let cb = read_shadow_arg(&mut caller, args_base, 0);
-        // ...
-        for i in 0..len {
-            // ...
-            if call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val]).is_err() {
-                return value::encode_undefined();
-            }
-        }
-        value::encode_undefined()
-    },
-);
-linker.define(&mut store, "env", "arr_proto_for_each", arr_proto_for_each_fn)?;
-```
-
-**After**:
-```rust
-linker.func_wrap_async(
-    "env", "arr_proto_for_each",
-    |mut caller: Caller<'_, RuntimeState>,
-     (_env_obj, this_val, args_base, args_count): (i64, i64, i32, i32)| -> i64 {
-        Box::new(async move {
-            let cb = read_shadow_arg(&mut caller, args_base, 0);
-            // ...
-            for i in 0..len {
-                // ...
-                if call_wasm_callback_async(&mut caller, cb, this_arg, &[elem, idx_val, this_val]).await.is_err() {
-                    return value::encode_undefined();
-                }
-            }
-            value::encode_undefined()
-        })
-    },
-)?;
-```
-
-对其余 10 个回调重复相同模式。
-
-- [ ] **Step 3**: 移除 `store` 参数（如果函数内所有回调都已转换）
-
-由于 `array_object.rs` 中混合 sync/async 回调，`store` 参数仍需保留给 sync `Func::wrap` 回调。**函数签名不变**。
-
-- [ ] **Step 4**: 验证编译
-
-```bash
-cargo check -p wjsm-runtime 2>&1 | head -50
-```
-
-**Verification**: `cargo check -p wjsm-runtime` passes. 文件中 `call_wasm_callback(` 在 `Func::wrap` 闭包内零匹配（已全部转为 `_async`）。
-
-- [ ] **Step 5**: Commit
-
-```bash
-git add -A && git commit -m "feat: convert array_object.rs re-entry callbacks to func_wrap_async
-
-Convert 11 callbacks (sort, forEach, map, filter, reduce, reduceRight,
-find, findIndex, some, every, flatMap) from Func::wrap to func_wrap_async.
-Remaining ~30 non-re-entry callbacks stay as Func::wrap.
-
-Co-authored-by: CommandCodeBot <noreply@commandcode.ai>"
-```
-
----
-
-### Task 3: Convert `host_imports/proxy_reflect.rs` re-entry callbacks
-
-**Files**:
-- Modify: `crates/wjsm-runtime/src/host_imports/proxy_reflect.rs`
-
-**Why**: 12 个回调直接调用 `call_wasm_callback`（proxy get/set/has/deleteProperty/apply/construct, reflect get/set/has/delete/apply/construct）。此外 `reflect_get` 回调调用 `reflect_get_impl_with_receiver`，`reflect_defineProperty` 调用 `define_property_internal` — 需改用 `_async` 版本。
-
-**Impact**: 12 回调转 async。其余 ~5 个回调（`reflect_get_prototype_of`, `reflect_set_prototype_of`, `reflect_is_extensible`, `reflect_prevent_extensions`, `reflect_get_own_property_descriptor`）保持 sync（它们不直接调用 `call_wasm_callback`，但它们调用的 `proxy_or_target_*_impl` helpers 有 `_async` 版本 — 但这些回调本身不做 WASM re-entry，仅在 proxy 路径通过 `call_wasm_callback` re-enter — 需验证）。
-
-**⚠️ 注意**：`reflect_get_prototype_of` 等 5 个回调虽然自身不含 `call_wasm_callback`，但它们调用 `proxy_or_target_get_prototype_of_impl` 等 helper，这些 helper **内部** 对 proxy 做 `call_wasm_callback`。如果这些回调在 async store 上执行且目标是 proxy，sync helper 内的 `call_wasm_callback` 会 panic。
-
-**决策**：为安全起见，将这 5 个回调也转为 async，调用 `_async` helpers。总计 **17 个回调**转 async。
+**Impact/Compatibility**: Only re-entry host functions switch to `func_wrap_async`; pure Array methods stay `Func::wrap`.
 
 **Steps**:
 
-- [ ] **Step 1**: 转换 12 个直接 `call_wasm_callback` 回调（Pattern A）
+- [ ] Convert these direct callback imports to `func_wrap_async` and `call_wasm_callback_async(...).await`: `arr_proto_sort`, `arr_proto_for_each`, `arr_proto_map`, `arr_proto_filter`, `arr_proto_reduce`, `arr_proto_reduce_right`, `arr_proto_find`, `arr_proto_find_index`, `arr_proto_some`, `arr_proto_every`, `arr_proto_flat_map`.
+- [ ] Convert `func_call` host import to `func_wrap_async` and use `resolve_and_call_async(...).await`.
+- [ ] Convert `func_apply` host import to `func_wrap_async` and use `func_apply_impl_async(...).await`.
+- [ ] Leave non-re-entry methods (`push`, `pop`, `includes`, `slice`, `splice`, etc.) as `Func::wrap`.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Run `cargo nextest run -p wjsm-runtime -E 'test(async_reentry_array_callbacks) or test(async_reentry_function_call_and_apply)'`.
+- [ ] Commit.
 
-同 Task 2 模式。对每个回调：
-1. `Func::wrap` → `func_wrap_async` + `Box::new(async move { ... })`
-2. `call_wasm_callback(` → `call_wasm_callback_async(...).await`
-3. 删除 `linker.define(...)` + 中间变量
-
-对 `reflect_get` 回调（line ~39-82）：
-- `reflect_get_impl_with_receiver(...)` → `reflect_get_impl_with_receiver_async(...).await`
-
-对 `reflect_defineProperty` 回调（line ~1100-1120）：
-- `define_property_internal(...)` → `define_property_internal_async(...).await`
-
-- [ ] **Step 2**: 转换 5 个间接 re-entry 回调
-
-转换 `reflect_get_prototype_of`, `reflect_set_prototype_of`, `reflect_is_extensible`, `reflect_prevent_extensions`, `reflect_get_own_property_descriptor` 为 `func_wrap_async`。
-
-在回调体内，将：
-- `proxy_or_target_get_prototype_of_impl(...)` → `proxy_or_target_get_prototype_of_impl_async(...).await`
-- `proxy_or_target_is_extensible_impl(...)` → `proxy_or_target_is_extensible_impl_async(...).await`
-- `proxy_or_target_prevent_extensions_impl(...)` → `proxy_or_target_prevent_extensions_impl_async(...).await`
-
-- [ ] **Step 3**: 验证编译
-
-```bash
-cargo check -p wjsm-runtime 2>&1 | head -50
-```
-
-- [ ] **Step 4**: Commit
-
-```bash
-git add -A && git commit -m "feat: convert proxy_reflect.rs callbacks to func_wrap_async
-
-Convert all 17 Proxy/Reflect callbacks to func_wrap_async.
-Uses async versions of reflect_get_impl_with_receiver,
-define_property_internal, and proxy_or_target_*_impl helpers.
-
-Co-authored-by: CommandCodeBot <noreply@commandcode.ai>"
-```
+**Verification**: Targeted async array/function tests pass.
 
 ---
 
-### Task 4: Convert `host_imports/typedarray_new_methods.rs` re-entry callbacks
+### Task 6: Convert `typedarray_new_methods.rs` re-entry callbacks
 
 **Files**:
 - Modify: `crates/wjsm-runtime/src/host_imports/typedarray_new_methods.rs`
 
-**Why**: 10 个回调直接调用 `call_wasm_callback`（forEach, map, filter, reduce, reduceRight, find, findIndex, some, every, sort）。
+**Why**: TypedArray callback methods have the same async Store re-entry risk as Array methods.
 
-**Impact**: 仅转换这 10 个回调。其余 ~12 个回调（includes, indexOf, lastIndexOf, join, toString, copyWithin, at, fill, reverse, entries, keys, values）保持 `Func::wrap`。
+**Impact/Compatibility**: Only callback methods convert.
 
 **Steps**:
 
-- [ ] **Step 1**: 对 10 个回调应用 Pattern A 转换
+- [ ] Convert `forEach`, `map`, `filter`, `reduce`, `reduceRight`, `find`, `findIndex`, `some`, `every`, `sort` to `func_wrap_async`.
+- [ ] Replace every callback dispatch with `call_wasm_callback_async(...).await`.
+- [ ] Preserve TypedArray element read/write and SameValueZero behavior.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Add TypedArray coverage to `async_reentry_array_callbacks` if not already present.
+- [ ] Commit.
 
-同 Task 2 模式。每个回调：`Func::wrap` → `func_wrap_async`，`call_wasm_callback(` → `call_wasm_callback_async(...).await`。
-
-- [ ] **Step 2**: 验证编译
-
-```bash
-cargo check -p wjsm-runtime
-```
-
-- [ ] **Step 3**: Commit
-
-```bash
-git add -A && git commit -m "feat: convert typedarray_new_methods.rs re-entry callbacks to func_wrap_async
-
-Convert 10 callbacks (forEach, map, filter, reduce, reduceRight, find,
-findIndex, some, every, sort) from Func::wrap to func_wrap_async.
-
-Co-authored-by: CommandCodeBot <noreply@commandcode.ai>"
-```
+**Verification**: TypedArray callback coverage passes under async runtime.
 
 ---
 
-### Task 5: Convert `host_imports/misc.rs` re-entry callbacks
+### Task 7: Convert `proxy_reflect.rs` fully, including local helper recursion
+
+**Files**:
+- Modify: `crates/wjsm-runtime/src/host_imports/proxy_reflect.rs`
+- Modify: `crates/wjsm-runtime/src/runtime_host_helpers.rs` if shared helpers are used by Object builtins too
+
+**Why**: Proxy and Reflect are the densest source of direct and indirect callback dispatch. Partial conversion leaves invariant paths unsafe.
+
+**Impact/Compatibility**: Convert every Proxy/Reflect host import that can dispatch a trap or call target. `proxy_create` and `proxy_revocable` remain sync if they only allocate/state-mutate.
+
+**Steps**:
+
+- [ ] Convert direct trap callbacks to `func_wrap_async`: `reflect_get`, `reflect_set`, `reflect_has`, `reflect_delete_property`, `reflect_apply`, `reflect_construct`, `reflect_set_prototype_of`, `reflect_get_own_property_descriptor`, `reflect_define_property`, `reflect_own_keys`, `proxy.apply`, `proxy.construct`.
+- [ ] Convert indirect prototype/extensibility callbacks to async: `reflect_get_prototype_of`, `reflect_is_extensible`, `reflect_prevent_extensions`.
+- [ ] Add async local helpers inside the file where local helpers currently call sync re-entry:
+  - `reflect_apply_impl_async`
+  - `reflect_construct_impl_async`
+  - `reflect_get_prototype_of_impl_async`
+- [ ] Use shared async helpers where appropriate:
+  - `reflect_get_impl_with_receiver_async`
+  - `define_property_internal_async`
+  - `proxy_or_target_is_extensible_impl_async`
+  - `proxy_or_target_prevent_extensions_impl_async`
+- [ ] Ensure recursive proxy forwarding awaits async helper, not sync helper.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Run `cargo nextest run -p wjsm-runtime -E 'test(async_reentry_proxy_reflect_traps)'`.
+- [ ] Commit.
+
+**Verification**: Proxy/Reflect async tests pass; source audit no longer flags `proxy_reflect.rs`.
+
+---
+
+### Task 8: Convert `proxy_traps.rs` internal trap imports
+
+**Files**:
+- Modify: `crates/wjsm-runtime/src/host_imports/proxy_traps.rs`
+
+**Why**: `proxy_trap_get`, `proxy_trap_set`, and `proxy_trap_delete` call local `call_trap_with_args`, which uses `resolve_and_call` and `func.call` transitively.
+
+**Impact/Compatibility**: Only proxy trap imports convert.
+
+**Steps**:
+
+- [ ] Add `call_trap_with_args_async` using `resolve_and_call_async(...).await`.
+- [ ] Add async local helpers:
+  - `proxy_internal_get_async`
+  - `proxy_internal_set_async`
+  - `proxy_internal_delete_async`
+  - async ordinary recursive branches for proxy targets.
+- [ ] Convert `proxy_trap_get`, `proxy_trap_set`, `proxy_trap_delete` to `func_wrap_async`.
+- [ ] Preserve existing TypeError messages and boolean return semantics.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Run `cargo nextest run -p wjsm-runtime -E 'test(async_reentry_proxy_trap_imports)'`.
+- [ ] Commit.
+
+**Verification**: Proxy internal trap async tests pass.
+
+---
+
+### Task 9: Convert `misc.rs` native call, drain, and eval imports
 
 **Files**:
 - Modify: `crates/wjsm-runtime/src/host_imports/misc.rs`
 
-**Why**: 2 个回调直接调用 `call_wasm_callback`（`native_call` line 92, `queueMicrotask` line 155）。
+**Why**: `native_call`, `drain_microtasks`, `eval_direct`, and `eval_indirect` can reach WASM on async Store. `queue_microtask` only enqueues and remains sync.
+
+**Impact/Compatibility**: Mixed sync/async imports in one module.
 
 **Steps**:
 
-- [ ] **Step 1**: 对 2 个回调应用 Pattern A 转换
+- [ ] Leave `queue_microtask` as `Func::wrap`.
+- [ ] Convert `drain_microtasks` import to `func_wrap_async` and call `drain_microtasks_from_caller_async(...).await`.
+- [ ] Convert `native_call` to `func_wrap_async`:
+  - Proxy construct/apply traps use `call_wasm_callback_async(...).await`.
+  - Proxy target forwarding uses `resolve_and_call_async(...).await`.
+  - Native callable branch uses `call_native_callable_with_args_from_caller_async(...).await`.
+  - `new_target` restoration remains identical on every return path.
+- [ ] Convert `eval_direct` and `eval_indirect` imports to `func_wrap_async` and call `perform_eval_from_caller_async(...).await`.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Run `cargo nextest run -p wjsm-runtime -E 'test(async_reentry_eval_direct_indirect_and_native) or test(async_reentry_microtask_and_timer_callbacks)'`.
+- [ ] Commit.
 
-`native_call_fn` (line ~43-200): `Func::wrap` → `func_wrap_async`，`call_wasm_callback(` → `call_wasm_callback_async(...).await`。
-
-`queue_microtask_fn` (line ~22-200): 同上。注意此回调内有 `call_wasm_callback` 在 microtask drain 路径。
-
-- [ ] **Step 2**: 验证编译
-
-```bash
-cargo check -p wjsm-runtime
-```
-
-- [ ] **Step 3**: Commit
-
-```bash
-git add -A && git commit -m "feat: convert misc.rs re-entry callbacks to func_wrap_async
-
-Convert native_call and queueMicrotask callbacks to func_wrap_async.
-
-Co-authored-by: CommandCodeBot <noreply@commandcode.ai>"
-```
+**Verification**: Eval/native/microtask targeted tests pass.
 
 ---
 
-### Task 6: Convert `host_imports/core.rs` re-entry callbacks
+### Task 10: Convert `primitive_core.rs` callable replacer path
+
+**Files**:
+- Modify: `crates/wjsm-runtime/src/host_imports/primitive_core.rs`
+
+**Why**: RegExp/String replacement with callable replacer uses `resolve_and_call`.
+
+**Impact/Compatibility**: Only host import callback path converts; primitive pure operations stay sync.
+
+**Steps**:
+
+- [ ] Locate the host import containing `primitive_core.rs:1105` `resolve_and_call`.
+- [ ] Convert that host import to `func_wrap_async`.
+- [ ] Replace `resolve_and_call(...)` with `resolve_and_call_async(...).await`.
+- [ ] Preserve argument materialization order for match, captures, offset, original string, and named groups object.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Add replacer coverage to `async_reentry_function_call_and_apply` or a dedicated `async_reentry_string_replace_callback` test and run it.
+- [ ] Commit.
+
+**Verification**: Callable replacer passes under async runtime.
+
+---
+
+### Task 11: Convert `core.rs` proxy `in` trap path
 
 **Files**:
 - Modify: `crates/wjsm-runtime/src/host_imports/core.rs`
 
-**Why**: 1 个回调直接调用 `call_wasm_callback`（line 716，位于某个宿主函数内）。
+**Why**: `op_in` dispatches Proxy `has` trap via sync `call_wasm_callback`.
+
+**Impact/Compatibility**: Convert only `op_in`; pure core imports remain sync.
 
 **Steps**:
 
-- [ ] **Step 1**: 定位 line 716 的 `call_wasm_callback` 所在回调
+- [ ] Convert `op_in` host import to `func_wrap_async`.
+- [ ] Replace Proxy `has` trap dispatch with `call_wasm_callback_async(...).await`.
+- [ ] If `op_in_impl` recurses into proxy targets and can call re-entry, add `op_in_impl_async` and use it from async host import.
+- [ ] Preserve non-proxy behavior and TypeError/runtime error messages.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Add `"x" in proxy` coverage to proxy async test and run it.
+- [ ] Commit.
 
-确认该回调的宿主函数名（`obj_get`、`typeof`、或其他）。对该回调应用 Pattern A。
-
-- [ ] **Step 2**: 验证编译
-
-```bash
-cargo check -p wjsm-runtime
-```
-
-- [ ] **Step 3**: Commit
-
-```bash
-git add -A && git commit -m "feat: convert core.rs re-entry callback to func_wrap_async
-
-Co-authored-by: CommandCodeBot <noreply@commandcode.ai>"
-```
+**Verification**: Proxy `in` trap passes under async runtime.
 
 ---
 
-### Task 7: Convert `runtime_json.rs` re-entry callbacks
+### Task 12: Convert JSON.parse callback/coercion path and timers_arrays JSON import
 
 **Files**:
 - Modify: `crates/wjsm-runtime/src/runtime_json.rs`
+- Modify: `crates/wjsm-runtime/src/host_imports/timers_arrays.rs`
 
-**Why**: 2 处 `call_wasm_callback` 调用（JSON.stringify `toJSON` dispatch line 645, JSON.parse `reviver` dispatch line 785）。
+**Why**: JSON.parse can call user code via object-to-string coercion and reviver.
 
-**Impact**: 这些调用位于 runtime 内部函数中（非 `Func::wrap` 回调），被 async 回调间接调用。需将包含它们的函数转为 async。
+**Impact/Compatibility**: JSON.stringify remains sync unless implementation grows actual callback support; JSON.parse import becomes async.
 
 **Steps**:
 
-- [ ] **Step 1**: 定位调用链
+- [ ] Add `json_parse_to_string_async` mirroring `json_parse_to_string`; object `toString` / `valueOf` uses `call_wasm_callback_async(...).await`.
+- [ ] Add `apply_reviver_async` with recursive await on array/object traversal and `call_wasm_callback_async(...).await` for reviver.
+- [ ] Add `json_parse_to_wasm_async` using both async helpers.
+- [ ] Convert `json_parse` import in `timers_arrays.rs` to `func_wrap_async`.
+- [ ] Keep `json_stringify` import as `Func::wrap` because current implementation has no callback dispatch.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Run `cargo nextest run -p wjsm-runtime -E 'test(async_reentry_json_parse_callbacks)'`.
+- [ ] Commit.
 
-`call_wasm_callback` at line 645 位于 `json_stringify_impl` 或类似函数内。
-`call_wasm_callback` at line 785 位于 `json_parse_impl` 或类似函数内。
-
-将这些函数转为 async，`call_wasm_callback(` → `call_wasm_callback_async(...).await`。
-
-- [ ] **Step 2**: 级联更新调用者
-
-如果 `json_stringify_impl` 被 `Func::wrap` 回调调用，该回调也需转 `func_wrap_async`。
-定位所有调用 `json_stringify_impl` / `json_parse_impl` 的 `Func::wrap` 回调并转换。
-
-- [ ] **Step 3**: 验证编译
-
-```bash
-cargo check -p wjsm-runtime
-```
-
-- [ ] **Step 4**: Commit
-
-```bash
-git add -A && git commit -m "feat: convert runtime_json.rs re-entry paths to async
-
-Convert JSON.stringify toJSON and JSON.parse reviver dispatch to
-call_wasm_callback_async.
-
-Co-authored-by: CommandCodeBot <noreply@commandcode.ai>"
-```
+**Verification**: JSON.parse callback/coercion tests pass under async runtime.
 
 ---
 
-### Task 8: lib.rs — 转换 `register_common_bridges` 中 re-entry 回调
+### Task 13: Delete sync complex bridges and collapse runtime linker naming
 
 **Files**:
 - Modify: `crates/wjsm-runtime/src/lib.rs`
 
-**Why**: `register_common_bridges`（sync/async 共享）中可能有 `Func::wrap` 回调包含 `call_wasm_callback`。`register_complex_bridges_sync` 已被 `register_complex_bridges_async` 覆盖（后者用 `func_wrap_async` + `call_wasm_callback_async`）。
+**Why**: Async path already has `register_complex_bridges_async`; sync complex bridge copy keeps forbidden source patterns alive and confuses audits.
+
+**Impact/Compatibility**: Internal runtime wiring only.
 
 **Steps**:
 
-- [ ] **Step 1**: 审计 `register_common_bridges` 中的 re-entry
+- [ ] Delete `register_complex_bridges_sync` entirely.
+- [ ] Rename `register_complex_bridges_async` to `register_complex_bridges`.
+- [ ] Confirm `register_common_bridges` remains sync and has no re-entry.
+- [ ] Keep `register_common_bridges` only if source audit proves it contains no forbidden patterns.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Commit.
 
-```bash
-grep -n 'call_wasm_callback\b' crates/wjsm-runtime/src/lib.rs
-```
-
-检查 `register_common_bridges` 内的 `Func::wrap` 回调是否包含 `call_wasm_callback`。如果有，对该回调应用 Pattern A。
-
-- [ ] **Step 2**: 删除 `register_complex_bridges_sync`
-
-`register_complex_bridges_sync`（line ~402）已被 `register_complex_bridges_async`（line ~774）完全替代。删除 sync 版本。
-
-- [ ] **Step 3**: 重命名 `register_complex_bridges_async` → `register_complex_bridges`
-
-- [ ] **Step 4**: 验证编译
-
-```bash
-cargo check -p wjsm-runtime
-```
-
-- [ ] **Step 5**: Commit
-
-```bash
-git add -A && git commit -m "feat: clean up lib.rs bridges — delete sync complex bridges, audit common bridges
-
-Co-authored-by: CommandCodeBot <noreply@commandcode.ai>"
-```
+**Verification**: `lib.rs` has no sync complex bridge copy and no sync `call_wasm_callback` in runtime execution wiring.
 
 ---
 
-### Task 9: lib.rs — 删除 sync 执行路径，重命名 async 路径
+### Task 14: Delete sync execution path and rename async API as default
 
 **Files**:
 - Modify: `crates/wjsm-runtime/src/lib.rs`
+- Modify: `crates/wjsm-runtime/tests/async_scheduler.rs`
+- Modify: `crates/wjsm-runtime/tests/timer_timing.rs`
 
-**Why**: 消除 sync 路径，async 成为唯一路径。
+**Why**: Keeping sync wrappers contradicts the async-only model and keeps sync Wasmtime calls in the crate.
+
+**Impact/Compatibility**: Public `wjsm-runtime` API becomes async. In-repo tests update in the same task.
 
 **Steps**:
 
-- [ ] **Step 1**: 删除 `register_linker`（sync 版本）
+- [ ] Delete sync `register_linker` and rename `register_linker_async` to `register_linker`.
+- [ ] Delete sync `execute` and sync `execute_with_writer`.
+- [ ] Rename `execute_async` to `execute`.
+- [ ] Rename `execute_with_writer_async` to `execute_with_writer`.
+- [ ] Update runtime tests to `Runtime::new()?.block_on(async { execute_with_writer(...).await })` or use `#[tokio::test]`.
+- [ ] Update `timer_timing.rs` to call async runtime through a Tokio runtime.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Run `cargo nextest run -p wjsm-runtime`.
+- [ ] Commit.
 
-删除 `fn register_linker(linker, store)`（line ~63-82）。保留 `register_linker_async`。
-
-- [ ] **Step 2**: 重命名 `register_linker_async` → `register_linker`
-
-全局替换 `register_linker_async` → `register_linker`。
-
-- [ ] **Step 3**: 删除 `execute_with_writer`（sync 版本）
-
-删除 `pub fn execute_with_writer(...)` 整个函数体（sync 路径，包含 `Config::new()` + `Store::new()` + sync linker + sync instantiation + sync main.call + sync timer loop）。
-
-- [ ] **Step 4**: 重命名 `execute_with_writer_async` → `execute_with_writer`
-
-全局替换 `execute_with_writer_async` → `execute_with_writer`。
-
-- [ ] **Step 5**: 重命名 `execute_async` → `execute`
-
-全局替换 `execute_async` → `execute`。
-
-- [ ] **Step 6**: 清理 `Func::wrap` 相关 imports
-
-如果 `Func` import 不再被使用（仅剩 `func_wrap_async`），移除。
-
-- [ ] **Step 7**: 验证编译
-
-```bash
-cargo check -p wjsm-runtime 2>&1 | head -80
-```
-
-CLI 层会报编译错误（调用已删除的 sync 函数）— 这是预期的，Task 10 修复。
-
-- [ ] **Step 8**: Commit
-
-```bash
-git add -A && git commit -m "feat: delete sync execution path, rename async as default
-
-- Delete register_linker (sync), rename register_linker_async → register_linker
-- Delete execute_with_writer (sync), rename execute_with_writer_async → execute_with_writer
-- Rename execute_async → execute
-
-Co-authored-by: CommandCodeBot <noreply@commandcode.ai>"
-```
+**Verification**: Runtime crate compiles and tests use only async public API.
 
 ---
 
-### Task 10: CLI 集成 — tokio block_on 桥接
+### Task 15: CLI integration with explicit Tokio bridge
 
 **Files**:
 - Modify: `crates/wjsm-cli/Cargo.toml`
 - Modify: `crates/wjsm-cli/src/lib.rs`
 
-**Why**: CLI 需桥接 sync→async，通过 `tokio::runtime::Runtime::block_on` 调用 `execute`/`execute_with_writer`。
+**Why**: CLI remains a synchronous command-line program but must call async runtime API.
+
+**Impact/Compatibility**: CLI behavior unchanged; dependency on Tokio becomes direct.
 
 **Steps**:
 
-- [ ] **Step 1**: 添加 tokio 依赖
+- [ ] Add direct dependency:
+  ```toml
+  tokio = { version = "1", features = ["rt-multi-thread"] }
+  ```
+- [ ] Add a small helper in `wjsm-cli/src/lib.rs`:
+  ```rust
+  fn execute_runtime(wasm: &[u8]) -> anyhow::Result<()> {
+      let rt = tokio::runtime::Runtime::new()
+          .context("Failed to create tokio runtime")?;
+      rt.block_on(wjsm_runtime::execute(wasm))
+  }
+  ```
+- [ ] Replace both CLI `runtime::execute(...)` callsites with `execute_runtime(...)`.
+- [ ] Ensure no CLI path calls `wjsm_runtime::execute_with_writer` directly unless it awaits through the same runtime boundary.
+- [ ] Run `cargo check -p wjsm-cli`.
+- [ ] Run a targeted CLI fixture through nextest: `cargo nextest run -E 'test(happy__hello)'`.
+- [ ] Commit.
 
-在 `crates/wjsm-cli/Cargo.toml` 的 `[dependencies]` 中确认 `tokio` 已存在（`wjsm-runtime` 已传递依赖 tokio）。如果需要直接创建 runtime，添加：
-```toml
-tokio = { version = "1", features = ["rt-multi-thread"] }
-```
-
-- [ ] **Step 2**: 更新 `run` 子命令
-
-在 `crates/wjsm-cli/src/lib.rs` 中，找到调用 `runtime::execute_with_writer` 的位置，改为：
-```rust
-let rt = tokio::runtime::Runtime::new()
-    .context("Failed to create tokio runtime")?;
-rt.block_on(async {
-    runtime::execute_with_writer(&wasm_bytes, writer).await
-})?;
-```
-
-- [ ] **Step 3**: 更新 `eval` 子命令
-
-同上模式，将 `runtime::execute_with_writer` / `runtime::execute` 调用改为 `block_on(async { ... .await })`。
-
-- [ ] **Step 4**: 更新其他执行入口
-
-搜索 `wjsm-cli/src/lib.rs` 中所有 `runtime::execute` 和 `runtime::execute_with_writer` 调用点，确保都使用 `block_on`。
-
-- [ ] **Step 5**: 验证编译
-
-```bash
-cargo build --workspace 2>&1 | tail -20
-```
-
-- [ ] **Step 6**: Commit
-
-```bash
-git add -A && git commit -m "feat: integrate CLI with tokio runtime for async execution
-
-Co-authored-by: CommandCodeBot <noreply@commandcode.ai>"
-```
+**Verification**: CLI check passes and a CLI-backed fixture still executes.
 
 ---
 
-### Task 11: 清理 — 删除不再使用的 sync helpers
+### Task 16: Retire unused sync re-entry helpers
 
 **Files**:
 - Modify: `crates/wjsm-runtime/src/runtime_host_helpers.rs`
 - Modify: `crates/wjsm-runtime/src/runtime_values.rs`
+- Modify: `crates/wjsm-runtime/src/runtime_eval.rs`
+- Modify: `crates/wjsm-runtime/src/runtime_microtask.rs`
+- Modify: `crates/wjsm-runtime/src/runtime_async_fn.rs`
+- Modify: `crates/wjsm-runtime/src/runtime_builtins.rs`
 
-**Why**: sync 执行路径已删除。`call_wasm_callback`（sync）、`resolve_callable_and_call`（sync）等函数不再被任何代码路径使用。
+**Why**: A clean cutover prevents future callsites from accidentally choosing sync helpers.
+
+**Impact/Compatibility**: Internal deletions after all callsites have moved.
 
 **Steps**:
 
-- [ ] **Step 1**: 检查 `call_wasm_callback`（sync）是否仍有调用者
+- [ ] Delete sync `call_wasm_callback`.
+- [ ] Delete sync `resolve_and_call`, `resolve_callable_and_call`, and `func_apply_impl` if no sync callsite remains.
+- [ ] Delete sync `try_compiled_eval_from_caller`, `perform_eval_from_caller`, and sync eval interpreter helpers if no sync callsite remains. If a sync eval helper remains for pure AST code without Wasm re-entry, keep it only if source audit proves it cannot call `Instance::new`, `entry.call`, or `perform_eval_from_caller`.
+- [ ] Delete sync `drain_microtasks`, `drain_microtasks_from_caller`, `call_host_function`, `call_host_function_with_args`, and sync `resume_async_function` if no sync callsite remains.
+- [ ] Delete sync native callable dispatch helpers or keep only pure wrappers that cannot reach eval/WASM; async Store callsites must use async native callable helpers.
+- [ ] Remove `Func` imports from host import files that no longer use `Func::wrap`; keep `Func` where pure sync imports remain.
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Run `cargo nextest run -p wjsm-runtime -E 'test(async_reentry_audit)'`.
+- [ ] Commit.
 
-```bash
-grep -rn 'call_wasm_callback\b(' crates/wjsm-runtime/src/ | grep -v '_async'
-```
-
-如果所有调用者都已转为 `call_wasm_callback_async`，删除 sync `call_wasm_callback` 函数。
-
-**注意**：sync 版本的 `call_wasm_callback` 可能被不 re-enter 的 `Func::wrap` 回调间接使用 — 但实际上不 re-enter 的回调根本不调用 `call_wasm_callback`（它们不需要 WASM re-entry）。所以如果 grep 显示零非 async 调用者，可以安全删除。
-
-- [ ] **Step 2**: 检查 `resolve_callable_and_call`（sync）是否仍有调用者
-
-```bash
-grep -rn 'resolve_callable_and_call\b(' crates/wjsm-runtime/src/ | grep -v '_async'
-```
-
-如果仅在自身定义 + `call_wasm_callback` 内调用（两者都将被删除），可以安全删除。
-
-- [ ] **Step 3**: 检查其他 sync helpers 是否仍有调用者
-
-对 `reflect_get_impl_with_receiver`、`define_property_internal`、`proxy_or_target_*_impl` 执行同样检查。如果所有调用者都已转 `_async`，删除 sync 版本。
-
-**⚠️ 谨慎**：某些 sync helpers 可能被不 re-enter 的 `Func::wrap` 回调通过间接路径调用（如 `reflect_get_impl_with_receiver` 被 `reflect_get` 回调调用）。确保所有调用路径都已覆盖。
-
-- [ ] **Step 4**: 删除确认无调用者的 sync 函数
-
-- [ ] **Step 5**: 移除 Task 1 中的 `#[allow(dead_code)]` 标注
-
-- [ ] **Step 6**: 验证编译
-
-```bash
-cargo build --workspace 2>&1 | tail -20
-```
-
-- [ ] **Step 7**: Commit
-
-```bash
-git add -A && git commit -m "refactor: remove unused sync re-entry helpers
-
-Delete sync versions of call_wasm_callback, resolve_callable_and_call,
-reflect_get_impl_with_receiver, define_property_internal, and
-proxy_or_target_*_impl — all callers now use async versions.
-
-Co-authored-by: CommandCodeBot <noreply@commandcode.ai>"
-```
+**Verification**: Source audit test passes for retired sync helper patterns.
 
 ---
 
-### Task 12: 最终验证
+### Task 17: Update authority docs and spec
 
-**Files**: None (verification only)
+**Files**:
+- Modify: `docs/async-scheduler.md`
+- Modify: `docs/aegis/specs/2026-06-02-unified-async-execution-model-design.md`
+
+
+**Why**: Current docs contradict the new async-only contract and stale property-read scope.
+
+**Impact/Compatibility**: Documentation only.
 
 **Steps**:
 
-- [ ] **Step 1**: 全 workspace 编译
+- [ ] Update `docs/async-scheduler.md`:
+  - replace sync wrapper section with async-only runtime API;
+  - state CLI owns the sync `block_on` bridge;
+  - remove “CLI migration excluded” claim;
+  - preserve run-to-completion and scheduler owner semantics.
+- [ ] Update the 2026-06-02 spec:
+  - correct `read_object_property_by_name` claim;
+  - correct `register_common_bridges` claim;
+  - add `resolve_and_call`, eval, native callable, microtask drain, and proxy_traps to risk inventory;
+  - update acceptance criteria to source audit + targeted async tests.
+- [ ] Do not modify `docs/aegis/INDEX.md`; existing entries already point to this plan and spec.
+- [ ] Run `cargo nextest run -p wjsm-runtime -E 'test(async_reentry_audit)'` to ensure docs did not replace technical verification.
+- [ ] Commit.
 
-```bash
-cargo build --workspace 2>&1 | tail -20
-```
+**Verification**: Docs no longer conflict with code plan or public API.
 
-**Expected**: 编译成功，零 error。
+---
 
-- [ ] **Step 2**: 全测试
+### Task 18: Final verification and no-regression proof
 
-```bash
-cargo nextest run --workspace 2>&1 | tail -30
-```
+**Files**: None, unless verification exposes a real issue.
 
-**Expected**: 全测试通过。
+**Steps**:
 
-- [ ] **Step 3**: Fixture 输出不变
+- [ ] Run `cargo check -p wjsm-runtime`.
+- [ ] Run `cargo check -p wjsm-cli`.
+- [ ] Run `cargo build --workspace`.
+- [ ] Run `cargo nextest run -p wjsm-runtime -E 'test(async_reentry)'`.
+- [ ] Run `cargo nextest run -p wjsm-runtime -E 'test(async_scheduler)'`.
+- [ ] Run `cargo nextest run --workspace`.
+- [ ] Run `cargo clippy --workspace --all-targets`.
+- [ ] Run `git diff -- fixtures` and confirm no existing `.expected` files changed.
+- [ ] If any verification fails, fix the source issue and rerun the failed command plus the directly related targeted test.
+- [ ] Commit final verification/doc cleanup if any files changed.
 
-```bash
-WJSM_UPDATE_FIXTURES=1 cargo nextest run 2>&1 | tail -10
-git diff fixtures/ | head -50
-```
-
-**Expected**: 无 `.expected` 文件变化。如有变化，分析是否为回归。
-
-- [ ] **Step 4**: Grep 验证 — 无遗漏 re-entry
-
-```bash
-# 验证 Func::wrap 回调内无 call_wasm_callback（sync）
-grep -n 'call_wasm_callback\b(' crates/wjsm-runtime/src/host_imports/*.rs | grep -v '_async' | grep -v '//'
-```
-
-**Expected**: 零匹配（所有 `call_wasm_callback` 在 host_imports 中已转 `_async`）。
-
-```bash
-# 验证 func.call( 不在 async 路径
-grep -rn '\.call(' crates/wjsm-runtime/src/ | grep -v '_async' | grep -v '//' | grep -v 'func_call_fn' | grep -v 'native_call'
-```
-
-**Expected**: 仅 sync 路径残留（应已被 Task 9/11 清除）。
-
-- [ ] **Step 5**: Clippy
-
-```bash
-cargo clippy --workspace 2>&1 | tail -20
-```
-
-**Expected**: 零 warning（或仅预存 warning）。
-
-- [ ] **Step 6**: 总结 commit
-
-```bash
-git log --oneline feat/async-scheduler-2026-05-31 ^master | head -20
-```
+**Verification**: Every command above passes; targeted audit proves no sync re-entry owner remains in async runtime paths.
 
 ---
 
 ## Risks
 
-| 风险 | 缓解 |
+| Risk | Mitigation |
 |---|---|
-| `Func::wrap` 回调参数 tuple 化编译错误 | 逐模块 `cargo check`，参考 `register_complex_bridges_async` 已有模式 |
-| async helper 内 lifetime/borrow checker 问题 | `Caller<'_, RuntimeState>` 在 async closure 内需注意 — 参考已有 `call_wasm_callback_async` |
-| 遗漏间接 re-entry 路径 | Task 12 grep 验证 + 全 fixture 测试 |
-| `call_wasm_callback_async` bound 函数修复引入行为变化 | bound 函数已有测试覆盖 |
-| tokio runtime 在 CLI 中初始化失败 | `Runtime::new()` 错误处理 |
+| Async closure lifetime errors with `Caller<'_, RuntimeState>` | Follow existing `register_complex_bridges_async` pattern; convert one module at a time with `cargo check -p wjsm-runtime`. |
+| Eval async mirror becomes large | Keep a 1:1 async mirror first; delete sync mirror only after all callsites move; do not redesign eval semantics during this plan. |
+| `drain_microtasks_async` generic refactor breaks scheduler | Refactor signature first, run runtime scheduler tests before host import conversion. |
+| Native callable async path silently keeps sync eval | Source audit test bans `perform_eval_from_caller` from async/native callsites and targeted eval tests cover direct/indirect/native eval. |
+| Pure `Func::wrap` accidentally converted broadly | Source audit validates risk; only convert re-entry callbacks. Mixed sync/async host imports are allowed. |
+| Public API break misses a caller | Workspace build and search-backed source audit catch in-repo callers; docs mark the external breaking boundary. |
+| Existing fixture output changes | Final fixture diff check; any changed existing `.expected` is a regression unless separately justified by a spec bug fix, which is outside this plan. |
 
 ## Retirement
 
-| 旧 owner/fallback | 状态 | 处置 |
+| Old owner/fallback | Final status | Deletion trigger |
 |---|---|---|
-| `execute_with_writer` (sync) | 待删除 | Task 9 |
-| `register_linker` (sync) | 待删除 | Task 9 |
-| `register_complex_bridges_sync` | 待删除 | Task 8 |
-| `call_wasm_callback` (sync) | 待删除 | Task 11 |
-| `resolve_callable_and_call` (sync) | 待删除 | Task 11 |
-| `reflect_get_impl_with_receiver` (sync) | 待删除 | Task 11（如无 sync 调用者） |
-| `define_property_internal` (sync) | 待删除 | Task 11（如无 sync 调用者） |
-| `proxy_or_target_*_impl` (sync) | 待删除 | Task 11（如无 sync 调用者） |
+| sync `execute` / `execute_with_writer` | Deleted | Task 14 |
+| sync `register_linker` | Deleted | Task 14 |
+| `register_complex_bridges_sync` | Deleted | Task 13 |
+| sync `call_wasm_callback` | Deleted | Task 16 |
+| sync `resolve_and_call` / `resolve_callable_and_call` / `func_apply_impl` | Deleted or proven unreachable pure sync-only absent from async Store | Task 16 source audit |
+| sync eval compiled-WASM helpers | Deleted or no Wasm re-entry remains | Task 16 source audit |
+| sync microtask drain / host function callback helpers | Deleted | Task 16 |
+| sync `resume_async_function` | Deleted | Task 16 |
+| stale `async-scheduler.md` sync wrapper contract | Replaced by async-only contract | Task 17 |
+| stale 2026-06-02 spec property-read/common-bridge claims | Corrected | Task 17 |
 
 ## ADR Signal
 
-从 spec 继承：执行模型单一化（async-only），tokio 硬依赖，公共 API 变更（`execute_with_writer` sync → async）。
+This remains an architecture decision: execution model single-owner async-only, Tokio is a hard dependency at CLI/runtime integration boundary, and `wjsm-runtime` public API changes from sync to async. Completion should trigger ADR/baseline backfill documenting:
+
+- why mixed `Func::wrap` / `func_wrap_async` is allowed only when sync callbacks do not re-enter WASM;
+- why sync runtime wrappers were deleted instead of retained;
+- why `read_object_property_by_name` stayed sync;
+- why CLI, not runtime, owns `block_on`.
+
+## Self-review checklist
+
+- [x] Every stale claim from the prior review was re-grounded against current source.
+- [x] `register_common_bridges` false positive corrected.
+- [x] `read_object_property_by_name` scope corrected.
+- [x] `resolve_and_call`, eval, native callable, microtask, proxy_traps, JSON.parse, and Function call/apply are covered.
+- [x] Verification includes behavior tests and source audit tests.
+- [x] Public API and CLI migration are explicit.
+- [x] Docs/spec conflict is a task, not a hidden follow-up.
+- [x] No compatibility fallback or sync runtime owner remains after retirement.
