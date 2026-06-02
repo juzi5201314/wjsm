@@ -3,7 +3,7 @@
 //! These tests verify timer delay behavior by running JS code through the
 //! full pipeline (parse → lower → compile → execute) and checking output.
 
-use std::io::Write;
+use tokio::runtime::Runtime;
 
 /// 编译 JS 源码并执行，返回 stdout 字符串
 fn run_js(code: &str) -> String {
@@ -11,7 +11,9 @@ fn run_js(code: &str) -> String {
     let program = wjsm_semantic::lower_module(module, false).expect("lower");
     let wasm = wjsm_backend_wasm::compile(&program).expect("compile");
     let mut buf = Vec::new();
-    wjsm_runtime::execute_with_writer(&wasm, &mut buf).expect("execute");
+    Runtime::new().expect("tokio").block_on(async {
+        wjsm_runtime::execute_with_writer(&wasm, &mut buf).await
+    }).expect("execute");
     String::from_utf8(buf).expect("utf8")
 }
 

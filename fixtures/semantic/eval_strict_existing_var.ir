@@ -24,22 +24,18 @@ module {
     c21 = string("use strict")
     c22 = number(0)
     c23 = string("var x = 1;")
-    c24 = number(2)
-    c25 = string("Symbol")
+    c24 = number(1)
+    c25 = string("x")
     c26 = number(0)
     c27 = number(0)
-    c28 = string("x")
-    c29 = number(0)
-    c30 = number(0)
+    c28 = number(0)
+    c29 = number(1)
+    c30 = number(1)
     c31 = number(0)
-    c32 = number(1)
-    c33 = number(1)
+    c32 = number(2)
+    c33 = string("__wjsm_super_base")
     c34 = number(0)
-    c35 = number(2)
-    c36 = string("__wjsm_super_base")
-    c37 = number(0)
-    c38 = string("Symbol")
-    c39 = string("x")
+    c35 = string("x")
 
   fn @main [has_eval] [entry=bb0]:
     bb0:
@@ -95,56 +91,48 @@ module {
       %26 = call builtin.scope_record_create(%25)
       store var $eval_env, %26
       %27 = const c25
-      %28 = load var $0.Symbol
+      %28 = load var $0.x
       %29 = const c26
       %30 = const c27
       call builtin.scope_record_add_binding(%26, %27, %28, %29, %30)
       %31 = const c28
-      %32 = load var $0.x
-      %33 = const c29
-      %34 = const c30
-      call builtin.scope_record_add_binding(%26, %31, %32, %33, %34)
-      %35 = const c31
-      %36 = const c32
-      call builtin.scope_record_set_meta(%26, %35, %36)
+      %32 = const c29
+      call builtin.scope_record_set_meta(%26, %31, %32)
+      %33 = const c30
+      %34 = const c31
+      call builtin.scope_record_set_meta(%26, %33, %34)
+      %35 = const c32
+      %36 = get_super_base
       %37 = const c33
       %38 = const c34
-      call builtin.scope_record_set_meta(%26, %37, %38)
-      %39 = const c35
-      %40 = get_super_base
-      %41 = const c36
-      %42 = const c37
-      call builtin.scope_record_add_binding(%26, %41, %40, %42, %42)
-      call builtin.scope_record_set_meta(%26, %39, %40)
-      %43 = call builtin.eval(%24, %26)
-      %44 = is_exception %43
-      branch %44, bb2, bb1
+      call builtin.scope_record_add_binding(%26, %37, %36, %38, %38)
+      call builtin.scope_record_set_meta(%26, %35, %36)
+      %39 = call builtin.eval(%24, %26)
+      %40 = is_exception %39
+      branch %40, bb2, bb1
     bb1:
-      %46 = const c38
-      %47 = call builtin.eval_get_binding(%26, %46)
-      store var $0.Symbol, %47
-      %48 = const c39
-      %49 = call builtin.eval_get_binding(%26, %48)
-      store var $0.x, %49
+      %42 = const c35
+      %43 = call builtin.eval_get_binding(%26, %42)
+      store var $0.x, %43
       call builtin.scope_record_destroy(%26)
       jump bb3
     bb2:
-      %45 = call builtin.exception_value(%43)
-      throw %45
+      %41 = call builtin.exception_value(%39)
+      throw %41
     bb3:
-      %50 = is_exception %43
-      branch %50, bb5, bb4
+      %44 = is_exception %39
+      branch %44, bb5, bb4
     bb4:
-      %52 = load var $0.x
-      %53 = call builtin.console.log(%52)
-      %54 = is_exception %53
-      branch %54, bb7, bb6
+      %46 = load var $0.x
+      %47 = call builtin.console.log(%46)
+      %48 = is_exception %47
+      branch %48, bb7, bb6
     bb5:
-      %51 = call builtin.exception_value(%43)
-      throw %51
+      %45 = call builtin.exception_value(%39)
+      throw %45
     bb6:
       return
     bb7:
-      %55 = call builtin.exception_value(%53)
-      throw %55
+      %49 = call builtin.exception_value(%47)
+      throw %49
 }

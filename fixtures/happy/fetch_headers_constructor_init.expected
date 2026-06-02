@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+empty has x: false
+rec has x-foo: true
+rec get x-foo: bar
+seq get x-dup: v1, v2
+copy get x-dup: v1, v2
+orig after set get x-dup: replaced
+copy independent get x-dup: v1, v2
+after append get: replaced, extra
+done headers ctor
+--- stderr ---

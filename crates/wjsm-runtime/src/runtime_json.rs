@@ -5,8 +5,8 @@
 //! - StringBlock: parallel quote/backslash/control detection (32 bytes at once, AVX2)
 //! - NonspaceBitmap: cached 64-byte whitespace bitmap for skip_whitespace
 
-use wasmtime::{AsContextMut, Caller};
 use crate::*;
+use wasmtime::{AsContextMut, Caller};
 
 // ── SIMD helpers ──────────────────────────────
 
@@ -69,8 +69,7 @@ fn compute_nonspace_bits_scalar(input: &[u8], base: usize) -> u64 {
 #[cfg(target_arch = "x86_64")]
 fn compute_nonspace_bits(input: &[u8], base: usize) -> u64 {
     if is_x86_feature_detected!("avx2") {
-        // SAFETY: We just verified AVX2 is available.
-        unsafe { compute_nonspace_bits_avx2(input, base) }
+        compute_nonspace_bits_avx2(input, base)
     } else {
         compute_nonspace_bits_scalar(input, base)
     }
@@ -115,16 +114,25 @@ impl StringBlock {
             let q_bits = _mm256_movemask_epi8(_mm256_cmpeq_epi8(v, quote)) as u32;
             let bs_bits = _mm256_movemask_epi8(_mm256_cmpeq_epi8(v, bs)) as u32;
             // control = (0x20 > v) AND (v >= 0)
-            let ctrl_bits = _mm256_movemask_epi8(
-                _mm256_and_si256(_mm256_cmpgt_epi8(ctrl_thresh, v), _mm256_cmpgt_epi8(v, non_neg))
-            ) as u32;
-            Self { quote_bits: q_bits, backslash_bits: bs_bits, control_bits: ctrl_bits }
+            let ctrl_bits = _mm256_movemask_epi8(_mm256_and_si256(
+                _mm256_cmpgt_epi8(ctrl_thresh, v),
+                _mm256_cmpgt_epi8(v, non_neg),
+            )) as u32;
+            Self {
+                quote_bits: q_bits,
+                backslash_bits: bs_bits,
+                control_bits: ctrl_bits,
+            }
         }
     }
 
     fn has_quote_first(&self) -> bool {
-        if self.quote_bits == 0 { return false; }
-        if self.backslash_bits == 0 { return true; }
+        if self.quote_bits == 0 {
+            return false;
+        }
+        if self.backslash_bits == 0 {
+            return true;
+        }
         self.quote_bits.trailing_zeros() < self.backslash_bits.trailing_zeros()
     }
 
@@ -132,8 +140,12 @@ impl StringBlock {
         self.quote_bits.trailing_zeros() as usize
     }
 
-    fn has_backslash(&self) -> bool { self.backslash_bits != 0 }
-    fn has_control(&self) -> bool { self.control_bits != 0 }
+    fn has_backslash(&self) -> bool {
+        self.backslash_bits != 0
+    }
+    fn has_control(&self) -> bool {
+        self.control_bits != 0
+    }
 }
 
 // ── Internal parsed value representation ──
@@ -151,7 +163,7 @@ enum JsonValue {
 struct JsonParser<'a> {
     input: &'a [u8],
     pos: usize,
-    nonspace: NonspaceBitmap,   // 缓存当前 64 字节对齐窗口的 nonspace 位图；skip_whitespace 中按需更新，避免重复 compute
+    nonspace: NonspaceBitmap, // 缓存当前 64 字节对齐窗口的 nonspace 位图；skip_whitespace 中按需更新，避免重复 compute
 }
 
 impl<'a> JsonParser<'a> {
@@ -159,7 +171,10 @@ impl<'a> JsonParser<'a> {
         Self {
             input,
             pos: 0,
-            nonspace: NonspaceBitmap { bits: 0, base: usize::MAX },
+            nonspace: NonspaceBitmap {
+                bits: 0,
+                base: usize::MAX,
+            },
         }
     }
 
@@ -202,19 +217,29 @@ impl<'a> JsonParser<'a> {
         }
     }
 
-    fn peek(&self) -> Option<u8> { self.input.get(self.pos).copied() }
+    fn peek(&self) -> Option<u8> {
+        self.input.get(self.pos).copied()
+    }
 
     fn next(&mut self) -> Option<u8> {
         let ch = self.input.get(self.pos).copied();
-        if ch.is_some() { self.pos += 1; }
+        if ch.is_some() {
+            self.pos += 1;
+        }
         ch
     }
 
     fn expect(&mut self, expected: u8) -> Result<(), String> {
         match self.next() {
             Some(ch) if ch == expected => Ok(()),
-            Some(ch) => Err(format!("Expected '{}', found '{}'", expected as char, ch as char)),
-            None => Err(format!("Expected '{}', found end of input", expected as char)),
+            Some(ch) => Err(format!(
+                "Expected '{}', found '{}'",
+                expected as char, ch as char
+            )),
+            None => Err(format!(
+                "Expected '{}', found end of input",
+                expected as char
+            )),
         }
     }
 
@@ -289,47 +314,45 @@ impl<'a> JsonParser<'a> {
             match self.next() {
                 None => return Err("Unterminated string".to_string()),
                 Some(b'"') => return Ok(result),
-                Some(b'\\') => {
-                    match self.next() {
-                        None => return Err("Unterminated escape sequence".to_string()),
-                        Some(b'"') => result.push('"'),
-                        Some(b'\\') => result.push('\\'),
-                        Some(b'/') => result.push('/'),
-                        Some(b'b') => result.push('\u{0008}'),
-                        Some(b'f') => result.push('\u{000C}'),
-                        Some(b'n') => result.push('\n'),
-                        Some(b'r') => result.push('\r'),
-                        Some(b't') => result.push('\t'),
-                        Some(b'u') => {
-                            let code_point = self.parse_hex_escape()?;
-                            if (0xD800..=0xDBFF).contains(&code_point) {
-                                if self.next() != Some(b'\\') {
-                                    return Err("Expected '\\' before low surrogate".to_string());
-                                }
-                                if self.next() != Some(b'u') {
-                                    return Err("Expected 'u' before low surrogate".to_string());
-                                }
-                                let low = self.parse_hex_escape()?;
-                                if !(0xDC00..=0xDFFF).contains(&low) {
-                                    return Err("Invalid low surrogate".to_string());
-                                }
-                                let full = 0x10000 + ((code_point - 0xD800) << 10) + (low - 0xDC00);
-                                match char::from_u32(full) {
-                                    Some(ch) => result.push(ch),
-                                    None => return Err("Invalid surrogate pair code point".to_string()),
-                                }
-                            } else if (0xDC00..=0xDFFF).contains(&code_point) {
-                                return Err("Unexpected low surrogate".to_string());
-                            } else {
-                                match char::from_u32(code_point) {
-                                    Some(ch) => result.push(ch),
-                                    None => return Err("Invalid unicode escape".to_string()),
-                                }
+                Some(b'\\') => match self.next() {
+                    None => return Err("Unterminated escape sequence".to_string()),
+                    Some(b'"') => result.push('"'),
+                    Some(b'\\') => result.push('\\'),
+                    Some(b'/') => result.push('/'),
+                    Some(b'b') => result.push('\u{0008}'),
+                    Some(b'f') => result.push('\u{000C}'),
+                    Some(b'n') => result.push('\n'),
+                    Some(b'r') => result.push('\r'),
+                    Some(b't') => result.push('\t'),
+                    Some(b'u') => {
+                        let code_point = self.parse_hex_escape()?;
+                        if (0xD800..=0xDBFF).contains(&code_point) {
+                            if self.next() != Some(b'\\') {
+                                return Err("Expected '\\' before low surrogate".to_string());
+                            }
+                            if self.next() != Some(b'u') {
+                                return Err("Expected 'u' before low surrogate".to_string());
+                            }
+                            let low = self.parse_hex_escape()?;
+                            if !(0xDC00..=0xDFFF).contains(&low) {
+                                return Err("Invalid low surrogate".to_string());
+                            }
+                            let full = 0x10000 + ((code_point - 0xD800) << 10) + (low - 0xDC00);
+                            match char::from_u32(full) {
+                                Some(ch) => result.push(ch),
+                                None => return Err("Invalid surrogate pair code point".to_string()),
+                            }
+                        } else if (0xDC00..=0xDFFF).contains(&code_point) {
+                            return Err("Unexpected low surrogate".to_string());
+                        } else {
+                            match char::from_u32(code_point) {
+                                Some(ch) => result.push(ch),
+                                None => return Err("Invalid unicode escape".to_string()),
                             }
                         }
-                        Some(ch) => return Err(format!("Invalid escape sequence: \\{}", ch as char)),
                     }
-                }
+                    Some(ch) => return Err(format!("Invalid escape sequence: \\{}", ch as char)),
+                },
                 Some(ch) if ch < 0x20 => {
                     return Err(format!("Control character in string: 0x{:02X}", ch));
                 }
@@ -373,10 +396,15 @@ impl<'a> JsonParser<'a> {
             // This explicit unsafe block is required under Rust 2024 `unsafe_op_in_unsafe_fn`.
             let block = unsafe { StringBlock::new_avx2(self.input[self.pos..].as_ptr()) };
             // 只检查在第一个 quote/backslash 之前的控制字符
-            let first_structural = (block.quote_bits | block.backslash_bits).trailing_zeros() as usize;
+            let first_structural =
+                (block.quote_bits | block.backslash_bits).trailing_zeros() as usize;
             // 当 block 没有引号/反斜杠时，trailing_zeros() 返回 32
             // 1u32 << 32 是 UB，必须用 u32::MAX 作为全量掩码
-            let mask = if first_structural >= 32 { u32::MAX } else { (1u32 << first_structural) - 1 };
+            let mask = if first_structural >= 32 {
+                u32::MAX
+            } else {
+                (1u32 << first_structural) - 1
+            };
             let control_before_structural = block.control_bits & mask;
             if control_before_structural != 0 {
                 let idx = control_before_structural.trailing_zeros() as usize;
@@ -410,9 +438,13 @@ impl<'a> JsonParser<'a> {
         for _ in 0..4 {
             match self.next() {
                 Some(ch) if ch.is_ascii_hexdigit() => {
-                    let digit = if ch.is_ascii_digit() { ch - b'0' }
-                    else if ch.is_ascii_lowercase() { ch - b'a' + 10 }
-                    else { ch - b'A' + 10 };
+                    let digit = if ch.is_ascii_digit() {
+                        ch - b'0'
+                    } else if ch.is_ascii_lowercase() {
+                        ch - b'a' + 10
+                    } else {
+                        ch - b'A' + 10
+                    };
                     hex = (hex << 4) | (digit as u32);
                 }
                 Some(ch) => return Err(format!("Invalid hex digit: {}", ch as char)),
@@ -524,20 +556,33 @@ fn delete_property_by_name_id<C: AsContextMut<Data = RuntimeState>>(
     obj: i64,
     name_id: u32,
 ) {
-    let obj_ptr = match resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize) {
-        Some(p) => p,
-        None => return,
+    let obj_ptr =
+        match resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize) {
+            Some(p) => p,
+            None => return,
+        };
+    let Some((slot_offset, flags, _val)) =
+        find_property_slot_by_name_id_with_env(ctx, env, obj_ptr, name_id)
+    else {
+        return;
     };
-    let Some((slot_offset, flags, _val)) = find_property_slot_by_name_id_with_env(ctx, env, obj_ptr, name_id)
-    else { return };
     // 只删除 configurable 属性
-    if (flags & constants::FLAG_CONFIGURABLE) == 0 { return; }
+    if (flags & constants::FLAG_CONFIGURABLE) == 0 {
+        return;
+    }
     let data = env.memory.data_mut(&mut *ctx);
-    if obj_ptr + 16 > data.len() || slot_offset + 32 > data.len() { return; }
+    if obj_ptr + 16 > data.len() || slot_offset + 32 > data.len() {
+        return;
+    }
     let num_props = u32::from_le_bytes([
-        data[obj_ptr + 12], data[obj_ptr + 13], data[obj_ptr + 14], data[obj_ptr + 15],
+        data[obj_ptr + 12],
+        data[obj_ptr + 13],
+        data[obj_ptr + 14],
+        data[obj_ptr + 15],
     ]) as usize;
-    if num_props == 0 { return; }
+    if num_props == 0 {
+        return;
+    }
     let last_slot_offset = obj_ptr + 16 + (num_props - 1) * 32;
     data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props as u32 - 1).to_le_bytes());
     if slot_offset != last_slot_offset {
@@ -571,8 +616,15 @@ fn json_parse_to_string(caller: &mut Caller<'_, RuntimeState>, value: i64) -> Re
     }
     if value::is_bigint(value) {
         let handle = value::decode_bigint_handle(value) as usize;
-        let table = caller.data().bigint_table.lock().expect("bigint_table mutex");
-        return Ok(table.get(handle).map(|bigint| bigint.to_string()).unwrap_or_default());
+        let table = caller
+            .data()
+            .bigint_table
+            .lock()
+            .expect("bigint_table mutex");
+        return Ok(table
+            .get(handle)
+            .map(|bigint| bigint.to_string())
+            .unwrap_or_default());
     }
     if value::is_f64(value)
         || value::is_bool(value)
@@ -581,7 +633,9 @@ fn json_parse_to_string(caller: &mut Caller<'_, RuntimeState>, value: i64) -> Re
     {
         return Ok(eval_to_string(caller, value));
     }
-    if value::is_js_object(value) && let Some(ptr) = resolve_handle(caller, value) {
+    if value::is_js_object(value)
+        && let Some(ptr) = resolve_handle(caller, value)
+    {
         for method_name in ["toString", "valueOf"] {
             let method = read_object_property_by_name(caller, ptr, method_name)
                 .unwrap_or_else(value::encode_undefined);
@@ -658,7 +712,7 @@ fn apply_reviver(
                 };
                 let new_val = apply_reviver(caller, reviver, val, &i.to_string(), elem_val);
                 if value::is_undefined(new_val) {
-                    write_array_hole(caller, ptr, i);
+                    write_array_elem(caller, ptr, i, value::encode_undefined());
                 } else {
                     write_array_elem(caller, ptr, i, new_val);
                 }
@@ -672,21 +726,31 @@ fn apply_reviver(
                 let data = env.memory.data(&*caller);
                 if obj_ptr + 16 <= data.len() {
                     let num_props = u32::from_le_bytes([
-                        data[obj_ptr + 12], data[obj_ptr + 13],
-                        data[obj_ptr + 14], data[obj_ptr + 15],
+                        data[obj_ptr + 12],
+                        data[obj_ptr + 13],
+                        data[obj_ptr + 14],
+                        data[obj_ptr + 15],
                     ]) as usize;
                     for i in 0..num_props {
                         let slot_off = obj_ptr + 16 + i * 32;
-                        if slot_off + 32 > data.len() { continue; }
+                        if slot_off + 32 > data.len() {
+                            continue;
+                        }
                         let name_id = u32::from_le_bytes([
-                            data[slot_off], data[slot_off + 1],
-                            data[slot_off + 2], data[slot_off + 3],
+                            data[slot_off],
+                            data[slot_off + 1],
+                            data[slot_off + 2],
+                            data[slot_off + 3],
                         ]);
                         let prop_val = i64::from_le_bytes([
-                            data[slot_off + 8], data[slot_off + 9],
-                            data[slot_off + 10], data[slot_off + 11],
-                            data[slot_off + 12], data[slot_off + 13],
-                            data[slot_off + 14], data[slot_off + 15],
+                            data[slot_off + 8],
+                            data[slot_off + 9],
+                            data[slot_off + 10],
+                            data[slot_off + 11],
+                            data[slot_off + 12],
+                            data[slot_off + 13],
+                            data[slot_off + 14],
+                            data[slot_off + 15],
                         ]);
                         props.push((name_id, prop_val));
                     }
@@ -702,8 +766,14 @@ fn apply_reviver(
                     let obj_ptr2 = resolve_handle(caller, val).unwrap_or(0);
                     if obj_ptr2 != 0 {
                         write_object_property_by_name_id(
-                            caller, obj_ptr2, val, *name_id, new_val,
-                            constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE,
+                            caller,
+                            obj_ptr2,
+                            val,
+                            *name_id,
+                            new_val,
+                            constants::FLAG_CONFIGURABLE
+                                | constants::FLAG_ENUMERABLE
+                                | constants::FLAG_WRITABLE,
                         );
                     }
                 }
@@ -716,11 +786,162 @@ fn apply_reviver(
         .unwrap_or_else(|_| value::encode_undefined())
 }
 
-pub fn json_parse_to_wasm(
+async fn apply_reviver_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    reviver: i64,
+    holder: i64,
+    key: &str,
+    val: i64,
+) -> i64 {
+    if value::is_array(val) {
+        if let Some(ptr) = resolve_array_ptr(caller, val) {
+            let len = match read_array_length(caller, ptr) {
+                Some(n) => n,
+                None => return value::encode_undefined(),
+            };
+            for i in 0..len {
+                let elem_val = match read_array_elem(caller, ptr, i) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let new_val = Box::pin(apply_reviver_async(
+                    caller,
+                    reviver,
+                    val,
+                    &i.to_string(),
+                    elem_val,
+                ))
+                .await;
+                if value::is_undefined(new_val) {
+                    write_array_elem(caller, ptr, i, value::encode_undefined());
+                } else {
+                    write_array_elem(caller, ptr, i, new_val);
+                }
+            }
+        }
+    } else if value::is_object(val) {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        if let Some(obj_ptr) = resolve_handle(caller, val) {
+            let mut props: Vec<(u32, i64)> = Vec::new();
+            {
+                let data = env.memory.data(&*caller);
+                if obj_ptr + 16 <= data.len() {
+                    let num_props = u32::from_le_bytes([
+                        data[obj_ptr + 12],
+                        data[obj_ptr + 13],
+                        data[obj_ptr + 14],
+                        data[obj_ptr + 15],
+                    ]) as usize;
+                    for i in 0..num_props {
+                        let slot_off = obj_ptr + 16 + i * 32;
+                        if slot_off + 32 > data.len() {
+                            continue;
+                        }
+                        let name_id = u32::from_le_bytes([
+                            data[slot_off],
+                            data[slot_off + 1],
+                            data[slot_off + 2],
+                            data[slot_off + 3],
+                        ]);
+                        let prop_val = i64::from_le_bytes([
+                            data[slot_off + 8],
+                            data[slot_off + 9],
+                            data[slot_off + 10],
+                            data[slot_off + 11],
+                            data[slot_off + 12],
+                            data[slot_off + 13],
+                            data[slot_off + 14],
+                            data[slot_off + 15],
+                        ]);
+                        props.push((name_id, prop_val));
+                    }
+                }
+            }
+            for (name_id, prop_val) in &props {
+                let name_bytes = read_string_bytes_mem(caller, &env.memory, *name_id);
+                let name = String::from_utf8_lossy(&name_bytes);
+                let new_val = Box::pin(apply_reviver_async(caller, reviver, val, &name, *prop_val))
+                    .await;
+                if value::is_undefined(new_val) {
+                    delete_property_by_name_id(caller, &env, val, *name_id);
+                } else {
+                    let obj_ptr2 = resolve_handle(caller, val).unwrap_or(0);
+                    if obj_ptr2 != 0 {
+                        write_object_property_by_name_id(
+                            caller,
+                            obj_ptr2,
+                            val,
+                            *name_id,
+                            new_val,
+                            constants::FLAG_CONFIGURABLE
+                                | constants::FLAG_ENUMERABLE
+                                | constants::FLAG_WRITABLE,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let key_str = store_runtime_string(caller, key.to_string());
+    call_wasm_callback_async(caller, reviver, holder, &[key_str, val])
+        .await
+        .unwrap_or_else(|_| value::encode_undefined())
+}
+
+pub async fn json_parse_to_wasm_async(
     caller: &mut Caller<'_, RuntimeState>,
     text: i64,
     reviver: i64,
 ) -> i64 {
+    let text_str = match json_parse_to_string(caller, text) {
+        Ok(text) => text,
+        Err(exception) => return exception,
+    };
+
+    let mut parser = JsonParser::new(text_str.as_bytes());
+    match parser.parse_value() {
+        Ok(json_value) => {
+            parser.skip_whitespace();
+            if parser.pos < parser.input.len() {
+                return make_exception(
+                    caller,
+                    "SyntaxError",
+                    "Unexpected trailing content".to_string(),
+                );
+            }
+
+            let wasm_value = build_wasm_value(caller, &json_value);
+
+            if is_callable_in_runtime(caller, reviver) {
+                let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                let root = alloc_host_object(caller, &env, 1);
+                let empty_name_id = find_memory_c_string_with_env(caller, &env, "")
+                    .or_else(|| alloc_heap_c_string_with_env(caller, &env, ""));
+                if let Some(nid) = empty_name_id {
+                    let root_ptr = resolve_handle(caller, root);
+                    if let Some(ptr) = root_ptr {
+                        write_object_property_by_name_id(
+                            caller,
+                            ptr,
+                            root,
+                            nid,
+                            wasm_value,
+                            constants::FLAG_CONFIGURABLE
+                                | constants::FLAG_ENUMERABLE
+                                | constants::FLAG_WRITABLE,
+                        );
+                    }
+                }
+                apply_reviver_async(caller, reviver, root, "", wasm_value).await
+            } else {
+                wasm_value
+            }
+        }
+        Err(error) => make_exception(caller, "SyntaxError", error),
+    }
+}
+
+pub fn json_parse_to_wasm(caller: &mut Caller<'_, RuntimeState>, text: i64, reviver: i64) -> i64 {
     let text_str = match json_parse_to_string(caller, text) {
         Ok(text) => text,
         Err(exception) => return exception,
@@ -750,8 +971,14 @@ pub fn json_parse_to_wasm(
                     let root_ptr = resolve_handle(caller, root);
                     if let Some(ptr) = root_ptr {
                         write_object_property_by_name_id(
-                            caller, ptr, root, nid, wasm_value,
-                            constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE,
+                            caller,
+                            ptr,
+                            root,
+                            nid,
+                            wasm_value,
+                            constants::FLAG_CONFIGURABLE
+                                | constants::FLAG_ENUMERABLE
+                                | constants::FLAG_WRITABLE,
                         );
                     }
                 }
@@ -789,6 +1016,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_parse_numbers() {
         assert_eq!(parse("0").unwrap(), JsonValue::Number(0.0));
         assert_eq!(parse("-42").unwrap(), JsonValue::Number(-42.0));
@@ -802,9 +1030,18 @@ mod tests {
 
     #[test]
     fn test_parse_strings_and_escapes() {
-        assert_eq!(parse(r#""hello""#).unwrap(), JsonValue::String("hello".into()));
-        assert_eq!(parse(r#""a\nb\tc""#).unwrap(), JsonValue::String("a\nb\tc".into()));
-        assert_eq!(parse(r#""\\ \" \/""#).unwrap(), JsonValue::String(r#"\ " /"#.into()));
+        assert_eq!(
+            parse(r#""hello""#).unwrap(),
+            JsonValue::String("hello".into())
+        );
+        assert_eq!(
+            parse(r#""a\nb\tc""#).unwrap(),
+            JsonValue::String("a\nb\tc".into())
+        );
+        assert_eq!(
+            parse(r#""\\ \" \/""#).unwrap(),
+            JsonValue::String(r#"\ " /"#.into())
+        );
         // unicode + surrogate not fully exercised here but basic ok
         assert!(parse("\"\\u0041\"").is_ok());
     }
@@ -814,7 +1051,9 @@ mod tests {
         let v = parse("[1,2,3]").unwrap();
         if let JsonValue::Array(a) = v {
             assert_eq!(a.len(), 3);
-        } else { panic!(); }
+        } else {
+            panic!();
+        }
         assert!(parse("[]").is_ok());
         assert!(parse("[1,]").is_err()); // trailing comma rejected
         assert!(parse("[1,2").is_err()); // unterm
@@ -825,7 +1064,9 @@ mod tests {
         let v = parse(r#"{"a":1,"b":true}"#).unwrap();
         if let JsonValue::Object(o) = v {
             assert_eq!(o.len(), 2);
-        } else { panic!(); }
+        } else {
+            panic!();
+        }
         assert!(parse("{}").is_ok());
         assert!(parse(r#"{"a":1,}"#).is_err()); // trailing
     }

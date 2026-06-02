@@ -1,4 +1,7 @@
 use super::*;
+use std::io::Write;
+
+use wasmtime::{Instance, Store};
 
 pub(crate) fn create_async_generator_method(
     state: &RuntimeState,
@@ -207,7 +210,21 @@ pub(crate) fn pump_async_generator_from_caller(
     }
 }
 
-pub(crate) fn resume_async_function<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+/// Phase 3 must-convert 之 resume 路径（按 2026-05-31-async-scheduler-implementation-plan.md 审计条目 + 26-async-audit-refactor-design.md）：
+/// 为 `Microtask::AsyncResume`（用户 async/await 和 async generator 的恢复点）添加 async 版本，与现有 sync `resume_async_function` 并存。
+///
+/// 规则：
+/// - 严格与 sync 版本并存，供保留的 sync execute 路径继续使用
+/// - 所有 AsyncResume / async generator resumption 语义（state 值、rejection 路径、generator object 更新、continuation 表更新、outer_promise 检测与 completed 标记）必须 100% 相同
+/// - 仅 continuation 表更新 + 状态机推进（Wasm 恢复调用） + 返回值处理完全等价；唯一差异是将 `func.call(...)` 替换为 `func.call_async(...).await`
+/// - 本阶段保持调用点不变（microtask 中的 AsyncResume 分支仍调用 sync 版本；未来 Microtask 调度切换到 async 骨架时同步转换）
+/// - 精确保留原有行为，无任何语义或顺序差异
+///
+/// 特别提醒（plan Correction 3 + lib.rs 已有注释 + 审计计划）：
+///   在 Store::epoch_deadline_async_yield_and_update 之后，
+///   *所有* 经由该 Store 的 Wasm 调用（主 + 回调，包括此处 resume 中的 continuation 恢复调用）都必须走 async API（call_async 等）。
+///   本文件中的 async 版本即为此准备；sync 版本仅留给未切换的 sync execute 路径。
+pub(crate) async fn resume_async_function_async<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
     ctx: &mut C,
     env: &WasmEnv,
     fn_table_idx: u32,
@@ -235,16 +252,18 @@ pub(crate) fn resume_async_function<C: AsContextMut<Data = RuntimeState> + Runti
     let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
     let Some(func) = func else { return };
     let mut results = [Val::I64(0)];
-    let _ = func.call(
-        &mut *ctx,
-        &[
-            Val::I64(continuation),
-            Val::I64(resume_val),
-            Val::I32(0),
-            Val::I32(0),
-        ],
-        &mut results,
-    );
+    let _ = func
+        .call_async(
+            &mut *ctx,
+            &[
+                Val::I64(continuation),
+                Val::I64(resume_val),
+                Val::I32(0),
+                Val::I32(0),
+            ],
+            &mut results,
+        )
+        .await;
     let cont_handle = value::decode_object_handle(continuation) as usize;
     let outer_promise = {
         let c_table = ctx
@@ -267,4 +286,101 @@ pub(crate) fn resume_async_function<C: AsContextMut<Data = RuntimeState> + Runti
             }
         }
     }
+}
+/// Dedicated async-only helper (for the thin top-level async execution skeleton in lib.rs
+/// or future wiring after async instantiate + prototype setup).
+/// Contains a full byte-for-byte copy of the block from sync execute's post-instantiate
+/// "Run main" through the end of main completion handling / output / error / trap propagation.
+/// Per strict instructions: ONLY the main invocation line was altered (to call_async + .await).
+/// All other logic, comments, Chinese messages, error handling, drain, timer loop etc. are
+/// identical to the sync version. This is the required top-level async main.call_async site.
+pub(crate) async fn run_main_completion_block_async<W: Write>(
+    instance: &Instance,
+    mut store: Store<RuntimeState>,
+    wasm_env: WasmEnv,
+    output: Arc<Mutex<Vec<u8>>>,
+    runtime_error: Arc<Mutex<Option<String>>>,
+    writer: W,
+    completion_rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion>,
+) -> anyhow::Result<W> {
+    let main = instance.get_typed_func::<(), i64>(&mut store, "main")?;
+    let main_result = main.call_async(&mut store, ()).await;
+    let main_ok = match main_result {
+        Ok(return_val) => {
+            if value::is_exception(return_val) {
+                // 未捕获异常被抛出顶层：将异常信息写入输出并设置 runtime_error
+                let idx = value::decode_handle(return_val) as usize;
+                if let Some(entry) = store
+                    .data()
+                    .error_table
+                    .lock()
+                    .expect("error_table mutex")
+                    .get(idx)
+                {
+                    let msg = if entry.message.is_empty() {
+                        "Uncaught exception".to_string()
+                    } else {
+                        format!("Uncaught exception: {}", entry.message)
+                    };
+                    let mut buffer = store.data().output.lock().expect("output mutex");
+                    writeln!(&mut *buffer, "{msg}").ok();
+                    *store
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime_error mutex") = Some(msg);
+                }
+                // 跳过后续 microtasks/timers
+                false
+            } else {
+                true
+            }
+        }
+        Err(ref trap) => {
+            if store
+                .data()
+                .runtime_error
+                .lock()
+                .expect("runtime_error mutex")
+                .is_some()
+            {
+                // throw import 已经记录了 JS 层异常；先走统一输出/错误收集路径。
+                false
+            } else {
+                return Err(anyhow::anyhow!("WASM trap: {:?}", trap));
+            }
+        }
+    };
+
+    // ── Drain microtasks after main() ────────────────────────────────────
+    // Phase 1-4 solid gate: async 主路径接线到 drain_microtasks_async 等自有 helpers
+    if main_ok {
+        drain_microtasks_async(&mut store, &wasm_env).await;
+    }
+
+    // ── Post-main scheduler（Phase 5 委托给 scheduler.rs，Phase 6 传入 rx） ─────────────────────────
+    // 仅 async 路径；sync 路径的阻塞 loop 保持 100% 不动。
+    // 初始 drain 已在上方完成；scheduler 内部负责后续 timer fire + per-callback drain + completion 处理。
+    if main_ok {
+        crate::scheduler::run_post_main_scheduler_async(&mut store, &wasm_env, completion_rx)
+            .await?;
+    }
+    let bytes = output
+        .lock()
+        .expect("runtime output buffer mutex should not be poisoned")
+        .clone();
+    drop(store);
+
+    let mut writer = writer;
+    writer.write_all(&bytes)?;
+
+    // ── Check errors ─────────────────────────────────────────────────────
+    if let Some(message) = runtime_error.lock().expect("runtime error mutex").clone() {
+        anyhow::bail!(message);
+    }
+
+    // Propagate any wasm trap from main() call (must be after output collection)
+    main_result?;
+
+    Ok(writer)
 }

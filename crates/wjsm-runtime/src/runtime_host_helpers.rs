@@ -1,5 +1,6 @@
 use super::*;
 use crate::wasm_env::WasmEnv;
+use std::sync::atomic::Ordering;
 
 pub(crate) fn read_shadow_arg_with_env<C: AsContext>(
     ctx: &C,
@@ -145,7 +146,10 @@ pub(crate) fn call_wasm_callback(
         .as_func()
         .flatten()
         .ok_or_else(|| anyhow::anyhow!("table entry not a function"))?;
-    let previous_new_target = caller.data().new_target.replace(value::encode_undefined());
+    let previous_new_target = caller
+        .data()
+        .new_target
+        .swap(value::encode_undefined(), Ordering::Relaxed);
     let mut results = [Val::I64(0)];
     let call_result = func.call(
         &mut *caller,
@@ -158,7 +162,187 @@ pub(crate) fn call_wasm_callback(
         &mut results,
     );
     // 恢复调用上下文（无论 call 成功与否）
-    caller.data().new_target.set(previous_new_target);
+    caller
+        .data()
+        .new_target
+        .store(previous_new_target, Ordering::Relaxed);
+    let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+    call_result?;
+    Ok(results[0].unwrap_i64())
+}
+
+/// Phase 3 must-convert 之 host reentrant 路径（按 2026-05-31-async-scheduler-implementation-plan.md 审计条目 + 26-async-audit-refactor-design.md）：
+/// 为 `call_wasm_callback`（中央 host reentrant 调用点，proxy/define/array 等 13+ callers）添加 async 版本，与现有 sync `call_wasm_callback` 并存。
+///
+/// 规则：
+/// - 严格与 sync 版本并存，供保留的 sync execute 路径继续使用
+/// - 所有 bound/closure/proxy 解析逻辑、shadow stack 更新、native callable 短路、结果处理必须 100% 相同
+/// - 仅 Wasm invocation（func table dispatch） + 返回值处理完全等价；唯一差异是将 `func.call(...)` 替换为 `func.call_async(...).await`
+/// - 本阶段保持调用点不变（runtime_host_helpers 内部递归及所有 host_imports 调用仍使用 sync 版本；未来当 async host fn 路径激活时同步转换调用点）
+/// - 精确保留原有行为，无任何语义或顺序差异
+///
+/// 特别提醒（plan Correction 3 + lib.rs 已有注释 + 审计计划）：
+///   在 Store::epoch_deadline_async_yield_and_update 之后，
+///   *所有* 经由该 Store 的 Wasm 调用（主 + 回调，包括此处 host reentrant 中的 func table 调用）都必须走 async API（call_async 等）。
+///   本文件中的 async 版本即为此准备；sync 版本仅留给未切换的 sync execute 路径。
+pub(crate) async fn call_wasm_callback_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_val: i64,
+    this_val: i64,
+    args: &[i64],
+) -> anyhow::Result<i64> {
+    let shadow_sp_global = caller
+        .get_export("__shadow_sp")
+        .and_then(|e| e.into_global())
+        .ok_or_else(|| anyhow::anyhow!("no __shadow_sp"))?;
+    let shadow_sp = shadow_sp_global
+        .get(&mut *caller)
+        .i32()
+        .ok_or_else(|| anyhow::anyhow!("shadow_sp not i32"))?;
+    let new_shadow_sp = shadow_sp + (args.len() as i32) * 8;
+    // 将参数写入影子栈
+    {
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return Err(anyhow::anyhow!("no memory"));
+        };
+        let data = memory.data_mut(&mut *caller);
+        let mut write_pos = shadow_sp as usize;
+        for &arg in args {
+            if write_pos + 8 > data.len() {
+                return Err(anyhow::anyhow!("shadow stack overflow"));
+            }
+            data[write_pos..write_pos + 8].copy_from_slice(&arg.to_le_bytes());
+            write_pos += 8;
+        }
+    }
+    // 更新 __shadow_sp
+    shadow_sp_global.set(&mut *caller, Val::I32(new_shadow_sp))?;
+    // 解析函数：支持闭包、函数引用、代理链
+    let mut resolved = func_val;
+    loop {
+        if value::is_closure(resolved)
+            || value::is_function(resolved)
+            || value::is_native_callable(resolved)
+        {
+            break;
+        }
+        if value::is_bound(resolved) {
+            break;
+        }
+        if !value::is_proxy(resolved) {
+            return Err(anyhow::anyhow!("not callable"));
+        }
+        let handle = value::decode_proxy_handle(resolved) as usize;
+        let entry = {
+            let table = caller.data().proxy_table.lock().unwrap();
+            table.get(handle).cloned()
+        };
+        let entry = match entry {
+            Some(e) => e,
+            None => return Err(anyhow::anyhow!("proxy handle not found")),
+        };
+        if entry.revoked {
+            return Err(anyhow::anyhow!("proxy has been revoked"));
+        }
+        // Check handler.apply trap
+        if let Some(handler_ptr) = resolve_handle(&mut *caller, entry.handler) {
+            let trap = read_object_property_by_name(&mut *caller, handler_ptr, "apply")
+                .unwrap_or_else(value::encode_undefined);
+            if !value::is_undefined(trap) && !value::is_null(trap) {
+                resolved = trap;
+                continue;
+            }
+        }
+        // No apply trap, forward to target
+        resolved = entry.target;
+        continue;
+    }
+    if value::is_native_callable(resolved) {
+        // 先恢复 shadow_sp，因为 native_callable 不走 WASM 调用路径
+        let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+        return call_native_callable_with_args_from_caller_async(
+            &mut *caller,
+            resolved,
+            this_val,
+            args.to_vec(),
+        )
+        .await
+        .ok_or_else(|| anyhow::anyhow!("native callable returned None"));
+    }
+    if value::is_bound(resolved) {
+        let bound_idx = value::decode_bound_idx(resolved) as usize;
+        let (bound_func, bound_this, bound_args) = {
+            let bound = caller.data().bound_objects.lock().unwrap();
+            let record = &bound[bound_idx];
+            (
+                record.target_func,
+                record.bound_this,
+                record.bound_args.clone(),
+            )
+        };
+        // 先恢复 shadow_sp
+        let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+        // 合并 bound_args 和 args
+        let mut combined_args = bound_args;
+        combined_args.extend_from_slice(args);
+        return Box::pin(call_wasm_callback_async(
+            &mut *caller,
+            bound_func,
+            bound_this,
+            &combined_args,
+        ))
+        .await;
+    }
+    let (func_idx, env_obj) = if value::is_closure(resolved) {
+        let idx = value::decode_closure_idx(resolved) as usize;
+        let closures = caller.data().closures.lock().unwrap();
+        if let Some(entry) = closures.get(idx) {
+            (entry.func_idx, entry.env_obj)
+        } else {
+            return Err(anyhow::anyhow!("closure index out of range"));
+        }
+    } else if value::is_function(resolved) {
+        (
+            (resolved as u64 & 0xFFFF_FFFF) as u32,
+            value::encode_undefined(),
+        )
+    } else {
+        return Err(anyhow::anyhow!("not callable"));
+    };
+    // 通过函数表调用
+    let table = caller
+        .get_export("__table")
+        .and_then(|e| e.into_table())
+        .ok_or_else(|| anyhow::anyhow!("no __table"))?;
+    let func_ref = table
+        .get(&mut *caller, func_idx as u64)
+        .ok_or_else(|| anyhow::anyhow!("table get failed"))?;
+    let func = func_ref
+        .as_func()
+        .flatten()
+        .ok_or_else(|| anyhow::anyhow!("table entry not a function"))?;
+    let previous_new_target = caller
+        .data()
+        .new_target
+        .swap(value::encode_undefined(), Ordering::Relaxed);
+    let mut results = [Val::I64(0)];
+    let call_result = func
+        .call_async(
+            &mut *caller,
+            &[
+                Val::I64(env_obj),
+                Val::I64(this_val),
+                Val::I32(shadow_sp),
+                Val::I32(args.len() as i32),
+            ],
+            &mut results,
+        )
+        .await;
+    // 恢复调用上下文（无论 call 成功与否）
+    caller
+        .data()
+        .new_target
+        .store(previous_new_target, Ordering::Relaxed);
     let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
     call_result?;
     Ok(results[0].unwrap_i64())
@@ -173,13 +357,18 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let size = 16 + capacity * 8;
-    let new_heap_ptr = heap_ptr + size;
-    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
+    let size = 16u32.saturating_add(capacity.saturating_mul(8));
+    let new_heap_ptr = heap_ptr.saturating_add(size);
     let proto = env.array_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
     let d = env.memory.data_mut(&mut *ctx);
     let ptr = heap_ptr as usize;
     if (new_heap_ptr as usize) > d.len() {
+        return value::encode_undefined();
+    }
+    let slot_addr = obj_table_ptr as usize + obj_table_count as usize * 4;
+    // obj_table 槽位耗尽时必须直接返回 undefined，不递增 obj_table_count、
+    // 不前进 heap_ptr，保持 handle->slot 映射与 obj_table_count 一致。
+    if slot_addr + 4 > d.len() {
         return value::encode_undefined();
     }
     d[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());
@@ -187,11 +376,9 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
     d[ptr + 5..ptr + 8].fill(0);
     d[ptr + 8..ptr + 12].copy_from_slice(&0u32.to_le_bytes());
     d[ptr + 12..ptr + 16].copy_from_slice(&capacity.to_le_bytes());
-    let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
-    if slot_addr + 4 <= d.len() {
-        d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
-    }
+    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
     let _ = d;
+    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
     let _ = env
         .obj_table_count
         .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
@@ -236,12 +423,17 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let size = 16 + capacity * 32;
-    let new_heap_ptr = heap_ptr + size;
-    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
+    let size = 16u32.saturating_add(capacity.saturating_mul(32));
+    let new_heap_ptr = heap_ptr.saturating_add(size);
     let d = env.memory.data_mut(&mut *ctx);
     let ptr = heap_ptr as usize;
     if (new_heap_ptr as usize) > d.len() {
+        return value::encode_undefined();
+    }
+    let slot_addr = obj_table_ptr as usize + obj_table_count as usize * 4;
+    // obj_table 槽位耗尽时必须直接返回 undefined，不递增 obj_table_count、
+    // 不前进 heap_ptr，保持 handle->slot 映射与 obj_table_count 一致。
+    if slot_addr + 4 > d.len() {
         return value::encode_undefined();
     }
     d[ptr..ptr + 4].copy_from_slice(&0u32.to_le_bytes()); // proto = 0 (null)
@@ -249,11 +441,9 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
     d[ptr + 5..ptr + 8].fill(0);
     d[ptr + 8..ptr + 12].copy_from_slice(&capacity.to_le_bytes()); // capacity
     d[ptr + 12..ptr + 16].copy_from_slice(&0u32.to_le_bytes()); // num_props = 0
-    let slot_addr = (obj_table_ptr + obj_table_count * 4) as usize;
-    if slot_addr + 4 <= d.len() {
-        d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
-    }
+    d[slot_addr..slot_addr + 4].copy_from_slice(&heap_ptr.to_le_bytes());
     let _ = d;
+    let _ = env.heap_ptr.set(&mut *ctx, Val::I32(new_heap_ptr as i32));
     let _ = env
         .obj_table_count
         .set(&mut *ctx, Val::I32((obj_table_count + 1) as i32));
@@ -721,107 +911,6 @@ pub(crate) fn proxy_or_target_get_prototype_of_impl(
     prototype_handle_to_value(caller, proto_handle)
 }
 
-pub(crate) fn proxy_or_target_is_extensible_impl(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-) -> bool {
-    if value::is_proxy(target) {
-        let handle = value::decode_proxy_handle(target) as usize;
-        let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
-            table.get(handle).cloned()
-        };
-        if let Some(entry) = entry {
-            if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'isExtensible' on a proxy that has been revoked"
-                        .to_string(),
-                );
-                return false;
-            }
-            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-                let trap = read_object_property_by_name(caller, handler_ptr, "isExtensible")
-                    .unwrap_or_else(value::encode_undefined);
-                if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let trap_res =
-                        match call_wasm_callback(caller, trap, entry.handler, &[entry.target]) {
-                            Ok(result) => !value::is_falsy(result),
-                            Err(error) => {
-                                set_runtime_error(
-                                    caller.data(),
-                                    format!("TypeError: isExtensible trap failed: {error}"),
-                                );
-                                return false;
-                            }
-                        };
-                    let real_res = is_extensible_impl(caller, entry.target);
-                    if trap_res != real_res {
-                        set_runtime_error(
-                            caller.data(),
-                            "TypeError: Proxy isExtensible trap returned result that does not match target's extensibility".to_string(),
-                        );
-                        return false;
-                    }
-                    return trap_res;
-                }
-            }
-            return is_extensible_impl(caller, entry.target);
-        }
-    }
-    is_extensible_impl(caller, target)
-}
-
-pub(crate) fn proxy_or_target_prevent_extensions_impl(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-) -> bool {
-    if value::is_proxy(target) {
-        let handle = value::decode_proxy_handle(target) as usize;
-        let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
-            table.get(handle).cloned()
-        };
-        if let Some(entry) = entry {
-            if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'preventExtensions' on a proxy that has been revoked"
-                        .to_string(),
-                );
-                return false;
-            }
-            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-                let trap = read_object_property_by_name(caller, handler_ptr, "preventExtensions")
-                    .unwrap_or_else(value::encode_undefined);
-                if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let trap_res =
-                        match call_wasm_callback(caller, trap, entry.handler, &[entry.target]) {
-                            Ok(result) => !value::is_falsy(result),
-                            Err(error) => {
-                                set_runtime_error(
-                                    caller.data(),
-                                    format!("TypeError: preventExtensions trap failed: {error}"),
-                                );
-                                return false;
-                            }
-                        };
-                    if trap_res && is_extensible_impl(caller, entry.target) {
-                        set_runtime_error(
-                            caller.data(),
-                            "TypeError: Proxy preventExtensions trap returned true, but target remains extensible".to_string(),
-                        );
-                        return false;
-                    }
-                    return trap_res;
-                }
-            }
-            return prevent_extensions_impl(caller, entry.target);
-        }
-    }
-    prevent_extensions_impl(caller, target)
-}
-
 /// JS 属性描述符结构体，对应规范中 Property Descriptor 内部类型
 #[derive(Debug, Clone)]
 pub(crate) struct PropertyDescriptor {
@@ -1064,167 +1153,6 @@ pub(crate) fn validate_proxy_get_own_property_descriptor_result(
     }
 
     Ok(())
-}
-
-/// 导出供 Object.defineProperty 及 Reflect.defineProperty 共享调用的核心底层属性定义逻辑
-pub(crate) fn define_property_internal(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-    prop: i64,
-    descriptor: i64,
-) -> Result<bool, String> {
-    if !value::is_object(target)
-        && !value::is_function(target)
-        && !value::is_array(target)
-        && !value::is_proxy(target)
-    {
-        return Err("TypeError: Object.defineProperty called on non-object".to_string());
-    }
-
-    let desc = parse_descriptor(caller, descriptor)?;
-
-    let prop_name = match render_value(caller, prop) {
-        Ok(s) => s,
-        Err(_) => return Err("TypeError: Cannot convert property key to string".to_string()),
-    };
-    let name_id = match find_memory_c_string(caller, &prop_name)
-        .or_else(|| alloc_heap_c_string(caller, &prop_name))
-    {
-        Some(id) => id,
-        None => return Err("TypeError: Failed to allocate property name string".to_string()),
-    };
-
-    define_property_on_target(caller, target, name_id, prop, descriptor, &desc)
-}
-
-/// 递归分发，同时处理普通对象与 Proxy 对象的属性定义与 invariants 校验
-fn define_property_on_target(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-    name_id: u32,
-    prop_val: i64,
-    descriptor: i64,
-    desc: &PropertyDescriptor,
-) -> Result<bool, String> {
-    if value::is_proxy(target) {
-        let handle = value::decode_proxy_handle(target) as usize;
-        let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
-            table.get(handle).cloned()
-        };
-        let entry = match entry {
-            Some(e) => e,
-            None => return Err("TypeError: Proxy target not found".to_string()),
-        };
-        if entry.revoked {
-            return Err(
-                "TypeError: Cannot perform 'defineProperty' on a proxy that has been revoked"
-                    .to_string(),
-            );
-        }
-
-        if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-            let trap = read_object_property_by_name(caller, handler_ptr, "defineProperty")
-                .unwrap_or_else(value::encode_undefined);
-            if !value::is_undefined(trap) && !value::is_null(trap) {
-                // 触发 defineProperty trap: (target, property, descriptor)
-                let result = match call_wasm_callback(
-                    caller,
-                    trap,
-                    entry.handler,
-                    &[entry.target, prop_val, descriptor],
-                ) {
-                    Ok(res) => res,
-                    Err(e) => return Err(format!("TypeError: defineProperty trap failed: {}", e)),
-                };
-                let trap_result = !value::is_falsy(result);
-                if !trap_result {
-                    return Ok(false);
-                }
-
-                // Invariants 检查（ECMAScript 规范代理定义属性的不变式）
-                let target_desc = get_target_descriptor(caller, entry.target, name_id);
-                let extensible = is_extensible_impl(caller, entry.target);
-                let setting_config_false = desc.configurable == Some(false);
-
-                if target_desc.is_none() {
-                    if !extensible {
-                        return Err("TypeError: proxy defineProperty invariant violation: target is non-extensible and property does not exist".to_string());
-                    }
-                    if setting_config_false {
-                        return Err("TypeError: proxy defineProperty invariant violation: cannot define non-configurable property if it does not exist on target".to_string());
-                    }
-                } else {
-                    let td = target_desc.unwrap();
-                    let target_configurable = td.configurable.unwrap_or(true);
-
-                    if !target_configurable {
-                        if desc.configurable == Some(true) {
-                            return Err("TypeError: proxy defineProperty invariant violation: cannot redefine non-configurable property as configurable".to_string());
-                        }
-                        if let Some(new_enum) = desc.enumerable {
-                            if Some(new_enum) != td.enumerable {
-                                return Err("TypeError: proxy defineProperty invariant violation: cannot change enumerableness of non-configurable property".to_string());
-                            }
-                        }
-
-                        let is_new_accessor = desc.get.is_some() || desc.set.is_some();
-                        let target_accessor = td.get.is_some() || td.set.is_some();
-                        if is_new_accessor != target_accessor {
-                            return Err("TypeError: proxy defineProperty invariant violation: cannot change property type on non-configurable property".to_string());
-                        }
-
-                        if !target_accessor {
-                            // 数据属性
-                            let target_writable = td.writable.unwrap_or(true);
-                            if !target_writable {
-                                if desc.writable == Some(true) {
-                                    return Err("TypeError: proxy defineProperty invariant violation: cannot make non-writable property writable".to_string());
-                                }
-                                if let Some(new_val) = desc.value {
-                                    let old_val = td.value.unwrap_or(value::encode_undefined());
-                                    let same = strict_eq(caller, old_val, new_val);
-                                    if value::is_falsy(same) {
-                                        return Err("TypeError: proxy defineProperty invariant violation: cannot change value of non-writable non-configurable property".to_string());
-                                    }
-                                }
-                            }
-                        } else {
-                            // 访问器属性
-                            if let Some(new_getter) = desc.get {
-                                let old_getter = td.get.unwrap_or(value::encode_undefined());
-                                if new_getter != old_getter {
-                                    return Err("TypeError: proxy defineProperty invariant violation: cannot change getter of non-configurable property".to_string());
-                                }
-                            }
-                            if let Some(new_setter) = desc.set {
-                                let old_setter = td.set.unwrap_or(value::encode_undefined());
-                                if new_setter != old_setter {
-                                    return Err("TypeError: proxy defineProperty invariant violation: cannot change setter of non-configurable property".to_string());
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 规范要求：在通过 invariants 后，需对底层 target 实际完成定义写入以同步影子状态
-                return define_property_on_target(
-                    caller,
-                    entry.target,
-                    name_id,
-                    prop_val,
-                    descriptor,
-                    desc,
-                );
-            }
-        }
-
-        // 无 trap，转发到被代理的 target
-        define_property_on_target(caller, entry.target, name_id, prop_val, descriptor, desc)
-    } else {
-        // 普通对象属性定义
-        define_property_on_normal_object(caller, target, name_id, desc)
-    }
 }
 
 /// 在底层普通（非代理）对象上实际执行属性定义（包含 invariants 检查与现有属性重写）
@@ -1487,6 +1415,343 @@ pub(crate) fn write_new_property_to_memory(
         .copy_from_slice(&(new_num_props as u32).to_le_bytes());
 }
 
+
+
+
+
+pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+) -> i64 {
+    if value::is_proxy(target) {
+        let handle = value::decode_proxy_handle(target) as usize;
+        let entry = {
+            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            table.get(handle).cloned()
+        };
+        if let Some(entry) = entry {
+            if entry.revoked {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked"
+                        .to_string(),
+                );
+                return value::encode_undefined();
+            }
+            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
+                let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
+                    .unwrap_or_else(value::encode_undefined);
+                if !value::is_undefined(trap) && !value::is_null(trap) {
+                    let result = match call_wasm_callback_async(caller, trap, entry.handler, &[entry.target]).await {
+                        Ok(result) => result,
+                        Err(error) => {
+                            set_runtime_error(
+                                caller.data(),
+                                format!("TypeError: getPrototypeOf trap failed: {error}"),
+                            );
+                            return value::encode_null();
+                        }
+                    };
+                    if !value::is_null(result) && !value::is_js_object(result) {
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: Proxy getPrototypeOf must return an object or null"
+                                .to_string(),
+                        );
+                        return value::encode_null();
+                    }
+                    if !is_extensible_impl(caller, entry.target) {
+                        let target_proto = Box::pin(proxy_or_target_get_prototype_of_impl_async(
+                            caller,
+                            entry.target,
+                        ))
+                        .await;
+                        if result != target_proto {
+                            set_runtime_error(
+                                caller.data(),
+                                "TypeError: Proxy getPrototypeOf invariant violated: target is not extensible and trap returned different prototype".to_string(),
+                            );
+                            return value::encode_null();
+                        }
+                    }
+                    return result;
+                }
+            }
+            return Box::pin(proxy_or_target_get_prototype_of_impl_async(caller, entry.target)).await;
+        }
+    }
+
+    let Some(ptr) = resolve_handle(caller, target) else {
+        return value::encode_null();
+    };
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return value::encode_null();
+    };
+    let data = memory.data(&*caller);
+    if ptr + 4 > data.len() {
+        return value::encode_null();
+    }
+    let proto_handle = u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
+    if proto_handle == 0 && value::is_object(target) {
+        return value::encode_null();
+    }
+    prototype_handle_to_value(caller, proto_handle)
+}
+
+pub(crate) async fn proxy_or_target_is_extensible_impl_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+) -> bool {
+    if value::is_proxy(target) {
+        let handle = value::decode_proxy_handle(target) as usize;
+        let entry = {
+            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            table.get(handle).cloned()
+        };
+        if let Some(entry) = entry {
+            if entry.revoked {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Cannot perform 'isExtensible' on a proxy that has been revoked".to_string(),
+                );
+                return false;
+            }
+            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
+                let trap = read_object_property_by_name(caller, handler_ptr, "isExtensible")
+                    .unwrap_or_else(value::encode_undefined);
+                if !value::is_undefined(trap) && !value::is_null(trap) {
+                    let trap_res = match call_wasm_callback_async(caller, trap, entry.handler, &[entry.target]).await {
+                        Ok(result) => !value::is_falsy(result),
+                        Err(error) => {
+                            set_runtime_error(caller.data(), format!("TypeError: isExtensible trap failed: {error}"));
+                            return false;
+                        }
+                    };
+                    let real_res = is_extensible_impl(caller, entry.target);
+                    if trap_res != real_res {
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: Proxy isExtensible trap returned result that does not match target's extensibility".to_string(),
+                        );
+                        return false;
+                    }
+                    return trap_res;
+                }
+            }
+            return is_extensible_impl(caller, entry.target);
+        }
+    }
+    is_extensible_impl(caller, target)
+}
+
+pub(crate) async fn proxy_or_target_prevent_extensions_impl_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+) -> bool {
+    if value::is_proxy(target) {
+        let handle = value::decode_proxy_handle(target) as usize;
+        let entry = {
+            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            table.get(handle).cloned()
+        };
+        if let Some(entry) = entry {
+            if entry.revoked {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Cannot perform 'preventExtensions' on a proxy that has been revoked".to_string(),
+                );
+                return false;
+            }
+            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
+                let trap = read_object_property_by_name(caller, handler_ptr, "preventExtensions")
+                    .unwrap_or_else(value::encode_undefined);
+                if !value::is_undefined(trap) && !value::is_null(trap) {
+                    let trap_res = match call_wasm_callback_async(caller, trap, entry.handler, &[entry.target]).await {
+                        Ok(result) => !value::is_falsy(result),
+                        Err(error) => {
+                            set_runtime_error(caller.data(), format!("TypeError: preventExtensions trap failed: {error}"));
+                            return false;
+                        }
+                    };
+                    if trap_res && is_extensible_impl(caller, entry.target) {
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: Proxy preventExtensions trap returned true, but target remains extensible".to_string(),
+                        );
+                        return false;
+                    }
+                    return trap_res;
+                }
+            }
+            return prevent_extensions_impl(caller, entry.target);
+        }
+    }
+    prevent_extensions_impl(caller, target)
+}
+
+pub(crate) async fn define_property_internal_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    prop: i64,
+    descriptor: i64,
+) -> Result<bool, String> {
+    if !value::is_object(target)
+        && !value::is_function(target)
+        && !value::is_array(target)
+        && !value::is_proxy(target)
+    {
+        return Err("TypeError: Object.defineProperty called on non-object".to_string());
+    }
+
+    let desc = parse_descriptor(caller, descriptor)?;
+
+    let prop_name = match render_value(caller, prop) {
+        Ok(s) => s,
+        Err(_) => return Err("TypeError: Cannot convert property key to string".to_string()),
+    };
+    let name_id = match find_memory_c_string(caller, &prop_name)
+        .or_else(|| alloc_heap_c_string(caller, &prop_name))
+    {
+        Some(id) => id,
+        None => return Err("TypeError: Failed to allocate property name string".to_string()),
+    };
+
+    define_property_on_target_async(caller, target, name_id, prop, descriptor, &desc).await
+}
+
+async fn define_property_on_target_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    name_id: u32,
+    prop_val: i64,
+    descriptor: i64,
+    desc: &PropertyDescriptor,
+) -> Result<bool, String> {
+    if value::is_proxy(target) {
+        let handle = value::decode_proxy_handle(target) as usize;
+        let entry = {
+            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            table.get(handle).cloned()
+        };
+        let entry = match entry {
+            Some(e) => e,
+            None => return Err("TypeError: Proxy target not found".to_string()),
+        };
+        if entry.revoked {
+            return Err(
+                "TypeError: Cannot perform 'defineProperty' on a proxy that has been revoked"
+                    .to_string(),
+            );
+        }
+
+        if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
+            let trap = read_object_property_by_name(caller, handler_ptr, "defineProperty")
+                .unwrap_or_else(value::encode_undefined);
+            if !value::is_undefined(trap) && !value::is_null(trap) {
+                let result = match call_wasm_callback_async(
+                    caller,
+                    trap,
+                    entry.handler,
+                    &[entry.target, prop_val, descriptor],
+                )
+                .await
+                {
+                    Ok(res) => res,
+                    Err(e) => return Err(format!("TypeError: defineProperty trap failed: {}", e)),
+                };
+                let trap_result = !value::is_falsy(result);
+                if !trap_result {
+                    return Ok(false);
+                }
+
+                let target_desc = get_target_descriptor(caller, entry.target, name_id);
+                let extensible = is_extensible_impl(caller, entry.target);
+                let setting_config_false = desc.configurable == Some(false);
+
+                if target_desc.is_none() {
+                    if !extensible {
+                        return Err("TypeError: proxy defineProperty invariant violation: target is non-extensible and property does not exist".to_string());
+                    }
+                    if setting_config_false {
+                        return Err("TypeError: proxy defineProperty invariant violation: cannot define non-configurable property if it does not exist on target".to_string());
+                    }
+                } else {
+                    let td = target_desc.unwrap();
+                    let target_configurable = td.configurable.unwrap_or(true);
+
+                    if !target_configurable {
+                        if desc.configurable == Some(true) {
+                            return Err("TypeError: proxy defineProperty invariant violation: cannot redefine non-configurable property as configurable".to_string());
+                        }
+                        if let Some(new_enum) = desc.enumerable {
+                            if Some(new_enum) != td.enumerable {
+                                return Err("TypeError: proxy defineProperty invariant violation: cannot change enumerableness of non-configurable property".to_string());
+                            }
+                        }
+
+                        let is_new_accessor = desc.get.is_some() || desc.set.is_some();
+                        let target_accessor = td.get.is_some() || td.set.is_some();
+                        if is_new_accessor != target_accessor {
+                            return Err("TypeError: proxy defineProperty invariant violation: cannot change property type on non-configurable property".to_string());
+                        }
+
+                        if !target_accessor {
+                            let target_writable = td.writable.unwrap_or(true);
+                            if !target_writable {
+                                if desc.writable == Some(true) {
+                                    return Err("TypeError: proxy defineProperty invariant violation: cannot make non-writable property writable".to_string());
+                                }
+                                if let Some(new_val) = desc.value {
+                                    let old_val = td.value.unwrap_or(value::encode_undefined());
+                                    let same = strict_eq(caller, old_val, new_val);
+                                    if value::is_falsy(same) {
+                                        return Err("TypeError: proxy defineProperty invariant violation: cannot change value of non-writable non-configurable property".to_string());
+                                    }
+                                }
+                            }
+                        } else {
+                            if let Some(new_getter) = desc.get {
+                                let old_getter = td.get.unwrap_or(value::encode_undefined());
+                                if new_getter != old_getter {
+                                    return Err("TypeError: proxy defineProperty invariant violation: cannot change getter of non-configurable property".to_string());
+                                }
+                            }
+                            if let Some(new_setter) = desc.set {
+                                let old_setter = td.set.unwrap_or(value::encode_undefined());
+                                if new_setter != old_setter {
+                                    return Err("TypeError: proxy defineProperty invariant violation: cannot change setter of non-configurable property".to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+
+                return Box::pin(define_property_on_target_async(
+                    caller,
+                    entry.target,
+                    name_id,
+                    prop_val,
+                    descriptor,
+                    desc,
+                ))
+                .await;
+            }
+        }
+
+        return Box::pin(define_property_on_target_async(
+            caller,
+            entry.target,
+            name_id,
+            prop_val,
+            descriptor,
+            desc,
+        ))
+        .await;
+    }
+
+    define_property_on_normal_object(caller, target, name_id, desc)
+}
+
 pub(crate) fn reflect_get_impl(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -1603,6 +1868,125 @@ pub(crate) fn reflect_get_impl_with_receiver(
         value::encode_undefined()
     } else {
         reflect_get_impl_with_receiver(caller, proto, prop, receiver)
+    }
+}
+
+
+pub(crate) async fn reflect_get_impl_with_receiver_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    prop: i64,
+    receiver: i64,
+) -> i64 {
+    if value::is_proxy(target) {
+        let handle = value::decode_proxy_handle(target) as usize;
+        let entry = {
+            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            table.get(handle).cloned()
+        };
+        if let Some(entry) = entry {
+            if entry.revoked {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Cannot perform 'get' on a proxy that has been revoked".to_string(),
+                );
+                return value::encode_undefined();
+            }
+            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
+                let trap = read_object_property_by_name(caller, handler_ptr, "get")
+                    .unwrap_or_else(value::encode_undefined);
+                if !value::is_undefined(trap) && !value::is_null(trap) {
+                    return call_wasm_callback_async(
+                        caller,
+                        trap,
+                        entry.handler,
+                        &[entry.target, prop, receiver],
+                    )
+                    .await
+                    .unwrap_or_else(|_| value::encode_undefined());
+                }
+            }
+            return Box::pin(reflect_get_impl_with_receiver_async(
+                caller,
+                entry.target,
+                prop,
+                receiver,
+            ))
+            .await;
+        }
+        return value::encode_undefined();
+    }
+
+    let prop_name = match render_value(caller, prop) {
+        Ok(name) => name,
+        Err(_) => return value::encode_undefined(),
+    };
+    let obj_ptr = match resolve_handle(caller, target) {
+        Some(ptr) => ptr,
+        None => return value::encode_undefined(),
+    };
+    let name_id = find_memory_c_string(caller, &prop_name);
+
+    if prop_name == "prototype"
+        && (value::is_function(target) || value::is_closure(target) || value::is_bound(target))
+    {
+        if let Some(id) = name_id
+            && let Some((_, _, value)) = find_property_slot_by_name_id(caller, obj_ptr, id)
+            && !value::is_undefined(value)
+        {
+            return value;
+        }
+
+        let default_proto = {
+            let wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            alloc_host_object(caller, &wjsm_env, 4)
+        };
+        let _ = define_host_data_property_from_caller(caller, target, "prototype", default_proto);
+        if let Some(name_c) = find_memory_c_string(caller, "constructor")
+            && let Some(dp_ptr) = resolve_handle(caller, default_proto)
+        {
+            write_object_property_by_name_id(
+                caller,
+                dp_ptr,
+                default_proto,
+                name_c as u32,
+                target,
+                constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+            );
+        }
+        return default_proto;
+    }
+
+    if let Some(id) = name_id
+        && let Some((slot_offset, flags, value)) =
+            find_property_slot_by_name_id(caller, obj_ptr, id)
+    {
+        if (flags & constants::FLAG_IS_ACCESSOR) == 0 {
+            return value;
+        }
+        let getter = {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return value::encode_undefined();
+            };
+            let data = memory.data(&*caller);
+            if slot_offset + 24 > data.len() {
+                return value::encode_undefined();
+            }
+            i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap())
+        };
+        if value::is_undefined(getter) || value::is_null(getter) {
+            return value::encode_undefined();
+        }
+        return call_wasm_callback_async(caller, getter, receiver, &[])
+            .await
+            .unwrap_or_else(|_| value::encode_undefined());
+    }
+
+    let proto = proxy_or_target_get_prototype_of_impl_async(caller, target).await;
+    if value::is_null(proto) {
+        value::encode_undefined()
+    } else {
+        Box::pin(reflect_get_impl_with_receiver_async(caller, proto, prop, receiver)).await
     }
 }
 

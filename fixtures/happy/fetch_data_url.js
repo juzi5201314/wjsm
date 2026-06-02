@@ -1,1 +1,1 @@
-console.log(fetch("data:text/plain,Hello%20World"));
+fetch("data:text/plain,Hello%20World").then(r => r.text()).then(t => console.log(t));

@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+method: GET
+url starts data: true
+redirect: follow
+clone url same: true
+--- stderr ---

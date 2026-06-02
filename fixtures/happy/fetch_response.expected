@@ -1,0 +1,13 @@
+exit_code: 0
+--- stdout ---
+ok: true
+status: 200
+statusText: "OK"
+url starts with data: true
+type: basic
+redirected: false
+body is null: true
+bodyUsed before: false
+text: ok
+bodyUsed after: true
+--- stderr ---

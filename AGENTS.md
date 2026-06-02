@@ -217,7 +217,9 @@ The root `Cargo.toml` defines workspace deps at shared versions; individual crat
 - Unreachable code (e.g., statements after `return`, `throw`, `break`, `continue`) is **valid JavaScript** and must not cause compile errors. The compiler should skip unreachable statements silently or emit warnings, but never reject them.
 - Early errors defined by the specification (e.g., duplicate parameter names in strict mode, `super` outside class) must be detected and reported.
 - Non-standard extensions or deviations from the specification require explicit documentation and justification.
-  - **No PoC compromises.** Every implementation **MUST** be spec-complete for the feature being added. The project is not a prototype — it is a runtime targeting full specification compliance. Partial stubs, deliberately skipped edge cases, "will fix later" TODOs, knowingly incomplete implementations, and speculative shortcuts are strictly prohibited. If a feature cannot be implemented correctly for all cases defined by the spec, it **MUST NOT** be merged.
+- **No PoC compromises.** Every implementation **MUST** be spec-complete for the feature being added. The project is not a prototype — it is a runtime targeting full specification compliance. Partial stubs, deliberately skipped edge cases, "will fix later" TODOs, knowingly incomplete implementations, and speculative shortcuts are strictly prohibited. If a feature cannot be implemented correctly for all cases defined by the spec, it **MUST NOT** be merged.
+
+**Implementation Discipline (Hard Rule):** 严禁任何形式的 MVP、部分实现、stub、妥协或“先跑通再说”的做法。凡是涉及语言规范、API 行为或用户明确要求完整实现的任务，必须严格、完整地实现该规范所定义的全部语义、边缘情况、错误条件与约束，“能跑”绝不是可接受的交付标准。
 
 ### Rust Edition & Style
 - Rust 2024 edition; edition is set once in `[workspace.package]` and inherited by all crates.

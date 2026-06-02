@@ -254,12 +254,9 @@ pub(crate) fn define_weakref_finalization(
             let handle_val = obj_ptr.and_then(|p| {
                 read_object_property_by_name(&mut caller, p, "__finalization_registry_handle__")
             });
-            let handle = handle_val
-                .map(|v| value::decode_f64(v) as usize)
-                .unwrap_or(0);
-            if handle == 0 {
+            let Some(handle) = handle_val.map(|v| value::decode_f64(v) as usize) else {
                 return value::encode_undefined();
-            }
+            };
             // Push the registration record
             {
                 let mut table = caller
