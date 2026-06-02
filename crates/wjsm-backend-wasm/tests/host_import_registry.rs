@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use wjsm_backend_wasm::host_import_registry::{HostImportGroup, HostImportKey, host_import_specs};
 use wjsm_ir::Builtin;
 
@@ -34,25 +34,16 @@ fn registry_has_unique_names_and_keys() {
 }
 
 #[test]
-fn only_array_prototype_wrappers_are_unkeyed() {
-    let unkeyed_names: BTreeSet<_> = host_import_specs()
+fn no_host_imports_are_unkeyed() {
+    let unkeyed: Vec<_> = host_import_specs()
         .iter()
         .filter(|spec| spec.key.is_none())
         .map(|spec| spec.name)
         .collect();
-    let expected_unkeyed_names = BTreeSet::from([
-        "arr_proto_push",
-        "arr_proto_pop",
-        "arr_proto_includes",
-        "arr_proto_index_of",
-        "arr_proto_join",
-        "arr_proto_slice",
-        "arr_proto_fill",
-        "arr_proto_reverse",
-        "arr_proto_flat",
-    ]);
-
-    assert_eq!(unkeyed_names, expected_unkeyed_names);
+    assert!(
+        unkeyed.is_empty(),
+        "every host import must have a HostImportKey (builtin or special); unkeyed: {unkeyed:?}"
+    );
 }
 
 #[test]

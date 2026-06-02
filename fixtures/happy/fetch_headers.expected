@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+has X-Foo: true
+get X-Foo: bar, baz
+has missing: false
+has after delete: false
+--- stderr ---

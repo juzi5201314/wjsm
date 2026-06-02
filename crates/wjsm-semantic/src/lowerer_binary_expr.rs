@@ -7,7 +7,13 @@ impl Lowerer {
         block: &mut BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let value = self.lower_expr(expr, *block)?;
-        *block = self.resolve_store_block(*block);
+        loop {
+            let next = self.resolve_store_block(*block);
+            if next == *block {
+                break;
+            }
+            *block = next;
+        }
         Ok(value)
     }
 

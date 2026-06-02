@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+error name: TypeError
+error message includes fetch: true
+--- stderr ---

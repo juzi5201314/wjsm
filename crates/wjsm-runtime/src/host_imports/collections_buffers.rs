@@ -1825,6 +1825,9 @@ pub(crate) fn define_collections_buffers(
                 ),
                 ("Date", NativeCallable::DateConstructorGlobal),
                 ("Promise", NativeCallable::PromiseConstructor),
+                ("Headers", NativeCallable::HeadersConstructor),
+                ("Request", NativeCallable::RequestConstructor),
+                ("Response", NativeCallable::ResponseConstructor),
                 ("ArrayBuffer", NativeCallable::ArrayBufferConstructorGlobal),
                 (
                     "SharedArrayBuffer",

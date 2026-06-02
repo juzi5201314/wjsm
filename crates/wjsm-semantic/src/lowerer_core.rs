@@ -7,7 +7,6 @@ impl Lowerer {
         let _ = scopes.declare("undefined", VarKind::Var, true);
         let _ = scopes.declare("NaN", VarKind::Var, true);
         let _ = scopes.declare("Infinity", VarKind::Var, true);
-        let _ = scopes.declare("Symbol", VarKind::Var, true);
 
         Self {
             module: Module::new(),
@@ -78,6 +77,7 @@ impl Lowerer {
             typedarray_bindings: std::collections::HashSet::new(),
             eval_continue_block: None,
             new_expr_continue_block: None,
+            await_continue_block: None,
             expr_merge_block: None,
             eval_completion: None,
         }

@@ -55,6 +55,41 @@ pub(crate) fn advance_object_iterator_from_caller(
     (result, value::encode_undefined(), true, true)
 }
 
+pub(crate) async fn advance_object_iterator_from_caller_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_table: &Table,
+    next: i64,
+) -> (i64, i64, bool, bool) {
+    let result = call_host_function_from_caller_async(
+        caller,
+        func_table,
+        next,
+        value::encode_undefined(),
+    )
+    .await
+    .unwrap_or_else(value::encode_undefined);
+    if is_promise_value(caller.data(), result) {
+        return (result, value::encode_undefined(), false, false);
+    }
+    if (value::is_object(result) || value::is_function(result) || value::is_array(result))
+        && let Some(ptr) = resolve_handle(caller, result)
+    {
+        let done = read_object_property_by_name(caller, ptr, "done")
+            .map(nanbox_to_bool)
+            .unwrap_or(false);
+        let current_value = read_object_property_by_name(caller, ptr, "value")
+            .unwrap_or_else(value::encode_undefined);
+        return (result, current_value, done, true);
+    }
+    if !value::is_undefined(result) {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: iterator next must return an object".to_string(),
+        );
+    }
+    (result, value::encode_undefined(), true, true)
+}
+
 pub(crate) fn create_async_generator_identity(state: &RuntimeState, generator: i64) -> i64 {
     let mut table = state
         .native_callables
@@ -1687,6 +1722,53 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             settle_promise(caller.data(), promise, PromiseSettlement::Reject(arg));
             Some(promise)
         }
+        NativeCallable::HeadersMethod { kind, .. } => {
+            call_headers_method_from_caller(caller, this_val, kind, &args)
+        }
+        NativeCallable::ResponseMethod { kind, .. } => {
+            call_response_method_from_caller(caller, this_val, kind, &args)
+        }
+        NativeCallable::RequestMethod { kind, .. } => {
+            call_request_method_from_caller(caller, this_val, kind, &args)
+        }
+        NativeCallable::HeadersConstructor => construct_headers(caller, this_val, &args),
+        NativeCallable::ResponseConstructor => construct_response(caller, this_val, &args),
+        NativeCallable::RequestConstructor => construct_request(caller, this_val, &args),
+    }
+}
+
+pub(crate) async fn call_native_callable_with_args_from_caller_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    callable: i64,
+    this_val: i64,
+    args: Vec<i64>,
+) -> Option<i64> {
+    if !value::is_native_callable(callable) {
+        return None;
+    }
+
+    let idx = value::decode_native_callable_idx(callable) as usize;
+    let record = {
+        let table = caller
+            .data()
+            .native_callables
+            .lock()
+            .expect("native callable table mutex");
+        table.get(idx).cloned()
+    }?;
+    let argument = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+
+    match record {
+        NativeCallable::EvalIndirect => {
+            Some(perform_eval_from_caller_async(caller, argument, None).await)
+        }
+        NativeCallable::EvalFunction(function) => {
+            Some(call_eval_function_from_caller_async(caller, function, args).await)
+        }
+        _ => call_native_callable_with_args_from_caller(caller, callable, this_val, args),
     }
 }
 /// 创建 AsyncFromSyncIterator：将同步迭代器包装为异步迭代器协议。
@@ -1999,12 +2081,9 @@ pub(crate) fn fr_unregister_impl(
     let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
     let handle_val = obj_ptr
         .and_then(|p| read_object_property_by_name(caller, p, "__finalization_registry_handle__"));
-    let handle = handle_val
-        .map(|v| value::decode_f64(v) as usize)
-        .unwrap_or(0);
-    if handle == 0 {
+    let Some(handle) = handle_val.map(|v| value::decode_f64(v) as usize) else {
         return value::encode_bool(false);
-    }
+    };
     let mut table = caller
         .data()
         .finalization_registry_table
@@ -2054,12 +2133,9 @@ pub(crate) fn fr_register_impl_with_args(
     let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
     let handle_val = obj_ptr
         .and_then(|p| read_object_property_by_name(caller, p, "__finalization_registry_handle__"));
-    let handle = handle_val
-        .map(|v| value::decode_f64(v) as usize)
-        .unwrap_or(0);
-    if handle == 0 {
+    let Some(handle) = handle_val.map(|v| value::decode_f64(v) as usize) else {
         return value::encode_undefined();
-    }
+    };
     {
         let mut table = caller
             .data()

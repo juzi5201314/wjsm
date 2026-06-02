@@ -1313,6 +1313,8 @@ struct Lowerer {
     pub(crate) eval_continue_block: Option<BasicBlockId>,
     /// 由 lower_new_expr 在构建了异常检查分叉后设置，由 resolve_store_block 消费。
     pub(crate) new_expr_continue_block: Option<BasicBlockId>,
+    /// 由 await 表达式设置，由 resolve_store_block 消费。
+    pub(crate) await_continue_block: Option<BasicBlockId>,
     /// 由 lower_logical / lower_cond 在创建控制流表达式后设置其 merge block，
     /// 由 resolve_store_block 消费，确保后续指令插入到正确的继续块中。
     pub(crate) expr_merge_block: Option<BasicBlockId>,

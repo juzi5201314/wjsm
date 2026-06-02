@@ -1,7 +1,5 @@
 exit_code: 0
 --- stdout ---
 registered
-cleaned: [object Object]
-cleaned: [object Object]
-unregistered: undefined
+unregistered: true
 --- stderr ---

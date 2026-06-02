@@ -480,72 +480,6 @@ pub(crate) fn define_array_object(
     );
     linker.define(&mut store, "env", "arr_proto_unshift", arr_proto_unshift_fn)?;
 
-    // ── arr_proto_sort (#61) ──────────────────────────────────────────
-    let arr_proto_sort_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         args_count: i32|
-         -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return this_val;
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as usize;
-            if len <= 1 {
-                return this_val;
-            }
-            // 读全部元素到 Vec
-            let mut elems: Vec<i64> = (0..len)
-                .map(|i| {
-                    read_array_elem(&mut caller, ptr, i as u32).unwrap_or(value::encode_undefined())
-                })
-                .collect();
-            if args_count > 0 && value::is_callable(read_shadow_arg(&mut caller, args_base, 0)) {
-                let cmp = read_shadow_arg(&mut caller, args_base, 0);
-                merge_sort_by(&mut elems, &mut |a, b| -> std::cmp::Ordering {
-                    let result =
-                        call_wasm_callback(&mut caller, cmp, value::encode_undefined(), &[*a, *b])
-                            .unwrap_or(value::encode_f64(0.0));
-                    let v = f64::from_bits(result as u64);
-                    if v > 0.0 {
-                        std::cmp::Ordering::Greater
-                    } else if v < 0.0 {
-                        std::cmp::Ordering::Less
-                    } else {
-                        std::cmp::Ordering::Equal
-                    }
-                });
-            } else {
-                let keys: Vec<String> = elems
-                    .iter()
-                    .map(|e| render_value(&mut caller, *e).unwrap_or_default())
-                    .collect();
-                // 带原始 index 的稳定排序
-                let mut indexed: Vec<(usize, &i64)> = (0..len).map(|i| (i, &elems[i])).collect();
-                indexed.sort_by(|(ia, _), (ib, _)| {
-                    let ka = &keys[*ia];
-                    let kb = &keys[*ib];
-                    let cmp = ka.cmp(kb);
-                    if cmp == std::cmp::Ordering::Equal {
-                        ia.cmp(ib)
-                    } else {
-                        cmp
-                    }
-                });
-                let sorted: Vec<i64> = indexed.iter().map(|(_, e)| **e).collect();
-                elems = sorted;
-            }
-            // 写回
-            for (i, &elem) in elems.iter().enumerate() {
-                write_array_elem(&mut caller, ptr, i as u32, elem);
-            }
-            this_val
-        },
-    );
-    linker.define(&mut store, "env", "arr_proto_sort", arr_proto_sort_fn)?;
-
     // ── arr_proto_at (#62) ────────────────────────────────────────────
     let arr_proto_at_fn = Func::wrap(
         &mut store,
@@ -654,569 +588,97 @@ pub(crate) fn define_array_object(
         arr_proto_copy_within_fn,
     )?;
 
-    // ── arr_proto_for_each (#64) ─────────────────────────────────────
-    let arr_proto_for_each_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         args_count: i32|
-         -> i64 {
-            let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) {
-                return value::encode_undefined();
-            }
-            let this_arg = if args_count > 1 {
-                read_shadow_arg(&mut caller, args_base, 1)
-            } else {
-                value::encode_undefined()
-            };
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            for i in 0..len {
-                let elem =
-                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
-                let idx_val = value::encode_f64(i as f64);
-                if call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val])
-                    .is_err()
-                {
-                    return value::encode_undefined();
-                }
-            }
-            value::encode_undefined()
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
-        "arr_proto_for_each",
-        arr_proto_for_each_fn,
-    )?;
-
-    // ── arr_proto_map (#65) ──────────────────────────────────────────
-    let arr_proto_map_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         args_count: i32|
-         -> i64 {
-            let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) {
-                return value::encode_undefined();
-            }
-            let this_arg = if args_count > 1 {
-                read_shadow_arg(&mut caller, args_base, 1)
-            } else {
-                value::encode_undefined()
-            };
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            let new_arr = alloc_array(&mut caller, len);
-            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
-                return value::encode_undefined();
-            };
-            for i in 0..len {
-                let elem =
-                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
-                let idx_val = value::encode_f64(i as f64);
-                let result =
-                    match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val])
-                    {
-                        Ok(r) => r,
-                        Err(_) => value::encode_undefined(),
-                    };
-                write_array_elem(&mut caller, new_ptr, i, result);
-            }
-            write_array_length(&mut caller, new_ptr, len);
-            new_arr
-        },
-    );
-    linker.define(&mut store, "env", "arr_proto_map", arr_proto_map_fn)?;
-
-    // ── arr_proto_filter (#66) ───────────────────────────────────────
-    let arr_proto_filter_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         args_count: i32|
-         -> i64 {
-            let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) {
-                return value::encode_undefined();
-            }
-            let this_arg = if args_count > 1 {
-                read_shadow_arg(&mut caller, args_base, 1)
-            } else {
-                value::encode_undefined()
-            };
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            let mut passed: Vec<i64> = Vec::new();
-            for i in 0..len {
-                let elem =
-                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
-                let idx_val = value::encode_f64(i as f64);
-                let ok =
-                    match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val])
-                    {
-                        Ok(r) => value::is_truthy(r),
-                        Err(_) => false,
-                    };
-                if ok {
-                    passed.push(elem);
-                }
-            }
-            let new_arr = alloc_array(&mut caller, passed.len() as u32);
-            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
-                return value::encode_undefined();
-            };
-            for (i, elem) in passed.iter().enumerate() {
-                write_array_elem(&mut caller, new_ptr, i as u32, *elem);
-            }
-            write_array_length(&mut caller, new_ptr, passed.len() as u32);
-            new_arr
-        },
-    );
-    linker.define(&mut store, "env", "arr_proto_filter", arr_proto_filter_fn)?;
-
-    // ── arr_proto_reduce (#67) ────────────────────────────────────────
-    let arr_proto_reduce_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         args_count: i32|
-         -> i64 {
-            let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) {
-                return value::encode_undefined();
-            }
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as usize;
-            if len == 0 {
-                if args_count < 2 {
-                    *caller
-                        .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") =
-                        Some("TypeError: Reduce of empty array with no initial value".to_string());
-                    return value::encode_undefined();
-                }
-                return read_shadow_arg(&mut caller, args_base, 1);
-            }
-            let mut acc: i64;
-            let mut start_idx = 0usize;
-            if args_count >= 2 {
-                acc = read_shadow_arg(&mut caller, args_base, 1);
-            } else {
-                acc = read_array_elem(&mut caller, ptr, 0).unwrap_or(value::encode_undefined());
-                start_idx = 1;
-            }
-            for i in start_idx..len {
-                let elem = read_array_elem(&mut caller, ptr, i as u32)
-                    .unwrap_or(value::encode_undefined());
-                let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(
-                    &mut caller,
-                    cb,
-                    value::encode_undefined(),
-                    &[acc, elem, idx_val, this_val],
-                ) {
-                    Ok(r) => acc = r,
-                    Err(_) => return value::encode_undefined(),
-                }
-            }
-            acc
-        },
-    );
-    linker.define(&mut store, "env", "arr_proto_reduce", arr_proto_reduce_fn)?;
-
-    // ── arr_proto_reduce_right (#68) ──────────────────────────────────
-    let arr_proto_reduce_right_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         args_count: i32|
-         -> i64 {
-            let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) {
-                return value::encode_undefined();
-            }
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
-            if len == 0 {
-                if args_count < 2 {
-                    *caller
-                        .data()
-                        .runtime_error
-                        .lock()
-                        .expect("runtime error mutex") =
-                        Some("TypeError: Reduce of empty array with no initial value".to_string());
-                    return value::encode_undefined();
-                }
-                return read_shadow_arg(&mut caller, args_base, 1);
-            }
-            let mut acc: i64;
-            let mut start_idx = len - 1;
-            if args_count >= 2 {
-                acc = read_shadow_arg(&mut caller, args_base, 1);
-            } else {
-                acc = read_array_elem(&mut caller, ptr, start_idx as u32)
-                    .unwrap_or(value::encode_undefined());
-                start_idx = len - 2;
-            }
-            for i in (0..=start_idx as usize).rev() {
-                let elem = read_array_elem(&mut caller, ptr, i as u32)
-                    .unwrap_or(value::encode_undefined());
-                let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(
-                    &mut caller,
-                    cb,
-                    value::encode_undefined(),
-                    &[acc, elem, idx_val, this_val],
-                ) {
-                    Ok(r) => acc = r,
-                    Err(_) => return value::encode_undefined(),
-                }
-            }
-            acc
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
-        "arr_proto_reduce_right",
-        arr_proto_reduce_right_fn,
-    )?;
-
-    // ── arr_proto_find (#69) ──────────────────────────────────────────
-    let arr_proto_find_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         _args_count: i32|
-         -> i64 {
-            let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) {
-                return value::encode_undefined();
-            }
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            for i in 0..len {
-                let elem =
-                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
-                let idx_val = value::encode_f64(i as f64);
-                if let Ok(r) = call_wasm_callback(
-                    &mut caller,
-                    cb,
-                    value::encode_undefined(),
-                    &[elem, idx_val, this_val],
-                ) && value::is_truthy(r)
-                {
-                    return elem;
-                }
-            }
-            value::encode_undefined()
-        },
-    );
-    linker.define(&mut store, "env", "arr_proto_find", arr_proto_find_fn)?;
-
-    // ── arr_proto_find_index (#70) ────────────────────────────────────
-    let arr_proto_find_index_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         _args_count: i32|
-         -> i64 {
-            let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) {
-                return value::encode_f64(-1.0);
-            }
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_f64(-1.0);
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            for i in 0..len {
-                let elem =
-                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
-                let idx_val = value::encode_f64(i as f64);
-                if let Ok(r) = call_wasm_callback(
-                    &mut caller,
-                    cb,
-                    value::encode_undefined(),
-                    &[elem, idx_val, this_val],
-                ) && value::is_truthy(r)
-                {
-                    return value::encode_f64(i as f64);
-                }
-            }
-            value::encode_f64(-1.0)
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
-        "arr_proto_find_index",
-        arr_proto_find_index_fn,
-    )?;
-
-    // ── arr_proto_some (#71) ─────────────────────────────────────────
-    let arr_proto_some_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         _args_count: i32|
-         -> i64 {
-            let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) {
-                return value::encode_bool(false);
-            }
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_bool(false);
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            for i in 0..len {
-                let elem =
-                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
-                let idx_val = value::encode_f64(i as f64);
-                if let Ok(r) = call_wasm_callback(
-                    &mut caller,
-                    cb,
-                    value::encode_undefined(),
-                    &[elem, idx_val, this_val],
-                ) && value::is_truthy(r)
-                {
-                    return value::encode_bool(true);
-                }
-            }
-            value::encode_bool(false)
-        },
-    );
-    linker.define(&mut store, "env", "arr_proto_some", arr_proto_some_fn)?;
-
-    // ── arr_proto_every (#72) ────────────────────────────────────────
-    let arr_proto_every_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         _args_count: i32|
-         -> i64 {
-            let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) {
-                return value::encode_bool(false);
-            }
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_bool(false);
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            for i in 0..len {
-                let elem =
-                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
-                let idx_val = value::encode_f64(i as f64);
-                match call_wasm_callback(
-                    &mut caller,
-                    cb,
-                    value::encode_undefined(),
-                    &[elem, idx_val, this_val],
-                ) {
-                    Ok(r) => {
-                        if !value::is_truthy(r) {
-                            return value::encode_bool(false);
-                        }
-                    }
-                    Err(_) => return value::encode_bool(false),
-                }
-            }
-            value::encode_bool(true)
-        },
-    );
-    linker.define(&mut store, "env", "arr_proto_every", arr_proto_every_fn)?;
-
-    // ── arr_proto_flat_map (#73) ─────────────────────────────────────
-    let arr_proto_flat_map_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         args_count: i32|
-         -> i64 {
-            let cb = read_shadow_arg(&mut caller, args_base, 0);
-            if !value::is_callable(cb) {
-                return value::encode_undefined();
-            }
-            let this_arg = if args_count > 1 {
-                read_shadow_arg(&mut caller, args_base, 1)
-            } else {
-                value::encode_undefined()
-            };
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            let mut elements: Vec<i64> = Vec::new();
-            for i in 0..len {
-                let elem =
-                    read_array_elem(&mut caller, ptr, i).unwrap_or(value::encode_undefined());
-                let idx_val = value::encode_f64(i as f64);
-                let mapped =
-                    match call_wasm_callback(&mut caller, cb, this_arg, &[elem, idx_val, this_val])
-                    {
-                        Ok(r) => r,
-                        Err(_) => continue,
-                    };
-                if value::is_array(mapped) {
-                    // 展平一层
-                    if let Some(mapped_ptr) = resolve_array_ptr(&mut caller, mapped) {
-                        let mapped_len = read_array_length(&mut caller, mapped_ptr).unwrap_or(0);
-                        for j in 0..mapped_len {
-                            if let Some(inner) = read_array_elem(&mut caller, mapped_ptr, j) {
-                                elements.push(inner);
-                            }
-                        }
-                    }
-                } else {
-                    elements.push(mapped);
-                }
-            }
-            let new_arr = alloc_array(&mut caller, elements.len() as u32);
-            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
-                return value::encode_undefined();
-            };
-            for (i, elem) in elements.iter().enumerate() {
-                write_array_elem(&mut caller, new_ptr, i as u32, *elem);
-            }
-            write_array_length(&mut caller, new_ptr, elements.len() as u32);
-            new_arr
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
-        "arr_proto_flat_map",
-        arr_proto_flat_map_fn,
-    )?;
-
     // ── arr_proto_splice (#74) ───────────────────────────────────────
-    let arr_proto_splice_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         _env_obj: i64,
-         this_val: i64,
-         args_base: i32,
-         args_count: i32|
-         -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
-            // 读取 start
-            let raw_start = if args_count > 0 {
-                let s = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
-                if s.is_nan() { 0 } else { s as i32 }
-            } else {
-                0
-            };
-            let start_idx = if raw_start < 0 {
-                (len + raw_start).max(0)
-            } else {
-                raw_start.min(len)
-            };
-            // 读取 deleteCount
-            let delete_count = if args_count > 1 {
-                let d = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
-                if d.is_nan() { 0 } else { (d as i32).max(0) }
-            } else {
-                (len - start_idx).max(0)
-            };
-            let actual_delete = delete_count.min(len - start_idx);
-            let insert_count = (args_count - 2).max(0);
-            let new_len = len - actual_delete + insert_count;
-            let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0) as i32;
-            let mut ptr = ptr;
-            if new_len > cap {
-                let new_cap = cap.max(1) * 2;
-                let needed = new_len.max(new_cap);
-                if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed as u32) {
-                    ptr = new_ptr;
-                } else {
+        let arr_proto_splice_fn = Func::wrap(
+            &mut store,
+            |mut caller: Caller<'_, RuntimeState>,
+             _env_obj: i64,
+             this_val: i64,
+             args_base: i32,
+             args_count: i32|
+             -> i64 {
+                let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                     return value::encode_undefined();
-                }
-            }
-            // 收集被删除的元素
-            let deleted_arr = alloc_array(&mut caller, actual_delete as u32);
-            let Some(deleted_ptr) = resolve_array_ptr(&mut caller, deleted_arr) else {
-                return value::encode_undefined();
-            };
-            for i in 0..actual_delete {
-                let elem = read_array_elem(&mut caller, ptr, (start_idx as u32) + i as u32)
-                    .unwrap_or(value::encode_undefined());
-                write_array_elem(&mut caller, deleted_ptr, i as u32, elem);
-            }
-            write_array_length(&mut caller, deleted_ptr, actual_delete as u32);
-            // 移动元素（右移或左移）
-            if insert_count != actual_delete {
-                if insert_count < actual_delete {
-                    // 左移
-                    for i in start_idx..(len - actual_delete + insert_count) {
-                        let src = i + actual_delete - insert_count;
-                        let elem = read_array_elem(&mut caller, ptr, src as u32)
-                            .unwrap_or(value::encode_undefined());
-                        write_array_elem(&mut caller, ptr, i as u32, elem);
-                    }
+                };
+                let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
+                // 读取 start
+                let raw_start = if args_count > 0 {
+                    let s = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                    if s.is_nan() { 0 } else { s as i32 }
                 } else {
-                    // 右移（从后往前）
-                    for i in (start_idx..(len - actual_delete + insert_count)).rev() {
-                        let src = i - insert_count + actual_delete;
-                        let elem = read_array_elem(&mut caller, ptr, src as u32)
-                            .unwrap_or(value::encode_undefined());
-                        write_array_elem(
-                            &mut caller,
-                            ptr,
-                            i as u32 + insert_count as u32 - actual_delete as u32,
-                            elem,
-                        );
+                    0
+                };
+                let start_idx = if raw_start < 0 {
+                    (len + raw_start).max(0)
+                } else {
+                    raw_start.min(len)
+                };
+                // 读取 deleteCount
+                let delete_count = if args_count > 1 {
+                    let d = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
+                    if d.is_nan() { 0 } else { (d as i32).max(0) }
+                } else {
+                    (len - start_idx).max(0)
+                };
+                let actual_delete = delete_count.min(len - start_idx);
+                let insert_count = (args_count - 2).max(0);
+                let new_len = len - actual_delete + insert_count;
+                let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0) as i32;
+                let mut ptr = ptr;
+                if new_len > cap {
+                    let new_cap = cap.max(1) * 2;
+                    let needed = new_len.max(new_cap);
+                    if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed as u32) {
+                        ptr = new_ptr;
+                    } else {
+                        return value::encode_undefined();
                     }
                 }
-            }
-            // 插入新元素
-            for i in 0..insert_count {
-                let item = read_shadow_arg(&mut caller, args_base, 2 + i as u32);
-                write_array_elem(&mut caller, ptr, (start_idx as u32) + i as u32, item);
-            }
-            write_array_length(&mut caller, ptr, new_len as u32);
-            deleted_arr
-        },
-    );
+                // 收集被删除的元素
+                let deleted_arr = alloc_array(&mut caller, actual_delete as u32);
+                let Some(deleted_ptr) = resolve_array_ptr(&mut caller, deleted_arr) else {
+                    return value::encode_undefined();
+                };
+                for i in 0..actual_delete {
+                    let elem = read_array_elem(&mut caller, ptr, (start_idx as u32) + i as u32)
+                        .unwrap_or(value::encode_undefined());
+                    write_array_elem(&mut caller, deleted_ptr, i as u32, elem);
+                }
+                write_array_length(&mut caller, deleted_ptr, actual_delete as u32);
+                // 移动元素（右移或左移）
+                if insert_count != actual_delete {
+                    if insert_count < actual_delete {
+                        // 左移
+                        for i in start_idx..(len - actual_delete + insert_count) {
+                            let src = i + actual_delete - insert_count;
+                            let elem = read_array_elem(&mut caller, ptr, src as u32)
+                                .unwrap_or(value::encode_undefined());
+                            write_array_elem(&mut caller, ptr, i as u32, elem);
+                        }
+                    } else {
+                        // 右移（从后往前）
+                        for i in (start_idx..(len - actual_delete + insert_count)).rev() {
+                            let src = i - insert_count + actual_delete;
+                            let elem = read_array_elem(&mut caller, ptr, src as u32)
+                                .unwrap_or(value::encode_undefined());
+                            write_array_elem(
+                                &mut caller,
+                                ptr,
+                                i as u32 + insert_count as u32 - actual_delete as u32,
+                                elem,
+                            );
+                        }
+                    }
+                }
+                // 插入新元素
+                for i in 0..insert_count {
+                    let item = read_shadow_arg(&mut caller, args_base, 2 + i as u32);
+                    write_array_elem(&mut caller, ptr, (start_idx as u32) + i as u32, item);
+                }
+                write_array_length(&mut caller, ptr, new_len as u32);
+                deleted_arr
+            },
+        );
     linker.define(&mut store, "env", "arr_proto_splice", arr_proto_splice_fn)?;
 
     // ── arr_proto_is_array (#75) ──────────────────────────────────────
@@ -1267,28 +729,6 @@ pub(crate) fn define_array_object(
         "abort_shadow_stack_overflow",
         abort_shadow_stack_overflow_fn,
     )?;
-
-    // ── func_call (#78): Function.prototype.call ────────────────────────────
-    // 签名: (i64 func, i64 this_val, i64 args_base, i32 args_count) -> i64
-    let func_call_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>,
-         func: i64,
-         this_val: i64,
-         args_base: i32,
-         args_count: i32|
-         -> i64 { resolve_and_call(&mut caller, func, this_val, args_base, args_count) },
-    );
-    linker.define(&mut store, "env", "func_call", func_call_fn)?;
-
-    // ── func_apply (#79): Function.prototype.apply ──────────────────────────
-    let func_apply_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, func: i64, this_val: i64, args_array: i64| -> i64 {
-            func_apply_impl(&mut caller, func, this_val, args_array)
-        },
-    );
-    linker.define(&mut store, "env", "func_apply", func_apply_fn)?;
 
     // ── func_bind (#80): Function.prototype.bind ────────────────────────────
     let func_bind_fn = Func::wrap(
@@ -1618,17 +1058,6 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "obj_create", obj_create_fn)?;
-    // ── Import 89: obj_get_proto_of(i64) -> i64 ───────────────────────────────
-    let obj_get_proto_of_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            if !value::is_js_object(obj) {
-                return value::encode_undefined();
-            };
-            proxy_or_target_get_prototype_of_impl(&mut caller, obj)
-        },
-    );
-    linker.define(&mut store, "env", "obj_get_proto_of", obj_get_proto_of_fn)?;
     // ── Import 90: obj_set_proto_of(i64, i64) -> i64 ──────────────────────────
     let obj_set_proto_of_fn = Func::wrap(
         &mut store,

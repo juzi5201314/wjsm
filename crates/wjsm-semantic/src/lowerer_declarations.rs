@@ -43,8 +43,8 @@ impl Lowerer {
         for declarator in &var_decl.decls {
             if let Some(init) = &declarator.init {
                 let value = self.lower_expr(init, block)?;
-                self.lower_destructure_pattern(&declarator.name, value, block, kind)?;
                 block = self.resolve_store_block(block);
+                block = self.lower_destructure_pattern(&declarator.name, value, block, kind)?;
                 // 若为简单 ident = new TypedArrayConstructor(...)，记录绑定类型
                 if let swc_ast::Pat::Ident(binding) = &declarator.name {
                     let name = binding.id.sym.to_string();
@@ -80,7 +80,7 @@ impl Lowerer {
                         constant: undef_cid,
                     },
                 );
-                self.lower_destructure_pattern(&declarator.name, undef_val, block, kind)?;
+                block = self.lower_destructure_pattern(&declarator.name, undef_val, block, kind)?;
             }
         }
 
@@ -472,7 +472,7 @@ impl Lowerer {
                         skip,
                     },
                 );
-                self.lower_destructure_pattern(&rest.arg, rest_val, block, VarKind::Let)?;
+                block = self.lower_destructure_pattern(&rest.arg, rest_val, block, VarKind::Let)?;
                 block = self.resolve_store_block(block);
                 break;
             }
@@ -510,7 +510,7 @@ impl Lowerer {
                                 name: ir_name.clone(),
                             },
                         );
-                        self.lower_destructure_pattern(
+                        block = self.lower_destructure_pattern(
                             &assign.left,
                             loaded,
                             store_block,
@@ -528,7 +528,7 @@ impl Lowerer {
                             name: ir_name.clone(),
                         },
                     );
-                    self.lower_destructure_pattern(pat, raw, block, VarKind::Let)?;
+                    block = self.lower_destructure_pattern(pat, raw, block, VarKind::Let)?;
                 }
             }
             ir_name_idx += 1;
@@ -546,7 +546,7 @@ impl Lowerer {
         src_val: ValueId,
         block: BasicBlockId,
         kind: VarKind,
-    ) -> Result<(), LoweringError> {
+    ) -> Result<BasicBlockId, LoweringError> {
         match pat {
             swc_ast::Pat::Ident(binding) => {
                 let name = binding.id.sym.to_string();
@@ -575,26 +575,25 @@ impl Lowerer {
                     },
                 );
                 self.append_eval_var_leak_if_needed(&name, kind, src_val, store_block);
+                Ok(store_block)
             }
             swc_ast::Pat::Object(object_pat) => {
-                self.lower_object_destructure(object_pat, src_val, block, kind)?;
+                self.lower_object_destructure(object_pat, src_val, block, kind)
             }
             swc_ast::Pat::Array(array_pat) => {
-                self.lower_array_destructure(array_pat, src_val, block, kind)?;
+                self.lower_array_destructure(array_pat, src_val, block, kind)
             }
             swc_ast::Pat::Assign(assign_pat) => {
                 let resolved = self.lower_default_value_check(src_val, &assign_pat.right, block)?;
-                self.lower_destructure_pattern(&assign_pat.left, resolved, block, kind)?;
+                let store_block = self.resolve_store_block(block);
+                self.lower_destructure_pattern(&assign_pat.left, resolved, store_block, kind)
             }
-            swc_ast::Pat::Rest(_) => {
-                return Err(self.error(
-                    pat.span(),
-                    "rest element must be used as a function parameter or inside array destructuring",
-                ));
-            }
-            swc_ast::Pat::Expr(_) | swc_ast::Pat::Invalid(_) => {}
+            swc_ast::Pat::Rest(_) => Err(self.error(
+                pat.span(),
+                "rest element must be used as a function parameter or inside array destructuring",
+            )),
+            swc_ast::Pat::Expr(_) | swc_ast::Pat::Invalid(_) => Ok(block),
         }
-        Ok(())
     }
 
     /// 对象解构: `{ prop1, prop2: alias, ...rest }`
@@ -604,13 +603,14 @@ impl Lowerer {
         src_val: ValueId,
         mut block: BasicBlockId,
         kind: VarKind,
-    ) -> Result<(), LoweringError> {
+    ) -> Result<BasicBlockId, LoweringError> {
         let mut excluded_keys = Vec::new();
         for prop in &object_pat.props {
             match prop {
                 swc_ast::ObjectPatProp::KeyValue(kv) => {
                     // { key: pattern } 或 { [computed]: pattern }
                     let key_val = self.lower_prop_name(&kv.key, block)?;
+                    block = self.resolve_store_block(block);
                     excluded_keys.push(key_val);
                     let dest = self.alloc_value();
                     self.current_function.append_instruction(
@@ -621,7 +621,7 @@ impl Lowerer {
                             key: key_val,
                         },
                     );
-                    self.lower_destructure_pattern(&kv.value, dest, block, kind)?;
+                    block = self.lower_destructure_pattern(&kv.value, dest, block, kind)?;
                 }
                 swc_ast::ObjectPatProp::Assign(assign) => {
                     // { key } 等价于 { key: key }
@@ -649,6 +649,7 @@ impl Lowerer {
                     // 如果有默认值 { key = default }
                     if let Some(default_expr) = &assign.value {
                         let resolved = self.lower_default_value_check(dest, default_expr, block)?;
+                        block = self.resolve_store_block(block);
                         let scope_id = self
                             .scopes
                             .resolve_scope_id(&name)
@@ -657,17 +658,16 @@ impl Lowerer {
                         self.scopes
                             .mark_initialised(&name)
                             .map_err(|msg| self.error(assign.key.span(), msg))?;
-                        let store_block = self.resolve_store_block(block);
                         self.current_function.append_instruction(
-                            store_block,
+                            block,
                             Instruction::StoreVar {
                                 name: ir_name,
                                 value: resolved,
                             },
                         );
-                        self.append_eval_var_leak_if_needed(&name, kind, resolved, store_block);
+                        self.append_eval_var_leak_if_needed(&name, kind, resolved, block);
                     } else {
-                        self.lower_destructure_pattern(
+                        block = self.lower_destructure_pattern(
                             &swc_ast::Pat::Ident(assign.key.clone()),
                             dest,
                             block,
@@ -704,13 +704,13 @@ impl Lowerer {
                             args: vec![src_val, excluded_val],
                         },
                     );
-                    self.lower_destructure_pattern(&rest.arg, rest_dest, block, kind)?;
+                    block = self.lower_destructure_pattern(&rest.arg, rest_dest, block, kind)?;
                 }
             }
             // 确保 block 指向当前可用的基本块（可能已被 lower_default_value_check 等终结）
             block = self.resolve_store_block(block);
         }
-        Ok(())
+        Ok(block)
     }
 
     /// 数组解构: `[a, b, ...rest]`
@@ -720,7 +720,7 @@ impl Lowerer {
         src_val: ValueId,
         mut block: BasicBlockId,
         kind: VarKind,
-    ) -> Result<(), LoweringError> {
+    ) -> Result<BasicBlockId, LoweringError> {
         let mut idx: i32 = 0;
         let mut has_rest = false;
 
@@ -766,7 +766,8 @@ impl Lowerer {
                         },
                     );
                     let resolved = self.lower_default_value_check(dest, &assign.right, block)?;
-                    self.lower_destructure_pattern(&assign.left, resolved, block, kind)?;
+                    block = self.resolve_store_block(block);
+                    block = self.lower_destructure_pattern(&assign.left, resolved, block, kind)?;
                 } else {
                     let dest = self.alloc_value();
                     self.current_function.append_instruction(
@@ -777,7 +778,7 @@ impl Lowerer {
                             index: index_val,
                         },
                     );
-                    self.lower_destructure_pattern(elem, dest, block, kind)?;
+                    block = self.lower_destructure_pattern(elem, dest, block, kind)?;
                 }
                 idx += 1;
             }
@@ -789,7 +790,7 @@ impl Lowerer {
             // 在此上下文中不需要显式 IteratorClose — 已由 lower_array_rest_destructure 处理
         }
 
-        Ok(())
+        Ok(block)
     }
 
     /// 数组解构中的 rest 元素: `[...rest]`
@@ -912,7 +913,7 @@ impl Lowerer {
         );
 
         // 5. 将结果数组赋值给 rest pattern
-        self.lower_destructure_pattern(rest_pat, result_arr, exit, kind)?;
+        let _ = self.lower_destructure_pattern(rest_pat, result_arr, exit, kind)?;
 
         Ok(result_arr)
     }

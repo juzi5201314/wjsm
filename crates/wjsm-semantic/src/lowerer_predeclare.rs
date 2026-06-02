@@ -393,6 +393,10 @@ impl Lowerer {
             return cont;
         }
 
+        if let Some(cont) = self.await_continue_block.take() {
+            return cont;
+        }
+
         if let Some(cont) = self.eval_continue_block.take() {
             return cont;
         }
