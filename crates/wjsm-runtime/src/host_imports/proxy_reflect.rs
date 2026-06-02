@@ -569,5 +569,6 @@ pub(crate) fn define_proxy_reflect(
     linker.define(&mut store, "env", "proxy_revocable", proxy_revocable_fn)?;
 
 
+
     Ok(())
 }
