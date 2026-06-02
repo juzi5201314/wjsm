@@ -7,16 +7,6 @@ pub(crate) fn define_timers_arrays(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    // ── Import 32: json_stringify(i64, i64, i64) → i64 ──────────────────────────
-    // value, replacer?, space? (B2 fills undefined for omitted optionals)
-    // 委托 runtime_json_stringify_full，传递参数，启用白名单顺序、pretty gap、replacer fn transform
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64, replacer: i64, space: i64| -> i64 {
-            runtime_json_stringify_full(&mut caller, val, replacer, space)
-        },
-    );
-    linker.define(&mut store, "env", "json_stringify", f)?;
     // ── Import 34: closure_create(i32, i64) -> i64 ────────────────────────────
     let f = Func::wrap(
         &mut store,

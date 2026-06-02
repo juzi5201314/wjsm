@@ -466,7 +466,8 @@ fn build_replacer_whitelist(
 }
 
 /// 获取并调用对象的 toJSON 方法（ES §24.5.2 SerializeJSONProperty 步骤 2）
-fn get_to_json(caller: &mut Caller<'_, RuntimeState>, key: &str, value: i64) -> i64 {
+/// async 版本：使用 call_wasm_callback_async 替代 sync call_wasm_callback
+async fn get_to_json_async(caller: &mut Caller<'_, RuntimeState>, key: &str, value: i64) -> i64 {
     if !value::is_object(value) && !value::is_array(value) {
         return value;
     }
@@ -482,14 +483,14 @@ fn get_to_json(caller: &mut Caller<'_, RuntimeState>, key: &str, value: i64) -> 
         return value;
     }
     let key_str = store_runtime_string(caller, key.to_string());
-    match call_wasm_callback(caller, to_json, value, &[key_str]) {
+    match call_wasm_callback_async(caller, to_json, value, &[key_str]).await {
         Ok(v) => v,
         Err(_) => value::encode_undefined(),
     }
 }
-
 /// 完整的 JSON.stringify（ES §24.5.2），返回 boxed JS 值。
-pub(crate) fn runtime_json_stringify_full(
+/// async 版本：使用 call_wasm_callback_async 替代 sync call_wasm_callback
+pub(crate) async fn runtime_json_stringify_full_async(
     caller: &mut Caller<'_, RuntimeState>,
     val: i64,
     replacer: i64,
@@ -500,7 +501,7 @@ pub(crate) fn runtime_json_stringify_full(
     let replacer_is_fn = is_callable_in_runtime(caller, replacer);
     let replacer_fn = if replacer_is_fn { Some(replacer) } else { None };
     let mut stack = Vec::new();
-    let json = serialize_json_property(
+    let json = serialize_json_property_async(
         caller,
         "",
         val,
@@ -510,7 +511,8 @@ pub(crate) fn runtime_json_stringify_full(
         &mut stack,
         &gap,
         "",
-    );
+    )
+    .await;
     if json == "undefined" {
         value::encode_undefined()
     } else {
@@ -519,7 +521,8 @@ pub(crate) fn runtime_json_stringify_full(
 }
 
 /// 序列化 JSON 属性（核心递归 impl，含 cycle、toJSON、replacer、pretty-print）
-fn serialize_json_property(
+/// async 版本：使用 call_wasm_callback_async 替代 sync call_wasm_callback
+async fn serialize_json_property_async(
     caller: &mut Caller<'_, RuntimeState>,
     key: &str,
     val: i64,
@@ -530,11 +533,11 @@ fn serialize_json_property(
     gap: &str,
     current_indent: &str,
 ) -> String {
-    let mut value = get_to_json(caller, key, val);
+    let mut value = get_to_json_async(caller, key, val).await;
     let mut replacer_returned_undefined = false;
     if let Some(rf) = replacer_fn.filter(|_| replacer_is_fn) {
         let key_str = store_runtime_string(caller, key.to_string());
-        match call_wasm_callback(caller, rf, value, &[key_str, value]) {
+        match call_wasm_callback_async(caller, rf, value, &[key_str, value]).await {
             Ok(new_val) => {
                 replacer_returned_undefined = value::is_undefined(new_val);
                 value = new_val;
@@ -611,7 +614,7 @@ fn serialize_json_property(
         let mut parts = Vec::with_capacity(len as usize);
         for i in 0..len {
             let elem = read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
-            let s = serialize_json_property(
+            let s = Box::pin(serialize_json_property_async(
                 caller,
                 &i.to_string(),
                 elem,
@@ -621,7 +624,8 @@ fn serialize_json_property(
                 stack,
                 gap,
                 &next_indent,
-            );
+            ))
+            .await;
             parts.push(if s == "undefined" { "null".to_string() } else { s });
         }
         stack.pop();
@@ -670,7 +674,7 @@ fn serialize_json_property(
                     if value::is_undefined(prop_val) {
                         continue;
                     }
-                    let s = serialize_json_property(
+                    let s = Box::pin(serialize_json_property_async(
                         caller,
                         name,
                         prop_val,
@@ -680,7 +684,8 @@ fn serialize_json_property(
                         stack,
                         gap,
                         &next_indent,
-                    );
+                    ))
+                    .await;
                     if s != "undefined" {
                         let colon = if gap.is_empty() { ":" } else { ": " };
                         pairs.push(format!("{}{}{}", json_escape_string(name), colon, s));
@@ -729,7 +734,7 @@ fn serialize_json_property(
             for (name_id, prop_val) in slots {
                 let name_bytes = read_string_bytes(caller, name_id);
                 let name = String::from_utf8_lossy(&name_bytes).to_string();
-                let s = serialize_json_property(
+                let s = Box::pin(serialize_json_property_async(
                     caller,
                     &name,
                     prop_val,
@@ -739,7 +744,8 @@ fn serialize_json_property(
                     stack,
                     gap,
                     &next_indent,
-                );
+                ))
+                .await;
                 if s != "undefined" {
                     let colon = if gap.is_empty() { ":" } else { ": " };
                     pairs.push(format!("{}{}{}", json_escape_string(&name), colon, s));
@@ -761,10 +767,6 @@ fn serialize_json_property(
     "null".to_string()
 }
 
-/// 简单的 JSON.stringify 实现（单参向后兼容包装器）
-pub(crate) fn runtime_json_stringify(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
-    runtime_json_stringify_full(caller, val, value::encode_undefined(), value::encode_undefined())
-}
 
 pub(crate) fn read_string(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Result<String> {
     let data = read_string_bytes(caller, ptr);

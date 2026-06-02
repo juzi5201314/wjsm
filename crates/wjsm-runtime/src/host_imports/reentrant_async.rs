@@ -337,6 +337,16 @@ pub(crate) fn define_timers_arrays_async(
             Box::new(async move { json_parse_to_wasm_async(&mut caller, val, reviver).await })
         },
     )?;
+
+    linker.func_wrap_async(
+        "env",
+        "json_stringify",
+        |mut caller: Caller<'_, RuntimeState>, (val, replacer, space): (i64, i64, i64)| {
+            Box::new(async move {
+                runtime_json_stringify_full_async(&mut caller, val, replacer, space).await
+            })
+        },
+    )?;
     Ok(())
 }
 
