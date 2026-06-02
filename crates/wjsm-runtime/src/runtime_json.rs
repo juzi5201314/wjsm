@@ -786,6 +786,161 @@ fn apply_reviver(
         .unwrap_or_else(|_| value::encode_undefined())
 }
 
+async fn apply_reviver_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    reviver: i64,
+    holder: i64,
+    key: &str,
+    val: i64,
+) -> i64 {
+    if value::is_array(val) {
+        if let Some(ptr) = resolve_array_ptr(caller, val) {
+            let len = match read_array_length(caller, ptr) {
+                Some(n) => n,
+                None => return value::encode_undefined(),
+            };
+            for i in 0..len {
+                let elem_val = match read_array_elem(caller, ptr, i) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let new_val = Box::pin(apply_reviver_async(
+                    caller,
+                    reviver,
+                    val,
+                    &i.to_string(),
+                    elem_val,
+                ))
+                .await;
+                if value::is_undefined(new_val) {
+                    write_array_elem(caller, ptr, i, value::encode_undefined());
+                } else {
+                    write_array_elem(caller, ptr, i, new_val);
+                }
+            }
+        }
+    } else if value::is_object(val) {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        if let Some(obj_ptr) = resolve_handle(caller, val) {
+            let mut props: Vec<(u32, i64)> = Vec::new();
+            {
+                let data = env.memory.data(&*caller);
+                if obj_ptr + 16 <= data.len() {
+                    let num_props = u32::from_le_bytes([
+                        data[obj_ptr + 12],
+                        data[obj_ptr + 13],
+                        data[obj_ptr + 14],
+                        data[obj_ptr + 15],
+                    ]) as usize;
+                    for i in 0..num_props {
+                        let slot_off = obj_ptr + 16 + i * 32;
+                        if slot_off + 32 > data.len() {
+                            continue;
+                        }
+                        let name_id = u32::from_le_bytes([
+                            data[slot_off],
+                            data[slot_off + 1],
+                            data[slot_off + 2],
+                            data[slot_off + 3],
+                        ]);
+                        let prop_val = i64::from_le_bytes([
+                            data[slot_off + 8],
+                            data[slot_off + 9],
+                            data[slot_off + 10],
+                            data[slot_off + 11],
+                            data[slot_off + 12],
+                            data[slot_off + 13],
+                            data[slot_off + 14],
+                            data[slot_off + 15],
+                        ]);
+                        props.push((name_id, prop_val));
+                    }
+                }
+            }
+            for (name_id, prop_val) in &props {
+                let name_bytes = read_string_bytes_mem(caller, &env.memory, *name_id);
+                let name = String::from_utf8_lossy(&name_bytes);
+                let new_val = Box::pin(apply_reviver_async(caller, reviver, val, &name, *prop_val))
+                    .await;
+                if value::is_undefined(new_val) {
+                    delete_property_by_name_id(caller, &env, val, *name_id);
+                } else {
+                    let obj_ptr2 = resolve_handle(caller, val).unwrap_or(0);
+                    if obj_ptr2 != 0 {
+                        write_object_property_by_name_id(
+                            caller,
+                            obj_ptr2,
+                            val,
+                            *name_id,
+                            new_val,
+                            constants::FLAG_CONFIGURABLE
+                                | constants::FLAG_ENUMERABLE
+                                | constants::FLAG_WRITABLE,
+                        );
+                    }
+                }
+            }
+        }
+    }
+    let key_str = store_runtime_string(caller, key.to_string());
+    call_wasm_callback_async(caller, reviver, holder, &[key_str, val])
+        .await
+        .unwrap_or_else(|_| value::encode_undefined())
+}
+
+pub async fn json_parse_to_wasm_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    text: i64,
+    reviver: i64,
+) -> i64 {
+    let text_str = match json_parse_to_string(caller, text) {
+        Ok(text) => text,
+        Err(exception) => return exception,
+    };
+
+    let mut parser = JsonParser::new(text_str.as_bytes());
+    match parser.parse_value() {
+        Ok(json_value) => {
+            parser.skip_whitespace();
+            if parser.pos < parser.input.len() {
+                return make_exception(
+                    caller,
+                    "SyntaxError",
+                    "Unexpected trailing content".to_string(),
+                );
+            }
+
+            let wasm_value = build_wasm_value(caller, &json_value);
+
+            if is_callable_in_runtime(caller, reviver) {
+                let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                let root = alloc_host_object(caller, &env, 1);
+                let empty_name_id = find_memory_c_string_with_env(caller, &env, "")
+                    .or_else(|| alloc_heap_c_string_with_env(caller, &env, ""));
+                if let Some(nid) = empty_name_id {
+                    let root_ptr = resolve_handle(caller, root);
+                    if let Some(ptr) = root_ptr {
+                        write_object_property_by_name_id(
+                            caller,
+                            ptr,
+                            root,
+                            nid,
+                            wasm_value,
+                            constants::FLAG_CONFIGURABLE
+                                | constants::FLAG_ENUMERABLE
+                                | constants::FLAG_WRITABLE,
+                        );
+                    }
+                }
+                apply_reviver_async(caller, reviver, root, "", wasm_value).await
+            } else {
+                wasm_value
+            }
+        }
+        Err(error) => make_exception(caller, "SyntaxError", error),
+    }
+}
+
 pub fn json_parse_to_wasm(caller: &mut Caller<'_, RuntimeState>, text: i64, reviver: i64) -> i64 {
     let text_str = match json_parse_to_string(caller, text) {
         Ok(text) => text,
@@ -861,6 +1016,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::approx_constant)]
     fn test_parse_numbers() {
         assert_eq!(parse("0").unwrap(), JsonValue::Number(0.0));
         assert_eq!(parse("-42").unwrap(), JsonValue::Number(-42.0));

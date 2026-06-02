@@ -20,4 +20,5 @@ wasmprinter = { workspace = true }
 wasmparser = { workspace = true }
 notify = { workspace = true }
 swc_core = { workspace = true }
+ tokio = { workspace = true, features = ["rt-multi-thread"] }
 regex = "1"

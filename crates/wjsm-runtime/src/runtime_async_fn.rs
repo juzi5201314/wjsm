@@ -210,7 +210,21 @@ pub(crate) fn pump_async_generator_from_caller(
     }
 }
 
-pub(crate) fn resume_async_function<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+/// Phase 3 must-convert 之 resume 路径（按 2026-05-31-async-scheduler-implementation-plan.md 审计条目 + 26-async-audit-refactor-design.md）：
+/// 为 `Microtask::AsyncResume`（用户 async/await 和 async generator 的恢复点）添加 async 版本，与现有 sync `resume_async_function` 并存。
+///
+/// 规则：
+/// - 严格与 sync 版本并存，供保留的 sync execute 路径继续使用
+/// - 所有 AsyncResume / async generator resumption 语义（state 值、rejection 路径、generator object 更新、continuation 表更新、outer_promise 检测与 completed 标记）必须 100% 相同
+/// - 仅 continuation 表更新 + 状态机推进（Wasm 恢复调用） + 返回值处理完全等价；唯一差异是将 `func.call(...)` 替换为 `func.call_async(...).await`
+/// - 本阶段保持调用点不变（microtask 中的 AsyncResume 分支仍调用 sync 版本；未来 Microtask 调度切换到 async 骨架时同步转换）
+/// - 精确保留原有行为，无任何语义或顺序差异
+///
+/// 特别提醒（plan Correction 3 + lib.rs 已有注释 + 审计计划）：
+///   在 Store::epoch_deadline_async_yield_and_update 之后，
+///   *所有* 经由该 Store 的 Wasm 调用（主 + 回调，包括此处 resume 中的 continuation 恢复调用）都必须走 async API（call_async 等）。
+///   本文件中的 async 版本即为此准备；sync 版本仅留给未切换的 sync execute 路径。
+pub(crate) async fn resume_async_function_async<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
     ctx: &mut C,
     env: &WasmEnv,
     fn_table_idx: u32,
@@ -238,16 +252,18 @@ pub(crate) fn resume_async_function<C: AsContextMut<Data = RuntimeState> + Runti
     let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
     let Some(func) = func else { return };
     let mut results = [Val::I64(0)];
-    let _ = func.call(
-        &mut *ctx,
-        &[
-            Val::I64(continuation),
-            Val::I64(resume_val),
-            Val::I32(0),
-            Val::I32(0),
-        ],
-        &mut results,
-    );
+    let _ = func
+        .call_async(
+            &mut *ctx,
+            &[
+                Val::I64(continuation),
+                Val::I64(resume_val),
+                Val::I32(0),
+                Val::I32(0),
+            ],
+            &mut results,
+        )
+        .await;
     let cont_handle = value::decode_object_handle(continuation) as usize;
     let outer_promise = {
         let c_table = ctx
@@ -262,86 +278,6 @@ pub(crate) fn resume_async_function<C: AsContextMut<Data = RuntimeState> + Runti
         if settled {
             let mut c_table = ctx
                 .state_mut()
-                .continuation_table
-                .lock()
-                .expect("continuation table mutex");
-            if let Some(entry) = c_table.get_mut(cont_handle) {
-                entry.completed = true;
-            }
-        }
-    }
-}
-
-/// Phase 3 must-convert 之 resume 路径（按 2026-05-31-async-scheduler-implementation-plan.md 审计条目 + 26-async-audit-refactor-design.md）：
-/// 为 `Microtask::AsyncResume`（用户 async/await 和 async generator 的恢复点）添加 async 版本，与现有 sync `resume_async_function` 并存。
-///
-/// 规则：
-/// - 严格与 sync 版本并存，供保留的 sync execute 路径继续使用
-/// - 所有 AsyncResume / async generator resumption 语义（state 值、rejection 路径、generator object 更新、continuation 表更新、outer_promise 检测与 completed 标记）必须 100% 相同
-/// - 仅 continuation 表更新 + 状态机推进（Wasm 恢复调用） + 返回值处理完全等价；唯一差异是将 `func.call(...)` 替换为 `func.call_async(...).await`
-/// - 本阶段保持调用点不变（microtask 中的 AsyncResume 分支仍调用 sync 版本；未来 Microtask 调度切换到 async 骨架时同步转换）
-/// - 精确保留原有行为，无任何语义或顺序差异
-///
-/// 特别提醒（plan Correction 3 + lib.rs 已有注释 + 审计计划）：
-///   在 Store::epoch_deadline_async_yield_and_update 之后，
-///   *所有* 经由该 Store 的 Wasm 调用（主 + 回调，包括此处 resume 中的 continuation 恢复调用）都必须走 async API（call_async 等）。
-///   本文件中的 async 版本即为此准备；sync 版本仅留给未切换的 sync execute 路径。
-pub(crate) async fn resume_async_function_async(
-    store: &mut Store<RuntimeState>,
-    env: &WasmEnv,
-    fn_table_idx: u32,
-    continuation: i64,
-    state: u32,
-    resume_val: i64,
-    is_rejected: bool,
-) {
-    {
-        let cont_handle = value::decode_object_handle(continuation) as usize;
-        let mut c_table = store
-            .data_mut()
-            .continuation_table
-            .lock()
-            .expect("continuation table mutex");
-        if let Some(entry) = c_table.get_mut(cont_handle) {
-            while entry.captured_vars.len() < 2 {
-                entry.captured_vars.push(value::encode_undefined());
-            }
-            entry.captured_vars[0] = value::encode_f64(state as f64);
-            entry.captured_vars[1] = value::encode_bool(is_rejected);
-        }
-    }
-    let func_ref = env.func_table.get(&mut *store, fn_table_idx as u64);
-    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
-    let Some(func) = func else { return };
-    let mut results = [Val::I64(0)];
-    // 关键：同步版本用 func.call(...)，async 版本必须替换为 func.call_async(...).await
-    // 这是保证 async Store 在 yield_and_update 后不触发 Wasmtime sync call 拒绝的关键转换点。
-    let _ = func
-        .call_async(
-            &mut *store,
-            &[
-                Val::I64(continuation),
-                Val::I64(resume_val),
-                Val::I32(0),
-                Val::I32(0),
-            ],
-            &mut results,
-        )
-        .await;
-    let cont_handle = value::decode_object_handle(continuation) as usize;
-    let outer_promise = {
-        let c_table = store
-            .data_mut()
-            .continuation_table
-            .lock()
-            .expect("continuation table mutex");
-        c_table.get(cont_handle).map(|entry| entry.outer_promise)
-    };
-    if let Some(outer_promise) = outer_promise {
-        let settled = is_promise_settled(store.data_mut(), outer_promise);
-        if settled {
-            let mut c_table = store
-                .data_mut()
                 .continuation_table
                 .lock()
                 .expect("continuation table mutex");

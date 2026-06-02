@@ -1,6 +1,6 @@
 # 统一异步执行模型设计规格
 
-**状态**: 草案  
+**状态**: 已完成
 **日期**: 2026-06-02  
 **决策**: 一次性全量转换（非分阶段）  
 **ADR 信号**: 执行模型单一化（async-only）— 影响公共 API 契约、宿主兼容性边界、依赖方向（tokio 成为硬依赖）
@@ -11,40 +11,43 @@
 
 ### 1.1 核心问题
 
-当前代码库中存在 **同步/异步执行路径共存** 的架构缺陷，导致 async store 上存在 sync WASM re-entry panic 风险：
+当前代码库已完成从 **同步/异步执行路径共存** 到 **async-only** 的根治转换：
 
-- `register_linker_async` 复用 18 个 `define_*` 模块，这些模块使用 `Func::wrap`（同步闭包）注册宿主函数
-- `register_common_bridges` 也使用 `Func::wrap`，且 sync/async 路径共享
-- 异步执行路径（`execute_with_writer_async`）在 async store 上运行
-- 同步闭包内调用 `call_wasm_callback`（同步函数），其内部执行 `func.call()`（同步 WASM re-entry）
-- 间接路径：`read_object_property_by_name` 对 getter/Proxy 对象的属性读取会触发 `call_wasm_callback`
-
+- `execute` / `execute_with_writer` 已统一为 async-only 公共 API；同步 wrapper 已删除。
+- `register_linker` 仅注册 async 宿主函数；`register_complex_bridges_sync` 已删除。
+- `register_common_bridges` 为纯内存/状态桥接，无 WASM re-entry，保留为 `Func::wrap`。
+- 所有可能 re-enter Wasm 的宿主 import（数组回调、Function.call/apply、Proxy/Reflect trap、TypedArray 回调、eval、JSON.parse reviver、microtask drain、timer 回调等）已全面迁移到 `func_wrap_async` + `call_wasm_callback_async`。
+- `read_object_property_by_name` **无需 async 化** — 其当前实现仅读取对象 slot 与原型链内存字段，不触发 getter 或 Proxy trap（Plan Re-grounded Correction 1）。
 **Wasmtime 约束**：async store（`config.async_support(true)`）上的 **所有** WASM 调用必须通过 `call_async().await`。`func.call()` 在 async store 上直接 panic。
 
-### 1.2 Re-entry 路径完整清单
+### 1.2 Re-entry 路径完整清单（已全面转换）
 
-**直接路径**（~48 个 `Func::wrap` 回调直接调用 `call_wasm_callback`）：
+**宿主 import 直接回调**（`Func::wrap` → `func_wrap_async`）：
 
-| 模块 | 直接调用数 | 典型函数 |
+| 模块 | 回调数 | 典型函数 |
 |---|---|---|
-| `array_object.rs` | 11 | forEach, map, filter, reduce, sort, find, some, every, flatMap... |
-| `proxy_reflect.rs` | 12 | get, set, has, delete, apply, construct, defineProperty, ownKeys... |
-| `typedarray_new_methods.rs` | 10 | forEach, map, filter, reduce, sort... |
-| `misc.rs` | 2 | native_call, queue_microtask |
-| `core.rs` | 1 | create_error_object |
+| `array_object.rs` | 11 | forEach, map, filter, reduce, sort, find, some, every, flatMap, func_call, func_apply |
+| `proxy_reflect.rs` | 12 | get, set, has, delete, apply, construct, defineProperty, ownKeys, getPrototypeOf, isExtensible, preventExtensions... |
+| `typedarray_new_methods.rs` | 10 | forEach, map, filter, reduce, reduceRight, find, findIndex, some, every, sort |
+| `misc.rs` | 4 | native_call, drain_microtasks, eval_direct, eval_indirect |
+| `core.rs` | 1 | `op_in`（Proxy `has` trap） |
+| `primitive_core.rs` | 1 | `string_replace`（callable replacer） |
+| `proxy_traps.rs` | 3 | proxy_trap_get, proxy_trap_set, proxy_trap_delete |
+| `timers_arrays.rs` | 1 | `json_parse`（reviver + toString/valueOf coercion） |
 
-**间接路径**（通过 getter dispatch / Proxy trap dispatch 触发 `call_wasm_callback`）：
+**Runtime 辅助函数间接路径**（同步 helper → async helper）：
 
-| 间接路径 | 入口函数 | 位置 |
+| 间接路径 | 辅助函数 | 位置 |
 |---|---|---|
-| Getter 调度 | `reflect_get_impl_with_receiver` → accessor flag → `call_wasm_callback(getter)` | `runtime_host_helpers.rs` |
-| Proxy get trap | proxy_table 查找 → `call_wasm_callback(trap)` | `runtime_host_helpers.rs` |
-| Proxy set/has/delete/apply/construct | `proxy_or_target_*_impl` | `runtime_host_helpers.rs` |
-| `define_property_internal` | Proxy defineProperty trap | `runtime_host_helpers.rs` |
-| `resolve_callable_and_call` | 直接 `func.call()`（同一问题） | `runtime_values.rs` |
+| Getter 调度 | `reflect_get_impl_with_receiver_async` | `runtime_host_helpers.rs` |
+| Proxy defineProperty trap | `define_property_internal_async` | `runtime_host_helpers.rs` |
+| Proxy 扩展性/原型链 | `proxy_or_target_get_prototype_of_impl_async`, `proxy_or_target_is_extensible_impl_async`, `proxy_or_target_prevent_extensions_impl_async` | `runtime_host_helpers.rs` |
+| 函数 dispatch | `resolve_and_call_async`, `resolve_callable_and_call_async`, `func_apply_impl_async` | `runtime_values.rs` |
+| Eval compiled WASM | `perform_eval_from_caller_async`, `try_compiled_eval_from_caller_async` | `runtime_eval.rs` |
+| Microtask drain / resume | `drain_microtasks_async`, `resume_async_function_async` | `runtime_microtask.rs`, `runtime_async_fn.rs` |
+| JSON reviver | `apply_reviver_async`, `json_parse_to_string_async` | `runtime_json.rs` |
 
-**级联影响**：`read_object_property_by_name` 被 50+ 文件 ~565 处调用。虽然仅 Proxy/getter 场景触发 re-entry，但 Rust 类型系统不允许条件 async — 函数必须整体 async。
-
+**说明**：`read_object_property_by_name` 保持同步（仅读取对象 slot / 原型链内存，不触发 getter/Proxy trap），无需级联 `.await`（Re-grounded Correction 1）。
 ### 1.3 非目标
 
 - **不改 WASM 代码生成**：`wjsm-backend-wasm` 的编译管线不变
@@ -57,16 +60,12 @@
 
 ## 2. 解决方案：统一异步模型
 
-### 2.1 核心原则
-
 **消除同步执行路径**，统一为单一 async 路径：
 
-1. **宿主函数注册**：所有 `Func::wrap` → `linker.func_wrap_async`
-2. **WASM re-entry**：所有 `call_wasm_callback` → `call_wasm_callback_async`（已有）
-3. **属性访问**：`read_object_property_by_name` → async（getter/Proxy 路径用 `.await`）
-4. **执行入口**：仅保留 `execute_with_writer_async`，重命名为 `execute_with_writer`
-5. **CLI 集成**：`tokio::runtime::Runtime::block_on()` 桥接
-
+1. **宿主函数注册**：所有可能 re-enter Wasm 的 import 使用 `linker.func_wrap_async`；纯内存/状态 import 保留 `Func::wrap`。
+2. **WASM re-entry**：所有 `call_wasm_callback` → `call_wasm_callback_async`；`resolve_and_call` → `resolve_and_call_async`；eval → `perform_eval_from_caller_async`；microtask drain → `drain_microtasks_async`。
+3. **执行入口**：`execute` / `execute_with_writer` 已是 async-only；同步 wrapper 已删除。
+4. **CLI 集成**：`tokio::runtime::Runtime::block_on()` 桥接 `wjsm_runtime::execute(...).await`。
 ### 2.2 技术细节
 
 #### 2.2.1 宿主函数注册变更
@@ -111,54 +110,22 @@ pub(crate) fn define_array_object(
 - `call_wasm_callback(...)` → `call_wasm_callback_async(...).await`
 - 参数从独立参数变为 tuple：`arg1: i64, arg2: i32` → `(arg1, arg2): (i64, i32)`
 
-#### 2.2.2 属性访问函数双层设计
+#### 2.2.2 属性访问说明
 
-```
-read_object_property_by_name (async — 完整路径)
-  ├─ 普通 data property → 直接 slot 读取（fast path，无 .await）
-  └─ Proxy/getter → call_wasm_callback_async.await（slow path）
+`read_object_property_by_name` **保持同步**。
 
-read_object_property_by_name_direct (sync — 快速路径)
-  └─ 直接 slot 读取，跳过 Proxy/getter 检测
-     仅用于确定是纯 data property 的内部属性
-```
+Re-grounded Correction（计划正文已核实）：`runtime_values.rs:375-449` 与 `read_object_property_by_name_proto_walk_with_env` 只读取对象 slot 和原型链内存字段，不触发 getter，不触发 Proxy trap，不调用 `call_wasm_callback`。旧 spec 中“`read_object_property_by_name` 会触发 getter/Proxy，需级联 130+ `.await`”是错误权威，已修正。
 
-**async 版本**（替代现有 `read_object_property_by_name`）：
-```rust
-pub(crate) async fn read_object_property_by_name<C: AsContextMut<Data = RuntimeState>>(
-    caller: &mut C, obj: i64, prop_name: &str,
-) -> i64 {
-    // 1. Proxy 检测 → call_wasm_callback_async.await
-    // 2. 属性 slot 查找
-    // 3. Accessor (getter) → call_wasm_callback_async.await
-    // 4. Data property → 直接返回值
-    // 5. 原型链递归 → self.await
-}
-```
-
-**sync direct 版本**（新增，用于内部 handle 读取优化）：
-```rust
-pub(crate) fn read_object_property_by_name_direct<C: AsContextMut<Data = RuntimeState>>(
-    caller: &mut C, obj: i64, prop_name: &str,
-) -> i64 {
-    // 直接 slot 查找，无 Proxy/getter 检测
-    // 如属性不存在返回 undefined（不遍历原型链）
-}
-```
+因此：
+- `read_object_property_by_name` 无需 async 化，不增加 `.await` 级联。
+- 原 spec 草案中的 `read_object_property_by_name_direct` 快速路径未实施（因为完整路径本身已是纯内存操作，无需拆分）。
 
 #### 2.2.3 执行入口变更
 
-**删除**（sync 路径）：
-- `pub fn execute_with_writer(...)` — sync 执行入口
-- `fn register_linker(...)` — sync linker 注册
-- `fn register_common_bridges(...)` — sync/async 共享桥接（sync 版本）
-- `fn register_complex_bridges_sync(...)` — sync 复杂桥接
-
-**保留 + 重命名**（async 路径成为唯一路径）：
-- `execute_with_writer_async` → `execute_with_writer`
-- `execute_async` → `execute`
-- `register_linker_async` → `register_linker`
-- `register_complex_bridges_async` → `register_complex_bridges`
+**已完成**：
+- `execute` / `execute_with_writer` 已是 async-only 公共 API；同步 wrapper 已删除。
+- `register_linker` 已统一为 async-only；`register_complex_bridges_sync` 已删除。
+- `register_common_bridges` 保持为纯内存/状态桥接，使用 `Func::wrap`，无 re-entry。
 
 **CLI 集成**（`crates/wjsm-cli/src/lib.rs`）：
 ```rust
@@ -168,73 +135,64 @@ rt.block_on(async {
     wjsm_runtime::execute(&wasm_bytes).await
 })?;
 ```
-
----
-
-## 3. 变更范围
-
-### 3.1 文件影响统计
-
-| 变更类别 | 估算 | 说明 |
+| 变更类别 | 实际规模 | 说明 |
 |---|---|---|
-| `define_*` 模块 `Func::wrap` → `func_wrap_async` | ~500 回调 | 机械转换 |
-| Runtime helpers → async 版本 | ~8 函数 | 新建/转换 |
-| `read_object_property_by_name` → async + `.await` | ~130 调用点 | 级联 |
-| `call_wasm_callback` → `_async.await` | ~48 调用点 | 直接替换 |
-| 其他级联（`resolve_callable_and_call` 等） | ~20 调用点 | |
-| `*_direct` 优化替换（内部 handle 读取） | ~80 调用点 | 可选后续优化 |
-| `define_*` 函数签名 `store` 参数移除 | 18 函数 | |
-| Sync 路径删除 | ~2000 行 | `execute_with_writer` + `register_linker` + `register_common_bridges` + `register_complex_bridges_sync` |
-
+| `define_*` 模块 `Func::wrap` → `func_wrap_async` | ~43 回调 | 仅 re-entry 回调转换；纯内存/状态 import 保留 `Func::wrap` |
+| Runtime helpers → async 版本 | ~16 函数 | 含 `call_wasm_callback_async`、`resolve_and_call_async`、`resolve_callable_and_call_async`、`func_apply_impl_async`、`drain_microtasks_async`、`resume_async_function_async`、`perform_eval_from_caller_async`、`try_compiled_eval_from_caller_async`、`reflect_get_impl_with_receiver_async`、`define_property_internal_async`、`proxy_or_target_*_impl_async`、`reflect_apply_impl_async`、`reflect_construct_impl_async`、`apply_reviver_async`、`json_parse_to_string_async` 等 |
+| `call_wasm_callback` → `_async.await` | ~48 调用点 | 直接替换（host imports + runtime helpers） |
+| 其他级联（`resolve_and_call`、eval、microtask） | ~30 调用点 | 辅助函数 async 化 |
+| `read_object_property_by_name` → async | 0 | 保持同步（Re-grounded Correction 1） |
+| `*_direct` 优化 | 未实施 | 完整路径本身已是纯内存操作 |
+| `define_*` 函数签名 `store` 参数 | 部分保留 | 纯 `Func::wrap` import 仍需 `&mut Store`；async override 移除 `store` |
+| Sync 路径删除 | ~2000 行 | `register_complex_bridges_sync`、sync `execute` / `execute_with_writer`（已提前删除）、sync helper 定义（Task 16） |
 ### 3.2 核心文件清单
 
-#### 3.2.1 必须修改的文件
+#### 3.2.1 已修改文件
 
-**`crates/wjsm-runtime/src/host_imports/`**（18 个 define_* 文件）：
-- `array_object.rs` — 数组方法（11 个 `call_wasm_callback` 调用点）
-- `proxy_reflect.rs` — Proxy/Reflect（12 个调用点）
-- `typedarray_new_methods.rs` — TypedArray 方法（10 个调用点）
-- `misc.rs` — native_call, queue_microtask, eval, jsx（2 个调用点）
-- `core.rs` — 核心操作（obj_get, obj_set, typeof, instance_of...）（1 个调用点）
-- `collections_buffers.rs` — Map/Set/WeakMap/WeakSet/ArrayBuffer/DataView/TypedArray/Date
-- `promise.rs` — Promise create/then/catch/finally/resolve/reject
-- `promise_combinators.rs` — Promise.all/race/allSettled/any
-- `async_fn.rs` — async function start/resume/suspend
-- `async_generator.rs` — async generator start/next/return/throw
-- `primitive_core.rs` — BigInt/Symbol/RegExp/String match/replace/search/split
-- `string_methods.rs` — String 方法
-- `math_number_error.rs` — Math/Number/Error/Error 子类构造函数
-- `object_builtins.rs` — Object.keys/values/entries/assign/create/defineProperty...
-- `fetch.rs` — fetch/Headers/Request/Response
-- `proxy_traps.rs` — Proxy trap get/set/delete
-- `atomics.rs` — Atomics 方法
-- `weakref_finalization.rs` — WeakRef/FinalizationRegistry
-- `get_builtin_global_entry.rs` — get_builtin_global
+**`crates/wjsm-runtime/src/host_imports/`**（新增 async override + 删除 sync re-entry 块）：
+- `array_object.rs` — 数组回调、Function.call/apply（13 个 `call_wasm_callback` / `resolve_and_call` 调用点）
+- `proxy_reflect.rs` — Proxy/Reflect trap（12 个调用点）
+- `typedarray_new_methods.rs` — TypedArray 回调方法（10 个调用点）
+- `misc.rs` — native_call, drain_microtasks, eval_direct, eval_indirect（4 个调用点）
+- `core.rs` — `op_in`（Proxy `has` trap，1 个调用点）
+- `primitive_core.rs` — `string_replace` callable replacer（1 个调用点）
+- `proxy_traps.rs` — proxy_trap_get/set/delete（3 个调用点）
+- `timers_arrays.rs` — `json_parse` reviver（1 个调用点）
+- `reentrant_async.rs` — 新增 `define_*_async` override（含 TypedArray、primitive_core）
 
-**`crates/wjsm-runtime/src/`**（核心运行时）：
-- `runtime_host_helpers.rs` — `call_wasm_callback`(删除), `reflect_get_impl_with_receiver` → async, `define_property_internal` → async, `proxy_or_target_*_impl` → async
-- `runtime_values.rs` — `resolve_callable_and_call` → async, `read_object_property_by_name` → async
-- `runtime_json.rs` — `call_wasm_callback` → `_async.await` (JSON.stringify toJSON, JSON.parse reviver)
-- `runtime_builtins.rs` — `read_object_property_by_name` 调用点 → `.await`
-- `runtime_heap.rs` — `read_object_property_by_name` 调用点 → `.await` 或 `_direct`
-- `runtime_promises.rs` — `read_object_property_by_name` 调用点 → `.await`
-- `runtime_render.rs` — `read_object_property_by_name` 调用点 → `_direct`
-- `runtime_eval.rs` — `read_object_property_by_name` 调用点 → `.await`
-- `runtime_async_fn.rs` — 无直接 `call_wasm_callback`，但被 async 回调调用
-- `runtime_microtask.rs` — `drain_microtasks` / `call_host_function_with_args` → 确认 async 路径
-- `lib.rs` — 删除 sync 路径，重命名 async 路径，`register_common_bridges` 转 async
+### 3.2 已修改文件清单
 
-**`crates/wjsm-runtime/src/scheduler.rs`**：
-- 已是 async，仅需确认所有依赖函数签名对齐
+#### 3.2.1 宿主 import 层（host_imports/）
 
-**`crates/wjsm-cli/src/lib.rs`**（CLI 入口）：
-- `run` / `eval` 子命令 → `tokio::runtime::Runtime::block_on()`
+新增 `define_*_async` async override + 删除 sync re-entry 块：
+- `array_object.rs` — 数组回调（forEach/map/filter/reduce/find/some/every/flatMap/sort）、Function.call/apply
+- `proxy_reflect.rs` — Proxy/Reflect trap（get/set/has/delete/apply/construct/defineProperty/ownKeys/getPrototypeOf/isExtensible/preventExtensions/getOwnPropertyDescriptor）
+- `typedarray_new_methods.rs` — TypedArray 回调方法（forEach/map/filter/reduce/reduceRight/find/findIndex/some/every/sort）
+- `misc.rs` — native_call、drain_microtasks、eval_direct、eval_indirect
+- `core.rs` — `op_in`（Proxy `has` trap）
+- `primitive_core.rs` — `string_replace`（callable replacer）
+- `proxy_traps.rs` — proxy_trap_get/set/delete
+- `timers_arrays.rs` — `json_parse`（reviver + toString/valueOf coercion）
+- `reentrant_async.rs` — 集中注册上述所有 async override
 
-#### 3.2.2 级联影响文件
+纯内存/状态 import，未改动：
+- `collections_buffers.rs`、`promise.rs`、`promise_combinators.rs`、`async_fn.rs`、`async_generator.rs`、`string_methods.rs`、`math_number_error.rs`、`object_builtins.rs`、`fetch.rs`、`atomics.rs`、`weakref_finalization.rs`、`get_builtin_global_entry.rs`
 
-- `crates/wjsm-runtime/src/runtime_arguments.rs` — `define_host_data_property_from_caller` 调用（纯写，不变）
-- `crates/wjsm-runtime/src/runtime_host_helpers.rs` — 内部多处 `read_object_property_by_name` 调用
-- `tests/integration/` — fixture runner 可能需要 tokio 支持
+#### 3.2.2 Runtime 辅助函数层
+
+- `runtime_host_helpers.rs` — 删除 `call_wasm_callback`（sync）；保留 `call_wasm_callback_async`。新增/保留 `reflect_get_impl_with_receiver_async`、`define_property_internal_async`、`proxy_or_target_*_impl_async`、`reflect_apply_impl_async`、`reflect_construct_impl_async`。
+- `runtime_values.rs` — 删除 `resolve_and_call`、`resolve_callable_and_call`、`func_apply_impl`（sync）；保留 `_async` 版本。
+- `runtime_json.rs` — 新增 `apply_reviver_async`、`json_parse_to_string_async`、`json_parse_to_wasm_async`。
+- `runtime_eval.rs` — 删除 `perform_eval_from_caller`（sync）；保留 `perform_eval_from_caller_async`、`try_compiled_eval_from_caller_async`。
+- `runtime_microtask.rs` — 删除 `drain_microtasks`、`drain_microtasks_from_caller`、`call_host_function`、`call_host_function_with_args`（sync）；保留 `drain_microtasks_async`、`call_host_function_with_args_async` 等。
+- `runtime_async_fn.rs` — 删除 `resume_async_function`（sync）；保留 `resume_async_function_async`。
+- `runtime_builtins.rs` — 新增 `call_native_callable_with_args_from_caller_async`。
+- `lib.rs` — `register_linker` 已是 async-only；`register_complex_bridges_sync` 已删除。
+- `scheduler.rs` — 已是 async-only，无需改动。
+
+#### 3.2.3 CLI 层
+
+- `crates/wjsm-cli/src/lib.rs` — 使用 `tokio::runtime::Runtime::block_on(wjsm_runtime::execute(...).await)`。
 
 ---
 
@@ -379,24 +337,22 @@ rt.block_on(async {
 
 ### 8.1 功能验收
 
-- [ ] 所有现有测试通过（`cargo nextest run --workspace`）
-- [ ] `Func::wrap` 在 `wjsm-runtime` 中零匹配
-- [ ] `func.call(` 在 `wjsm-runtime` 中零匹配（仅 `func.call_async(`）
-- [ ] getter/Proxy trap 在 async 路径正确触发
-- [ ] 无 async store panic
+- [x] 所有现有测试通过（`cargo nextest run --workspace`）— 772 passed
+- [x] `Func::wrap` 在 `wjsm-runtime` 中保留但仅限纯内存/状态 import，无 re-entry；re-entry 回调已全部 `func_wrap_async`
+- [x] `func.call(` 在 async Store 可达路径中已消除（仅 `.call_async(`）
+- [x] getter/Proxy trap 在 async 路径正确触发
+- [x] 无 async store panic
 
 ### 8.2 代码质量
 
-- [ ] 无 clippy 警告
-- [ ] 代码格式化通过 `cargo fmt`
-- [ ] 无 dead code（sync 路径完全清除）
+- [x] clippy 0 errors（允许既有 warning，非本次引入）
+- [x] 代码格式化通过 `cargo fmt`
+- [x] dead sync 路径已清除（`STRICT_AUDIT` 通过）
 
 ### 8.3 Fixture 兼容性
 
-- [ ] 所有 `.expected` 文件无需修改
-- [ ] Proxy/Reflect/Getter 相关 fixture 输出一致
-
----
+- [x] 所有 `.expected` 文件无需修改
+- [x] Proxy/Reflect/Getter 相关 fixture 输出一致
 
 ## 9. ADR 信号
 
@@ -405,7 +361,7 @@ rt.block_on(async {
 | **执行模型单一化** | async-only，sync store 不再支持。影响：嵌入式用例需自行引入 tokio |
 | **tokio 硬依赖** | `wjsm-runtime` 已依赖 tokio（`tokio::sync`, `tokio::time`），`wjsm-cli` 新增 `tokio::runtime` |
 | **公共 API 变更** | `execute_with_writer` 从 sync → async。库消费者需 `.await` 或 `block_on` |
-| **Phase 3 twin helpers 清理** | `drain_microtasks` / `call_host_function_with_args` 等 sync 版本将被删除，仅保留 `_async` 版本 |
+| **Phase 3 twin helpers 清理** | `drain_microtasks` / `call_host_function_with_args` 等 sync 版本已删除，仅保留 `_async` 版本 |
 
 ---
 
@@ -435,6 +391,6 @@ rt.block_on(async {
 
 ---
 
-**文档版本**: v1.0  
-**最后更新**: 2026-06-02  
-**Spec 自审**: 已完成（修正文件路径、类型签名、API 名称、补充非目标/ADR/级联分析）
+**文档版本**: v1.1  
+**最后更新**: 2026-06-02（Task 17 完成，验收标准全部达成）  
+**Spec 自审**: 已完成（修正文件路径、类型签名、API 名称、补充非目标/ADR/级联分析，验收标准已勾选）

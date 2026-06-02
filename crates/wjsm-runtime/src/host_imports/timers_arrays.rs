@@ -7,121 +7,6 @@ pub(crate) fn define_timers_arrays(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, callback: i64, delay: i64| -> i64 {
-            let delay_f64 = if value::is_f64(delay) {
-                f64::from_bits(delay as u64)
-            } else {
-                f64::NAN
-            };
-            let delay_ms: u64 = if delay_f64.is_nan() || delay_f64.is_sign_negative() {
-                0
-            } else if delay_f64 > (u32::MAX as f64) {
-                u32::MAX as u64
-            } else {
-                delay_f64 as u64
-            };
-            let id = {
-                let mut next_id = caller
-                    .data()
-                    .next_timer_id
-                    .lock()
-                    .expect("next_timer_id mutex");
-                let id = *next_id;
-                *next_id += 1;
-                id
-            };
-            let deadline = Instant::now() + Duration::from_millis(delay_ms);
-            let mut timers = caller.data().timers.lock().expect("timers mutex");
-            timers.push(TimerEntry {
-                id,
-                deadline,
-                callback,
-                repeating: false,
-                interval: Duration::from_millis(delay_ms),
-            });
-            value::encode_f64(id as f64)
-        },
-    );
-    linker.define(&mut store, "env", "set_timeout", f)?;
-
-    // ── Import 28: clear_timeout(i64) → () ────────────────────────────────
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, timer_id: i64| {
-            if value::is_f64(timer_id) {
-                let id = f64::from_bits(timer_id as u64) as u32;
-                caller
-                    .data()
-                    .cancelled_timers
-                    .lock()
-                    .expect("cancelled_timers mutex")
-                    .insert(id);
-            }
-            // For simplicity, mark as cancelled rather than removing from the vec
-        },
-    );
-    linker.define(&mut store, "env", "clear_timeout", f)?;
-
-    // ── Import 29: set_interval(i64, i64) → i64 ───────────────────────────
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, callback: i64, delay: i64| -> i64 {
-            let delay_f64 = if value::is_f64(delay) {
-                f64::from_bits(delay as u64)
-            } else {
-                f64::NAN
-            };
-            let delay_ms: u64 = if delay_f64.is_nan() || delay_f64.is_sign_negative() {
-                0
-            } else if delay_f64 > (u32::MAX as f64) {
-                u32::MAX as u64
-            } else {
-                delay_f64 as u64
-            };
-            let id = {
-                let mut next_id = caller
-                    .data()
-                    .next_timer_id
-                    .lock()
-                    .expect("next_timer_id mutex");
-                let id = *next_id;
-                *next_id += 1;
-                id
-            };
-            let deadline = Instant::now() + Duration::from_millis(delay_ms);
-            let mut timers = caller.data().timers.lock().expect("timers mutex");
-            timers.push(TimerEntry {
-                id,
-                deadline,
-                callback,
-                repeating: true,
-                interval: Duration::from_millis(delay_ms),
-            });
-            value::encode_f64(id as f64)
-        },
-    );
-    linker.define(&mut store, "env", "set_interval", f)?;
-
-    // ── Import 30: clear_interval(i64) → () ───────────────────────────────
-    let f = Func::wrap(
-        &mut store,
-        |caller: Caller<'_, RuntimeState>, timer_id: i64| {
-            if value::is_f64(timer_id) {
-                let id = f64::from_bits(timer_id as u64) as u32;
-                caller
-                    .data()
-                    .cancelled_timers
-                    .lock()
-                    .expect("cancelled_timers mutex")
-                    .insert(id);
-            }
-            // simplified no-op
-        },
-    );
-    linker.define(&mut store, "env", "clear_interval", f)?;
-
     // ── Import 32: json_stringify(i64, i64, i64) → i64 (val, replacer, space) ──
     // Current minimal impl only uses val; replacer/space ignored for compatibility.
     // This matches the signature emitted by backend for JSON.stringify calls with args.
@@ -134,14 +19,6 @@ pub(crate) fn define_timers_arrays(
     );
     linker.define(&mut store, "env", "json_stringify", f)?;
 
-    // ── Import 33: json_parse(i64, i64) → i64 (input, reviver) ──────────────
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64, reviver: i64| -> i64 {
-            json_parse_to_wasm(&mut caller, val, reviver)
-        },
-    );
-    linker.define(&mut store, "env", "json_parse", f)?;
     // ── Import 34: closure_create(i32, i64) -> i64 ────────────────────────────
     let f = Func::wrap(
         &mut store,
