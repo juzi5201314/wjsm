@@ -2,6 +2,25 @@ use super::*;
 use crate::host_import_registry::SpecialHostImport;
 
 impl Compiler {
+    /// Emit bounds check: if handle_idx >= obj_table_count, return sentinel (or bare return for void).
+    /// Preserves handle_idx in `handle_local` via LocalTee for subsequent use.
+    fn emit_handle_bounds_check(
+        func: &mut Function,
+        obj_table_count_global: u32,
+        handle_local: u32,
+        sentinel: Option<i64>,
+    ) {
+        func.instruction(&WasmInstruction::GlobalGet(obj_table_count_global));
+        func.instruction(&WasmInstruction::I32GeU);
+        func.instruction(&WasmInstruction::If(BlockType::Empty));
+        if let Some(val) = sentinel {
+            func.instruction(&WasmInstruction::I64Const(val));
+        }
+        func.instruction(&WasmInstruction::Return);
+        func.instruction(&WasmInstruction::End);
+        func.instruction(&WasmInstruction::LocalGet(handle_local));
+    }
+
     pub(crate) fn compile_object_helpers(&mut self) {
         let heap_global = self.heap_ptr_global_idx;
         let obj_table_global = self.obj_table_global_idx;
@@ -252,6 +271,13 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::LocalTee(4));
+            Self::emit_handle_bounds_check(
+                &mut func,
+                obj_table_count_global,
+                4,
+                Some(value::encode_undefined()),
+            );
             func.instruction(&WasmInstruction::I32Const(4));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
@@ -520,6 +546,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
             func.instruction(&WasmInstruction::LocalTee(9));
+            Self::emit_handle_bounds_check(&mut func, obj_table_count_global, 9, None);
             func.instruction(&WasmInstruction::I32Const(4));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
@@ -882,6 +909,13 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::LocalTee(4));
+            Self::emit_handle_bounds_check(
+                &mut func,
+                obj_table_count_global,
+                4,
+                Some(value::encode_bool(false)),
+            );
             func.instruction(&WasmInstruction::I32Const(4));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
