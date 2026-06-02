@@ -1,4 +1,5 @@
 exit_code: 0
 --- stdout ---
-undefined
+parse-hits: 2
+a: 1
 --- stderr ---

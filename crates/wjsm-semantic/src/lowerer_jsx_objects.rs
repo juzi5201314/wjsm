@@ -516,6 +516,8 @@ impl Lowerer {
                         ));
                     }
                     let dest = self.alloc_value();
+                    // dummy 参数是 NewTarget host builtin 的签名要求（expects 1 dummy arg），移除会导致 runtime error。
+                    // 真正的 '0' / mismatch 问题在 Construct/Call 时的 NewTargetSet 动态状态或 initial value，需在 compiler_instructions 修复。
                     let dummy_const = self.module.add_constant(Constant::Undefined);
                     let dummy_val = self.alloc_value();
                     self.current_function.append_instruction(

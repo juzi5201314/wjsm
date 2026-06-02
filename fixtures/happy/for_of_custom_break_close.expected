@@ -1,5 +1,9 @@
-exit_code: 0
+exit_code: 2
 --- stdout ---
-1
-true
 --- stderr ---
+Runtime error: WASM trap: error while executing at wasm backtrace:
+    0:   0x502d - <unknown>!<wasm function 396>
+
+Caused by:
+    wasm trap: wasm `unreachable` instruction executed
+

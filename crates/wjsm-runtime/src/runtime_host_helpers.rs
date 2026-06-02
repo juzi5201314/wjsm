@@ -576,6 +576,26 @@ pub(crate) fn collect_own_property_names(
     if obj_ptr + 16 > data.len() {
         return vec![];
     }
+    if data[obj_ptr + 4] == wjsm_ir::HEAP_TYPE_ARRAY {
+        let len = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]);
+        let _ = data;
+        let _ = mem;
+        let mut names = Vec::new();
+        for i in 0..len {
+            if array_elem_present(caller, obj_ptr, i) {
+                names.push(i.to_string());
+            }
+        }
+        if !enumerable_only {
+            names.push("length".to_string());
+        }
+        return names;
+    }
     let num_props = u32::from_le_bytes([
         data[obj_ptr + 12],
         data[obj_ptr + 13],
@@ -614,6 +634,7 @@ pub(crate) fn collect_own_property_names(
     }
     names
 }
+
 pub(crate) fn collect_own_property_values(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
@@ -625,6 +646,26 @@ pub(crate) fn collect_own_property_values(
     let data = mem.data(&*caller);
     if obj_ptr + 16 > data.len() {
         return vec![];
+    }
+    if data[obj_ptr + 4] == wjsm_ir::HEAP_TYPE_ARRAY {
+        let len = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]);
+        let _ = data;
+        let _ = mem;
+        let mut values = Vec::new();
+        for i in 0..len {
+            if let Some(value) = read_array_elem(caller, obj_ptr, i) {
+                values.push(value);
+            }
+        }
+        if !enumerable_only {
+            values.push(value::encode_f64(len as f64));
+        }
+        return values;
     }
     let num_props = u32::from_le_bytes([
         data[obj_ptr + 12],
@@ -647,7 +688,7 @@ pub(crate) fn collect_own_property_values(
         if enumerable_only && (flags & 2) == 0 {
             continue;
         }
-        let val = i64::from_le_bytes([
+        let value = i64::from_le_bytes([
             data[slot_offset + 8],
             data[slot_offset + 9],
             data[slot_offset + 10],
@@ -657,7 +698,7 @@ pub(crate) fn collect_own_property_values(
             data[slot_offset + 14],
             data[slot_offset + 15],
         ]);
-        values.push(val);
+        values.push(value);
     }
     values
 }

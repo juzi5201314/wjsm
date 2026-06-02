@@ -1,3 +1,3 @@
-// JSON.parse 嵌套数组、对象和 null 解析。
+// JSON.parse nested array/object/null parse.
 const result = JSON.parse('[1,{"x":true},null]');
 console.log("nested-result:", result);

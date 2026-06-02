@@ -1,5 +1,5 @@
 use anyhow::Result;
-use wasmtime::{Caller, Linker};
+use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
@@ -7,18 +7,16 @@ pub(crate) fn define_timers_arrays(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    // ── Import 32: json_stringify(i64, i64, i64) → i64 (val, replacer, space) ──
-    // Current minimal impl only uses val; replacer/space ignored for compatibility.
-    // This matches the signature emitted by backend for JSON.stringify calls with args.
+    // ── Import 32: json_stringify(i64, i64, i64) → i64 ──────────────────────────
+    // value, replacer?, space? (B2 fills undefined for omitted optionals)
+    // 委托 runtime_json_stringify_full，传递参数，启用白名单顺序、pretty gap、replacer fn transform
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64, _replacer: i64, _space: i64| -> i64 {
-            let json_str = runtime_json_stringify(&mut caller, val);
-            store_runtime_string(&caller, json_str)
+        |mut caller: Caller<'_, RuntimeState>, val: i64, replacer: i64, space: i64| -> i64 {
+            runtime_json_stringify_full(&mut caller, val, replacer, space)
         },
     );
     linker.define(&mut store, "env", "json_stringify", f)?;
-
     // ── Import 34: closure_create(i32, i64) -> i64 ────────────────────────────
     let f = Func::wrap(
         &mut store,
