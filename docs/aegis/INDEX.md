@@ -7,6 +7,7 @@
 | 2026-05-28 | Host Import Registry Consolidation | [specs/2026-05-28-host-import-registry-design.md](specs/2026-05-28-host-import-registry-design.md) |
 | 2026-05-28 | Proxy 13-Trap + Reflect API Completion | [specs/2026-05-28-proxy-reflect-complete-design.md](specs/2026-05-28-proxy-reflect-complete-design.md) |
 | 2026-06-02 | Unified Async Execution Model | [specs/2026-06-02-unified-async-execution-model-design.md](specs/2026-06-02-unified-async-execution-model-design.md) |
+| 2026-06-03 | Fetch Standard Implementation | [specs/2026-06-03-fetch-standard-design.md](specs/2026-06-03-fetch-standard-design.md) |
 ## Plans
 
 | Date | Title | File |
