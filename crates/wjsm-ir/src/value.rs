@@ -132,7 +132,7 @@ pub fn decode_array_handle(val: i64) -> u32 {
 pub const TAG_MASK: u64 = 0x1F;
 
 pub const STRING_RUNTIME_HANDLE_FLAG: u64 = 0x20;
-pub const BOX_BASE: u64 = MASK_EXPONENT | MASK_QUIET_NAN;
+pub const BOX_BASE: u64 = MASK_SIGN | MASK_EXPONENT | MASK_QUIET_NAN;
 
 pub fn encode_f64(val: f64) -> i64 {
     val.to_bits() as i64
@@ -189,7 +189,10 @@ pub fn encode_runtime_string_handle(handle: u32) -> i64 {
 
 pub fn is_f64(val: i64) -> bool {
     let uval = val as u64;
-    (uval & MASK_EXPONENT) != MASK_EXPONENT || (uval & MASK_QUIET_NAN) == 0
+    // 非负向 quiet NaN 的值均为原始 f64。
+    // 负向 quiet NaN（符号位 + 指数全 1 + quiet bit = 0x7FFC 前缀）用于 NaN-boxing。
+    // 正向 quiet NaN（含规范 NaN）、signaling NaN、有限数值都是原始 f64。
+    (uval & BOX_BASE) != BOX_BASE
 }
 
 pub fn is_string(val: i64) -> bool {
