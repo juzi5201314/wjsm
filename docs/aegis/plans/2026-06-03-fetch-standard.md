@@ -43,11 +43,11 @@ JS: fetch(url, init)
 |---|---|
 | data: URL 行为不变 | 同步处理，Promise 同步 settle |
 | 现有 fixture .expected 零变更 | 无回归 |
-| fetch() 签名不变 | `fetch(input, init)` |
-| Response.text()/json()/arrayBuffer() 仍返回 Promise | 行为不变，内部改为 async |
+| fetch() 签名不变 | `fetch(input, init)` — WASM ABI 从 `(i64)→i64` 改为 `(i64,i64)→i64` |
+| Response.text()/json()/arrayBuffer() 仍返回 Promise | 行为不变，内部改为 Materialize 闭包异步 settle |
 | Headers API 不变 | 全部现有方法保持 |
-| Request 构造器不变 | 新增 signal 处理 |
-| fetch host import type_idx 3 → 可能变为 async 签名 | 需要 backend 同步更新 |
+| Request 构造器不变 | 新增 signal 解析 + FetchRequestEntry.signal_handle 字段 |
+| fetch host import type_idx 变更 | 从 3（单参数）改为新的双参数 type_idx |
 
 ## Plan Pressure Test
 
@@ -111,7 +111,7 @@ git add -A && git commit -m "feat: add reqwest dependency for HTTP fetch"
 
 - [ ] Step 1: 创建 `fetch_core.rs`，从 fetch.rs 移入以下内容：
   - `HeadersEntry`, `HeadersGuard`, `HeadersMethodKind` 类型定义
-  - `FetchResponseEntry`, `FetchRequestEntry`, `ResponseType`, `RedirectMode` 等类型定义
+- `FetchResponseEntry`, `FetchRequestEntry` (含新增 `signal_handle: Option<u32>` 字段), `ResponseType`, `RedirectMode` 等类型定义
   - `RequestMode`, `RequestCredentials`, `RequestCache` 等类型定义
   - 所有 `create_*` 函数：`create_empty_headers`, `create_response_object`, `create_request_object`, `create_headers_object_from_handle`, `create_arraybuffer_with_bytes`
   - 所有 `init_*` 函数：`init_headers_object`
@@ -176,7 +176,15 @@ readable_stream_table: Arc::new(Mutex::new(Vec::new())),
 reader_table: Arc::new(Mutex::new(Vec::new())),
 ```
 
-- [ ] Step 3: 在 lib.rs 中定义新类型（放在 FetchRequestEntry 之后）：
+在 Task 2 拆分时同步修改 `FetchRequestEntry`，新增 `signal_handle` 字段：
+```rust
+struct FetchRequestEntry {
+    // ... existing fields ...
++   signal_handle: Option<u32>,
+}
+```
+
+新增类型定义：
 ```rust
 #[derive(Clone, Debug)]
 struct AbortSignalEntry {
@@ -207,6 +215,13 @@ struct ReadableStreamEntry {
 #[derive(Clone, Debug)]
 struct ReaderEntry {
     stream_handle: u32,
+}
+```
+同时，`FetchResponseEntry` 需新增 `http_response_handle` 字段，替代 JS 对象上的 `__http_response_handle__` 隐藏属性：
+```rust
+struct FetchResponseEntry {
+    // ... existing fields ...
+   http_response_handle: Option<u32>,  // 非 None 表示 HTTP 响应（需异步消费 body）
 }
 ```
 
@@ -250,25 +265,18 @@ cargo check -p wjsm-runtime
 ```bash
 git add -A && git commit -m "feat: add HTTP fetch side tables and NativeCallable variants to RuntimeState"
 ```
-
-### Task 4: 将 fetch host function 改为 func_wrap_async
-
-**Files**: `crates/wjsm-runtime/src/host_imports/fetch.rs`, `crates/wjsm-runtime/src/host_imports/fetch_http.rs`
-**Why**: HTTP 请求是异步的，需要 `func_wrap_async` 实现 epoch yielding
-**Impact**: fetch ABI 从同步变为异步——需要 backend host_import_registry 同步更新 type_idx
-**Verification**: data: URL fixture 仍通过 + `cargo check -p wjsm-runtime`
-
-- [ ] Step 1: 修改 `define_fetch` 中 fetch 的注册方式，从 `Func::wrap` 改为 `linker.func_wrap_async`：
+- [ ] Step 1: 修改 `define_fetch` 中 fetch 的注册方式，从 `Func::wrap` 改为 `linker.func_wrap_async`。
+  同时修改 fetch 的 WASM 签名，从 `(i64) → i64` 改为 `(i64, i64) → i64`，新增 `init` 参数：
 
 ```rust
 linker.func_wrap_async(
     "env", "fetch",
-    |mut caller: Caller<'_, RuntimeState>, (input,): (i64,)| {
+    |mut caller: Caller<'_, RuntimeState>, (input, init): (i64, i64)| {
         Box::new(async move {
             let promise = alloc_promise_from_caller(&mut caller, PromiseEntry::pending());
 
-            let (method, url, headers_handle, body_opt, redirect) =
-                parse_fetch_input(&mut caller, input, value::encode_undefined());
+            let (method, url, headers_handle, body_opt, redirect, signal_handle) =
+                parse_fetch_input(&mut caller, input, init);
 
             if url.is_empty() {
                 let err = alloc_type_error_from_caller(&mut caller, "Failed to parse URL from request.");
@@ -302,9 +310,12 @@ linker.func_wrap_async(
 )?;
 ```
 
-注意：`func_wrap_async` 的签名需要确认。查看 `reentrant_async.rs` 中 `func_wrap_async` 的用法确认参数格式。当前 reentrant_async 使用 `linker.func_wrap_async("env", name, |caller, args| Box::new(async move { ... }))` 模式。fetch 的参数是 `(input: i64)`，返回 `i64`。
+- [ ] Step 2: 更新 backend 以支持 fetch 传 2 个参数：
+  - `wjsm-semantic/src/builtins.rs`: 将 `Builtin::Fetch => ("fetch", 1)` 改为 `Builtin::Fetch => ("fetch", 2)`（min_args 不变，仍为 1，但 backend 取 args[0] 和 args[1]）
+  - `wjsm-backend-wasm/src/compiler_builtins.rs`: `Builtin::Fetch` 分支中取 `args[0]` (input) 和 `args[1]` (init)，emit 两个 `LocalGet` + `Call`
+  - `wjsm-backend-wasm/src/host_import_registry.rs`: 将 `fetch` 的 type_idx 从 3（单参数）改为对应的双参数类型。需查看 HOST_IMPORT_TYPES 或创建新的 type_idx（`i64, i64 → i64`）
 
-- [ ] Step 2: 在 fetch_http.rs 中将 `perform_fetch_and_build_response` 的 data: 路径提取为 `perform_data_url_fetch`：
+- [ ] Step 3: 在 fetch_http.rs 中将 `perform_fetch_and_build_response` 的 data: 路径提取为 `perform_data_url_fetch`：
 
 ```rust
 fn perform_data_url_fetch(
@@ -322,17 +333,33 @@ fn perform_data_url_fetch(
 }
 ```
 
-- [ ] Step 3: 更新 `host_import_registry.rs` 中 fetch 的 type_idx。fetch 从同步 `(i64) → i64` (type_idx 3) 变为 async 签名。需要查看当前 async host function 使用的 type_idx，或创建新的。先查看已有的 async import 的 type_idx：
-  - 当前 `func_wrap_async` 的 import 类型需要匹配 wasmtime 的 async ABI。在 wasmtime 中，async host function 的 WASM 侧签名与同步签名相同——差异在于 host function 的执行模型。因此 type_idx **不需要改变**。
+- [ ] Step 4: 添加 `WasmEnv::from_store`（scheduler 的 Materialize 闭包需要 `WasmEnv`，而闭包只接收 `Store`）：
+```rust
+// 在 wasm_env.rs 中新增：
+impl WasmEnv {
+    pub fn from_store(store: &mut Store<RuntimeState>) -> Option<Self> {
+        Some(Self {
+            memory: store.get_export("memory")?.into_memory()?,
+            func_table: store.get_export("__table")?.into_table()?,
+            shadow_sp: store.get_export("__shadow_sp")?.into_global()?,
+            heap_ptr: store.get_export("__heap_ptr")?.into_global()?,
+            obj_table_ptr: store.get_export("__obj_table_ptr")?.into_global()?,
+            obj_table_count: store.get_export("__obj_table_count")?.into_global()?,
+            object_proto_handle: store.get_export("__object_proto_handle")?.into_global()?,
+            array_proto_handle: store.get_export("__array_proto_handle")?.into_global()?,
+        })
+    }
+}
+```
 
-- [ ] Step 4: 验证 data: URL fixture 通过
+- [ ] Step 5: 验证 data: URL fixture 通过
 ```bash
 cargo nextest run -E 'test(happy__fetch_data_url)'
 ```
 
-- [ ] Step 5: Commit
+- [ ] Step 6: Commit
 ```bash
-git add -A && git commit -m "feat: convert fetch host function to func_wrap_async"
+git add -A && git commit -m "feat: convert fetch to func_wrap_async, add init param, add WasmEnv::from_store"
 ```
 
 ### Task 5: 实现 HTTP fetch 核心路径
@@ -432,22 +459,22 @@ async fn perform_http_fetch(
 ```
 
 - [ ] Step 2: 实现 `create_response_object_with_http_handle`（在 fetch_core.rs 中）：
-  - 与 `create_response_object` 类似，但增加 `__http_response_handle__` 隐藏属性
-  - `body` 属性设为 null（后续 Task 7 实现懒创建 ReadableStream）
-  - 增加 `bodyUsed` 属性
+  - 复用 `create_response_object`，但在 `FetchResponseEntry` 中设置 `http_response_handle: Some(http_handle)`
+  - `body` 属性设为 null（Task 7 将其改为 ReadableStream）
+  - `bodyUsed` 属性设为 false
 
 - [ ] Step 3: 实现 `is_signal_aborted` 辅助函数：
 ```rust
-fn is_signal_aborted(caller: &mut Caller<'_, RuntimeState>, handle: u32) -> bool {
-    let table = caller.data().abort_signal_table.lock().expect("abort_signal mutex");
-    table.get(handle as usize).map(|e| e.aborted).unwrap_or(false)
+fn is_signal_aborted(state: &RuntimeState, handle: u32) -> bool {
+    state.abort_signal_table.lock().expect("abort_signal mutex")
+        .get(handle as usize).map(|e| e.aborted).unwrap_or(false)
 }
 ```
 
 - [ ] Step 4: 在 Task 4 的 `define_fetch` 中替换 "not implemented" 错误为实际 HTTP 路径：
 ```rust
 // HTTP/HTTPS — 异步路径
-match perform_http_fetch(&mut caller, method, url, headers_handle, body_opt, redirect, None).await {
+match perform_http_fetch(&mut caller, method, url, headers_handle, body_opt, redirect, signal_handle).await {
     Ok(response_val) => {
         settle_promise(caller.data_mut(), promise, PromiseSettlement::Fulfill(response_val));
     }
@@ -458,10 +485,62 @@ match perform_http_fetch(&mut caller, method, url, headers_handle, body_opt, red
 }
 ```
 
-- [ ] Step 5: 更新 `parse_fetch_input` 以正确从 Request 对象提取 method/headers/body/redirect：
-  - 当前实现只提取 url，method 硬编码为 GET
-  - 需要从 Request-like 对象读取 `.method`, `.headers`, `.body`, `.redirect` 属性
-  - 如果 init 对象非 undefined，从中读取覆盖值
+- [ ] Step 5: 重写 `parse_fetch_input` 以正确从 Request 对象和 init 提取所有字段：
+  返回类型从 `(String, String, u32, Option<Vec<u8>>, RedirectMode)` 改为 `(String, String, u32, Option<Vec<u8>>, RedirectMode, Option<u32>)`（新增 `signal_handle`）。
+
+  逻辑：
+  - 如果 `input` 是字符串 → 默认 GET, 无 body, Follow, 无 signal
+  - 如果 `input` 是 Request 对象 → 从 `fetch_request_table` 读取 method/headers_handle/body/redirect/signal_handle
+  - 如果 `init` 非 undefined → 从 init 对象覆盖 method/headers/body/redirect/signal
+  - `init` 中 `signal` 属性检查：如果对象有 `__signal_handle__` 属性，提取 handle；否则忽略
+
+```rust
+fn parse_fetch_input(
+    caller: &mut Caller<'_, RuntimeState>,
+    input: i64,
+    init: i64,
+) -> (String, String, u32, Option<Vec<u8>>, RedirectMode, Option<u32>) {
+    // 1. 从 input 提取基础信息
+    let (mut method, mut url, mut headers_handle, mut body, mut redirect, mut signal_handle) =
+        if value::is_string(input) {
+            ("GET".to_string(), extract_string_from_value(caller, input),
+             create_empty_headers(caller), None, RedirectMode::Follow, None)
+        } else if value::is_object(input) {
+            // 从 Request 对象读取属性
+            let url = extract_string_property(caller, input, "url").unwrap_or_default();
+            let method = extract_string_property(caller, input, "method").unwrap_or_else(|| "GET".to_string());
+            let req_handle = get_request_handle_from_object(caller, input).unwrap_or(0);
+            let (hdr, body, redir, sig) = {
+                let table = caller.data().fetch_request_table.lock().expect("mutex");
+                table.get(req_handle as usize).map(|e| (e.headers_handle, e.body.clone(), e.redirect, e.signal_handle))
+                    .unwrap_or((create_empty_headers(caller), None, RedirectMode::Follow, None))
+            };
+            (method, url, hdr, body, redir, sig)
+        } else {
+            (String::new(), String::new(), create_empty_headers(caller), None, RedirectMode::Follow, None)
+        };
+
+    // 2. 如果 init 非 undefined，覆盖属性
+    if value::is_object(init) {
+        if let Some(m) = extract_string_property(caller, init, "method") { method = m; }
+        // headers: 创建新 headers 从 init
+        if let Some(h) = object_property(caller, init, "headers") {
+            headers_handle = create_headers_from_init(caller, h);
+        }
+        if let Some(b) = object_property(caller, init, "body") {
+            body = body_bytes_from_value(caller, b);
+        }
+        if let Some(r) = extract_string_property(caller, init, "redirect") {
+            redirect = parse_redirect_mode(&r).unwrap_or(redirect);
+        }
+        if let Some(sig_obj) = object_property(caller, init, "signal") {
+            signal_handle = get_signal_handle_from_object(caller, sig_obj);
+        }
+    }
+
+    (method, url, headers_handle, body, redirect, signal_handle)
+}
+```
 
 - [ ] Step 6: 新增 fixture `fixtures/happy/fetch_http_get.js`：
 ```javascript
@@ -504,32 +583,102 @@ git add -A && git commit -m "feat: implement HTTP fetch core path (GET, response
 **Verification**: `fetch_data_url.js` fixture + 新 HTTP fixture 通过
 
 - [ ] Step 1: 修改 `call_response_method_from_caller` 中的 Text/Json/ArrayBuffer 分支：
-  - 对于有 `__http_response_handle__` 属性的 Response：通过 `perform_http_body_consume` 异步消费
-  - 对于没有该属性的 Response（data: URL / 用户构造）：保持现有同步逻辑
+  - 检查 `FetchResponseEntry.http_response_handle` 是否非 None（从 `fetch_response_table` 读取）
+  - 如果非 None（HTTP Response）→ 异步路径
+  - 如果 None（data: URL / 用户构造）→ 保持现有同步逻辑
 
-  由于 NativeCallable 的调用是同步分发，但 body 消费需要异步，需要调整架构：
-  - **方案**：Response body 消费方法（text/json/arrayBuffer）改为在 `call_native_callable` 中检测到 ResponseMethod::{Text,Json,ArrayBuffer} 时，通过 `func_wrap_async` 路径执行
-  - 实际更简单的方案：**在 `call_response_method_from_caller` 中，如果有 http_response_handle，立即返回一个 pending Promise，然后通过 `host_completion_tx` 发送 Materialize 闭包来 settle**
-  - **最简方案**：在 `call_response_method_from_caller` 中，如果有 http_response_handle，直接 await reqwest 的 `bytes()`。但这需要 `call_response_method_from_caller` 本身是 async。
-  - **最终方案**：参考现有 reentrant_async.rs 模式——`call_native_callable` 在 runtime_builtins.rs 中是同步的。对于需要 async 的 Response 方法，需要注册一个单独的 `func_wrap_async` host import（类似 `stream_read`），在 NativeCallable 分发时跳转到该异步路径。
+  **异步路径方案**（利用已有的 `AsyncHostCompletion::Materialize`）：
 
-  实际实现：在 `define_fetch` 中注册一个 `response_body_consume` 的 `func_wrap_async` host import。当 `call_response_method_from_caller` 检测到 HTTP Response 时，不是直接执行，而是将 (response_handle, kind) 信息存储，然后调用 WASM 侧的 `response_body_consume` import 来触发异步消费。
+  `Materialize` 闭包签名为 `FnOnce(&mut Store<RuntimeState>, &WasmEnv) -> PromiseSettlement`。
+  闭包内可通过 `alloc_host_object(store, env, capacity)` 创建 JS 对象（`alloc_host_object` 已是泛型，接受 `impl AsContextMut`）。
+  `WasmEnv` 通过 Task 4 添加的 `WasmEnv::from_store(store)` 获取。
 
-  **更简单的替代方案**：在 ResponseMethod 的 NativeCallable 中存储一个标记。在 `call_native_callable` 中，遇到 ResponseMethod::{Text,Json,ArrayBuffer} 且 Response 有 `__http_response_handle__` 时，创建 pending Promise 并通过 `host_completion_tx` 发送一个 Materialize 闭包，闭包内 tokio::spawn 一个 task 执行 reqwest bytes() 读取，完成后通过 channel 回传结果。
+  具体步骤：
+  1. 在 `call_response_method_from_caller` 中，标记 body_used，alloc pending Promise
+  2. 从 `http_response_table` take 出 `reqwest::Response`
+  3. `tokio::spawn` 一个 task：`await resp.bytes()`
+  4. bytes 完成后，通过 `host_completion_tx` 发送 `AsyncHostCompletion::Materialize` 闭包
+  5. 闭包在 scheduler 的 post-main 阶段执行，通过 `Store` + `WasmEnv` 创建 JS 值
+  6. 闭包返回 `PromiseSettlement`，scheduler 自动 settle Promise
+  7. 返回 Promise handle
 
-  **最终选择**：使用 Materialize 闭包模式（利用已有的 `host_completion_tx` channel）。这是最干净的方案，不需要改变 NativeCallable 的分发模型。
+- [ ] Step 2: 实现异步 body 消费核心逻辑：
+```rust
+// 在 call_response_method_from_caller 中，检测到 HTTP Response 时：
+let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+let response = {
+    let mut table = caller.data().http_response_table.lock().expect("mutex");
+    table.get_mut(http_handle as usize).and_then(|e| e.response.take())
+};
+if let Some(response) = response {
+    let state = caller.data().clone(); // RuntimeState 所有字段都是 Arc，可 clone
+    let tx = caller.data().host_completion_tx.clone().expect("tx");
+    let kind_clone = kind;
+    let promise_clone = promise;
 
-- [ ] Step 2: 实现异步 body 消费。在 `call_response_method_from_caller` 中：
-  - 检查 Response 对象是否有 `__http_response_handle__` 属性
-  - 如果有：
-    1. 标记 body_used = true
-    2. alloc pending Promise
-    3. 从 http_response_table take 出 reqwest::Response
-    4. 获取 host_completion_tx
-    5. tokio::spawn 一个 task：await resp.bytes()，完成后通过 tx 发送 Materialize 闭包
-    6. Materialize 闭包在 main loop 中执行：构造 JS 值 + settle Promise
-    7. 返回 Promise handle
-  - 如果没有（data: URL / 用户构造）：保持现有同步逻辑
+    tokio::spawn(async move {
+        match response.bytes().await {
+            Ok(bytes) => {
+                let _ = tx.send(AsyncHostCompletion::Materialize {
+                    promise: promise_clone,
+                    materialize: Box::new(move |store, env| {
+                        let state = store.data();
+                        match kind_clone {
+                            ResponseMethodKind::Text => {
+                                let text = String::from_utf8_lossy(&bytes).to_string();
+                                let mut strings = state.runtime_strings.lock().expect("mutex");
+                                let handle = strings.len() as u32;
+                                strings.push(text);
+                                PromiseSettlement::Fulfill(value::encode_runtime_string_handle(handle))
+                            }
+                            ResponseMethodKind::Json => {
+                                // 将 bytes 存为 runtime string，然后用 runtime 的 JSON 解析
+                                let text = String::from_utf8_lossy(&bytes).to_string();
+                                let mut strings = state.runtime_strings.lock().expect("mutex");
+                                let handle = strings.len() as u32;
+                                strings.push(text);
+                                let text_val = value::encode_runtime_string_handle(handle);
+                                // 调用 runtime_json 的 json_parse 函数（需要 Caller）。
+                                // 简化：先用 runtime_strings 存储 JSON 字符串，
+                                // 返回字符串值（让 JS 侧 .text() 后 JSON.parse()）
+                                // TODO: 后续实现真正的 JSON 解析
+                                PromiseSettlement::Fulfill(text_val)
+                            }
+                            ResponseMethodKind::ArrayBuffer => {
+                                // 创建 ArrayBuffer 对象
+                                let mut ab_table = state.arraybuffer_table.lock().expect("mutex");
+                                let ab_handle = ab_table.len() as u32;
+                                ab_table.push(ArrayBufferEntry { data: bytes.to_vec() });
+                                drop(ab_table);
+                                // 创建 JS ArrayBuffer 对象（通过 Store + WasmEnv）
+                                let obj = alloc_host_object(store, env, 4);
+                                let handle_val = value::encode_f64(ab_handle as f64);
+                                define_host_data_property_from_store(store, obj, "__arraybuffer_handle__", handle_val);
+                                let len_val = value::encode_f64(bytes.len() as f64);
+                                define_host_data_property_from_store(store, obj, "byteLength", len_val);
+                                PromiseSettlement::Fulfill(obj)
+                            }
+                            _ => PromiseSettlement::Fulfill(value::encode_undefined()),
+                        }
+                    }),
+                });
+            }
+            Err(e) => {
+                let _ = tx.send(AsyncHostCompletion::Materialize {
+                    promise: promise_clone,
+                    materialize: Box::new(move |store, env| {
+                        let obj = create_error_object_from_store(store, env, "TypeError", &e.to_string());
+                        PromiseSettlement::Reject(obj)
+                    }),
+                });
+            }
+        }
+    });
+}
+return Some(promise);
+```
+
+注意：需要添加 `define_host_data_property_from_store` 和 `create_error_object_from_store` 辅助函数（泛型化现有函数，接受 `Store` + `WasmEnv`）。这些函数与 `from_caller` 版本逻辑相同，只是用 `store` 替代 `caller`。
 
 - [ ] Step 3: 验证 data: URL fixture 不受影响
 ```bash
@@ -647,10 +796,10 @@ NativeCallable::AbortControllerAbort { signal_handle } => {
   - Cancel: 标记 stream closed
 
 - [ ] Step 5: 实现 `call_reader_method_from_caller`：
-  - Read: 创建 pending Promise，通过 host_completion_tx 发送 Materialize 闭包执行 `resp.chunk().await`
-  - ReleaseLock: 解锁 stream
+  - Read: 与 Task 6 相同模式——创建 pending Promise，`tokio::spawn` 中 `await resp.chunk()`，完成后发送 `Materialize` 闭包。闭包中通过 `Store` + `WasmEnv` 构造 `{done: boolean, value: Uint8Array | undefined}` 对象。chunk 到达时 `put_back` response 到 `http_response_table`；chunk 为 None 时标记 stream Closed，不放回 response。
+  - ReleaseLock: 解锁 stream（标记 `locked = false`，更新 `locked` 属性）
 
-- [ ] Step 6: 修改 `create_response_object_with_http_handle` 中 `body` 属性：从 `null` 改为懒创建的 ReadableStream 对象。
+- [ ] Step 6: 修改 `create_response_object_with_http_handle` 中 `body` 属性：从 `null` 改为直接创建 ReadableStream 对象（`create_readable_stream_object`）。
 
 - [ ] Step 7: 新增 fixture `fixtures/happy/fetch_stream_body.js`：
 ```javascript
@@ -785,14 +934,35 @@ pub(crate) fn abort_controller_abort(
 }
 ```
 
-- [ ] Step 6: 在 Semantic 层处理 AbortController 构造器。在 `wjsm-semantic` 中，`AbortController` 被识别为 host builtin 构造器（与 Headers/Request/Response 模式一致）。需要：
-  - 在 `builtins.rs` 中添加 `AbortController` 的解析
-  - 在 lowerer 中生成 `Builtin::AbortControllerConstructor` 调用
+- [ ] Step 6: 修改 `construct_request` 以解析 `signal` 属性。在 RequestInit 解析中新增：
+```rust
+// 在 construct_request 中，解析 init 对象的 signal 属性
+let mut signal_handle: Option<u32> = None;
+if value::is_object(init) {
+    if let Some(sig_obj) = object_property(caller, init, "signal") {
+        signal_handle = get_signal_handle_from_object(caller, sig_obj);
+    }
+}
+// 存储 signal_handle 到 FetchRequestEntry
+```
 
-- [ ] Step 7: 在 `perform_http_fetch` 中添加 signal 检查（已在 Task 5 中预留 `signal_handle` 参数，现激活）：
-  - 从 Request init 中提取 signal
-  - fetch 前检查 abort
-  - 请求完成后检查 abort
+同时实现 `get_signal_handle_from_object` 辅助函数：
+```rust
+fn get_signal_handle_from_object(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<u32> {
+    let ptr = resolve_handle(caller, obj)?;
+    let val = read_object_property_by_name(caller, ptr, "__signal_handle__")?;
+    Some(value::decode_f64(val) as u32)
+}
+```
+
+在 Semantic 层处理 AbortController 构造器：
+  - 在 `builtins.rs` 中添加 `"AbortController" => Some(Builtin::AbortControllerConstructor)` 解析
+  - 在 lowerer 中，`new AbortController()` 生成 `Builtin::AbortControllerConstructor` 调用
+
+- [ ] Step 7: 在 `perform_http_fetch` 中激活 signal 检查（已在 Task 5 Step 1 和 Step 4 中预留 `signal_handle` 参数）：
+  - fetch 前检查 `is_signal_aborted`
+  - 请求完成后检查 `is_signal_aborted`（请求可能在 await 期间被 abort）
+  - 注意：当前架构下无法在 await 期间中断 reqwest 请求（需要 reqwest 的 `futures::abortable` 或 `CancellationToken`）。后续可扩展。
 
 - [ ] Step 8: 新增 fixture `fixtures/happy/abort_controller.js`：
 ```javascript
@@ -905,27 +1075,26 @@ cargo nextest run -E 'test(happy__fetch_data_url)'
 cargo nextest run -E 'test(fetch_)'
 ```
 
-- [ ] Step 4: 如果网络依赖 fixture 在无网络环境下失败，添加 `KNOWN-NETWORK` 标记并确保 CI 可配置跳过
-
-- [ ] Step 5: 更新 AGENTS.md 中的 fetch 描述（从 "data: URL only" 改为完整描述）
-
-- [ ] Step 6: Commit
-```bash
-git add -A && git commit -m "test: verify full fetch implementation + update docs"
-```
+- [ ] Step 4: 网络依赖 fixture 处理。所有 HTTP fetch fixture 需标记 `KNOWN-NETWORK`（在 JS 文件头注释中标注），并在 fixture runner 中支持环境变量跳过：
+  - 在 `tests/fixture_runner.rs` 中添加：如果 fixture 文件包含 `KNOWN-NETWORK` 注释，且环境变量 `WJSM_SKIP_NETWORK=1`，则跳过该 fixture
+  - CI 配置中默认设 `WJSM_SKIP_NETWORK=1`（除非专门的网络测试 job）
+  - 本地开发时不设此变量，HTTP fixture 正常运行
 
 ## Risks
 
 | 风险 | 缓解 |
 |---|---|
-| reqwest 依赖体积 | `rustls-tls` 比 `native-tls` 更小 |
+| reqwest 依赖体积 | `rustls-tls` 比 `native-tls` 更小，无系统依赖 |
 | 流式 body 的 reqwest Response 生命周期 | take/put_back 模式，await 期间不持锁 |
-| fixture 依赖外部 HTTP 服务 | 标记 KNOWN-NETWORK，CI 可跳过 |
+| fixture 依赖外部 HTTP 服务 | `KNOWN-NETWORK` 标记 + `WJSM_SKIP_NETWORK` 环境变量跳过 |
 | epoch yielding 与长时间请求 | wasmtime 自动 yield |
-| NativeCallable 同步分发 vs async body 消费 | 使用 host_completion_tx + Materialize 闭包 |
-
+| NativeCallable 同步分发 vs async body 消费 | `tokio::spawn` + `Materialize` 闭包（`Store` + `WasmEnv` 路径创建 JS 对象） |
+| Response.json() 在 Materialize 中解析 | 简化：先返回字符串值，后续用 runtime JSON 解析器增强 |
 ## Retirement
 
 - 旧 `perform_fetch_and_build_response`（仅 data: URL + HTTP 报错）→ 由 `perform_data_url_fetch` + `perform_http_fetch` 替代
 - 旧 `Func::wrap` fetch host function → 由 `func_wrap_async` 替代
 - 旧 `Response.body = null` → 由 ReadableStream 对象替代（仅 HTTP Response）
+- 旧 `FetchResponseEntry`（无 `http_response_handle`）→ 由带 `http_response_handle: Option<u32>` 的新版本替代
+- 旧 `FetchRequestEntry`（无 `signal_handle`）→ 由带 `signal_handle: Option<u32>` 的新版本替代
+- 旧 `fetch` WASM 签名 `(i64)→i64` → 由 `(i64,i64)→i64` 替代
