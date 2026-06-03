@@ -18,7 +18,7 @@ pub(crate) fn define_fetch(
             Box::new(async move {
                 let promise = alloc_promise_from_caller(&mut caller, PromiseEntry::pending());
 
-                let (method, url, headers_handle, body_opt, _redirect) =
+                let (method, url, headers_handle, body_opt, _redirect, _signal_handle) =
                     parse_fetch_input(&mut caller, input, init);
 
                 if url.is_empty() {
@@ -41,12 +41,16 @@ pub(crate) fn define_fetch(
                     return promise;
                 }
 
-                // HTTP/HTTPS — 异步路径（将在 Task 5 实现）
-                let err = alloc_type_error_from_caller(
-                    &mut caller,
-                    &format!("fetch for non-data: URL not implemented yet: {}", url),
-                );
-                settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
+                // HTTP/HTTPS — 异步路径
+                match perform_http_fetch(&mut caller, method, url, headers_handle, body_opt, _redirect, None).await {
+                    Ok(response_val) => {
+                        settle_promise(caller.data_mut(), promise, PromiseSettlement::Fulfill(response_val));
+                    }
+                    Err(msg) => {
+                        let err = alloc_type_error_from_caller(&mut caller, &msg);
+                        settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
+                    }
+                }
                 promise
             })
         },

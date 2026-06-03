@@ -106,6 +106,72 @@ pub(crate) fn create_headers_object_from_handle(
     obj
 }
 
+pub(crate) fn create_response_object_with_http_handle(
+    caller: &mut Caller<'_, RuntimeState>,
+    status: u16,
+    status_text: String,
+    headers_handle: u32,
+    url: String,
+    response_type: ResponseType,
+    redirected: bool,
+    http_handle: u32,
+) -> i64 {
+    let mut table = caller
+        .data()
+        .fetch_response_table
+        .lock()
+        .expect("fetch_response_table mutex");
+    let handle = table.len() as u32;
+    table.push(FetchResponseEntry {
+        status,
+        status_text: status_text.clone(),
+        headers_handle,
+        url: url.clone(),
+        body: Vec::new(),
+        response_type,
+        redirected,
+        body_used: false,
+        http_response_handle: Some(http_handle),
+    });
+    drop(table);
+
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let obj = alloc_host_object(caller, &env, 12);
+
+    let handle_val = value::encode_f64(handle as f64);
+    let _ = define_host_data_property_from_caller(caller, obj, "__response_handle__", handle_val);
+
+    let ok_val = value::encode_bool(status >= 200 && status < 300);
+    let _ = define_host_data_property_from_caller(caller, obj, "ok", ok_val);
+
+    let status_val = value::encode_f64(status as f64);
+    let _ = define_host_data_property_from_caller(caller, obj, "status", status_val);
+
+    let status_text_val = store_runtime_string(caller, status_text);
+    let _ = define_host_data_property_from_caller(caller, obj, "statusText", status_text_val);
+
+    let url_val = store_runtime_string(caller, url);
+    let _ = define_host_data_property_from_caller(caller, obj, "url", url_val);
+
+    let type_val = store_runtime_string(caller, "basic".to_string());
+    let _ = define_host_data_property_from_caller(caller, obj, "type", type_val);
+
+    let redirected_val = value::encode_bool(redirected);
+    let _ = define_host_data_property_from_caller(caller, obj, "redirected", redirected_val);
+
+    // body / bodyUsed
+    let _ = define_host_data_property_from_caller(caller, obj, "body", value::encode_null());
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(false));
+
+    let headers_obj = create_headers_object_from_handle(caller, headers_handle);
+    let _ = define_host_data_property_from_caller(caller, obj, "headers", headers_obj);
+
+    attach_response_methods(caller, obj, handle);
+
+    obj
+}
+
 pub(crate) fn create_request_object(
     caller: &mut Caller<'_, RuntimeState>,
     method: String,
