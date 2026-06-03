@@ -254,7 +254,7 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
     },
     HostImportSpec {
         name: "fetch",
-        type_idx: 3,
+        type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::Fetch)),
         group: None,
     },
