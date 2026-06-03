@@ -482,8 +482,17 @@ pub(crate) fn call_response_method_from_caller(
                                     }
                                     ResponseMethodKind::Json => {
                                         let text = String::from_utf8_lossy(&bytes).to_string();
-                                        let handle = crate::runtime_render::store_runtime_string_in_state(store.data(), text);
-                                        PromiseSettlement::Fulfill(handle)
+                                        let mut parser = crate::runtime_json::JsonParser::new(text.as_bytes());
+                                        match parser.parse_value() {
+                                            Ok(json_value) => {
+                                                let wasm_value = crate::runtime_json::build_wasm_value_with_env(store, env, &json_value);
+                                                PromiseSettlement::Fulfill(wasm_value)
+                                            }
+                                            Err(e) => {
+                                                let err = crate::runtime_heap::alloc_type_error_with_env(store, env, e);
+                                                PromiseSettlement::Reject(err)
+                                            }
+                                        }
                                     }
                                     ResponseMethodKind::ArrayBuffer => {
                                         let mut ab_table = store.data().arraybuffer_table.lock().expect("mutex");
