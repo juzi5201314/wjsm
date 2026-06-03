@@ -1009,7 +1009,14 @@ struct RuntimeState {
     fetch_response_table: Arc<Mutex<Vec<FetchResponseEntry>>>,
     /// Fetch Request 侧表：存储 Request 对象 (method/url/headers/body)
     fetch_request_table: Arc<Mutex<Vec<FetchRequestEntry>>>,
-    /// Optional shared state for cross-agent coordination.
+    /// AbortSignal 侧表：存储 abort 状态
+    abort_signal_table: Arc<Mutex<Vec<AbortSignalEntry>>>,
+    /// reqwest Response 侧表：持有未消费的 HTTP response body stream
+    http_response_table: Arc<Mutex<Vec<HttpResponseEntry>>>,
+    /// ReadableStream 侧表：存储流状态
+    readable_stream_table: Arc<Mutex<Vec<ReadableStreamEntry>>>,
+    /// Reader 侧表：存储 reader → stream 映射
+    reader_table: Arc<Mutex<Vec<ReaderEntry>>>,
     /// None in normal (non-agent) execution.
     shared_state: Option<Arc<SharedRuntimeState>>,
     /// 被 preventExtensions 标记为不可扩展对象的 handle 集合（使用完整的 NaN-boxed 值作为 key）
@@ -1119,6 +1126,10 @@ impl RuntimeState {
             headers_table: Arc::new(Mutex::new(Vec::new())),
             fetch_response_table: Arc::new(Mutex::new(Vec::new())),
             fetch_request_table: Arc::new(Mutex::new(Vec::new())),
+            abort_signal_table: Arc::new(Mutex::new(Vec::new())),
+            http_response_table: Arc::new(Mutex::new(Vec::new())),
+            readable_stream_table: Arc::new(Mutex::new(Vec::new())),
+            reader_table: Arc::new(Mutex::new(Vec::new())),
             shared_state: Some(Arc::new(SharedRuntimeState {
                 sab_table: Arc::new(Mutex::new(Vec::new())),
                 agent_state: Arc::new(AgentState {
@@ -1302,6 +1313,7 @@ struct FetchResponseEntry {
     response_type: ResponseType,
     redirected: bool,
     body_used: bool,
+    http_response_handle: Option<u32>,
 }
 #[derive(Clone, Debug)]
 struct FetchRequestEntry {
@@ -1311,6 +1323,7 @@ struct FetchRequestEntry {
     body: Option<Vec<u8>>,
     redirect: RedirectMode,
     body_used: bool,
+    signal_handle: Option<u32>,
     // Extended observable fields per Fetch Standard
     mode: RequestMode,
     credentials: RequestCredentials,
@@ -1322,6 +1335,39 @@ struct FetchRequestEntry {
     destination: String,
     duplex: String,
 }
+
+#[derive(Clone, Debug)]
+struct AbortSignalEntry {
+    aborted: bool,
+    reason: Option<i64>,
+}
+
+#[derive(Debug)]
+struct HttpResponseEntry {
+    response: Option<reqwest::Response>,
+}
+
+#[derive(Clone, Debug)]
+enum StreamState {
+    Readable,
+    Closed,
+    Errored,
+}
+
+#[derive(Clone, Debug)]
+struct ReadableStreamEntry {
+    state: StreamState,
+    error: Option<String>,
+    disturbed: bool,
+    locked: bool,
+    http_response_handle: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+struct ReaderEntry {
+    stream_handle: u32,
+}
+
 fn bigint_low_64_bytes(value: &num_bigint::BigInt) -> [u8; 8] {
     let fill = if value.sign() == num_bigint::Sign::Minus {
         0xff
@@ -1976,6 +2022,19 @@ enum NativeCallable {
     HeadersConstructor,
     ResponseConstructor,
     RequestConstructor,
+    // ── ReadableStream / Reader / AbortController ──
+    StreamMethod {
+        handle: u32,
+        kind: StreamMethodKind,
+    },
+    ReaderMethod {
+        handle: u32,
+        kind: ReaderMethodKind,
+    },
+    AbortControllerConstructor,
+    AbortControllerAbort {
+        signal_handle: u32,
+    },
 }
 #[derive(Clone, Copy)]
 enum MapSetMethodKind {
@@ -2071,6 +2130,16 @@ enum ResponseMethodKind {
 #[derive(Clone, Copy)]
 enum RequestMethodKind {
     Clone,
+}
+#[derive(Clone, Copy)]
+enum StreamMethodKind {
+    GetReader,
+    Cancel,
+}
+#[derive(Clone, Copy)]
+enum ReaderMethodKind {
+    Read,
+    ReleaseLock,
 }
 #[derive(Clone, Copy)]
 enum PromiseCombinatorReactionKind {

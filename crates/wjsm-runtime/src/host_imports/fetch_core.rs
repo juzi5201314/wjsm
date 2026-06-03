@@ -43,6 +43,7 @@ pub(crate) fn create_response_object(
         response_type,
         redirected,
         body_used: false,
+        http_response_handle: None,
     });
     drop(table);
 
@@ -127,6 +128,7 @@ pub(crate) fn create_request_object(
         body,
         redirect,
         body_used: false,
+        signal_handle: None,
         mode: RequestMode::Cors,
         credentials: RequestCredentials::SameOrigin,
         cache: RequestCache::Default,
@@ -1218,4 +1220,42 @@ pub(crate) fn extract_string_property(
     } else {
         None
     }
+}
+
+// ── Stub functions for Stream / Reader / AbortController (implemented in later tasks) ──
+
+pub(crate) fn call_stream_method_from_caller(
+    _caller: &mut Caller<'_, RuntimeState>,
+    _this_val: i64,
+    _handle: u32,
+    _kind: StreamMethodKind,
+    _args: &[i64],
+) -> Option<i64> {
+    None
+}
+
+pub(crate) fn call_reader_method_from_caller(
+    _caller: &mut Caller<'_, RuntimeState>,
+    _this_val: i64,
+    _handle: u32,
+    _kind: ReaderMethodKind,
+    _args: &[i64],
+) -> Option<i64> {
+    None
+}
+
+pub(crate) fn construct_abort_controller(
+    _caller: &mut Caller<'_, RuntimeState>,
+    _this_val: i64,
+    _args: &[i64],
+) -> Option<i64> {
+    None
+}
+
+pub(crate) fn abort_controller_abort(
+    _caller: &mut Caller<'_, RuntimeState>,
+    _signal_handle: u32,
+    _args: &[i64],
+) -> Option<i64> {
+    None
 }

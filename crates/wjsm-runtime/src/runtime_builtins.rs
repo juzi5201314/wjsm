@@ -1734,6 +1734,18 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::HeadersConstructor => construct_headers(caller, this_val, &args),
         NativeCallable::ResponseConstructor => construct_response(caller, this_val, &args),
         NativeCallable::RequestConstructor => construct_request(caller, this_val, &args),
+        NativeCallable::StreamMethod { handle, kind } => {
+            call_stream_method_from_caller(caller, this_val, handle, kind, &args)
+        }
+        NativeCallable::ReaderMethod { handle, kind } => {
+            call_reader_method_from_caller(caller, this_val, handle, kind, &args)
+        }
+        NativeCallable::AbortControllerConstructor => {
+            construct_abort_controller(caller, this_val, &args)
+        }
+        NativeCallable::AbortControllerAbort { signal_handle } => {
+            abort_controller_abort(caller, signal_handle, &args)
+        }
     }
 }
 
