@@ -96,6 +96,24 @@ pub(crate) fn create_error_object(
     obj
 }
 
+pub(crate) fn alloc_type_error_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    message: String,
+) -> i64 {
+    let name_val = {
+        let state = ctx.as_context().data();
+        store_runtime_string_in_state(state, "TypeError".to_string())
+    };
+    let message_val = {
+        let state = ctx.as_context().data();
+        store_runtime_string_in_state(state, message)
+    };
+    let obj = alloc_host_object(ctx, env, 2);
+    let _ = define_host_data_property_with_env(ctx, env, obj, "name", name_val);
+    let _ = define_host_data_property_with_env(ctx, env, obj, "message", message_val);
+    obj
+}
 pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> i64 {
     if value::is_undefined(obj) {
         store_runtime_string(caller, "[object Undefined]".to_string())

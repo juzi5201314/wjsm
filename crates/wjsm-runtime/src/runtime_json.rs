@@ -151,7 +151,7 @@ impl StringBlock {
 // ── Internal parsed value representation ──
 
 #[derive(Debug, Clone, PartialEq)]
-enum JsonValue {
+pub(crate) enum JsonValue {
     Null,
     Bool(bool),
     Number(f64),
@@ -160,14 +160,14 @@ enum JsonValue {
     Object(Vec<(String, JsonValue)>),
 }
 
-struct JsonParser<'a> {
+pub(crate) struct JsonParser<'a> {
     input: &'a [u8],
     pos: usize,
     nonspace: NonspaceBitmap, // 缓存当前 64 字节对齐窗口的 nonspace 位图；skip_whitespace 中按需更新，避免重复 compute
 }
 
 impl<'a> JsonParser<'a> {
-    fn new(input: &'a [u8]) -> Self {
+    pub(crate) fn new(input: &'a [u8]) -> Self {
         Self {
             input,
             pos: 0,
@@ -243,7 +243,7 @@ impl<'a> JsonParser<'a> {
         }
     }
 
-    fn parse_value(&mut self) -> Result<JsonValue, String> {
+    pub(crate) fn parse_value(&mut self) -> Result<JsonValue, String> {
         self.skip_whitespace();
         match self.peek() {
             Some(b'n') => self.parse_null(),
@@ -692,6 +692,41 @@ fn build_wasm_value(caller: &mut Caller<'_, RuntimeState>, json_value: &JsonValu
     }
 }
 
+pub(crate) fn build_wasm_value_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    json_value: &JsonValue,
+) -> i64 {
+    match json_value {
+        JsonValue::Null => value::encode_null(),
+        JsonValue::Bool(b) => value::encode_bool(*b),
+        JsonValue::Number(n) => value::encode_f64(*n),
+        JsonValue::String(s) => {
+            let text = s.clone();
+            let state = ctx.as_context().data();
+            store_runtime_string_in_state(state, text)
+        }
+        JsonValue::Array(elements) => {
+            let arr = alloc_array_with_env(ctx, env, elements.len() as u32);
+            if let Some(ptr) = resolve_array_ptr_with_env(ctx, env, arr) {
+                for (i, elem) in elements.iter().enumerate() {
+                    let elem_val = build_wasm_value_with_env(ctx, env, elem);
+                    write_array_elem_with_env(ctx, env, ptr, i as u32, elem_val);
+                }
+                write_array_length_with_env(ctx, env, ptr, elements.len() as u32);
+            }
+            arr
+        }
+        JsonValue::Object(properties) => {
+            let obj = alloc_host_object(ctx, env, properties.len() as u32);
+            for (key, val) in properties {
+                let val_encoded = build_wasm_value_with_env(ctx, env, val);
+                let _ = define_host_data_property_with_env(ctx, env, obj, key, val_encoded);
+            }
+            obj
+        }
+    }
+}
 fn apply_reviver(
     caller: &mut Caller<'_, RuntimeState>,
     reviver: i64,
