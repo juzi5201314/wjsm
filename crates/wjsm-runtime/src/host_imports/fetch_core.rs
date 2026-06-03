@@ -180,9 +180,9 @@ pub(crate) fn create_request_object(
     body: Option<Vec<u8>>,
     redirect: RedirectMode,
     target_obj: Option<i64>,
+    signal_handle: Option<u32>,
 ) -> i64 {
-    let mut table = caller
-        .data()
+    let mut table = caller.data()
         .fetch_request_table
         .lock()
         .expect("fetch_request_table mutex");
@@ -194,7 +194,7 @@ pub(crate) fn create_request_object(
         body,
         redirect,
         body_used: false,
-        signal_handle: None,
+        signal_handle,
         mode: RequestMode::Cors,
         credentials: RequestCredentials::SameOrigin,
         cache: RequestCache::Default,
@@ -628,7 +628,7 @@ pub(crate) fn call_request_method_from_caller(
                 });
                 nh
             };
-            let req = create_request_object(caller, method, url, new_headers, body, redirect, None);
+            let req = create_request_object(caller, method, url, new_headers, body, redirect, None, None);
             if let Some(url_val) = object_property(caller, this_val, "url") {
                 let _ = set_host_data_property_from_caller(caller, req, "url", url_val);
             }
@@ -819,7 +819,7 @@ pub(crate) fn construct_request(
         ));
     }
 
-    let req = create_request_object(caller, method, url, headers, body, redirect, Some(this_val));
+    let req = create_request_object(caller, method, url, headers, body, redirect, Some(this_val), None);
     define_request_init_properties(caller, req, &cache, &credentials, &integrity, keepalive);
     if copied_request && let Some(url_val) = object_property(caller, input, "url") {
         let _ = set_host_data_property_from_caller(caller, req, "url", url_val);
