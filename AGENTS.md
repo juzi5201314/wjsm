@@ -326,7 +326,7 @@ Auto-update: `WJSM_UPDATE_FIXTURES=1 cargo nextest run` 写入新的 `.expected`
   - Timer callbacks: do not currently fire (only main-thread + microtask output captured). Timer fixtures carry KNOWN-BROKEN headers.
   - Class setters: bypassed on assignment; creates own data property instead of invoking setter.
   - Class computed methods: not supported; produces undefined at runtime.
-  - JSON.stringify(NaN): outputs undefined instead of null (spec gap, documented).
+  - (NaN boxing collision resolved: JSON.stringify(NaN) now correctly outputs "null".)
 **Error path** (57 fixtures): undeclared_var, const_reassign, tdz, let_redeclare, redeclare combinations, unsupported statements/expressions, syntax_error, await/yield/for-await outside valid contexts, break/continue outside loop, unknown/duplicate labels, with statement, for-in/for-of bad LHS, for-of non-iterable, for-await non-iterable, bigint JSON, regex_invalid, regexp_flags_invalid, get_own_property_descriptor non-object, define_property_accessor non-callable, group_by non-callable/non-iterable, typedarray invalid length, bigint typedarray number write, weakref non-object, eval errors (strict var leak, syntax, throw, lexical redeclare, const reassign, arguments conflict), plus recent additions (proxy invariants, JSON cycle, class TDZ/static field errors, timer non-function).
 **Module path** (52 source files across 23 scenarios): ESM (simple, default/named/re-export, alias, circular, deep chain, shared reuse, side effect, dynamic import, missing export) and CJS (simple, circular, conditional require, default export, exports alias, mixed ESM, require error, syntax error).
 ### Not yet tested

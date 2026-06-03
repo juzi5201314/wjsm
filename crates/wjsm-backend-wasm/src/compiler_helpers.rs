@@ -1296,11 +1296,11 @@ impl Compiler {
             let mut func = Function::new(vec![(1, ValType::F64)]);
 
             // Check: is this a raw f64 (not a NaN-box sentinel)?
-            // is_f64: (val & 0x7FF8000000000000) != 0x7FF8000000000000
+            // is_f64: (val & BOX_BASE) != BOX_BASE
             func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::I64Const(0x7FF8000000000000u64 as i64));
+            func.instruction(&WasmInstruction::I64Const(value::BOX_BASE as i64));
             func.instruction(&WasmInstruction::I64And);
-            func.instruction(&WasmInstruction::I64Const(0x7FF8000000000000u64 as i64));
+            func.instruction(&WasmInstruction::I64Const(value::BOX_BASE as i64));
             func.instruction(&WasmInstruction::I64Ne);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
 

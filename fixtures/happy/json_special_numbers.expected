@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
-undefined
 null
 null
-{"y":null}
+null
+{"x":null,"y":null}
 --- stderr ---
