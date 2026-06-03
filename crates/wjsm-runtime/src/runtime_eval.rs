@@ -7,6 +7,7 @@ const META_HOME_OBJECT: u8 = 2;
 const META_NEW_TARGET: u8 = 3;
 
 /// Host-allocated scope record implementing spec-like scope behavior.
+#[derive(Clone)]
 pub(crate) struct ScopeRecord {
     pub(crate) bindings: Vec<(String, i64, bool, bool)>,
     pub(crate) home_object: Option<i64>,
