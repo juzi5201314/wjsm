@@ -432,6 +432,7 @@ pub enum Builtin {
     ScopeRecordDestroy,
     // ── WHATWG Streams ──
     ReadableStreamConstructor,
+    WritableStreamConstructor,
 }
 
 impl fmt::Display for Builtin {
@@ -814,6 +815,7 @@ impl fmt::Display for Builtin {
             Self::ScopeRecordSetMeta => "scope_record_set_meta",
             Self::ScopeRecordDestroy => "scope_record_destroy",
             Self::ReadableStreamConstructor => "ReadableStream",
+            Self::WritableStreamConstructor => "WritableStream",
         })
     }
 }

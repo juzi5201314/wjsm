@@ -54,6 +54,9 @@ pub(crate) fn define_get_builtin_global(
                     "ReadableStream" => {
                         native_callables.push(NativeCallable::ReadableStreamConstructor)
                     }
+                    "WritableStream" => {
+                        native_callables.push(NativeCallable::WritableStreamConstructor)
+                    }
                     "ArrayBuffer" => {
                         native_callables.push(NativeCallable::ArrayBufferConstructorGlobal)
                     }

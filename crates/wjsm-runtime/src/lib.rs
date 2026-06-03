@@ -981,6 +981,8 @@ impl Clone for RuntimeState {
             readable_stream_table: self.readable_stream_table.clone(),
             reader_table: self.reader_table.clone(),
             stream_controller_table: self.stream_controller_table.clone(),
+            writable_stream_table: self.writable_stream_table.clone(),
+            writer_table: self.writer_table.clone(),
             shared_state: self.shared_state.clone(),
             non_extensible_handles: self.non_extensible_handles.clone(),
             scope_records: self.scope_records.clone(),
@@ -1086,6 +1088,10 @@ struct RuntimeState {
     reader_table: Arc<Mutex<Vec<ReaderEntry>>>,
     /// Controller 侧表（ReadableStream DefaultController 等）
     stream_controller_table: Arc<Mutex<Vec<StreamControllerEntry>>>,
+    /// WritableStream 侧表：存储可写流状态
+    writable_stream_table: Arc<Mutex<Vec<WritableStreamEntry>>>,
+    /// Writer 侧表：存储 WritableStreamDefaultWriter → stream 映射
+    writer_table: Arc<Mutex<Vec<WriterEntry>>>,
     /// None in normal (non-agent) execution.
     shared_state: Option<Arc<SharedRuntimeState>>,
     /// 被 preventExtensions 标记为不可扩展对象的 handle 集合（使用完整的 NaN-boxed 值作为 key）
@@ -1200,6 +1206,8 @@ impl RuntimeState {
             readable_stream_table: Arc::new(Mutex::new(Vec::new())),
             reader_table: Arc::new(Mutex::new(Vec::new())),
             stream_controller_table: Arc::new(Mutex::new(Vec::new())),
+            writable_stream_table: Arc::new(Mutex::new(Vec::new())),
+            writer_table: Arc::new(Mutex::new(Vec::new())),
             shared_state: Some(Arc::new(SharedRuntimeState {
                 sab_table: Arc::new(Mutex::new(Vec::new())),
                 agent_state: Arc::new(AgentState {
@@ -1445,14 +1453,37 @@ struct ReaderEntry {
     /// reader.closed Promise
     closed_promise: Option<i64>,
 }
+/// WritableStream 状态
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum WritableStreamState {
+    Writable,
+    Closing,
+    Closed,
+    Errored,
+}
+/// WritableStream 侧表条目
+#[derive(Debug, Clone)]
+struct WritableStreamEntry {
+    state: WritableStreamState,
+    error: Option<i64>,
+    locked: bool,
+    controller_handle: Option<u32>,
+}
+/// WritableStreamDefaultWriter 侧表条目
+#[derive(Debug, Clone)]
+struct WriterEntry {
+    writable_stream_handle: u32,
+    closed_promise: Option<i64>,
+    ready_promise: Option<i64>,
+}
 
 /// Controller 类型
 #[derive(Clone, Copy, PartialEq)]
 enum ControllerKind {
     ReadableDefault,
+    Writable,
     // 后续 Phase 使用：
     // ReadableByteStream,
-    // Writable,
     // Transform,
 }
 
@@ -2170,6 +2201,24 @@ enum NativeCallable {
     ReadableStreamAsyncIteratorReturn {
         reader_handle: u32,
     },
+    // ── WritableStream (WHATWG Streams Phase 4) ──
+    /// WritableStream constructor
+    WritableStreamConstructor,
+    /// WritableStream method (getWriter, abort, close, getLocked)
+    WritableStreamMethod {
+        handle: u32,
+        kind: WritableStreamMethodKind,
+    },
+    /// WritableStreamDefaultWriter method (write, close, abort, closed getter, ready getter, desiredSize getter)
+    WritableStreamDefaultWriterMethod {
+        handle: u32,
+        kind: WritableStreamDefaultWriterMethodKind,
+    },
+    /// WritableStreamDefaultController method (error)
+    WritableStreamDefaultControllerMethod {
+        handle: u32,
+        kind: WritableStreamDefaultControllerMethodKind,
+    },
 }
 #[derive(Clone, Copy)]
 enum MapSetMethodKind {
@@ -2297,6 +2346,27 @@ enum ReadableStreamDefaultControllerMethodKind {
     Close,
     Error,
     GetDesiredSize,
+}
+// ── WritableStream (WHATWG Streams Phase 4) method kinds ──
+#[derive(Clone, Copy)]
+enum WritableStreamMethodKind {
+    GetWriter,
+    Abort,
+    Close,
+    GetLocked,
+}
+#[derive(Clone, Copy)]
+enum WritableStreamDefaultWriterMethodKind {
+    Write,
+    Close,
+    Abort,
+    GetClosed,
+    GetReady,
+    GetDesiredSize,
+}
+#[derive(Clone, Copy)]
+enum WritableStreamDefaultControllerMethodKind {
+    Error,
 }
 #[derive(Clone, Copy)]
 enum PromiseCombinatorReactionKind {

@@ -2458,6 +2458,12 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         key: Some(HostImportKey::Special(SpecialHostImport::ProxyConstruct)),
         group: None,
     },
+    HostImportSpec {
+        name: "writable_stream_constructor",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::WritableStreamConstructor)),
+        group: None,
+    },
 ];
 
 pub fn host_import_specs() -> &'static [HostImportSpec] {

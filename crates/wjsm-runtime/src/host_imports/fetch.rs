@@ -152,5 +152,20 @@ pub(crate) fn define_fetch(
             })
         },
     )?;
+    linker.func_wrap_async(
+        "env",
+        "writable_stream_constructor",
+        |mut caller: Caller<'_, RuntimeState>,
+         (_env, this_val, args_base, args_count): (i64, i64, i32, i32)| {
+            Box::new(async move {
+                let args: Vec<i64> = (0..args_count.max(0))
+                    .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
+                    .collect();
+                construct_writable_stream(&mut caller, this_val, &args)
+                    .await
+                    .unwrap_or_else(value::encode_undefined)
+            })
+        },
+    )?;
     Ok(())
 }

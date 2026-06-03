@@ -1839,6 +1839,10 @@ pub(crate) fn define_collections_buffers(
                     NativeCallable::ReadableStreamConstructor,
                 ),
                 (
+                    "WritableStream",
+                    NativeCallable::WritableStreamConstructor,
+                ),
+                (
                     "AbortController",
                     NativeCallable::AbortControllerConstructor,
                 ),
