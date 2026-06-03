@@ -408,7 +408,6 @@ pub(crate) fn call_response_method_from_caller(
     _args: &[i64],
 ) -> Option<i64> {
     let handle = get_response_handle_from_object(caller, this_val)?;
-    // Extract everything we need while the lock is held, then drop the guard immediately.
     let (
         status,
         status_text,
@@ -419,6 +418,7 @@ pub(crate) fn call_response_method_from_caller(
         redirected,
         was_body_used,
         is_consuming,
+        http_response_handle,
     ) = {
         let mut table = caller
             .data()
@@ -447,14 +447,84 @@ pub(crate) fn call_response_method_from_caller(
             entry.redirected,
             was_body_used,
             is_consuming,
+            entry.http_response_handle,
         )
     };
-    // Guard is now dropped. Safe to allocate and settle.
     if is_consuming && was_body_used {
         let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
         let err = alloc_type_error_from_caller(caller, "body stream already read");
         settle_promise(caller.data_mut(), p, PromiseSettlement::Reject(err));
         return Some(p);
+    }
+    // HTTP Response — 异步 body 消费
+    if is_consuming && http_response_handle.is_some() {
+        let http_handle = http_response_handle.unwrap();
+        let response = {
+            let mut table = caller.data().http_response_table.lock().expect("http_response mutex");
+            table.get_mut(http_handle as usize).and_then(|e| e.response.take())
+        };
+        if let Some(response) = response {
+            let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+            let tx = caller.data().host_completion_tx.clone()?;
+            let kind_clone = kind;
+            let promise_clone = promise;
+            tokio::spawn(async move {
+                match response.bytes().await {
+                    Ok(bytes) => {
+                        let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
+                            promise: promise_clone,
+                            materialize: Box::new(move |store, env| {
+                                match kind_clone {
+                                    ResponseMethodKind::Text => {
+                                        let text = String::from_utf8_lossy(&bytes).to_string();
+                                        let handle = crate::runtime_render::store_runtime_string_in_state(store.data(), text);
+                                        PromiseSettlement::Fulfill(handle)
+                                    }
+                                    ResponseMethodKind::Json => {
+                                        let text = String::from_utf8_lossy(&bytes).to_string();
+                                        let handle = crate::runtime_render::store_runtime_string_in_state(store.data(), text);
+                                        PromiseSettlement::Fulfill(handle)
+                                    }
+                                    ResponseMethodKind::ArrayBuffer => {
+                                        let mut ab_table = store.data().arraybuffer_table.lock().expect("mutex");
+                                        let ab_handle = ab_table.len() as u32;
+                                        ab_table.push(ArrayBufferEntry { data: bytes.to_vec() });
+                                        drop(ab_table);
+                                        let ab = crate::runtime_heap::alloc_host_object(store, env, 4);
+                                        let handle_val = value::encode_f64(ab_handle as f64);
+                                        let _ = crate::runtime_host_helpers::define_host_data_property_with_env(store, env, ab, "__arraybuffer_handle__", handle_val);
+                                        let len_val = value::encode_f64(bytes.len() as f64);
+                                        let _ = crate::runtime_host_helpers::define_host_data_property_with_env(store, env, ab, "byteLength", len_val);
+                                        PromiseSettlement::Fulfill(ab)
+                                    }
+                                    _ => PromiseSettlement::Fulfill(value::encode_undefined()),
+                                }
+                            }),
+                        });
+                    }
+                    Err(e) => {
+                        let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
+                            promise: promise_clone,
+                            materialize: Box::new(move |store, env| {
+                                let obj = crate::runtime_heap::alloc_host_object(store, env, 2);
+                                let name_val = crate::runtime_render::store_runtime_string_in_state(store.data(), "TypeError".to_string());
+                                let msg_val = crate::runtime_render::store_runtime_string_in_state(store.data(), e.to_string());
+                                let _ = crate::runtime_host_helpers::define_host_data_property_with_env(store, env, obj, "name", name_val);
+                                let _ = crate::runtime_host_helpers::define_host_data_property_with_env(store, env, obj, "message", msg_val);
+                                PromiseSettlement::Reject(obj)
+                            }),
+                        });
+                    }
+                }
+            });
+            let _ = set_host_data_property_from_caller(
+                caller,
+                this_val,
+                "bodyUsed",
+                value::encode_bool(true),
+            );
+            return Some(promise);
+        }
     }
     let result = match kind {
         ResponseMethodKind::Text => {
@@ -484,7 +554,6 @@ pub(crate) fn call_response_method_from_caller(
             Some(p)
         }
         ResponseMethodKind::Clone => {
-            // Avoid deadlock: read the header pairs under one lock scope, drop, then push under second
             let pairs = {
                 let htable = caller.data().headers_table.lock().ok()?;
                 let hentry = htable.get(headers_handle as usize)?;
@@ -514,7 +583,6 @@ pub(crate) fn call_response_method_from_caller(
         }
     };
     if is_consuming {
-        // Sync the public property after successful consume (side table already updated under lock)
         let _ = set_host_data_property_from_caller(
             caller,
             this_val,
