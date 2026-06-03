@@ -17,5 +17,5 @@ swc_core = { workspace = true }
 wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
 wjsm-parser = { path = "../wjsm-parser" }
 wjsm-semantic = { path = "../wjsm-semantic" }
-
+reqwest = { workspace = true }
 [dev-dependencies]
