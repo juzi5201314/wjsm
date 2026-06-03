@@ -136,10 +136,16 @@ impl Compiler {
                 Ok(())
             }
             Builtin::Fetch => {
-                let val = args
+                let input = args
                     .first()
-                    .with_context(|| format!("{builtin} expects 1 argument"))?;
-                self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
+                    .with_context(|| format!("{builtin} expects at least 1 argument"))?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(input.0)));
+                let init = args.get(1).copied();
+                if let Some(init_val) = init {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(init_val.0)));
+                } else {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {

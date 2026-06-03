@@ -45,28 +45,27 @@ pub(crate) fn perform_fetch_and_build_response(
         return Err("Failed to parse URL from request.".to_string());
     }
     if url.starts_with("data:") {
-        let body = url.split(',').nth(1).unwrap_or("").to_string();
-        let decoded = urlencoding_decode(&body);
-        let bytes = decoded.into_bytes();
-        let resp_headers = create_empty_headers(caller);
-        let resp_handle = create_response_object(
-            caller,
-            200,
-            "OK".to_string(),
-            resp_headers,
-            url,
-            bytes,
-            ResponseType::Basic,
-            false,
-            None,
-        );
-        return Ok(resp_handle);
+        return perform_data_url_fetch(caller, &url);
     }
 
     // HTTP/HTTPS and other schemes are not supported in this build.
     Err(format!(
         "fetch for non-data: URL not implemented in this build: {}",
         url
+    ))
+}
+
+pub(crate) fn perform_data_url_fetch(
+    caller: &mut Caller<'_, RuntimeState>,
+    url: &str,
+) -> std::result::Result<i64, String> {
+    let body = url.split(',').nth(1).unwrap_or("").to_string();
+    let decoded = urlencoding_decode(&body);
+    let bytes = decoded.into_bytes();
+    let resp_headers = create_empty_headers(caller);
+    Ok(create_response_object(
+        caller, 200, "OK".to_string(), resp_headers,
+        url.to_string(), bytes, ResponseType::Basic, false, None,
     ))
 }
 

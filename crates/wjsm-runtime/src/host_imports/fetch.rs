@@ -11,45 +11,46 @@ pub(crate) fn define_fetch(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    // Import 31: fetch(i64) → i64
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, input: i64| -> i64 {
-            // Create pending Promise immediately (return its handle)
-            let promise = alloc_promise_from_caller(&mut caller, PromiseEntry::pending());
-            let _promise_handle = value::decode_object_handle(promise) as usize;
-            // Current backend ABI passes only input; constructors handle init objects.
-            let (method, url, headers_handle, body_opt, _redirect) =
-                parse_fetch_input(&mut caller, input, value::encode_undefined());
-            // Perform the actual work synchronously (design decision)
-            let settle_result = perform_fetch_and_build_response(
-                &mut caller,
-                method,
-                url,
-                headers_handle,
-                body_opt,
-            );
+    // fetch(i64, i64) → i64  [input, init]
+    linker.func_wrap_async(
+        "env", "fetch",
+        |mut caller: Caller<'_, RuntimeState>, (input, init): (i64, i64)| {
+            Box::new(async move {
+                let promise = alloc_promise_from_caller(&mut caller, PromiseEntry::pending());
 
-            match settle_result {
-                Ok(response_val) => {
-                    // Fulfill the promise with the Response object
-                    settle_promise(
-                        caller.data_mut(),
-                        promise,
-                        PromiseSettlement::Fulfill(response_val),
-                    );
-                }
-                Err(type_error_msg) => {
-                    // Reject with a TypeError (network failure or bad input)
-                    let err = alloc_type_error_from_caller(&mut caller, &type_error_msg);
+                let (method, url, headers_handle, body_opt, _redirect) =
+                    parse_fetch_input(&mut caller, input, init);
+
+                if url.is_empty() {
+                    let err = alloc_type_error_from_caller(&mut caller, "Failed to parse URL from request.");
                     settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
+                    return promise;
                 }
-            }
 
-            promise
+                // data: URL — 同步路径（保持现有行为）
+                if url.starts_with("data:") {
+                    match perform_data_url_fetch(&mut caller, &url) {
+                        Ok(response_val) => {
+                            settle_promise(caller.data_mut(), promise, PromiseSettlement::Fulfill(response_val));
+                        }
+                        Err(msg) => {
+                            let err = alloc_type_error_from_caller(&mut caller, &msg);
+                            settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
+                        }
+                    }
+                    return promise;
+                }
+
+                // HTTP/HTTPS — 异步路径（将在 Task 5 实现）
+                let err = alloc_type_error_from_caller(
+                    &mut caller,
+                    &format!("fetch for non-data: URL not implemented yet: {}", url),
+                );
+                settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
+                promise
+            })
         },
-    );
-    linker.define(&mut store, "env", "fetch", f)?;
+    )?;
 
     let headers_constructor = Func::wrap(
         &mut store,
