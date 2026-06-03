@@ -1,6 +1,6 @@
-// Class instance setter — documents actual behavior.
-// NOTE: Setter is currently bypassed; assignment creates an own data property instead
-// of invoking the setter. The getter then reads the own property, masking the prototype getter.
+// Class instance setter — setter is invoked on assignment, prototype chain is respected.
+// The setter on the prototype is called with the instance as `this`, and the getter
+// reads the backing field set by the setter.
 class Counter {
   constructor() {
     this._value = 0;

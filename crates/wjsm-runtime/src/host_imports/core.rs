@@ -833,7 +833,25 @@ pub(crate) fn define_core(
 
             // 查找已有属性
             let found = find_property_slot_by_name_id(&mut caller, obj_ptr, name_id);
-            if let Some((slot_offset, _old_flags, _old_val)) = found {
+            if let Some((slot_offset, old_flags, _old_val)) = found {
+                // 读取旧的 getter/setter 以保留未被描述符覆盖的值
+                let old_accessor = (old_flags & constants::FLAG_IS_ACCESSOR) != 0;
+                let (old_getter, old_setter) = {
+                    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                        return;
+                    };
+                    let data = memory.data(&caller);
+                    if old_accessor {
+                        let g = i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap());
+                        let s = i64::from_le_bytes(data[slot_offset + 24..slot_offset + 32].try_into().unwrap());
+                        (g, s)
+                    } else {
+                        (value::encode_undefined(), value::encode_undefined())
+                    }
+                };
+                // 使用描述符值或保留旧值
+                let final_getter = prop_get.unwrap_or(old_getter);
+                let final_setter = prop_set.unwrap_or(old_setter);
                 // 更新已有属性
                 let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
                     return;
@@ -841,8 +859,8 @@ pub(crate) fn define_core(
                 let data = memory.data_mut(&mut caller);
                 data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
                 data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-                data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
-                data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
+                data[slot_offset + 16..slot_offset + 24].copy_from_slice(&final_getter.to_le_bytes());
+                data[slot_offset + 24..slot_offset + 32].copy_from_slice(&final_setter.to_le_bytes());
             } else {
                 // 添加新属性
                 let (capacity, num_props) = {

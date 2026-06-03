@@ -1,5 +1,5 @@
-// Computed method name — documents actual behavior (gap: not supported).
-// Computed method names produce undefined at runtime; the method is not installed on the prototype.
+// Computed method name — supported via lower_prop_name.
+// Computed method names are lowered dynamically and installed on the prototype.
 const methodName = "dynamic";
 
 class Dynamic {

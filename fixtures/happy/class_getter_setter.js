@@ -1,7 +1,6 @@
-// Property with both getter and setter — documents actual behavior.
-// NOTE: Setter is currently bypassed; assignment creates own data property.
-// The getter reads the own property so t.celsius appears to work, but _celsius
-// (which the setter should write to) stays at 0.
+// Property with both getter and setter — setter is invoked on assignment.
+// The setter writes to `_celsius`, and the getter reads it back.
+// The fahrenheit getter also reads `_celsius` and computes the conversion.
 class Temperature {
   constructor() {
     this._celsius = 0;
