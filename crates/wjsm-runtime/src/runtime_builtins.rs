@@ -1746,7 +1746,43 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::AbortControllerAbort { signal_handle } => {
             abort_controller_abort(caller, signal_handle, &args)
         }
-    }
+        // ── ReadableStream (WHATWG Streams Phase 1) ──
+        // ReadableStreamConstructor is async-only: routed through the host-import
+        // `readable_stream_constructor` (linker.func_wrap_async in fetch.rs). It is
+        // never dispatched via the sync NativeCallable path.
+        NativeCallable::ReadableStreamConstructor => Some(value::encode_undefined()),
+        NativeCallable::ReadableStreamMethod { handle, kind } => {
+            call_readable_stream_method_from_caller(caller, this_val, handle, kind, &args)
+        }
+        NativeCallable::ReadableStreamDefaultReaderMethod { handle, kind } => {
+            call_default_reader_method_from_caller(caller, this_val, handle, kind, &args)
+        }
+        NativeCallable::ReadableStreamDefaultControllerMethod { handle, kind } => {
+            call_default_controller_method_from_caller(caller, this_val, handle, kind, &args)
+        }
+        // ── ReadableStream async iterator (WHATWG Streams Phase 2) ──
+        NativeCallable::ReadableStreamAsyncIteratorNext { reader_handle } => {
+            call_default_reader_method_from_caller(caller, this_val, reader_handle, ReadableStreamDefaultReaderMethodKind::Read, &args)
+        }
+        NativeCallable::ReadableStreamAsyncIteratorReturn { reader_handle } => {
+            // releaseLock：释放流的锁定
+            let stream_handle = {
+                let reader_table = caller.data().reader_table.lock().expect("reader mutex");
+                reader_table.get(reader_handle as usize).map(|e| e.stream_handle)
+            };
+            if let Some(sh) = stream_handle {
+                let mut stream_table = caller.data().readable_stream_table.lock().expect("stream mutex");
+                if let Some(entry) = stream_table.get_mut(sh as usize) {
+                    entry.locked = false;
+                }
+            }
+            // 返回 {done: true, value: undefined} 作为 resolved Promise
+            let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
+            let result = build_reader_result(caller, true, None);
+            settle_promise(caller.data(), p, PromiseSettlement::Fulfill(result));
+            Some(p)
+        }
+     }
 }
 
 pub(crate) async fn call_native_callable_with_args_from_caller_async(

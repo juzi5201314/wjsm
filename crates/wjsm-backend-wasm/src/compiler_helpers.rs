@@ -411,19 +411,36 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
-            // 调用 getter: Type 12 签名 (env_obj, this_val, args_base, args_count) -> i64
+            // 调用 getter: 检查是否为 NativeCallable
+            func.instruction(&WasmInstruction::LocalGet(7));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I64Const(0x1F));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_NATIVE_CALLABLE as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
+            // NativeCallable: 直接通过宿主调用
+            func.instruction(&WasmInstruction::LocalGet(7)); // getter (callee)
+            func.instruction(&WasmInstruction::LocalGet(0)); // this_val
+            func.instruction(&WasmInstruction::I32Const(0)); // args_base
+            func.instruction(&WasmInstruction::I32Const(0)); // args_count
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::NativeCall],
+            ));
+            func.instruction(&WasmInstruction::Else);
+            // 闭包或普通函数: resolve callable + call_indirect
             self.emit_resolve_callable_for_helper(&mut func, 7, 9, 8);
-            // this_val = local 0, args_base = 0 (no args), args_count = 0
             func.instruction(&WasmInstruction::LocalGet(8)); // env_obj
             func.instruction(&WasmInstruction::LocalGet(0)); // this_val
-            func.instruction(&WasmInstruction::I32Const(0)); // args_base (doesn't matter, no args)
+            func.instruction(&WasmInstruction::I32Const(0)); // args_base
             func.instruction(&WasmInstruction::I32Const(0)); // args_count
             func.instruction(&WasmInstruction::LocalGet(9)); // func_idx
-            // call_indirect type 12, table 0
             func.instruction(&WasmInstruction::CallIndirect {
                 type_index: 12,
                 table_index: 0,
             });
+            func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
             // 是数据属性，返回 value (offset 8)
@@ -778,7 +795,43 @@ impl Compiler {
             // getter-only accessor，直接返回（不创建 own property）
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End); // end no_setter
-            // 调用 setter: Type 12 签名 (env_obj, this_val, args_base, args_count) -> i64
+            // 调用 setter: 检查是否为 NativeCallable
+            func.instruction(&WasmInstruction::LocalGet(11));
+            func.instruction(&WasmInstruction::I64Const(32));
+            func.instruction(&WasmInstruction::I64ShrU);
+            func.instruction(&WasmInstruction::I64Const(0x1F));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(value::TAG_NATIVE_CALLABLE as i64));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // NativeCallable: 推入 value 到影子栈，通过宿主调用
+            func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            func.instruction(&WasmInstruction::LocalSet(12));
+            func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            func.instruction(&WasmInstruction::LocalGet(2)); // value
+            func.instruction(&WasmInstruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            func.instruction(&WasmInstruction::I32Const(8));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+            func.instruction(&WasmInstruction::LocalGet(11)); // setter (callee)
+            func.instruction(&WasmInstruction::LocalGet(0)); // this_val
+            func.instruction(&WasmInstruction::LocalGet(12)); // args_base
+            func.instruction(&WasmInstruction::I32Const(1)); // args_count
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::NativeCall],
+            ));
+            // 恢复 shadow_sp
+            func.instruction(&WasmInstruction::LocalGet(12));
+            func.instruction(&WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+            func.instruction(&WasmInstruction::Drop);
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::Else);
+            // 闭包或普通函数: resolve callable + call_indirect
             self.emit_resolve_callable_for_helper(&mut func, 11, 13, 15);
             // 将 value (local 2) 写入影子栈
             func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
@@ -809,6 +862,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
             func.instruction(&WasmInstruction::Drop);
             func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End); // end is_accessor
             // 是数据属性 → 跳出原型链遍历，fall through 到创建 own data property
             // br depth: If(name_found)=0, Loop(search_loop)=1, Block(search_exit)=2, Loop(proto_chain_loop)=3, Block(proto_chain_done)=4

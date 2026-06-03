@@ -1029,6 +1029,8 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::FinalizationRegistryProtoUnregister => {
             ("FinalizationRegistry.prototype.unregister", 2)
         }
+        // ── WHATWG Streams ──
+        Builtin::ReadableStreamConstructor => ("ReadableStream", 2),
     }
 }
 

@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd /home/soeur/project/wjsm && cargo check -p wjsm-runtime 2>&1)",
+      "Bash(cd /home/soeur/project/wjsm && cargo check -p wjsm-runtime --quiet 2>&1 | tail -20)",
+      "Bash(cargo build --silent 2>&1 | tail -20)",
+      "Bash(cargo build --quiet 2>&1 | tail -20)",
+      "Bash(WJSM_UPDATE_FIXTURES=1 cargo nextest run -E 'test\\(happy__map\\) or test\\(happy__set\\)' 2>&1 | tail -30)",
+      "Bash(WJSM_UPDATE_FIXTURES=1 cargo nextest run -E 'test\\(happy__map\\) or test\\(happy__set\\)' 2>&1 | grep -E '\\(PASS|FAIL|test result|happy__map|happy__set\\)')",
+      "Bash(cargo nextest run -E 'test\\(happy__\\)' 2>&1 | grep -E '\\(FAIL|test result\\)' | tail -20)",
+      "Bash(cargo nextest run -E 'test\\(happy__\\)' 2>&1 | grep -c \"FAIL\")",
+      "Bash(cargo check 2>&1 | head -60)",
+      "Bash(cargo check 2>&1 | head -80)",
+      "Bash(cargo check 2>&1 | tail -20)",
+      "Bash(cargo build 2>&1 | tail -10)",
+      "Bash(cargo build --quiet 2>&1 | grep -E \"^error\" | head -5)",
+      "Bash(cargo build --package wjsm-runtime 2>&1 | tail -50)"
+    ]
+  }
+}

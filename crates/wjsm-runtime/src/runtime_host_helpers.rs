@@ -537,6 +537,61 @@ pub(crate) fn define_host_data_property_with_env<C: AsContextMut<Data = RuntimeS
     Some(())
 }
 
+/// 定义一个访问器（getter/setter）属性到宿主创建的对象上（泛型版本，不支持 grow_object）。
+/// slot 布局与数据属性相同（32字节），但 flags 标记为 IS_ACCESSOR，
+/// offset 8 = undefined（保留），offset 16 = getter，offset 24 = setter。
+pub(crate) fn define_host_accessor_property_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    obj: i64,
+    name: &str,
+    getter: i64,
+    setter: i64,
+) -> Option<()> {
+    let name_id = find_memory_c_string_with_env(ctx, env, name)
+        .or_else(|| alloc_heap_c_string_with_env(ctx, env, name))?;
+    let obj_ptr = resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize)?;
+    let (capacity, num_props) = {
+        let data = env.memory.data(&*ctx);
+        if obj_ptr + 16 > data.len() {
+            return None;
+        }
+        let capacity = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]);
+        let num_props = u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]);
+        (capacity, num_props)
+    };
+    if num_props >= capacity {
+        return None;
+    }
+    let actual_ptr = obj_ptr;
+    let data = env.memory.data_mut(&mut *ctx);
+    let slot_offset = actual_ptr + 16 + num_props as usize * 32;
+    if slot_offset + 32 > data.len() {
+        return None;
+    }
+    // 访问器属性：CONFIGURABLE | ENUMERABLE | IS_ACCESSOR（不含 WRITABLE）
+    let flags =
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_IS_ACCESSOR;
+    let undef = value::encode_undefined();
+    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&undef.to_le_bytes());
+    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
+    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
+    data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
+    Some(())
+}
+
 pub(crate) fn alloc_promise_all_settled_result(
     caller: &mut Caller<'_, RuntimeState>,
     status: &str,
@@ -2109,6 +2164,65 @@ pub(crate) fn define_host_data_property(
     data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
     data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
     data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
+    data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
+    Some(())
+}
+
+/// 定义一个访问器（getter/setter）属性到宿主创建的对象上（Caller 版本，支持 grow_object）。
+/// slot 布局与数据属性相同（32字节），但 flags 标记为 IS_ACCESSOR，
+/// offset 8 = undefined（保留），offset 16 = getter，offset 24 = setter。
+#[inline]
+pub(crate) fn define_host_accessor_property(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+    getter: i64,
+    setter: i64,
+) -> Option<()> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let name_id = find_memory_c_string_with_env(caller, &env, name)
+        .or_else(|| alloc_heap_c_string_with_env(caller, &env, name))?;
+    let obj_ptr =
+        resolve_handle_idx_with_env(caller, &env, value::decode_object_handle(obj) as usize)?;
+    let (capacity, num_props) = {
+        let data = env.memory.data(&*caller);
+        if obj_ptr + 16 > data.len() {
+            return None;
+        }
+        let capacity = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]);
+        let num_props = u32::from_le_bytes([
+            data[obj_ptr + 12],
+            data[obj_ptr + 13],
+            data[obj_ptr + 14],
+            data[obj_ptr + 15],
+        ]);
+        (capacity, num_props)
+    };
+    let actual_ptr = if num_props >= capacity {
+        let new_cap = capacity.saturating_mul(2).max(num_props + 1).max(1);
+        grow_object(caller, obj_ptr, obj, new_cap)?
+    } else {
+        obj_ptr
+    };
+    let data = env.memory.data_mut(&mut *caller);
+    let slot_offset = actual_ptr + 16 + num_props as usize * 32;
+    if slot_offset + 32 > data.len() {
+        return None;
+    }
+    // 访问器属性：CONFIGURABLE | ENUMERABLE | IS_ACCESSOR（不含 WRITABLE）
+    let flags =
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_IS_ACCESSOR;
+    let undef = value::encode_undefined();
+    data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
+    data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
+    data[slot_offset + 8..slot_offset + 16].copy_from_slice(&undef.to_le_bytes());
+    data[slot_offset + 16..slot_offset + 24].copy_from_slice(&getter.to_le_bytes());
+    data[slot_offset + 24..slot_offset + 32].copy_from_slice(&setter.to_le_bytes());
     data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
     Some(())
 }

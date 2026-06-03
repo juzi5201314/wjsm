@@ -430,6 +430,8 @@ pub enum Builtin {
     ScopeRecordSetMeta,
     /// args[0]: record — removes the scope record from the runtime map
     ScopeRecordDestroy,
+    // ── WHATWG Streams ──
+    ReadableStreamConstructor,
 }
 
 impl fmt::Display for Builtin {
@@ -811,6 +813,7 @@ impl fmt::Display for Builtin {
             Self::EvalSuperBase => "eval_super_base",
             Self::ScopeRecordSetMeta => "scope_record_set_meta",
             Self::ScopeRecordDestroy => "scope_record_destroy",
+            Self::ReadableStreamConstructor => "ReadableStream",
         })
     }
 }

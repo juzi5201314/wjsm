@@ -51,6 +51,9 @@ pub(crate) fn define_get_builtin_global(
                     "Headers" => native_callables.push(NativeCallable::HeadersConstructor),
                     "Request" => native_callables.push(NativeCallable::RequestConstructor),
                     "Response" => native_callables.push(NativeCallable::ResponseConstructor),
+                    "ReadableStream" => {
+                        native_callables.push(NativeCallable::ReadableStreamConstructor)
+                    }
                     "ArrayBuffer" => {
                         native_callables.push(NativeCallable::ArrayBufferConstructorGlobal)
                     }

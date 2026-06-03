@@ -109,10 +109,13 @@ pub(crate) fn define_collections_buffers(
             let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "clear", clear_fn);
-            // TODO: size should be a getter accessor property per ES spec, but current
-            // architecture does not support call_indirect for host import functions.
-            // Tracked as a known compliance gap — currently exposed as a method: m.size()
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "size", size_fn);
+            let _ = define_host_accessor_property_from_caller(
+                &mut caller,
+                obj,
+                "size",
+                size_fn,
+                value::encode_undefined(),
+            );
             let _ = define_host_data_property_from_caller(&mut caller, obj, "forEach", for_each_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "values", values_fn);
@@ -271,10 +274,13 @@ pub(crate) fn define_collections_buffers(
             let _ = define_host_data_property_from_caller(&mut caller, obj, "has", has_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "delete", delete_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "clear", clear_fn);
-            // TODO: ES spec requires `size` to be a getter accessor property, but the current
-            // WASM architecture doesn't support calling NativeCallable via call_indirect.
-            // Using a data property (method) as a workaround.
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "size", size_fn);
+            let _ = define_host_accessor_property_from_caller(
+                &mut caller,
+                obj,
+                "size",
+                size_fn,
+                value::encode_undefined(),
+            );
             let _ = define_host_data_property_from_caller(&mut caller, obj, "forEach", for_each_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "keys", keys_fn);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "values", values_fn);
@@ -1794,7 +1800,7 @@ pub(crate) fn define_collections_buffers(
         Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| -> i64 {
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 60)
+                alloc_host_object(&mut caller, &_wjsm_env, 64)
             };
             let builtin_pairs: &[(&str, NativeCallable)] = &[
                 ("Array", NativeCallable::ArrayConstructor),
@@ -1828,6 +1834,14 @@ pub(crate) fn define_collections_buffers(
                 ("Headers", NativeCallable::HeadersConstructor),
                 ("Request", NativeCallable::RequestConstructor),
                 ("Response", NativeCallable::ResponseConstructor),
+                (
+                    "ReadableStream",
+                    NativeCallable::ReadableStreamConstructor,
+                ),
+                (
+                    "AbortController",
+                    NativeCallable::AbortControllerConstructor,
+                ),
                 ("ArrayBuffer", NativeCallable::ArrayBufferConstructorGlobal),
                 (
                     "SharedArrayBuffer",

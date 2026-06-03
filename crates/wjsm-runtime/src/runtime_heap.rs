@@ -193,6 +193,17 @@ pub(crate) fn define_host_data_property_from_caller(
     define_host_data_property(caller, obj, name, val)
 }
 
+/// 定义一个访问器（getter/setter）属性到宿主创建的对象上（from_caller 便捷封装）。
+pub(crate) fn define_host_accessor_property_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+    getter: i64,
+    setter: i64,
+) -> Option<()> {
+    define_host_accessor_property(caller, obj, name, getter, setter)
+}
+
 pub(crate) fn alloc_all_settled_result_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     status: &str,
