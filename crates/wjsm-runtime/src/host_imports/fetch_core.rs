@@ -743,6 +743,7 @@ pub(crate) fn construct_request(
         }
     }
 
+    let mut signal_handle = None;
     if let Some(init) = args.get(1).copied()
         && value::is_object(init)
     {
@@ -810,6 +811,13 @@ pub(crate) fn construct_request(
         if let Some(init_keepalive) = bool_property(caller, init, "keepalive") {
             keepalive = init_keepalive;
         }
+        if let Some(init_signal) = object_property(caller, init, "signal") {
+            if !value::is_undefined(init_signal) {
+                if let Some(handle) = number_property(caller, init_signal, "__abort_signal_handle__") {
+                    signal_handle = Some(handle as u32);
+                }
+            }
+        }
     }
 
     if body.is_some() && matches!(method.as_str(), "GET" | "HEAD") {
@@ -819,7 +827,7 @@ pub(crate) fn construct_request(
         ));
     }
 
-    let req = create_request_object(caller, method, url, headers, body, redirect, Some(this_val), None);
+    let req = create_request_object(caller, method, url, headers, body, redirect, Some(this_val), signal_handle);
     define_request_init_properties(caller, req, &cache, &credentials, &integrity, keepalive);
     if copied_request && let Some(url_val) = object_property(caller, input, "url") {
         let _ = set_host_data_property_from_caller(caller, req, "url", url_val);
@@ -1379,17 +1387,38 @@ pub(crate) fn call_reader_method_from_caller(
 }
 
 pub(crate) fn construct_abort_controller(
-    _caller: &mut Caller<'_, RuntimeState>,
-    _this_val: i64,
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
     _args: &[i64],
 ) -> Option<i64> {
-    None
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let signal_handle = {
+        let mut table = caller.data().abort_signal_table.lock().expect("abort_signal mutex");
+        let handle = table.len() as u32;
+        table.push(AbortSignalEntry {
+            aborted: false,
+            reason: None,
+        });
+        handle
+    };
+    let signal_obj = alloc_host_object(caller, &env, 2);
+    let handle_val = value::encode_f64(signal_handle as f64);
+    let _ = define_host_data_property_from_caller(caller, signal_obj, "__abort_signal_handle__", handle_val);
+    let _ = define_host_data_property_from_caller(caller, signal_obj, "aborted", value::encode_bool(false));
+    let _ = define_host_data_property_from_caller(caller, this_val, "signal", signal_obj);
+    let _ = define_host_data_property_from_caller(caller, this_val, "__abort_signal_handle__", handle_val);
+    Some(this_val)
 }
 
 pub(crate) fn abort_controller_abort(
-    _caller: &mut Caller<'_, RuntimeState>,
-    _signal_handle: u32,
-    _args: &[i64],
+    caller: &mut Caller<'_, RuntimeState>,
+    signal_handle: u32,
+    args: &[i64],
 ) -> Option<i64> {
-    None
+    let mut table = caller.data().abort_signal_table.lock().expect("abort_signal mutex");
+    if let Some(entry) = table.get_mut(signal_handle as usize) {
+        entry.aborted = true;
+        entry.reason = args.first().copied();
+    }
+    Some(value::encode_undefined())
 }
