@@ -45,6 +45,7 @@ mod timers_arrays;
 mod typedarray_new_methods;
 mod weakref_finalization;
 mod streams_readable;
+mod streams_writable;
 
 pub(crate) use array_object::define_array_object;
 pub(crate) use atomics::define_atomics;
@@ -65,6 +66,10 @@ pub(crate) use streams_readable::construct_readable_stream;
 pub(crate) use streams_readable::call_readable_stream_method_from_caller;
 pub(crate) use streams_readable::call_default_reader_method_from_caller;
 pub(crate) use streams_readable::call_default_controller_method_from_caller;
+pub(crate) use streams_writable::construct_writable_stream;
+pub(crate) use streams_writable::call_writable_stream_method_from_caller;
+pub(crate) use streams_writable::call_default_writer_method_from_caller;
+pub(crate) use streams_writable::call_writable_controller_method_from_caller;
 pub(crate) use streams_readable::build_reader_result;
 pub(crate) use get_builtin_global_entry::define_get_builtin_global;
 pub(crate) use math_number_error::define_math_number_error;

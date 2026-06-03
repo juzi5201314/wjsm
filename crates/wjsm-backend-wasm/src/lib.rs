@@ -1031,6 +1031,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         }
         // ── WHATWG Streams ──
         Builtin::ReadableStreamConstructor => ("ReadableStream", 2),
+        Builtin::WritableStreamConstructor => ("WritableStream", 2),
     }
 }
 

@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+false
+true
+written
+written2
+writer-closed
+--- stderr ---

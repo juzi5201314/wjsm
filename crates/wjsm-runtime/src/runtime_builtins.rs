@@ -1782,6 +1782,20 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             settle_promise(caller.data(), p, PromiseSettlement::Fulfill(result));
             Some(p)
         }
+        // ── WritableStream (WHATWG Streams Phase 4) ──
+        // WritableStreamConstructor is async-only: routed through the host-import
+        // `writable_stream_constructor` (linker.func_wrap_async in fetch.rs). It is
+        // never dispatched via the sync NativeCallable path.
+        NativeCallable::WritableStreamConstructor => Some(value::encode_undefined()),
+        NativeCallable::WritableStreamMethod { handle, kind } => {
+            call_writable_stream_method_from_caller(caller, this_val, handle, kind, &args)
+        }
+        NativeCallable::WritableStreamDefaultWriterMethod { handle, kind } => {
+            call_default_writer_method_from_caller(caller, this_val, handle, kind, &args)
+        }
+        NativeCallable::WritableStreamDefaultControllerMethod { handle, kind } => {
+            call_writable_controller_method_from_caller(caller, this_val, handle, kind, &args)
+        }
      }
 }
 
