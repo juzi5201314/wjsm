@@ -486,10 +486,10 @@ impl Compiler {
         // 通过 handle 表解析 boxed value，设置属性。
         {
             // local 0 = $boxed (i64), local 1 = $name_id (i32), local 2 = $value (i64)
-            // local 3 = (unused pad)
+            // local 3 = proto_handle (i32, reused from unused pad)
             // local 4 = num_props (i32), local 5 = i (i32), local 6 = slot_addr (i32), local 7 = capacity (i32)
             // local 8 = resolved ptr (i32), local 9 = handle_idx (i32), local 10 = flags (i32), local 11 = setter (i64)
-            // local 12 = shadow_sp_scratch (i32), local 13 = setter func_idx (i32), local 15 = setter env_obj (i64)
+            // local 12 = shadow_sp_scratch (i32), local 13 = setter func_idx (i32), local 14 = proto_ptr (i32), local 15 = setter env_obj (i64)
             let mut func = Function::new(vec![
                 (8, ValType::I32),
                 (1, ValType::I64),
@@ -681,6 +681,185 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
 
+            // ── 原型链遍历：查找可能需要调用的 setter ──
+            func.instruction(&WasmInstruction::Block(BlockType::Empty)); // proto_chain_done
+            // 读取当前对象的 proto_handle
+            func.instruction(&WasmInstruction::LocalGet(8));
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(3)); // proto_handle
+            // 如果 proto_handle == 0 或 -1，跳过原型链遍历
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(-1));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::I32Or);
+            func.instruction(&WasmInstruction::BrIf(0)); // 跳出 proto_chain_done → fall through
+            // 通过 handle 表解析 proto_handle → proto_ptr
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(14)); // proto_ptr
+            func.instruction(&WasmInstruction::Loop(BlockType::Empty)); // proto_chain_loop
+            // 搜索 proto 对象的 own properties
+            func.instruction(&WasmInstruction::LocalGet(14));
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 12,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(4)); // num_props
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::LocalSet(5)); // i = 0
+            func.instruction(&WasmInstruction::Block(BlockType::Empty)); // search_exit
+            func.instruction(&WasmInstruction::Loop(BlockType::Empty)); // search_loop
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::LocalGet(4));
+            func.instruction(&WasmInstruction::I32GeU);
+            func.instruction(&WasmInstruction::BrIf(1)); // 跳出 search_exit
+            // slot_addr = proto_ptr + 16 + i * 32
+            func.instruction(&WasmInstruction::LocalGet(14));
+            func.instruction(&WasmInstruction::I32Const(16));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Const(32));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalTee(6));
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalTee(10));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::LocalGet(10));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Call(self.string_eq_func_idx));
+            func.instruction(&WasmInstruction::I32Or);
+            func.instruction(&WasmInstruction::If(BlockType::Empty)); // name_found
+            // 在原型上找到属性，检查是否为 accessor
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 4,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalTee(10));
+            func.instruction(&WasmInstruction::I32Const(constants::FLAG_IS_ACCESSOR));
+            func.instruction(&WasmInstruction::I32And);
+            func.instruction(&WasmInstruction::I32Const(0));
+            func.instruction(&WasmInstruction::I32Ne);
+            func.instruction(&WasmInstruction::If(BlockType::Empty)); // is_accessor
+            // 是 accessor 属性，加载 setter (offset 24)
+            func.instruction(&WasmInstruction::LocalGet(6));
+            func.instruction(&WasmInstruction::I64Load(MemArg {
+                offset: 24,
+                align: 3,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalTee(11));
+            // 检查 setter 是否为 undefined
+            func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
+            func.instruction(&WasmInstruction::I64Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty)); // no_setter
+            // getter-only accessor，直接返回（不创建 own property）
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End); // end no_setter
+            // 调用 setter: Type 12 签名 (env_obj, this_val, args_base, args_count) -> i64
+            self.emit_resolve_callable_for_helper(&mut func, 11, 13, 15);
+            // 将 value (local 2) 写入影子栈
+            func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            func.instruction(&WasmInstruction::LocalSet(12));
+            func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            func.instruction(&WasmInstruction::LocalGet(2)); // value
+            func.instruction(&WasmInstruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            func.instruction(&WasmInstruction::I32Const(8));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+            // 推入参数: env_obj, this_val (local 0), args_base (local 12), args_count (1)
+            func.instruction(&WasmInstruction::LocalGet(15)); // env_obj
+            func.instruction(&WasmInstruction::LocalGet(0)); // this_val
+            func.instruction(&WasmInstruction::LocalGet(12)); // args_base
+            func.instruction(&WasmInstruction::I32Const(1)); // args_count
+            func.instruction(&WasmInstruction::LocalGet(13)); // func_idx
+            func.instruction(&WasmInstruction::CallIndirect {
+                type_index: 12,
+                table_index: 0,
+            });
+            // 恢复 shadow_sp
+            func.instruction(&WasmInstruction::LocalGet(12));
+            func.instruction(&WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+            func.instruction(&WasmInstruction::Drop);
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End); // end is_accessor
+            // 是数据属性 → 跳出原型链遍历，fall through 到创建 own data property
+            // br depth: If(name_found)=0, Loop(search_loop)=1, Block(search_exit)=2, Loop(proto_chain_loop)=3, Block(proto_chain_done)=4
+            func.instruction(&WasmInstruction::Br(4));
+            func.instruction(&WasmInstruction::End); // end name_found
+            func.instruction(&WasmInstruction::LocalGet(5));
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalSet(5));
+            func.instruction(&WasmInstruction::Br(0)); // continue search_loop
+            func.instruction(&WasmInstruction::End); // end search_loop
+            func.instruction(&WasmInstruction::End); // end search_exit
+            // 未在当前 proto 上找到属性 → 遍历到下一个 proto
+            func.instruction(&WasmInstruction::LocalGet(14));
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(3)); // proto_handle
+            // 如果 proto_handle == 0 或 -1，跳出原型链
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Eqz);
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(-1));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::I32Or);
+            func.instruction(&WasmInstruction::BrIf(1)); // 跳出 proto_chain_done
+            // 解析下一个 proto_handle → proto_ptr
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(4));
+            func.instruction(&WasmInstruction::I32Mul);
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 0,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(14)); // proto_ptr
+            func.instruction(&WasmInstruction::Br(0)); // continue proto_chain_loop
+            func.instruction(&WasmInstruction::End); // end proto_chain_loop
+            func.instruction(&WasmInstruction::End); // end proto_chain_done
+            // 恢复 num_props 为原始对象的值（原型链遍历可能覆盖了 local 4）
+            func.instruction(&WasmInstruction::LocalGet(8));
+            func.instruction(&WasmInstruction::I32Load(MemArg {
+                offset: 12,
+                align: 2,
+                memory_index: 0,
+            }));
+            func.instruction(&WasmInstruction::LocalSet(4));
             // ── 未找到 → 检查是否需要扩容 ──
             func.instruction(&WasmInstruction::LocalGet(8));
             func.instruction(&WasmInstruction::I32Load(MemArg {

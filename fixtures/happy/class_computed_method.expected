@@ -1,5 +1,5 @@
 exit_code: 0
 --- stdout ---
-undefined
-no-dynamic-method
+function
+called
 --- stderr ---

@@ -452,9 +452,31 @@ impl Lowerer {
                             let is_static = method.is_static;
                             let target = if is_static { ctor_dest } else { proto_dest };
 
-                            let method_name = match &method.key {
-                                swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                                swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                            let (method_name, m_key_dest) = match &method.key {
+                                swc_ast::PropName::Ident(ident) => {
+                                    let name = ident.sym.to_string();
+                                    let key_const = self.module.add_constant(Constant::String(name.clone()));
+                                    let key_dest = self.alloc_value();
+                                    self.current_function.append_instruction(
+                                        outer_block,
+                                        Instruction::Const { dest: key_dest, constant: key_const },
+                                    );
+                                    (name, key_dest)
+                                }
+                                swc_ast::PropName::Str(s) => {
+                                    let name = s.value.to_string_lossy().into_owned();
+                                    let key_const = self.module.add_constant(Constant::String(name.clone()));
+                                    let key_dest = self.alloc_value();
+                                    self.current_function.append_instruction(
+                                        outer_block,
+                                        Instruction::Const { dest: key_dest, constant: key_const },
+                                    );
+                                    (name, key_dest)
+                                }
+                                swc_ast::PropName::Computed(_) => {
+                                    let key_dest = self.lower_prop_name(&method.key, outer_block)?;
+                                    ("<computed>".to_string(), key_dest)
+                                }
                                 _ => continue,
                             };
 
@@ -544,17 +566,6 @@ impl Lowerer {
                                     constant: m_ref_const,
                                 },
                             );
-
-                            let m_key_const =
-                                self.module.add_constant(Constant::String(method_name));
-                            let m_key_dest = self.alloc_value();
-                            self.current_function.append_instruction(
-                                outer_block,
-                                Instruction::Const {
-                                    dest: m_key_dest,
-                                    constant: m_key_const,
-                                },
-                            );
                             self.current_function.append_instruction(
                                 outer_block,
                                 Instruction::SetProp {
@@ -573,9 +584,31 @@ impl Lowerer {
                             let is_static = method.is_static;
                             let target = if is_static { ctor_dest } else { proto_dest };
 
-                            let method_name = match &method.key {
-                                swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                                swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                            let (method_name, m_key_dest) = match &method.key {
+                                swc_ast::PropName::Ident(ident) => {
+                                    let name = ident.sym.to_string();
+                                    let key_const = self.module.add_constant(Constant::String(name.clone()));
+                                    let key_dest = self.alloc_value();
+                                    self.current_function.append_instruction(
+                                        outer_block,
+                                        Instruction::Const { dest: key_dest, constant: key_const },
+                                    );
+                                    (name, key_dest)
+                                }
+                                swc_ast::PropName::Str(s) => {
+                                    let name = s.value.to_string_lossy().into_owned();
+                                    let key_const = self.module.add_constant(Constant::String(name.clone()));
+                                    let key_dest = self.alloc_value();
+                                    self.current_function.append_instruction(
+                                        outer_block,
+                                        Instruction::Const { dest: key_dest, constant: key_const },
+                                    );
+                                    (name, key_dest)
+                                }
+                                swc_ast::PropName::Computed(_) => {
+                                    let key_dest = self.lower_prop_name(&method.key, outer_block)?;
+                                    ("<computed>".to_string(), key_dest)
+                                }
                                 _ => continue,
                             };
 
@@ -668,16 +701,6 @@ impl Lowerer {
                             // Build descriptor and call DefineProperty
                             let desc =
                                 self.build_descriptor(accessor, fn_dest, false, true, outer_block)?;
-                            let m_key_const =
-                                self.module.add_constant(Constant::String(method_name));
-                            let m_key_dest = self.alloc_value();
-                            self.current_function.append_instruction(
-                                outer_block,
-                                Instruction::Const {
-                                    dest: m_key_dest,
-                                    constant: m_key_const,
-                                },
-                            );
                             self.current_function.append_instruction(
                                 outer_block,
                                 Instruction::CallBuiltin {
@@ -1182,9 +1205,31 @@ impl Lowerer {
                         let is_static = method.is_static;
                         let target = if is_static { ctor_dest } else { proto_dest };
 
-                        let method_name = match &method.key {
-                            swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                            swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                        let (method_name, m_key_dest) = match &method.key {
+                            swc_ast::PropName::Ident(ident) => {
+                                let name = ident.sym.to_string();
+                                let key_const = self.module.add_constant(Constant::String(name.clone()));
+                                let key_dest = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::Const { dest: key_dest, constant: key_const },
+                                );
+                                (name, key_dest)
+                            }
+                            swc_ast::PropName::Str(s) => {
+                                let name = s.value.to_string_lossy().into_owned();
+                                let key_const = self.module.add_constant(Constant::String(name.clone()));
+                                let key_dest = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::Const { dest: key_dest, constant: key_const },
+                                );
+                                (name, key_dest)
+                            }
+                            swc_ast::PropName::Computed(_) => {
+                                let key_dest = self.lower_prop_name(&method.key, block)?;
+                                ("<computed>".to_string(), key_dest)
+                            }
                             _ => continue,
                         };
 
@@ -1270,16 +1315,6 @@ impl Lowerer {
                                 constant: m_ref_const,
                             },
                         );
-
-                        let m_key_const = self.module.add_constant(Constant::String(method_name));
-                        let m_key_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::Const {
-                                dest: m_key_dest,
-                                constant: m_key_const,
-                            },
-                        );
                         self.current_function.append_instruction(
                             block,
                             Instruction::SetProp {
@@ -1298,9 +1333,31 @@ impl Lowerer {
                         let is_static = method.is_static;
                         let target = if is_static { ctor_dest } else { proto_dest };
 
-                        let method_name = match &method.key {
-                            swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
-                            swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+                        let (method_name, m_key_dest) = match &method.key {
+                            swc_ast::PropName::Ident(ident) => {
+                                let name = ident.sym.to_string();
+                                let key_const = self.module.add_constant(Constant::String(name.clone()));
+                                let key_dest = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::Const { dest: key_dest, constant: key_const },
+                                );
+                                (name, key_dest)
+                            }
+                            swc_ast::PropName::Str(s) => {
+                                let name = s.value.to_string_lossy().into_owned();
+                                let key_const = self.module.add_constant(Constant::String(name.clone()));
+                                let key_dest = self.alloc_value();
+                                self.current_function.append_instruction(
+                                    block,
+                                    Instruction::Const { dest: key_dest, constant: key_const },
+                                );
+                                (name, key_dest)
+                            }
+                            swc_ast::PropName::Computed(_) => {
+                                let key_dest = self.lower_prop_name(&method.key, block)?;
+                                ("<computed>".to_string(), key_dest)
+                            }
                             _ => continue,
                         };
 
@@ -1387,15 +1444,6 @@ impl Lowerer {
                         );
 
                         let desc = self.build_descriptor(accessor, fn_dest, false, true, block)?;
-                        let m_key_const = self.module.add_constant(Constant::String(method_name));
-                        let m_key_dest = self.alloc_value();
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::Const {
-                                dest: m_key_dest,
-                                constant: m_key_const,
-                            },
-                        );
                         self.current_function.append_instruction(
                             block,
                             Instruction::CallBuiltin {
