@@ -18,15 +18,13 @@ pub(crate) fn define_fetch(
             Box::new(async move {
                 let promise = alloc_promise_from_caller(&mut caller, PromiseEntry::pending());
 
-                let (method, url, headers_handle, body_opt, _redirect, _signal_handle) =
+                let (method, url, headers_handle, body_opt, redirect, signal_handle) =
                     parse_fetch_input(&mut caller, input, init);
-
                 if url.is_empty() {
                     let err = alloc_type_error_from_caller(&mut caller, "Failed to parse URL from request.");
                     settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
                     return promise;
                 }
-
                 // data: URL — 同步路径（保持现有行为）
                 if url.starts_with("data:") {
                     match perform_data_url_fetch(&mut caller, &url) {
@@ -40,9 +38,8 @@ pub(crate) fn define_fetch(
                     }
                     return promise;
                 }
-
                 // HTTP/HTTPS — 异步路径
-                match perform_http_fetch(&mut caller, method, url, headers_handle, body_opt, _redirect, None).await {
+                match perform_http_fetch(&mut caller, method, url, headers_handle, body_opt, redirect, signal_handle).await {
                     Ok(response_val) => {
                         settle_promise(caller.data_mut(), promise, PromiseSettlement::Fulfill(response_val));
                     }
@@ -117,6 +114,27 @@ pub(crate) fn define_fetch(
         "env",
         "response_constructor",
         response_constructor,
+    )?;
+
+    let abort_controller_constructor = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let args: Vec<i64> = (0..args_count.max(0))
+                .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
+                .collect();
+            construct_abort_controller(&mut caller, this_val, &args).unwrap_or_else(value::encode_undefined)
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "abort_controller_constructor",
+        abort_controller_constructor,
     )?;
     Ok(())
 }

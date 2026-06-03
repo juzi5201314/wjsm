@@ -2243,6 +2243,12 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "abort_controller_constructor",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::AbortControllerConstructor)),
+        group: None,
+    },
+    HostImportSpec {
         name: "weakref_proto_deref",
         type_idx: 3,
         key: Some(HostImportKey::Builtin(Builtin::WeakRefProtoDeref)),

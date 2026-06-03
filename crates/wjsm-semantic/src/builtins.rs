@@ -80,6 +80,7 @@ pub(crate) fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "Headers" => Some(Builtin::HeadersConstructor),
         "Request" => Some(Builtin::RequestConstructor),
         "Response" => Some(Builtin::ResponseConstructor),
+        "AbortController" => Some(Builtin::AbortControllerConstructor),
         "eval" => Some(Builtin::Eval),
         "Symbol" => Some(Builtin::SymbolCreate),
         "queueMicrotask" => Some(Builtin::QueueMicrotask),

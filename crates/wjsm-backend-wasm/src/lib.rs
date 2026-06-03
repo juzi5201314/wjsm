@@ -666,6 +666,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::HeadersConstructor => ("Headers", 1),
         Builtin::RequestConstructor => ("Request", 2),
         Builtin::ResponseConstructor => ("Response", 2),
+        Builtin::AbortControllerConstructor => ("AbortController", 1),
         Builtin::Eval => ("eval", 2),
         Builtin::EvalIndirect => ("eval.indirect", 1),
         Builtin::EvalResult => ("eval.result", 1),
