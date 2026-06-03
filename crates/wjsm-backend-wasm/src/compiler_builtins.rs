@@ -1983,7 +1983,8 @@ impl Compiler {
             | Builtin::HeadersConstructor
             | Builtin::RequestConstructor
             | Builtin::ResponseConstructor
-            | Builtin::AbortControllerConstructor => {
+            | Builtin::AbortControllerConstructor
+            | Builtin::ReadableStreamConstructor => {
                 self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
                 self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
                 self.emit_shadow_stack_overflow_check((args.len() * 8) as i32);

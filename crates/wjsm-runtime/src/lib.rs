@@ -695,7 +695,13 @@ fn register_complex_bridges(
                     let _ = define_host_data_property(&mut caller, map_result, "has", has_fn);
                     let _ = define_host_data_property(&mut caller, map_result, "delete", delete_fn);
                     let _ = define_host_data_property(&mut caller, map_result, "clear", clear_fn);
-                    let _ = define_host_data_property(&mut caller, map_result, "size", size_fn);
+                    let _ = define_host_accessor_property(
+                        &mut caller,
+                        map_result,
+                        "size",
+                        size_fn,
+                        value::encode_undefined(),
+                    );
                     let _ =
                         define_host_data_property(&mut caller, map_result, "forEach", for_each_fn);
                     let _ = define_host_data_property(&mut caller, map_result, "keys", keys_fn);
@@ -974,6 +980,7 @@ impl Clone for RuntimeState {
             http_response_table: self.http_response_table.clone(),
             readable_stream_table: self.readable_stream_table.clone(),
             reader_table: self.reader_table.clone(),
+            stream_controller_table: self.stream_controller_table.clone(),
             shared_state: self.shared_state.clone(),
             non_extensible_handles: self.non_extensible_handles.clone(),
             scope_records: self.scope_records.clone(),
@@ -1077,6 +1084,8 @@ struct RuntimeState {
     readable_stream_table: Arc<Mutex<Vec<ReadableStreamEntry>>>,
     /// Reader 侧表：存储 reader → stream 映射
     reader_table: Arc<Mutex<Vec<ReaderEntry>>>,
+    /// Controller 侧表（ReadableStream DefaultController 等）
+    stream_controller_table: Arc<Mutex<Vec<StreamControllerEntry>>>,
     /// None in normal (non-agent) execution.
     shared_state: Option<Arc<SharedRuntimeState>>,
     /// 被 preventExtensions 标记为不可扩展对象的 handle 集合（使用完整的 NaN-boxed 值作为 key）
@@ -1190,6 +1199,7 @@ impl RuntimeState {
             http_response_table: Arc::new(Mutex::new(Vec::new())),
             readable_stream_table: Arc::new(Mutex::new(Vec::new())),
             reader_table: Arc::new(Mutex::new(Vec::new())),
+            stream_controller_table: Arc::new(Mutex::new(Vec::new())),
             shared_state: Some(Arc::new(SharedRuntimeState {
                 sab_table: Arc::new(Mutex::new(Vec::new())),
                 agent_state: Arc::new(AgentState {
@@ -1421,11 +1431,53 @@ struct ReadableStreamEntry {
     disturbed: bool,
     locked: bool,
     http_response_handle: Option<u32>,
+    /// 关联的 controller handle（自定义流使用；HTTP 流为 None）
+    controller_handle: Option<u32>,
+    /// 是否为 byte stream（Phase 3 BYOB 支持预留）
+    is_byte_stream: bool,
 }
 
 #[derive(Clone, Debug)]
 struct ReaderEntry {
     stream_handle: u32,
+    /// 等待 enqueue 的 read Promise（自定义流路径使用）
+    pending_read_promise: Option<i64>,
+    /// reader.closed Promise
+    closed_promise: Option<i64>,
+}
+
+/// Controller 类型
+#[derive(Clone, Copy, PartialEq)]
+enum ControllerKind {
+    ReadableDefault,
+    // 后续 Phase 使用：
+    // ReadableByteStream,
+    // Writable,
+    // Transform,
+}
+
+/// Stream Controller 侧表条目
+#[derive(Clone)]
+struct StreamControllerEntry {
+    kind: ControllerKind,
+    stream_handle: u32,
+    /// 排队的 chunk（NaN-boxed JS values）
+    chunk_queue: VecDeque<i64>,
+    high_water_mark: f64,
+    strategy_size: Option<i64>,
+    started: bool,
+    close_requested: bool,
+    // Phase 3-5 预留字段
+    #[allow(dead_code)]
+    byob_reader_handle: Option<u32>,
+    #[allow(dead_code)]
+    pull_requested: bool,
+    #[allow(dead_code)]
+    abort_requested: bool,
+    #[allow(dead_code)]
+    abort_reason: Option<i64>,
+    #[allow(dead_code)]
+    flush_requested: bool,
 }
 
 fn bigint_low_64_bytes(value: &num_bigint::BigInt) -> [u8; 8] {
@@ -2095,6 +2147,29 @@ enum NativeCallable {
     AbortControllerAbort {
         signal_handle: u32,
     },
+    // ── ReadableStream (WHATWG Streams Phase 1) ──
+    ReadableStreamConstructor,
+    ReadableStreamMethod {
+        handle: u32,
+        kind: ReadableStreamMethodKind,
+    },
+    ReadableStreamDefaultReaderMethod {
+        handle: u32,
+        kind: ReadableStreamDefaultReaderMethodKind,
+    },
+    ReadableStreamDefaultControllerMethod {
+        handle: u32,
+        kind: ReadableStreamDefaultControllerMethodKind,
+    },
+    // ── ReadableStream async iterator (WHATWG Streams Phase 2) ──
+    /// ReadableStream async iterator next()
+    ReadableStreamAsyncIteratorNext {
+        reader_handle: u32,
+    },
+    /// ReadableStream async iterator return()
+    ReadableStreamAsyncIteratorReturn {
+        reader_handle: u32,
+    },
 }
 #[derive(Clone, Copy)]
 enum MapSetMethodKind {
@@ -2200,6 +2275,28 @@ enum StreamMethodKind {
 enum ReaderMethodKind {
     Read,
     ReleaseLock,
+}
+// ── ReadableStream (WHATWG Streams Phase 1) method kinds ──
+#[derive(Clone, Copy)]
+enum ReadableStreamMethodKind {
+    GetReader,
+    GetLocked,
+    Cancel,
+    Tee,
+    AsyncIterator,
+}
+#[derive(Clone, Copy)]
+enum ReadableStreamDefaultReaderMethodKind {
+    Read,
+    ReleaseLock,
+    GetClosed,
+}
+#[derive(Clone, Copy)]
+enum ReadableStreamDefaultControllerMethodKind {
+    Enqueue,
+    Close,
+    Error,
+    GetDesiredSize,
 }
 #[derive(Clone, Copy)]
 enum PromiseCombinatorReactionKind {

@@ -95,6 +95,8 @@ fn async_reentry_audit_forbidden_sync_patterns() {
             // runtime_json.rs sync call_wasm_callback (ToPrimitive + reviver)
             || h.contains("call_wasm_callback(caller, method, value, &[])")
             || h.contains("call_wasm_callback(caller, reviver, holder,")
+            // streams_readable.rs sync call_wasm_callback (source.start(controller) during ReadableStream construction)
+            || h.contains("call_wasm_callback(caller, start_fn, source,")
             // try_compiled_eval_from_caller sync (Instance::new + entry.call)
             || (h.contains("Instance::new(") && h.contains("eval_module"))
             || h.contains("Ok(entry.call(")

@@ -1,5 +1,6 @@
 use crate::*;
 use wasmtime::Caller;
+use super::streams_readable::create_closed_readable_stream_from_bytes;
 
 // ── Object construction helpers (Headers / Response / Request) ──────────────
 
@@ -75,8 +76,24 @@ pub(crate) fn create_response_object(
     let redirected_val = value::encode_bool(redirected);
     let _ = define_host_data_property_from_caller(caller, obj, "redirected", redirected_val);
 
-    // body / bodyUsed
-    let _ = define_host_data_property_from_caller(caller, obj, "body", value::encode_null());
+    // body / bodyUsed — 非空 body 创建已关闭的 ReadableStream，空 body 保持 null
+    let body_bytes_opt = {
+        let table = caller
+            .data()
+            .fetch_response_table
+            .lock()
+            .expect("fetch_response_table mutex");
+        table
+            .get(handle as usize)
+            .filter(|entry| !entry.body.is_empty())
+            .map(|entry| entry.body.clone())
+    };
+    let body_val = if let Some(ref bytes) = body_bytes_opt {
+        create_closed_readable_stream_from_bytes(caller, bytes)
+    } else {
+        value::encode_null()
+    };
+    let _ = define_host_data_property_from_caller(caller, obj, "body", body_val);
     let _ =
         define_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(false));
 
@@ -1386,6 +1403,8 @@ pub(crate) fn create_readable_stream_object(
             disturbed: false,
             locked: false,
             http_response_handle: Some(http_response_handle),
+            controller_handle: None,
+            is_byte_stream: false,
         });
         handle
     };
@@ -1412,7 +1431,11 @@ pub(crate) fn create_reader_object(
     let reader_handle = {
         let mut table = caller.data().reader_table.lock().expect("reader mutex");
         let handle = table.len() as u32;
-        table.push(ReaderEntry { stream_handle });
+        table.push(ReaderEntry {
+            stream_handle,
+            pending_read_promise: None,
+            closed_promise: None,
+        });
         handle
     };
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");

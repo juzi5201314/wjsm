@@ -1,0 +1,15 @@
+exit_code: 0
+--- stdout ---
+object
+false
+object
+function
+function
+true
+false
+a
+false
+b
+true
+undefined
+--- stderr ---

@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+object
+false
+true
+false
+hello
+false
+world
+true
+undefined
+--- stderr ---
