@@ -5,9 +5,9 @@ use wasmtime::{Caller, Linker};
 
 use super::proxy_reflect::{
     extract_array_like_elements, reflect_apply_impl_async, reflect_construct_impl_async,
-    reflect_delete_property_impl,
-    reflect_get_own_property_descriptor_impl, reflect_get_prototype_of_async, reflect_has_impl,
-    reflect_own_keys_impl, reflect_set_impl, reflect_set_prototype_of_fn_impl,
+    reflect_delete_property_impl, reflect_get_own_property_descriptor_impl,
+    reflect_get_prototype_of_async, reflect_has_impl, reflect_own_keys_impl, reflect_set_impl,
+    reflect_set_prototype_of_fn_impl,
 };
 use crate::*;
 
@@ -28,20 +28,37 @@ pub(crate) fn define_proxy_reflect_async(
     linker.func_wrap_async(
         "env",
         "reflect_set",
-        |mut caller: Caller<'_, RuntimeState>, (target, prop, val, receiver): (i64, i64, i64, i64)| {
+        |mut caller: Caller<'_, RuntimeState>,
+         (target, prop, val, receiver): (i64, i64, i64, i64)| {
             Box::new(async move {
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
-                    let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
+                    let entry = {
+                        let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                        table.get(handle).cloned()
+                    };
                     if let Some(entry) = entry {
                         if entry.revoked {
-                            set_runtime_error(caller.data(), "TypeError: Cannot perform 'set' on a proxy that has been revoked".to_string());
+                            set_runtime_error(
+                                caller.data(),
+                                "TypeError: Cannot perform 'set' on a proxy that has been revoked"
+                                    .to_string(),
+                            );
                             return value::encode_bool(false);
                         }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                            let trap = read_object_property_by_name(&mut caller, handler_ptr, "set").unwrap_or_else(value::encode_undefined);
+                            let trap =
+                                read_object_property_by_name(&mut caller, handler_ptr, "set")
+                                    .unwrap_or_else(value::encode_undefined);
                             if !value::is_undefined(trap) && !value::is_null(trap) {
-                                let result = call_wasm_callback_async(&mut caller, trap, entry.handler, &[entry.target, prop, val, receiver]).await.unwrap_or_else(|_| value::encode_bool(false));
+                                let result = call_wasm_callback_async(
+                                    &mut caller,
+                                    trap,
+                                    entry.handler,
+                                    &[entry.target, prop, val, receiver],
+                                )
+                                .await
+                                .unwrap_or_else(|_| value::encode_bool(false));
                                 return value::encode_bool(nanbox_to_bool(result));
                             }
                         }
@@ -50,7 +67,6 @@ pub(crate) fn define_proxy_reflect_async(
                     return value::encode_bool(false);
                 }
                 reflect_set_impl(&mut caller, target, prop, val)
-
             })
         },
     )?;
@@ -62,16 +78,32 @@ pub(crate) fn define_proxy_reflect_async(
             Box::new(async move {
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
-                    let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
+                    let entry = {
+                        let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                        table.get(handle).cloned()
+                    };
                     if let Some(entry) = entry {
                         if entry.revoked {
-                            set_runtime_error(caller.data(), "TypeError: Cannot perform 'has' on a proxy that has been revoked".to_string());
+                            set_runtime_error(
+                                caller.data(),
+                                "TypeError: Cannot perform 'has' on a proxy that has been revoked"
+                                    .to_string(),
+                            );
                             return value::encode_bool(false);
                         }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                            let trap = read_object_property_by_name(&mut caller, handler_ptr, "has").unwrap_or_else(value::encode_undefined);
+                            let trap =
+                                read_object_property_by_name(&mut caller, handler_ptr, "has")
+                                    .unwrap_or_else(value::encode_undefined);
                             if !value::is_undefined(trap) && !value::is_null(trap) {
-                                let result = call_wasm_callback_async(&mut caller, trap, entry.handler, &[entry.target, prop]).await.unwrap_or_else(|_| value::encode_bool(false));
+                                let result = call_wasm_callback_async(
+                                    &mut caller,
+                                    trap,
+                                    entry.handler,
+                                    &[entry.target, prop],
+                                )
+                                .await
+                                .unwrap_or_else(|_| value::encode_bool(false));
                                 return value::encode_bool(nanbox_to_bool(result));
                             }
                         }
@@ -80,7 +112,6 @@ pub(crate) fn define_proxy_reflect_async(
                     return value::encode_bool(false);
                 }
                 reflect_has_impl(&mut caller, target, prop)
-
             })
         },
     )?;
@@ -201,15 +232,26 @@ pub(crate) fn define_proxy_reflect_async(
         },
     )?;
 
-    linker.func_wrap_async("env", "reflect_get_prototype_of", |mut caller: Caller<'_, RuntimeState>, (target,): (i64,)| {
-        Box::new(async move {
-            if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
-                set_runtime_error(caller.data(), "TypeError: Reflect.getPrototypeOf called on non-object".to_string());
-                return value::encode_undefined();
-            }
-            reflect_get_prototype_of_async(&mut caller, target).await
-        })
-    })?;
+    linker.func_wrap_async(
+        "env",
+        "reflect_get_prototype_of",
+        |mut caller: Caller<'_, RuntimeState>, (target,): (i64,)| {
+            Box::new(async move {
+                if !value::is_object(target)
+                    && !value::is_array(target)
+                    && !value::is_function(target)
+                    && !value::is_proxy(target)
+                {
+                    set_runtime_error(
+                        caller.data(),
+                        "TypeError: Reflect.getPrototypeOf called on non-object".to_string(),
+                    );
+                    return value::encode_undefined();
+                }
+                reflect_get_prototype_of_async(&mut caller, target).await
+            })
+        },
+    )?;
 
     linker.func_wrap_async("env", "reflect_set_prototype_of", |mut caller: Caller<'_, RuntimeState>, (target, proto): (i64, i64)| {
         Box::new(async move {
@@ -260,25 +302,51 @@ pub(crate) fn define_proxy_reflect_async(
         })
     })?;
 
-    linker.func_wrap_async("env", "reflect_is_extensible", |mut caller: Caller<'_, RuntimeState>, (target,): (i64,)| {
-        Box::new(async move {
-            if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
-                set_runtime_error(caller.data(), "TypeError: Reflect.isExtensible called on non-object".to_string());
-                return value::encode_bool(false);
-            }
-            value::encode_bool(proxy_or_target_is_extensible_impl_async(&mut caller, target).await)
-        })
-    })?;
+    linker.func_wrap_async(
+        "env",
+        "reflect_is_extensible",
+        |mut caller: Caller<'_, RuntimeState>, (target,): (i64,)| {
+            Box::new(async move {
+                if !value::is_object(target)
+                    && !value::is_array(target)
+                    && !value::is_function(target)
+                    && !value::is_proxy(target)
+                {
+                    set_runtime_error(
+                        caller.data(),
+                        "TypeError: Reflect.isExtensible called on non-object".to_string(),
+                    );
+                    return value::encode_bool(false);
+                }
+                value::encode_bool(
+                    proxy_or_target_is_extensible_impl_async(&mut caller, target).await,
+                )
+            })
+        },
+    )?;
 
-    linker.func_wrap_async("env", "reflect_prevent_extensions", |mut caller: Caller<'_, RuntimeState>, (target,): (i64,)| {
-        Box::new(async move {
-            if !value::is_object(target) && !value::is_array(target) && !value::is_function(target) && !value::is_proxy(target) {
-                set_runtime_error(caller.data(), "TypeError: Reflect.preventExtensions called on non-object".to_string());
-                return value::encode_bool(false);
-            }
-            value::encode_bool(proxy_or_target_prevent_extensions_impl_async(&mut caller, target).await)
-        })
-    })?;
+    linker.func_wrap_async(
+        "env",
+        "reflect_prevent_extensions",
+        |mut caller: Caller<'_, RuntimeState>, (target,): (i64,)| {
+            Box::new(async move {
+                if !value::is_object(target)
+                    && !value::is_array(target)
+                    && !value::is_function(target)
+                    && !value::is_proxy(target)
+                {
+                    set_runtime_error(
+                        caller.data(),
+                        "TypeError: Reflect.preventExtensions called on non-object".to_string(),
+                    );
+                    return value::encode_bool(false);
+                }
+                value::encode_bool(
+                    proxy_or_target_prevent_extensions_impl_async(&mut caller, target).await,
+                )
+            })
+        },
+    )?;
 
     linker.func_wrap_async("env", "reflect_get_own_property_descriptor", |mut caller: Caller<'_, RuntimeState>, (target, prop): (i64, i64)| {
         Box::new(async move {
@@ -317,17 +385,21 @@ pub(crate) fn define_proxy_reflect_async(
         })
     })?;
 
-    linker.func_wrap_async("env", "reflect_define_property", |mut caller: Caller<'_, RuntimeState>, (target, prop, descriptor): (i64, i64, i64)| {
-        Box::new(async move {
-            match define_property_internal_async(&mut caller, target, prop, descriptor).await {
-                Ok(success) => value::encode_bool(success),
-                Err(e) => {
-                    set_runtime_error(caller.data(), e);
-                    value::encode_bool(false)
+    linker.func_wrap_async(
+        "env",
+        "reflect_define_property",
+        |mut caller: Caller<'_, RuntimeState>, (target, prop, descriptor): (i64, i64, i64)| {
+            Box::new(async move {
+                match define_property_internal_async(&mut caller, target, prop, descriptor).await {
+                    Ok(success) => value::encode_bool(success),
+                    Err(e) => {
+                        set_runtime_error(caller.data(), e);
+                        value::encode_bool(false)
+                    }
                 }
-            }
-        })
-    })?;
+            })
+        },
+    )?;
 
     linker.func_wrap_async("env", "reflect_own_keys", |mut caller: Caller<'_, RuntimeState>, (target,): (i64,)| {
         Box::new(async move {
@@ -401,77 +473,144 @@ pub(crate) fn define_proxy_reflect_async(
         })
     })?;
 
-    linker.func_wrap_async("env", "proxy.apply", |mut caller: Caller<'_, RuntimeState>, (proxy, this_val, args_base, args_count): (i64, i64, i32, i32)| {
-        Box::new(async move {
-            let handle = value::decode_proxy_handle(proxy) as usize;
-            let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
-            if let Some(entry) = entry {
-                if entry.revoked {
-                    set_runtime_error(caller.data(), "TypeError: Cannot perform call on a proxy that has been revoked".to_string());
-                    return value::encode_undefined();
-                }
-                if !is_callable_in_runtime(&mut caller, entry.target) {
-                    set_runtime_error(caller.data(), "TypeError: Proxy target must be callable".to_string());
-                    return value::encode_undefined();
-                }
-                let args: Vec<i64> = (0..args_count.max(0)).map(|i| read_shadow_arg(&mut caller, args_base, i as u32)).collect();
-                if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                    let trap = read_object_property_by_name(&mut caller, handler_ptr, "apply").unwrap_or_else(value::encode_undefined);
-                    if !value::is_undefined(trap) && !value::is_null(trap) {
-                        let arr = alloc_array(&mut caller, args.len() as u32);
-                        for (i, &arg) in args.iter().enumerate() { set_array_elem(&mut caller, arr, i as i32, arg); }
-                        return call_wasm_callback_async(&mut caller, trap, entry.handler, &[entry.target, this_val, arr]).await.unwrap_or_else(|_| {
-                            set_runtime_error(caller.data(), "TypeError: Proxy apply trap failed".to_string());
-                            value::encode_undefined()
-                        });
+    linker.func_wrap_async(
+        "env",
+        "proxy.apply",
+        |mut caller: Caller<'_, RuntimeState>,
+         (proxy, this_val, args_base, args_count): (i64, i64, i32, i32)| {
+            Box::new(async move {
+                let handle = value::decode_proxy_handle(proxy) as usize;
+                let entry = {
+                    let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    table.get(handle).cloned()
+                };
+                if let Some(entry) = entry {
+                    if entry.revoked {
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: Cannot perform call on a proxy that has been revoked"
+                                .to_string(),
+                        );
+                        return value::encode_undefined();
                     }
-                }
-                return reflect_apply_impl_async(&mut caller, entry.target, this_val, &args).await;
-            }
-            value::encode_undefined()
-        })
-    })?;
-
-    linker.func_wrap_async("env", "proxy.construct", |mut caller: Caller<'_, RuntimeState>, (proxy, _this_val, args_base, args_count): (i64, i64, i32, i32)| {
-        Box::new(async move {
-            let handle = value::decode_proxy_handle(proxy) as usize;
-            let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
-            if let Some(entry) = entry {
-                if entry.revoked {
-                    set_runtime_error(caller.data(), "TypeError: Cannot perform construct on a proxy that has been revoked".to_string());
-                    return value::encode_undefined();
-                }
-                if !is_constructor_in_runtime(&mut caller, entry.target) {
-                    set_runtime_error(caller.data(), "TypeError: Proxy target must be a constructor".to_string());
-                    return value::encode_undefined();
-                }
-                let args: Vec<i64> = (0..args_count.max(0)).map(|i| read_shadow_arg(&mut caller, args_base, i as u32)).collect();
-                if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                    let trap = read_object_property_by_name(&mut caller, handler_ptr, "construct").unwrap_or_else(value::encode_undefined);
-                    if !value::is_undefined(trap) && !value::is_null(trap) {
-                        let arr = alloc_array(&mut caller, args.len() as u32);
-                        for (i, &arg) in args.iter().enumerate() { set_array_elem(&mut caller, arr, i as i32, arg); }
-                        let trap_result = call_wasm_callback_async(&mut caller, trap, entry.handler, &[entry.target, arr, proxy]).await;
-                        return match trap_result {
-                            Ok(res) => {
-                                if !value::is_js_object(res) {
-                                    set_runtime_error(caller.data(), "TypeError: Proxy construct trap returned non-object".to_string());
-                                    value::encode_undefined()
-                                } else { res }
+                    if !is_callable_in_runtime(&mut caller, entry.target) {
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: Proxy target must be callable".to_string(),
+                        );
+                        return value::encode_undefined();
+                    }
+                    let args: Vec<i64> = (0..args_count.max(0))
+                        .map(|i| read_shadow_arg(&mut caller, args_base, i as u32))
+                        .collect();
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "apply")
+                            .unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let arr = alloc_array(&mut caller, args.len() as u32);
+                            for (i, &arg) in args.iter().enumerate() {
+                                set_array_elem(&mut caller, arr, i as i32, arg);
                             }
-                            Err(e) => {
-                                set_runtime_error(caller.data(), format!("TypeError: Proxy construct trap failed: {}", e));
+                            return call_wasm_callback_async(
+                                &mut caller,
+                                trap,
+                                entry.handler,
+                                &[entry.target, this_val, arr],
+                            )
+                            .await
+                            .unwrap_or_else(|_| {
+                                set_runtime_error(
+                                    caller.data(),
+                                    "TypeError: Proxy apply trap failed".to_string(),
+                                );
                                 value::encode_undefined()
-                            }
-                        };
+                            });
+                        }
                     }
+                    return reflect_apply_impl_async(&mut caller, entry.target, this_val, &args)
+                        .await;
                 }
-                return reflect_construct_impl_async(&mut caller, entry.target, &args, proxy).await;
-            }
-            value::encode_undefined()
-        })
-    })?;
+                value::encode_undefined()
+            })
+        },
+    )?;
 
+    linker.func_wrap_async(
+        "env",
+        "proxy.construct",
+        |mut caller: Caller<'_, RuntimeState>,
+         (proxy, _this_val, args_base, args_count): (i64, i64, i32, i32)| {
+            Box::new(async move {
+                let handle = value::decode_proxy_handle(proxy) as usize;
+                let entry = {
+                    let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    table.get(handle).cloned()
+                };
+                if let Some(entry) = entry {
+                    if entry.revoked {
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: Cannot perform construct on a proxy that has been revoked"
+                                .to_string(),
+                        );
+                        return value::encode_undefined();
+                    }
+                    if !is_constructor_in_runtime(&mut caller, entry.target) {
+                        set_runtime_error(
+                            caller.data(),
+                            "TypeError: Proxy target must be a constructor".to_string(),
+                        );
+                        return value::encode_undefined();
+                    }
+                    let args: Vec<i64> = (0..args_count.max(0))
+                        .map(|i| read_shadow_arg(&mut caller, args_base, i as u32))
+                        .collect();
+                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
+                        let trap =
+                            read_object_property_by_name(&mut caller, handler_ptr, "construct")
+                                .unwrap_or_else(value::encode_undefined);
+                        if !value::is_undefined(trap) && !value::is_null(trap) {
+                            let arr = alloc_array(&mut caller, args.len() as u32);
+                            for (i, &arg) in args.iter().enumerate() {
+                                set_array_elem(&mut caller, arr, i as i32, arg);
+                            }
+                            let trap_result = call_wasm_callback_async(
+                                &mut caller,
+                                trap,
+                                entry.handler,
+                                &[entry.target, arr, proxy],
+                            )
+                            .await;
+                            return match trap_result {
+                                Ok(res) => {
+                                    if !value::is_js_object(res) {
+                                        set_runtime_error(
+                                            caller.data(),
+                                            "TypeError: Proxy construct trap returned non-object"
+                                                .to_string(),
+                                        );
+                                        value::encode_undefined()
+                                    } else {
+                                        res
+                                    }
+                                }
+                                Err(e) => {
+                                    set_runtime_error(
+                                        caller.data(),
+                                        format!("TypeError: Proxy construct trap failed: {}", e),
+                                    );
+                                    value::encode_undefined()
+                                }
+                            };
+                        }
+                    }
+                    return reflect_construct_impl_async(&mut caller, entry.target, &args, proxy)
+                        .await;
+                }
+                value::encode_undefined()
+            })
+        },
+    )?;
 
     Ok(())
 }

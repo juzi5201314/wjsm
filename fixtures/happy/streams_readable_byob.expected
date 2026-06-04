@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+byobRequest null: true
+locked before: false
+locked after: true
+done: false
+value length: 4
+value byte0: 65
+value byte1: 66
+view byte2: 67
+second done: true
+--- stderr ---

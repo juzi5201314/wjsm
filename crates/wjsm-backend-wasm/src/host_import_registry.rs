@@ -2464,6 +2464,28 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         key: Some(HostImportKey::Builtin(Builtin::WritableStreamConstructor)),
         group: None,
     },
+    HostImportSpec {
+        name: "transform_stream_constructor",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(Builtin::TransformStreamConstructor)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "count_queuing_strategy_constructor",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(
+            Builtin::CountQueuingStrategyConstructor,
+        )),
+        group: None,
+    },
+    HostImportSpec {
+        name: "byte_length_queuing_strategy_constructor",
+        type_idx: 12,
+        key: Some(HostImportKey::Builtin(
+            Builtin::ByteLengthQueuingStrategyConstructor,
+        )),
+        group: None,
+    },
 ];
 
 pub fn host_import_specs() -> &'static [HostImportSpec] {

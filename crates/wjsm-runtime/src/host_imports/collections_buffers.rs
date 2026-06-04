@@ -1834,13 +1834,19 @@ pub(crate) fn define_collections_buffers(
                 ("Headers", NativeCallable::HeadersConstructor),
                 ("Request", NativeCallable::RequestConstructor),
                 ("Response", NativeCallable::ResponseConstructor),
+                ("ReadableStream", NativeCallable::ReadableStreamConstructor),
+                ("WritableStream", NativeCallable::WritableStreamConstructor),
                 (
-                    "ReadableStream",
-                    NativeCallable::ReadableStreamConstructor,
+                    "TransformStream",
+                    NativeCallable::TransformStreamConstructor,
                 ),
                 (
-                    "WritableStream",
-                    NativeCallable::WritableStreamConstructor,
+                    "CountQueuingStrategy",
+                    NativeCallable::CountQueuingStrategyConstructor,
+                ),
+                (
+                    "ByteLengthQueuingStrategy",
+                    NativeCallable::ByteLengthQueuingStrategyConstructor,
                 ),
                 (
                     "AbortController",

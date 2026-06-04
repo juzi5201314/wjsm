@@ -64,8 +64,14 @@ fn async_reentry_audit_forbidden_sync_patterns() {
     let patterns: &[(&str, &str)] = &[
         ("sync call_wasm_callback", "call_wasm_callback("),
         ("sync resolve_and_call", "resolve_and_call("),
-        ("sync resolve_callable_and_call", "resolve_callable_and_call("),
-        ("sync drain_microtasks_from_caller", "drain_microtasks_from_caller("),
+        (
+            "sync resolve_callable_and_call",
+            "resolve_callable_and_call(",
+        ),
+        (
+            "sync drain_microtasks_from_caller",
+            "drain_microtasks_from_caller(",
+        ),
         ("Instance::new", "Instance::new("),
         ("TypedFunc::call ", ".call("),
     ];

@@ -1,9 +1,10 @@
 // ReadableStream 核心实现（WHATWG Streams Phase 1）
 // 包含：构造函数、DefaultController、DefaultReader、locked getter、cancel
 
+use super::fetch_core::{alloc_type_error_from_caller, push_native_callable};
+use super::streams_transform::{call_flush_from_writable_close, call_transform_from_writable};
 use crate::*;
 use std::collections::VecDeque;
-use super::fetch_core::{push_native_callable, alloc_type_error_from_caller};
 
 /// 创建 TypeError 异常值（NaN-boxed TAG_EXCEPTION）
 fn type_error_exception(caller: &mut Caller<'_, RuntimeState>, message: &str) -> i64 {
@@ -18,6 +19,27 @@ fn type_error_exception(caller: &mut Caller<'_, RuntimeState>, message: &str) ->
     value::encode_exception(idx)
 }
 
+/// 标记 Response.body 对应的 Response 已被消费。
+pub(crate) fn mark_response_body_used_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    response_handle: Option<u32>,
+    response_obj: Option<i64>,
+) {
+    if let Some(handle) = response_handle {
+        let mut table = caller
+            .data()
+            .fetch_response_table
+            .lock()
+            .expect("fetch_response_table mutex");
+        if let Some(entry) = table.get_mut(handle as usize) {
+            entry.body_used = true;
+        }
+    }
+    if let Some(obj) = response_obj {
+        let _ =
+            set_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(true));
+    }
+}
 // ── 辅助函数 ────────────────────────────────────────────────────────────────
 
 /// 构建 reader.read() 返回的 { done, value } 结果对象
@@ -34,6 +56,103 @@ pub(crate) fn build_reader_result(
     obj
 }
 
+fn typedarray_u8_bytes(caller: &mut Caller<'_, RuntimeState>, typedarray: i64) -> Option<Vec<u8>> {
+    let entry = typedarray_entry_from_value(caller, typedarray)?;
+    if entry.element_size != 1 {
+        return None;
+    }
+    let start = entry.byte_offset as usize;
+    let len = entry.length as usize;
+    if entry.is_shared {
+        let shared = caller.data().shared_state.as_ref()?.clone();
+        let sab_table = shared.sab_table.lock().ok()?;
+        let buffer = sab_table.get(entry.buffer_handle as usize)?;
+        let data = buffer.data.read().ok()?;
+        let end = start.checked_add(len)?;
+        data.get(start..end).map(|bytes| bytes.to_vec())
+    } else {
+        let ab_table = caller.data().arraybuffer_table.lock().ok()?;
+        let buffer = ab_table.get(entry.buffer_handle as usize)?;
+        let end = start.checked_add(len)?;
+        buffer.data.get(start..end).map(|bytes| bytes.to_vec())
+    }
+}
+
+fn write_u8_bytes_to_view(
+    caller: &mut Caller<'_, RuntimeState>,
+    view: i64,
+    bytes: &[u8],
+) -> Option<usize> {
+    let entry = typedarray_entry_from_value(caller, view)?;
+    if entry.element_size != 1 {
+        return None;
+    }
+    let write_len = (entry.length as usize).min(bytes.len());
+    let start = entry.byte_offset as usize;
+    if entry.is_shared {
+        let shared = caller.data().shared_state.as_ref()?.clone();
+        let sab_table = shared.sab_table.lock().ok()?;
+        let buffer = sab_table.get(entry.buffer_handle as usize)?;
+        let mut data = buffer.data.write().ok()?;
+        let end = start.checked_add(write_len)?;
+        data.get_mut(start..end)?
+            .copy_from_slice(&bytes[..write_len]);
+    } else {
+        let mut ab_table = caller.data().arraybuffer_table.lock().ok()?;
+        let buffer = ab_table.get_mut(entry.buffer_handle as usize)?;
+        let end = start.checked_add(write_len)?;
+        buffer
+            .data
+            .get_mut(start..end)?
+            .copy_from_slice(&bytes[..write_len]);
+    }
+    Some(write_len)
+}
+
+fn reject_promise_with_type_error(
+    caller: &mut Caller<'_, RuntimeState>,
+    promise: i64,
+    message: &str,
+) {
+    let err = type_error_exception(caller, message);
+    settle_promise(caller.data(), promise, PromiseSettlement::Reject(err));
+}
+
+fn fulfill_byob_read(
+    caller: &mut Caller<'_, RuntimeState>,
+    controller_handle: u32,
+    chunk: i64,
+    view: i64,
+    promise: i64,
+) {
+    let Some(bytes) = typedarray_u8_bytes(caller, chunk) else {
+        reject_promise_with_type_error(
+            caller,
+            promise,
+            "Byte stream chunks must be Uint8Array-compatible",
+        );
+        return;
+    };
+    let Some(written) = write_u8_bytes_to_view(caller, view, &bytes) else {
+        reject_promise_with_type_error(caller, promise, "BYOB read requires a writable byte view");
+        return;
+    };
+    if written < bytes.len() {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        let rest = create_uint8array_with_env(caller, &env, &bytes[written..]);
+        let mut table = caller
+            .data()
+            .stream_controller_table
+            .lock()
+            .expect("controller mutex");
+        if let Some(ctrl) = table.get_mut(controller_handle as usize) {
+            ctrl.chunk_queue.push_front(rest);
+        }
+    }
+    let result = build_reader_result(caller, false, Some(view));
+    settle_promise(caller.data(), promise, PromiseSettlement::Fulfill(result));
+}
+
 /// 创建 ReadableStream JS 对象（包含 __stream_handle__、locked getter、getReader、cancel、tee、Symbol.asyncIterator）
 /// 从 create_closed_readable_stream_from_bytes / construct_readable_stream / tee 共用
 fn create_readable_stream_js_object(
@@ -41,7 +160,7 @@ fn create_readable_stream_js_object(
     stream_handle: u32,
 ) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 6);
+    let obj = alloc_host_object(caller, &env, 8);
 
     // __stream_handle__ = handle
     let handle_val = value::encode_f64(stream_handle as f64);
@@ -55,7 +174,8 @@ fn create_readable_stream_js_object(
     let locked_idx = push_native_callable(caller, locked_callable);
     let locked_getter = value::encode_native_callable_idx(locked_idx);
     let undef = value::encode_undefined();
-    let _ = define_host_accessor_property_with_env(caller, &env, obj, "locked", locked_getter, undef);
+    let _ =
+        define_host_accessor_property_with_env(caller, &env, obj, "locked", locked_getter, undef);
 
     // getReader() → method
     let get_reader_callable = NativeCallable::ReadableStreamMethod {
@@ -91,27 +211,41 @@ fn create_readable_stream_js_object(
     };
     let async_iter_idx = push_native_callable(caller, async_iter_callable);
     let async_iter_val = value::encode_native_callable_idx(async_iter_idx);
-    let _ = define_host_data_property_from_caller(caller, obj, "Symbol.asyncIterator", async_iter_val);
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "Symbol.asyncIterator", async_iter_val);
+
+    // pipeTo(destination) → method
+    let pipe_to_callable = NativeCallable::ReadableStreamMethod {
+        handle: stream_handle,
+        kind: ReadableStreamMethodKind::PipeTo,
+    };
+    let pipe_to_idx = push_native_callable(caller, pipe_to_callable);
+    let pipe_to_val = value::encode_native_callable_idx(pipe_to_idx);
+    let _ = define_host_data_property_from_caller(caller, obj, "pipeTo", pipe_to_val);
+
+    // pipeThrough(transform) → method
+    let pipe_through_callable = NativeCallable::ReadableStreamMethod {
+        handle: stream_handle,
+        kind: ReadableStreamMethodKind::PipeThrough,
+    };
+    let pipe_through_idx = push_native_callable(caller, pipe_through_callable);
+    let pipe_through_val = value::encode_native_callable_idx(pipe_through_idx);
+    let _ = define_host_data_property_from_caller(caller, obj, "pipeThrough", pipe_through_val);
 
     obj
 }
 
 /// 创建 controller JS 对象（带 enqueue/close/error + desiredSize getter）
-fn create_controller_object(
+pub(crate) fn create_controller_object(
     caller: &mut Caller<'_, RuntimeState>,
     controller_handle: u32,
 ) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 5);
+    let obj = alloc_host_object(caller, &env, 6);
 
     // __controller_handle__ — 内部标识
     let handle_val = value::encode_f64(controller_handle as f64);
-    let _ = define_host_data_property_from_caller(
-        caller,
-        obj,
-        "__controller_handle__",
-        handle_val,
-    );
+    let _ = define_host_data_property_from_caller(caller, obj, "__controller_handle__", handle_val);
 
     // enqueue(chunk)
     let enqueue_callable = NativeCallable::ReadableStreamDefaultControllerMethod {
@@ -157,6 +291,9 @@ fn create_controller_object(
         undef,
     );
 
+    // ByteStreamController.byobRequest：当前无活动 BYOB pull-into 请求时为 null。
+    let _ = define_host_data_property_from_caller(caller, obj, "byobRequest", value::encode_null());
+
     obj
 }
 
@@ -167,6 +304,8 @@ fn create_controller_object(
 pub(crate) fn create_closed_readable_stream_from_bytes(
     caller: &mut Caller<'_, RuntimeState>,
     bytes: &[u8],
+    response_body_handle: Option<u32>,
+    response_body_object: Option<i64>,
 ) -> i64 {
     // 1. 创建 StreamControllerEntry (ControllerKind::ReadableDefault)
     let controller_handle = {
@@ -221,8 +360,10 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
             disturbed: false,
             locked: false,
             http_response_handle: None,
+            response_body_handle,
+            response_body_object,
             controller_handle: Some(controller_handle),
-            is_byte_stream: false,
+            is_byte_stream: true,
         });
         handle
     };
@@ -253,8 +394,22 @@ pub(crate) async fn construct_readable_stream(
     args: &[i64],
 ) -> Option<i64> {
     // 1. 解析 underlyingSource (args[0]) 和 strategy (args[1])
-    let source = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let source = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let strategy = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+
+    // WHATWG byte stream: underlyingSource.type === "bytes"。
+    let is_byte_stream = if value::is_object(source) {
+        resolve_handle(caller, source)
+            .and_then(|ptr| read_object_property_by_name(caller, ptr, "type"))
+            .filter(|raw| value::is_string(*raw))
+            .map(|raw| get_string_value(caller, raw) == "bytes")
+            .unwrap_or(false)
+    } else {
+        false
+    };
 
     // 2. 解析 strategy.highWaterMark（默认 1）
     let high_water_mark = if value::is_object(strategy) {
@@ -264,11 +419,7 @@ pub(crate) async fn construct_readable_stream(
                 .unwrap_or_else(value::encode_undefined);
             if value::is_f64(hwm_val) {
                 let v = value::decode_f64(hwm_val);
-                if v >= 0.0 && v.is_finite() {
-                    v
-                } else {
-                    1.0
-                }
+                if v >= 0.0 && v.is_finite() { v } else { 1.0 }
             } else {
                 1.0
             }
@@ -318,8 +469,10 @@ pub(crate) async fn construct_readable_stream(
             disturbed: false,
             locked: false,
             http_response_handle: None,
+            response_body_handle: None,
+            response_body_object: None,
             controller_handle: Some(controller_handle),
-            is_byte_stream: false,
+            is_byte_stream,
         });
         handle
     };
@@ -377,7 +530,10 @@ fn controller_enqueue(
     controller_handle: u32,
     args: &[i64],
 ) -> Option<i64> {
-    let chunk = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let chunk = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
 
     // 1. 检查 close_requested → TypeError
     let (close_requested, stream_handle) = {
@@ -403,11 +559,12 @@ fn controller_enqueue(
             .readable_stream_table
             .lock()
             .expect("stream mutex");
-        table
-            .get(stream_handle as usize)
-            .map(|e| e.state.clone())
+        table.get(stream_handle as usize).map(|e| e.state.clone())
     };
-    if matches!(stream_state, Some(StreamState::Closed) | Some(StreamState::Errored)) {
+    if matches!(
+        stream_state,
+        Some(StreamState::Closed) | Some(StreamState::Errored)
+    ) {
         return Some(type_error_exception(
             caller,
             "Cannot enqueue to a closed or errored stream",
@@ -417,11 +574,11 @@ fn controller_enqueue(
     // 3. 检查 reader 是否有 pending read promise
     let pending = {
         let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
-        let mut pending_info: Option<(u32, i64)> = None;
-        for (idx, reader) in reader_table.iter_mut().enumerate() {
+        let mut pending_info: Option<(ReaderKind, Option<i64>, i64)> = None;
+        for reader in reader_table.iter_mut() {
             if reader.stream_handle == stream_handle {
                 if let Some(promise) = reader.pending_read_promise.take() {
-                    pending_info = Some((idx as u32, promise));
+                    pending_info = Some((reader.kind, reader.pending_byob_view.take(), promise));
                     break;
                 }
             }
@@ -429,10 +586,18 @@ fn controller_enqueue(
         pending_info
     };
 
-    if let Some((_reader_idx, promise)) = pending {
+    if let Some((reader_kind, byob_view, promise)) = pending {
         // 有等待中的 read → 立即 settle
-        let result = build_reader_result(caller, false, Some(chunk));
-        settle_promise(caller.data(), promise, PromiseSettlement::Fulfill(result));
+        if reader_kind == ReaderKind::Byob {
+            if let Some(view) = byob_view {
+                fulfill_byob_read(caller, controller_handle, chunk, view, promise);
+            } else {
+                reject_promise_with_type_error(caller, promise, "BYOB read requires a view");
+            }
+        } else {
+            let result = build_reader_result(caller, false, Some(chunk));
+            settle_promise(caller.data(), promise, PromiseSettlement::Fulfill(result));
+        }
     } else {
         // 无等待 → 推入 chunk_queue
         let mut table = caller
@@ -449,10 +614,7 @@ fn controller_enqueue(
 }
 
 /// controller.close()
-fn controller_close(
-    caller: &mut Caller<'_, RuntimeState>,
-    controller_handle: u32,
-) -> Option<i64> {
+fn controller_close(caller: &mut Caller<'_, RuntimeState>, controller_handle: u32) -> Option<i64> {
     let (already_closed, stream_handle) = {
         let mut table = caller
             .data()
@@ -490,20 +652,20 @@ fn controller_close(
     // 检查 pending_read_promise → resolve {done: true, value: undefined}
     let pending = {
         let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
-        let mut pending_promise: Option<i64> = None;
+        let mut pending_info: Option<(Option<i64>, i64)> = None;
         for reader in reader_table.iter_mut() {
             if reader.stream_handle == stream_handle {
                 if let Some(promise) = reader.pending_read_promise.take() {
-                    pending_promise = Some(promise);
+                    pending_info = Some((reader.pending_byob_view.take(), promise));
                     break;
                 }
             }
         }
-        pending_promise
+        pending_info
     };
 
-    if let Some(promise) = pending {
-        let result = build_reader_result(caller, true, None);
+    if let Some((byob_view, promise)) = pending {
+        let result = build_reader_result(caller, true, byob_view);
         settle_promise(caller.data(), promise, PromiseSettlement::Fulfill(result));
     }
 
@@ -516,7 +678,10 @@ fn controller_error(
     controller_handle: u32,
     args: &[i64],
 ) -> Option<i64> {
-    let error_val = args.first().copied().unwrap_or_else(value::encode_undefined);
+    let error_val = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
     let stream_handle = {
         let table = caller
             .data()
@@ -573,7 +738,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
     _this_val: i64,
     handle: u32,
     kind: ReadableStreamMethodKind,
-    _args: &[i64],
+    args: &[i64],
 ) -> Option<i64> {
     match kind {
         ReadableStreamMethodKind::GetLocked => {
@@ -590,27 +755,54 @@ pub(crate) fn call_readable_stream_method_from_caller(
             Some(value::encode_bool(locked))
         }
         ReadableStreamMethodKind::GetReader => {
-            // 检查 locked
-            let locked = {
+            let wants_byob = args
+                .first()
+                .copied()
+                .filter(|options| value::is_object(*options))
+                .and_then(|options| resolve_handle(caller, options))
+                .and_then(|ptr| read_object_property_by_name(caller, ptr, "mode"))
+                .filter(|mode| value::is_string(*mode))
+                .map(|mode| get_string_value(caller, mode) == "byob")
+                .unwrap_or(false);
+
+            // 检查 locked；BYOB reader 只能用于 byte stream。
+            let (locked, is_byte_stream, response_body) = {
                 let mut stream_table = caller
                     .data()
                     .readable_stream_table
                     .lock()
                     .expect("stream mutex");
                 let entry = stream_table.get_mut(handle as usize)?;
-                if entry.locked {
-                    true
-                } else {
+                let locked = entry.locked;
+                let is_byte_stream = entry.is_byte_stream;
+                let response_body = (entry.response_body_handle, entry.response_body_object);
+                if !locked && (!wants_byob || is_byte_stream) {
                     entry.locked = true;
-                    false
+                    entry.disturbed = true;
                 }
+                (locked, is_byte_stream, response_body)
             };
+            if !locked && (!wants_byob || is_byte_stream) {
+                mark_response_body_used_from_caller(caller, response_body.0, response_body.1);
+            }
             if locked {
                 return Some(type_error_exception(
                     caller,
                     "ReadableStream is already locked to a reader",
                 ));
             }
+            if wants_byob && !is_byte_stream {
+                return Some(type_error_exception(
+                    caller,
+                    "ReadableStreamBYOBReader requires a byte stream",
+                ));
+            }
+
+            let reader_kind = if wants_byob {
+                ReaderKind::Byob
+            } else {
+                ReaderKind::Default
+            };
 
             // 创建 reader + closed_promise
             let closed_promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
@@ -619,7 +811,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let rh = table.len() as u32;
                 table.push(ReaderEntry {
                     stream_handle: handle,
+                    kind: reader_kind,
                     pending_read_promise: None,
+                    pending_byob_view: None,
                     closed_promise: Some(closed_promise),
                 });
                 rh
@@ -632,9 +826,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     .readable_stream_table
                     .lock()
                     .expect("stream mutex");
-                table
-                    .get(handle as usize)
-                    .map(|e| e.state.clone())
+                table.get(handle as usize).map(|e| e.state.clone())
             };
             if matches!(stream_state, Some(StreamState::Closed)) {
                 settle_promise(
@@ -650,12 +842,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
 
             // __reader_handle__
             let rh_val = value::encode_f64(reader_handle as f64);
-            let _ = define_host_data_property_from_caller(
-                caller,
-                obj,
-                "__reader_handle__",
-                rh_val,
-            );
+            let _ = define_host_data_property_from_caller(caller, obj, "__reader_handle__", rh_val);
 
             // read() → method
             let read_callable = NativeCallable::ReadableStreamDefaultReaderMethod {
@@ -673,12 +860,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
             };
             let release_idx = push_native_callable(caller, release_callable);
             let release_val = value::encode_native_callable_idx(release_idx);
-            let _ = define_host_data_property_from_caller(
-                caller,
-                obj,
-                "releaseLock",
-                release_val,
-            );
+            let _ = define_host_data_property_from_caller(caller, obj, "releaseLock", release_val);
 
             // closed → accessor getter
             let closed_callable = NativeCallable::ReadableStreamDefaultReaderMethod {
@@ -738,7 +920,6 @@ pub(crate) fn call_readable_stream_method_from_caller(
         ReadableStreamMethodKind::Tee => {
             // WHATWG Streams Standard: ReadableStream.tee()
             // 将当前流拆分为两个独立分支，返回 [stream1, stream2]
-            eprintln!("[tee] entered with handle={handle}");
 
             // 1. 检查流是否已 locked
             let is_locked = {
@@ -747,7 +928,10 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     .readable_stream_table
                     .lock()
                     .expect("stream mutex");
-                table.get(handle as usize).map(|e| e.locked).unwrap_or(false)
+                table
+                    .get(handle as usize)
+                    .map(|e| e.locked)
+                    .unwrap_or(false)
             };
             if is_locked {
                 return Some(type_error_exception(
@@ -757,7 +941,7 @@ pub(crate) fn call_readable_stream_method_from_caller(
             }
 
             // 2. 标记原始流 disturbed = true, locked = true，获取 state 和 controller_handle
-            let (original_state, ctrl_handle) = {
+            let (original_state, ctrl_handle, original_is_byte_stream) = {
                 let mut stream_table = caller
                     .data()
                     .readable_stream_table
@@ -766,7 +950,11 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let entry = stream_table.get_mut(handle as usize)?;
                 entry.disturbed = true;
                 entry.locked = true;
-                (entry.state.clone(), entry.controller_handle)
+                (
+                    entry.state.clone(),
+                    entry.controller_handle,
+                    entry.is_byte_stream,
+                )
             };
 
             // 3. 从原始 controller 获取 chunk_queue 和配置（stream_table 锁已释放）
@@ -777,7 +965,11 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     .lock()
                     .expect("controller mutex");
                 let ctrl = ctrl_table.get(ctrl_handle? as usize)?;
-                (ctrl.chunk_queue.clone(), ctrl.high_water_mark, ctrl.strategy_size)
+                (
+                    ctrl.chunk_queue.clone(),
+                    ctrl.high_water_mark,
+                    ctrl.strategy_size,
+                )
             };
 
             // 4. 创建两个新的 StreamControllerEntry，各自持有 chunk_queue 的副本
@@ -843,8 +1035,10 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     disturbed: false,
                     locked: false,
                     http_response_handle: None,
+                    response_body_handle: None,
+                    response_body_object: None,
                     controller_handle: Some(controller1_handle),
-                    is_byte_stream: false,
+                    is_byte_stream: original_is_byte_stream,
                 });
                 h
             };
@@ -862,8 +1056,10 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     disturbed: false,
                     locked: false,
                     http_response_handle: None,
+                    response_body_handle: None,
+                    response_body_object: None,
                     controller_handle: Some(controller2_handle),
-                    is_byte_stream: false,
+                    is_byte_stream: original_is_byte_stream,
                 });
                 h
             };
@@ -890,7 +1086,12 @@ pub(crate) fn call_readable_stream_method_from_caller(
             // 8. 创建 JS 数组 [stream1_obj, stream2_obj]
             let env = WasmEnv::from_caller(caller).expect("WasmEnv");
             let arr = alloc_host_object(caller, &env, 2);
-            let _ = define_host_data_property_from_caller(caller, arr, "length", value::encode_f64(2.0));
+            let _ = define_host_data_property_from_caller(
+                caller,
+                arr,
+                "length",
+                value::encode_f64(2.0),
+            );
             let _ = define_host_data_property_from_caller(caller, arr, "0", stream1_obj);
             let _ = define_host_data_property_from_caller(caller, arr, "1", stream2_obj);
 
@@ -899,16 +1100,30 @@ pub(crate) fn call_readable_stream_method_from_caller(
         ReadableStreamMethodKind::AsyncIterator => {
             // 检查流是否已锁定
             let locked = {
-                let table = caller.data().readable_stream_table.lock().expect("stream mutex");
-                table.get(handle as usize).map(|e| e.locked).unwrap_or(false)
+                let table = caller
+                    .data()
+                    .readable_stream_table
+                    .lock()
+                    .expect("stream mutex");
+                table
+                    .get(handle as usize)
+                    .map(|e| e.locked)
+                    .unwrap_or(false)
             };
             if locked {
-                return Some(type_error_exception(caller, "ReadableStream is already locked to a reader"));
+                return Some(type_error_exception(
+                    caller,
+                    "ReadableStream is already locked to a reader",
+                ));
             }
 
             // 锁定流
             {
-                let mut table = caller.data().readable_stream_table.lock().expect("stream mutex");
+                let mut table = caller
+                    .data()
+                    .readable_stream_table
+                    .lock()
+                    .expect("stream mutex");
                 if let Some(entry) = table.get_mut(handle as usize) {
                     entry.locked = true;
                 }
@@ -921,7 +1136,9 @@ pub(crate) fn call_readable_stream_method_from_caller(
                 let rh = table.len() as u32;
                 table.push(ReaderEntry {
                     stream_handle: handle,
+                    kind: ReaderKind::Default,
                     pending_read_promise: None,
+                    pending_byob_view: None,
                     closed_promise: Some(closed_promise),
                 });
                 rh
@@ -929,11 +1146,19 @@ pub(crate) fn call_readable_stream_method_from_caller(
 
             // 如果流已关闭，立即 resolve closed promise
             let stream_state = {
-                let table = caller.data().readable_stream_table.lock().expect("stream mutex");
+                let table = caller
+                    .data()
+                    .readable_stream_table
+                    .lock()
+                    .expect("stream mutex");
                 table.get(handle as usize).map(|e| e.state.clone())
             };
             if matches!(stream_state, Some(StreamState::Closed)) {
-                settle_promise(caller.data(), closed_promise, PromiseSettlement::Fulfill(value::encode_undefined()));
+                settle_promise(
+                    caller.data(),
+                    closed_promise,
+                    PromiseSettlement::Fulfill(value::encode_undefined()),
+                );
             }
 
             // 创建迭代器对象
@@ -954,7 +1179,128 @@ pub(crate) fn call_readable_stream_method_from_caller(
 
             Some(iter_obj)
         }
+        ReadableStreamMethodKind::PipeTo => {
+            let destination = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            readable_stream_pipe_to(caller, handle, destination)
+        }
+        ReadableStreamMethodKind::PipeThrough => {
+            let transform = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            readable_stream_pipe_through(caller, handle, transform)
+        }
     }
+}
+
+fn writable_stream_handle_from_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    writable: i64,
+) -> Option<u32> {
+    resolve_handle(caller, writable)
+        .and_then(|ptr| read_object_property_by_name(caller, ptr, "__writable_stream_handle__"))
+        .filter(|raw| value::is_f64(*raw))
+        .map(|raw| value::decode_f64(raw) as u32)
+}
+
+fn transform_parts_from_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    transform: i64,
+) -> Option<(i64, i64)> {
+    let ptr = resolve_handle(caller, transform)?;
+    let transform_handle = read_object_property_by_name(caller, ptr, "__transform_stream_handle__")
+        .filter(|raw| value::is_f64(*raw))
+        .map(|raw| value::decode_f64(raw) as usize);
+    if let Some(handle) = transform_handle {
+        let table = caller
+            .data()
+            .transform_stream_table
+            .lock()
+            .expect("transform stream mutex");
+        let entry = table.get(handle)?;
+        return Some((entry.readable_obj?, entry.writable_obj?));
+    }
+    let readable = read_object_property_by_name(caller, ptr, "readable")?;
+    let writable = read_object_property_by_name(caller, ptr, "writable")?;
+    Some((readable, writable))
+}
+
+fn readable_stream_pipe_to(
+    caller: &mut Caller<'_, RuntimeState>,
+    readable_handle: u32,
+    destination: i64,
+) -> Option<i64> {
+    let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+    let Some(writable_handle) = writable_stream_handle_from_object(caller, destination) else {
+        reject_promise_with_type_error(
+            caller,
+            promise,
+            "pipeTo destination must be a WritableStream",
+        );
+        return Some(promise);
+    };
+    let (controller_handle, stream_state) = {
+        let table = caller
+            .data()
+            .readable_stream_table
+            .lock()
+            .expect("stream mutex");
+        let entry = table.get(readable_handle as usize)?;
+        (entry.controller_handle, entry.state.clone())
+    };
+    let chunks = if let Some(ctrl_handle) = controller_handle {
+        let mut table = caller
+            .data()
+            .stream_controller_table
+            .lock()
+            .expect("controller mutex");
+        if let Some(ctrl) = table.get_mut(ctrl_handle as usize) {
+            ctrl.chunk_queue.drain(..).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        }
+    } else {
+        Vec::new()
+    };
+    for chunk in chunks {
+        let write_promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+        call_transform_from_writable(caller, writable_handle, chunk, write_promise);
+    }
+    if matches!(stream_state, StreamState::Closed) {
+        let close_deferred = call_flush_from_writable_close(caller, writable_handle, promise);
+        if !close_deferred {
+            settle_promise(
+                caller.data(),
+                promise,
+                PromiseSettlement::Fulfill(value::encode_undefined()),
+            );
+        }
+    } else {
+        settle_promise(
+            caller.data(),
+            promise,
+            PromiseSettlement::Fulfill(value::encode_undefined()),
+        );
+    }
+    Some(promise)
+}
+
+fn readable_stream_pipe_through(
+    caller: &mut Caller<'_, RuntimeState>,
+    readable_handle: u32,
+    transform: i64,
+) -> Option<i64> {
+    let Some((readable, writable)) = transform_parts_from_object(caller, transform) else {
+        return Some(type_error_exception(
+            caller,
+            "pipeThrough transform must contain readable and writable",
+        ));
+    };
+    let _ = readable_stream_pipe_to(caller, readable_handle, writable);
+    Some(readable)
 }
 
 // ── ReadableStreamDefaultReader 方法分发 ────────────────────────────────────
@@ -965,14 +1311,24 @@ pub(crate) fn call_default_reader_method_from_caller(
     _this_val: i64,
     handle: u32,
     kind: ReadableStreamDefaultReaderMethodKind,
-    _args: &[i64],
+    args: &[i64],
 ) -> Option<i64> {
     match kind {
         ReadableStreamDefaultReaderMethodKind::Read => {
-            // 1. 从 reader_table 获取 stream_handle
-            let stream_handle = {
+            // 1. 从 reader_table 获取 stream_handle / reader kind
+            let (stream_handle, reader_kind) = {
                 let reader_table = caller.data().reader_table.lock().expect("reader mutex");
-                reader_table.get(handle as usize)?.stream_handle
+                let reader = reader_table.get(handle as usize)?;
+                (reader.stream_handle, reader.kind)
+            };
+            let byob_view = if reader_kind == ReaderKind::Byob {
+                Some(
+                    args.first()
+                        .copied()
+                        .unwrap_or_else(value::encode_undefined),
+                )
+            } else {
+                None
             };
 
             // 2. 获取 controller handle 和 stream 状态
@@ -1006,8 +1362,16 @@ pub(crate) fn call_default_reader_method_from_caller(
                 if let Some(chunk_val) = chunk {
                     // 有 chunk → 立即返回 Promise(value, done:false)
                     let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
-                    let result = build_reader_result(caller, false, Some(chunk_val));
-                    settle_promise(caller.data(), p, PromiseSettlement::Fulfill(result));
+                    if reader_kind == ReaderKind::Byob {
+                        if let Some(view) = byob_view {
+                            fulfill_byob_read(caller, ctrl_handle, chunk_val, view, p);
+                        } else {
+                            reject_promise_with_type_error(caller, p, "BYOB read requires a view");
+                        }
+                    } else {
+                        let result = build_reader_result(caller, false, Some(chunk_val));
+                        settle_promise(caller.data(), p, PromiseSettlement::Fulfill(result));
+                    }
                     return Some(p);
                 }
 
@@ -1026,7 +1390,7 @@ pub(crate) fn call_default_reader_method_from_caller(
 
                 if close_requested || matches!(stream_state, StreamState::Closed) {
                     let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
-                    let result = build_reader_result(caller, true, None);
+                    let result = build_reader_result(caller, true, byob_view);
                     settle_promise(caller.data(), p, PromiseSettlement::Fulfill(result));
                     return Some(p);
                 }
@@ -1041,10 +1405,10 @@ pub(crate) fn call_default_reader_method_from_caller(
                 // pending：存储 pending_read_promise
                 let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
                 {
-                    let mut reader_table =
-                        caller.data().reader_table.lock().expect("reader mutex");
+                    let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
                     if let Some(reader) = reader_table.get_mut(handle as usize) {
                         reader.pending_read_promise = Some(p);
+                        reader.pending_byob_view = byob_view;
                     }
                 }
                 return Some(p);
@@ -1058,7 +1422,7 @@ pub(crate) fn call_default_reader_method_from_caller(
 
             // 5. 无 controller 且无 HTTP → closed
             let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
-            let result = build_reader_result(caller, true, None);
+            let result = build_reader_result(caller, true, byob_view);
             settle_promise(caller.data(), p, PromiseSettlement::Fulfill(result));
             Some(p)
         }
@@ -1082,7 +1446,9 @@ pub(crate) fn call_default_reader_method_from_caller(
             // 返回 closed_promise
             let reader_table = caller.data().reader_table.lock().expect("reader mutex");
             let reader = reader_table.get(handle as usize)?;
-            let promise = reader.closed_promise.unwrap_or_else(value::encode_undefined);
+            let promise = reader
+                .closed_promise
+                .unwrap_or_else(value::encode_undefined);
             Some(promise)
         }
     }
@@ -1139,8 +1505,11 @@ fn call_reader_http_read(
                 let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
                     promise: promise_clone,
                     materialize: Box::new(move |store, env| {
-                        let err =
-                            crate::runtime_heap::alloc_type_error_with_env(store, env, e.to_string());
+                        let err = crate::runtime_heap::alloc_type_error_with_env(
+                            store,
+                            env,
+                            e.to_string(),
+                        );
                         PromiseSettlement::Reject(err)
                     }),
                 });
@@ -1151,7 +1520,7 @@ fn call_reader_http_read(
 }
 
 /// 辅助：使用 env 构建 reader result（用于 Materialize 回调）
-fn build_reader_result_with_env<C: AsContextMut<Data = RuntimeState>>(
+pub(crate) fn build_reader_result_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     done: bool,
@@ -1254,9 +1623,7 @@ pub(crate) fn call_default_controller_method_from_caller(
             controller_enqueue(caller, handle, args)
         }
         ReadableStreamDefaultControllerMethodKind::Close => controller_close(caller, handle),
-        ReadableStreamDefaultControllerMethodKind::Error => {
-            controller_error(caller, handle, args)
-        }
+        ReadableStreamDefaultControllerMethodKind::Error => controller_error(caller, handle, args),
         ReadableStreamDefaultControllerMethodKind::GetDesiredSize => {
             // 计算 high_water_mark - queue.len() 返回 number
             let table = caller

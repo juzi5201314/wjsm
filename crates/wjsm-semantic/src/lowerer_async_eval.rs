@@ -1423,6 +1423,9 @@ impl Lowerer {
                         | Builtin::AbortControllerConstructor
                         | Builtin::ReadableStreamConstructor
                         | Builtin::WritableStreamConstructor
+                        | Builtin::TransformStreamConstructor
+                        | Builtin::CountQueuingStrategyConstructor
+                        | Builtin::ByteLengthQueuingStrategyConstructor
                 )
             {
                 let mut arg_vals = Vec::new();

@@ -417,7 +417,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64ShrU);
             func.instruction(&WasmInstruction::I64Const(0x1F));
             func.instruction(&WasmInstruction::I64And);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_NATIVE_CALLABLE as i64));
+            func.instruction(&WasmInstruction::I64Const(
+                value::TAG_NATIVE_CALLABLE as i64,
+            ));
             func.instruction(&WasmInstruction::I64Eq);
             func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I64)));
             // NativeCallable: 直接通过宿主调用
@@ -801,7 +803,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64ShrU);
             func.instruction(&WasmInstruction::I64Const(0x1F));
             func.instruction(&WasmInstruction::I64And);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_NATIVE_CALLABLE as i64));
+            func.instruction(&WasmInstruction::I64Const(
+                value::TAG_NATIVE_CALLABLE as i64,
+            ));
             func.instruction(&WasmInstruction::I64Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             // NativeCallable: 推入 value 到影子栈，通过宿主调用

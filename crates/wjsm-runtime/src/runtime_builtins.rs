@@ -60,14 +60,10 @@ pub(crate) async fn advance_object_iterator_from_caller_async(
     func_table: &Table,
     next: i64,
 ) -> (i64, i64, bool, bool) {
-    let result = call_host_function_from_caller_async(
-        caller,
-        func_table,
-        next,
-        value::encode_undefined(),
-    )
-    .await
-    .unwrap_or_else(value::encode_undefined);
+    let result =
+        call_host_function_from_caller_async(caller, func_table, next, value::encode_undefined())
+            .await
+            .unwrap_or_else(value::encode_undefined);
     if is_promise_value(caller.data(), result) {
         return (result, value::encode_undefined(), false, false);
     }
@@ -1490,9 +1486,18 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             } else if value::is_string(desc) {
                 Some(get_string_value(caller, desc))
             } else {
-                Some(render_value(caller, desc).unwrap_or_default().trim_matches('"').to_string())
+                Some(
+                    render_value(caller, desc)
+                        .unwrap_or_default()
+                        .trim_matches('"')
+                        .to_string(),
+                )
             };
-            let mut table = caller.data().symbol_table.lock().expect("symbol_table mutex");
+            let mut table = caller
+                .data()
+                .symbol_table
+                .lock()
+                .expect("symbol_table mutex");
             let handle = table.len() as u32;
             table.push(SymbolEntry {
                 description,
@@ -1762,16 +1767,28 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         }
         // ── ReadableStream async iterator (WHATWG Streams Phase 2) ──
         NativeCallable::ReadableStreamAsyncIteratorNext { reader_handle } => {
-            call_default_reader_method_from_caller(caller, this_val, reader_handle, ReadableStreamDefaultReaderMethodKind::Read, &args)
+            call_default_reader_method_from_caller(
+                caller,
+                this_val,
+                reader_handle,
+                ReadableStreamDefaultReaderMethodKind::Read,
+                &args,
+            )
         }
         NativeCallable::ReadableStreamAsyncIteratorReturn { reader_handle } => {
             // releaseLock：释放流的锁定
             let stream_handle = {
                 let reader_table = caller.data().reader_table.lock().expect("reader mutex");
-                reader_table.get(reader_handle as usize).map(|e| e.stream_handle)
+                reader_table
+                    .get(reader_handle as usize)
+                    .map(|e| e.stream_handle)
             };
             if let Some(sh) = stream_handle {
-                let mut stream_table = caller.data().readable_stream_table.lock().expect("stream mutex");
+                let mut stream_table = caller
+                    .data()
+                    .readable_stream_table
+                    .lock()
+                    .expect("stream mutex");
                 if let Some(entry) = stream_table.get_mut(sh as usize) {
                     entry.locked = false;
                 }
@@ -1796,7 +1813,24 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::WritableStreamDefaultControllerMethod { handle, kind } => {
             call_writable_controller_method_from_caller(caller, this_val, handle, kind, &args)
         }
-     }
+        // ── TransformStream (WHATWG Streams Phase 5) ──
+        // TransformStreamConstructor is async-only: routed through the host-import
+        // `transform_stream_constructor`. It is never dispatched via the sync NativeCallable path.
+        NativeCallable::TransformStreamConstructor => Some(value::encode_undefined()),
+        NativeCallable::TransformStreamMethod { handle, kind } => {
+            call_transform_stream_method_from_caller(caller, this_val, handle, kind, &args)
+        }
+        // ── QueuingStrategy (WHATWG Streams Phase 2) ──
+        NativeCallable::CountQueuingStrategyConstructor => {
+            construct_count_queuing_strategy(caller, this_val, &args)
+        }
+        NativeCallable::ByteLengthQueuingStrategyConstructor => {
+            construct_byte_length_queuing_strategy(caller, this_val, &args)
+        }
+        NativeCallable::QueuingStrategySize { kind } => {
+            call_queuing_strategy_size_from_caller(caller, kind, &args)
+        }
+    }
 }
 
 pub(crate) async fn call_native_callable_with_args_from_caller_async(

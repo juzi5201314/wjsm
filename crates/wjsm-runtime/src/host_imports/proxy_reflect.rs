@@ -1,6 +1,6 @@
 use anyhow::Result;
 use wasmtime::Store;
-use wasmtime::{Caller, Func, Extern, Linker, Val};
+use wasmtime::{Caller, Extern, Func, Linker, Val};
 
 use crate::*;
 
@@ -33,7 +33,11 @@ pub(crate) fn reflect_set_impl(
     value::encode_bool(true)
 }
 
-pub(crate) fn reflect_has_impl(caller: &mut Caller<'_, RuntimeState>, target: i64, prop: i64) -> i64 {
+pub(crate) fn reflect_has_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    prop: i64,
+) -> i64 {
     let obj_ptr = resolve_handle(caller, target);
     if let Some(ptr) = obj_ptr
         && let Ok(prop_name) = render_value(caller, prop)
@@ -174,7 +178,8 @@ pub(crate) async fn reflect_apply_impl_async(
     shadow_sp_global
         .set(&mut *caller, Val::I32(saved_sp + args.len() as i32 * 8))
         .unwrap();
-    let result = resolve_and_call_async(caller, target, this_arg, saved_sp, args.len() as i32).await;
+    let result =
+        resolve_and_call_async(caller, target, this_arg, saved_sp, args.len() as i32).await;
     shadow_sp_global
         .set(&mut *caller, Val::I32(saved_sp))
         .unwrap();
@@ -225,7 +230,8 @@ pub(crate) async fn reflect_construct_impl_async(
     shadow_sp_global
         .set(&mut *caller, Val::I32(saved_sp + args.len() as i32 * 8))
         .expect("shadow_sp set in reflect_construct_impl_async");
-    let result = resolve_and_call_async(caller, target, this_obj, saved_sp, args.len() as i32).await;
+    let result =
+        resolve_and_call_async(caller, target, this_obj, saved_sp, args.len() as i32).await;
     shadow_sp_global
         .set(&mut *caller, Val::I32(saved_sp))
         .expect("shadow_sp restore in reflect_construct_impl_async");
@@ -236,7 +242,6 @@ pub(crate) async fn reflect_construct_impl_async(
         this_obj
     }
 }
-
 
 pub(crate) async fn reflect_get_prototype_of_async(
     caller: &mut Caller<'_, RuntimeState>,
@@ -256,7 +261,10 @@ pub(crate) async fn reflect_get_prototype_of_async(
     proxy_or_target_get_prototype_of_impl_async(caller, target).await
 }
 
-pub(crate) fn reflect_get_prototype_of_impl(caller: &mut Caller<'_, RuntimeState>, target: i64) -> i64 {
+pub(crate) fn reflect_get_prototype_of_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+) -> i64 {
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
@@ -265,7 +273,11 @@ pub(crate) fn reflect_get_prototype_of_impl(caller: &mut Caller<'_, RuntimeState
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(caller.data(), "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked".to_string());
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked"
+                        .to_string(),
+                );
                 return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
@@ -313,8 +325,7 @@ pub(crate) fn reflect_get_prototype_of_impl(caller: &mut Caller<'_, RuntimeState
     if ptr + 4 > data.len() {
         return value::encode_null();
     }
-    let proto_handle =
-        u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
+    let proto_handle = u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
     if proto_handle == 0 && value::is_object(target) {
         return value::encode_null();
     }
@@ -492,7 +503,6 @@ pub(crate) fn reflect_own_keys_impl(caller: &mut Caller<'_, RuntimeState>, targe
     arr
 }
 
-
 pub(crate) fn define_proxy_reflect(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -567,8 +577,6 @@ pub(crate) fn define_proxy_reflect(
         },
     );
     linker.define(&mut store, "env", "proxy_revocable", proxy_revocable_fn)?;
-
-
 
     Ok(())
 }

@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+orig body object: object
+clone body object: object
+orig bodyUsed before: false
+clone bodyUsed before: false
+orig bodyUsed after getReader: true
+clone bodyUsed after orig getReader: false
+orig first length: 12
+clone bodyUsed after getReader: true
+clone first length: 12
+--- stderr ---

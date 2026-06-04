@@ -142,7 +142,9 @@ pub(crate) fn call_host_function_from_caller(
 /// - 中文 header 引用 2026-05-31 plan、async Store contract（Correction 3：yield 后所有 Wasm entry 必须 async API）、原始 must-convert 列表
 ///
 /// 完成此项后，Phase 3 must-convert audit 列表（eval、resume、host reentrant、microtask+call_host）全部落地，'Phase 1-4 solid' 可被诚实评估。
-pub(crate) async fn drain_microtasks_async<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+pub(crate) async fn drain_microtasks_async<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
     ctx: &mut C,
     env: &WasmEnv,
 ) {
@@ -235,6 +237,125 @@ pub(crate) async fn drain_microtasks_async<C: AsContextMut<Data = RuntimeState> 
                     )
                     .await;
                 }
+            }
+            Some(Microtask::TransformStreamTransform {
+                callback,
+                this_val,
+                chunk,
+                controller,
+                write_promise,
+            }) => {
+                let result = call_host_function_with_args_async(
+                    ctx,
+                    env,
+                    callback,
+                    this_val,
+                    &[chunk, controller],
+                )
+                .await;
+                match result {
+                    Some(result) if is_promise_value(ctx.state_mut(), result) => {
+                        resolve_promise(ctx, env, write_promise, result);
+                    }
+                    Some(_) => {
+                        settle_promise(
+                            ctx.state_mut(),
+                            write_promise,
+                            PromiseSettlement::Fulfill(value::encode_undefined()),
+                        );
+                    }
+                    None => {
+                        let err = runtime_error_value(
+                            ctx.state_mut(),
+                            "TypeError: TransformStream transform callback failed".to_string(),
+                        );
+                        settle_promise(
+                            ctx.state_mut(),
+                            write_promise,
+                            PromiseSettlement::Reject(err),
+                        );
+                    }
+                }
+            }
+            Some(Microtask::TransformStreamFlush {
+                callback,
+                this_val,
+                controller,
+                readable_stream_handle,
+                readable_controller_handle,
+                close_promise,
+            }) => {
+                let flush_ok = match callback {
+                    Some(callback) => call_host_function_with_args_async(
+                        ctx,
+                        env,
+                        callback,
+                        this_val,
+                        &[controller],
+                    )
+                    .await
+                    .is_some(),
+                    None => true,
+                };
+                if !flush_ok {
+                    let err = runtime_error_value(
+                        ctx.state_mut(),
+                        "TypeError: TransformStream flush callback failed".to_string(),
+                    );
+                    settle_promise(
+                        ctx.state_mut(),
+                        close_promise,
+                        PromiseSettlement::Reject(err),
+                    );
+                    continue;
+                }
+
+                {
+                    let mut ctrl_table = ctx
+                        .state_mut()
+                        .stream_controller_table
+                        .lock()
+                        .expect("controller mutex");
+                    if let Some(ctrl) = ctrl_table.get_mut(readable_controller_handle as usize) {
+                        ctrl.close_requested = true;
+                    }
+                }
+
+                let pending = {
+                    let mut reader_table =
+                        ctx.state_mut().reader_table.lock().expect("reader mutex");
+                    let mut pending_promise: Option<i64> = None;
+                    for reader in reader_table.iter_mut() {
+                        if reader.stream_handle == readable_stream_handle {
+                            if let Some(promise) = reader.pending_read_promise.take() {
+                                pending_promise = Some(promise);
+                                break;
+                            }
+                        }
+                    }
+                    pending_promise
+                };
+
+                {
+                    let mut stream_table = ctx
+                        .state_mut()
+                        .readable_stream_table
+                        .lock()
+                        .expect("stream mutex");
+                    if let Some(entry) = stream_table.get_mut(readable_stream_handle as usize) {
+                        entry.state = StreamState::Closed;
+                    }
+                }
+
+                if let Some(promise) = pending {
+                    let result = build_reader_result_with_env(ctx, env, true, None);
+                    settle_promise(ctx.state_mut(), promise, PromiseSettlement::Fulfill(result));
+                }
+                settle_promise(
+                    ctx.state_mut(),
+                    close_promise,
+                    PromiseSettlement::Fulfill(value::encode_undefined()),
+                );
             }
             Some(Microtask::AsyncResume {
                 fn_table_idx,

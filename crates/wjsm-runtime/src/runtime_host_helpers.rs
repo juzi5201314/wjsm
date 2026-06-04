@@ -1470,10 +1470,6 @@ pub(crate) fn write_new_property_to_memory(
         .copy_from_slice(&(new_num_props as u32).to_le_bytes());
 }
 
-
-
-
-
 pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -1497,7 +1493,14 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
                 let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
                     .unwrap_or_else(value::encode_undefined);
                 if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let result = match call_wasm_callback_async(caller, trap, entry.handler, &[entry.target]).await {
+                    let result = match call_wasm_callback_async(
+                        caller,
+                        trap,
+                        entry.handler,
+                        &[entry.target],
+                    )
+                    .await
+                    {
                         Ok(result) => result,
                         Err(error) => {
                             set_runtime_error(
@@ -1532,7 +1535,11 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
                     return result;
                 }
             }
-            return Box::pin(proxy_or_target_get_prototype_of_impl_async(caller, entry.target)).await;
+            return Box::pin(proxy_or_target_get_prototype_of_impl_async(
+                caller,
+                entry.target,
+            ))
+            .await;
         }
     }
 
@@ -1567,7 +1574,8 @@ pub(crate) async fn proxy_or_target_is_extensible_impl_async(
             if entry.revoked {
                 set_runtime_error(
                     caller.data(),
-                    "TypeError: Cannot perform 'isExtensible' on a proxy that has been revoked".to_string(),
+                    "TypeError: Cannot perform 'isExtensible' on a proxy that has been revoked"
+                        .to_string(),
                 );
                 return false;
             }
@@ -1575,10 +1583,20 @@ pub(crate) async fn proxy_or_target_is_extensible_impl_async(
                 let trap = read_object_property_by_name(caller, handler_ptr, "isExtensible")
                     .unwrap_or_else(value::encode_undefined);
                 if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let trap_res = match call_wasm_callback_async(caller, trap, entry.handler, &[entry.target]).await {
+                    let trap_res = match call_wasm_callback_async(
+                        caller,
+                        trap,
+                        entry.handler,
+                        &[entry.target],
+                    )
+                    .await
+                    {
                         Ok(result) => !value::is_falsy(result),
                         Err(error) => {
-                            set_runtime_error(caller.data(), format!("TypeError: isExtensible trap failed: {error}"));
+                            set_runtime_error(
+                                caller.data(),
+                                format!("TypeError: isExtensible trap failed: {error}"),
+                            );
                             return false;
                         }
                     };
@@ -1621,10 +1639,20 @@ pub(crate) async fn proxy_or_target_prevent_extensions_impl_async(
                 let trap = read_object_property_by_name(caller, handler_ptr, "preventExtensions")
                     .unwrap_or_else(value::encode_undefined);
                 if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let trap_res = match call_wasm_callback_async(caller, trap, entry.handler, &[entry.target]).await {
+                    let trap_res = match call_wasm_callback_async(
+                        caller,
+                        trap,
+                        entry.handler,
+                        &[entry.target],
+                    )
+                    .await
+                    {
                         Ok(result) => !value::is_falsy(result),
                         Err(error) => {
-                            set_runtime_error(caller.data(), format!("TypeError: preventExtensions trap failed: {error}"));
+                            set_runtime_error(
+                                caller.data(),
+                                format!("TypeError: preventExtensions trap failed: {error}"),
+                            );
                             return false;
                         }
                     };
@@ -1926,7 +1954,6 @@ pub(crate) fn reflect_get_impl_with_receiver(
     }
 }
 
-
 pub(crate) async fn reflect_get_impl_with_receiver_async(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -2041,7 +2068,10 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
     if value::is_null(proto) {
         value::encode_undefined()
     } else {
-        Box::pin(reflect_get_impl_with_receiver_async(caller, proto, prop, receiver)).await
+        Box::pin(reflect_get_impl_with_receiver_async(
+            caller, proto, prop, receiver,
+        ))
+        .await
     }
 }
 

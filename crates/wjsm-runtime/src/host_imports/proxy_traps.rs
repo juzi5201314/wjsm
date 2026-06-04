@@ -52,11 +52,13 @@ pub(crate) fn proxy_trap_handler_trap(
     }
 }
 
-pub(crate) fn proxy_trap_property_key_value(caller: &mut Caller<'_, RuntimeState>, name_id: i32) -> i64 {
+pub(crate) fn proxy_trap_property_key_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    name_id: i32,
+) -> i64 {
     let name = read_string(caller, name_id as u32).unwrap_or_default();
     store_runtime_string(caller, name)
 }
-
 
 pub(crate) fn define_proxy_traps(
     _linker: &mut Linker<RuntimeState>,

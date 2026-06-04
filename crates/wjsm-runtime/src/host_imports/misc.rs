@@ -104,7 +104,6 @@ pub(crate) fn define_misc(
     );
     linker.define(&mut store, "env", "dynamic_import", dynamic_import_fn)?;
 
-
     let jsx_create_element_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, tag: i64, props: i64, children: i64| -> i64 {

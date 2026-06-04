@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+ALPHA
+pipeTo done
+BETA
+true
+--- stderr ---
