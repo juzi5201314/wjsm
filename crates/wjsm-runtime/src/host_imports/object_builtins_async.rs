@@ -9,23 +9,31 @@ pub(crate) fn define_object_builtins_async(
     linker: &mut Linker<RuntimeState>,
     _store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    linker.func_wrap_async("env", "obj_get_proto_of", |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
-        Box::new(async move {
-            if !value::is_js_object(obj) {
-                return value::encode_null();
-            }
-            proxy_or_target_get_prototype_of_impl_async(&mut caller, obj).await
-        })
-    })?;
+    linker.func_wrap_async(
+        "env",
+        "obj_get_proto_of",
+        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
+            Box::new(async move {
+                if !value::is_js_object(obj) {
+                    return value::encode_null();
+                }
+                proxy_or_target_get_prototype_of_impl_async(&mut caller, obj).await
+            })
+        },
+    )?;
 
-    linker.func_wrap_async("env", "object.is_extensible", |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
-        Box::new(async move {
-            if !value::is_js_object(obj) {
-                return value::encode_bool(false);
-            }
-            value::encode_bool(proxy_or_target_is_extensible_impl_async(&mut caller, obj).await)
-        })
-    })?;
+    linker.func_wrap_async(
+        "env",
+        "object.is_extensible",
+        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
+            Box::new(async move {
+                if !value::is_js_object(obj) {
+                    return value::encode_bool(false);
+                }
+                value::encode_bool(proxy_or_target_is_extensible_impl_async(&mut caller, obj).await)
+            })
+        },
+    )?;
 
     linker.func_wrap_async(
         "env",

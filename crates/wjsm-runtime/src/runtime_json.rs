@@ -895,8 +895,8 @@ async fn apply_reviver_async(
             for (name_id, prop_val) in &props {
                 let name_bytes = read_string_bytes_mem(caller, &env.memory, *name_id);
                 let name = String::from_utf8_lossy(&name_bytes);
-                let new_val = Box::pin(apply_reviver_async(caller, reviver, val, &name, *prop_val))
-                    .await;
+                let new_val =
+                    Box::pin(apply_reviver_async(caller, reviver, val, &name, *prop_val)).await;
                 if value::is_undefined(new_val) {
                     delete_property_by_name_id(caller, &env, val, *name_id);
                 } else {

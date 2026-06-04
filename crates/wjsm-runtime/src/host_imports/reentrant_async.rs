@@ -89,14 +89,9 @@ pub(crate) async fn native_call_from_caller_async(
                     .data()
                     .new_target
                     .store(new_target_val, Ordering::Relaxed);
-                let result = resolve_and_call_async(
-                    caller,
-                    entry.target,
-                    this_val,
-                    args_base,
-                    args_count,
-                )
-                .await;
+                let result =
+                    resolve_and_call_async(caller, entry.target, this_val, args_base, args_count)
+                        .await;
                 caller
                     .data()
                     .new_target
@@ -136,14 +131,8 @@ pub(crate) async fn native_call_from_caller_async(
                     });
                 }
             }
-            return resolve_and_call_async(
-                caller,
-                entry.target,
-                this_val,
-                args_base,
-                args_count,
-            )
-            .await;
+            return resolve_and_call_async(caller, entry.target, this_val, args_base, args_count)
+                .await;
         }
         return value::encode_undefined();
     }
@@ -157,14 +146,9 @@ pub(crate) async fn native_call_from_caller_async(
     let args = (0..args_count.max(0))
         .map(|index| read_shadow_arg(caller, args_base, index as u32))
         .collect();
-    let result = call_native_callable_with_args_from_caller_async(
-        caller,
-        callable,
-        this_val,
-        args,
-    )
-    .await
-    .unwrap_or_else(value::encode_undefined);
+    let result = call_native_callable_with_args_from_caller_async(caller, callable, this_val, args)
+        .await
+        .unwrap_or_else(value::encode_undefined);
     caller
         .data()
         .new_target
@@ -176,15 +160,19 @@ pub(crate) fn define_misc_async(
     linker: &mut Linker<RuntimeState>,
     _store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    linker.func_wrap_async("env", "drain_microtasks", |mut caller: Caller<'_, RuntimeState>, (): ()| {
-        Box::new(async move {
-            let table = caller.get_export("__table").and_then(|e| e.into_table());
-            let Some(func_table) = table else {
-                return;
-            };
-            drain_microtasks_from_caller_async(&mut caller, &func_table).await;
-        })
-    })?;
+    linker.func_wrap_async(
+        "env",
+        "drain_microtasks",
+        |mut caller: Caller<'_, RuntimeState>, (): ()| {
+            Box::new(async move {
+                let table = caller.get_export("__table").and_then(|e| e.into_table());
+                let Some(func_table) = table else {
+                    return;
+                };
+                drain_microtasks_from_caller_async(&mut caller, &func_table).await;
+            })
+        },
+    )?;
 
     linker.func_wrap_async(
         "env",
@@ -192,8 +180,14 @@ pub(crate) fn define_misc_async(
         |mut caller: Caller<'_, RuntimeState>,
          (callable, this_val, args_base, args_count): (i64, i64, i32, i32)| {
             Box::new(async move {
-                native_call_from_caller_async(&mut caller, callable, this_val, args_base, args_count)
-                    .await
+                native_call_from_caller_async(
+                    &mut caller,
+                    callable,
+                    this_val,
+                    args_base,
+                    args_count,
+                )
+                .await
             })
         },
     )?;
@@ -208,9 +202,13 @@ pub(crate) fn define_misc_async(
         },
     )?;
 
-    linker.func_wrap_async("env", "eval_indirect", |mut caller: Caller<'_, RuntimeState>, (code,): (i64,)| {
-        Box::new(async move { perform_eval_from_caller_async(&mut caller, code, None).await })
-    })?;
+    linker.func_wrap_async(
+        "env",
+        "eval_indirect",
+        |mut caller: Caller<'_, RuntimeState>, (code,): (i64,)| {
+            Box::new(async move { perform_eval_from_caller_async(&mut caller, code, None).await })
+        },
+    )?;
 
     Ok(())
 }
@@ -383,16 +381,13 @@ async fn arr_proto_sort_async_body(
         return this_val;
     }
     let mut elems: Vec<i64> = (0..len)
-        .map(|i| {
-            read_array_elem(caller, ptr, i as u32).unwrap_or(value::encode_undefined())
-        })
+        .map(|i| read_array_elem(caller, ptr, i as u32).unwrap_or(value::encode_undefined()))
         .collect();
     if args_count > 0 && value::is_callable(read_shadow_arg(caller, args_base, 0)) {
         let cmp = read_shadow_arg(caller, args_base, 0);
         for i in 0..elems.len() {
             for j in i + 1..elems.len() {
-                if sort_compare_async(caller, cmp, elems[i], elems[j])
-                    .await
+                if sort_compare_async(caller, cmp, elems[i], elems[j]).await
                     == std::cmp::Ordering::Greater
                 {
                     elems.swap(i, j);
@@ -455,7 +450,11 @@ pub(crate) fn define_array_object_async(
     wrap_array_callback_async!(linker, "arr_proto_map", arr_proto_map_async);
     wrap_array_callback_async!(linker, "arr_proto_filter", arr_proto_filter_async);
     wrap_array_callback_async!(linker, "arr_proto_reduce", arr_proto_reduce_async);
-    wrap_array_callback_async!(linker, "arr_proto_reduce_right", arr_proto_reduce_right_async);
+    wrap_array_callback_async!(
+        linker,
+        "arr_proto_reduce_right",
+        arr_proto_reduce_right_async
+    );
     wrap_array_callback_async!(linker, "arr_proto_find", arr_proto_find_async);
     wrap_array_callback_async!(linker, "arr_proto_find_index", arr_proto_find_index_async);
     wrap_array_callback_async!(linker, "arr_proto_some", arr_proto_some_async);
@@ -477,9 +476,9 @@ pub(crate) fn define_array_object_async(
         "env",
         "func_apply",
         |mut caller: Caller<'_, RuntimeState>, (func, this_val, args_array): (i64, i64, i64)| {
-            Box::new(async move {
-                func_apply_impl_async(&mut caller, func, this_val, args_array).await
-            })
+            Box::new(
+                async move { func_apply_impl_async(&mut caller, func, this_val, args_array).await },
+            )
         },
     )?;
 
@@ -544,8 +543,13 @@ async fn arr_proto_map_async(
     for i in 0..len {
         let elem = read_array_elem(caller, ptr, i).unwrap_or(value::encode_undefined());
         let idx_val = value::encode_f64(i as f64);
-        let result = match call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val])
-            .await
+        let result = match call_wasm_callback_async(
+            caller,
+            cb,
+            this_arg,
+            &[elem, idx_val, this_val],
+        )
+        .await
         {
             Ok(r) => r,
             Err(_) => value::encode_undefined(),
@@ -579,7 +583,8 @@ async fn arr_proto_filter_async(
     for i in 0..len {
         let elem = read_array_elem(caller, ptr, i).unwrap_or(value::encode_undefined());
         let idx_val = value::encode_f64(i as f64);
-        let ok = match call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val]).await
+        let ok = match call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val])
+            .await
         {
             Ok(r) => value::is_truthy(r),
             Err(_) => false,
@@ -727,7 +732,7 @@ async fn arr_proto_find_async(
             &[elem, idx_val, this_val],
         )
         .await
-        && value::is_truthy(r)
+            && value::is_truthy(r)
         {
             return elem;
         }
@@ -759,7 +764,7 @@ async fn arr_proto_find_index_async(
             &[elem, idx_val, this_val],
         )
         .await
-        && value::is_truthy(r)
+            && value::is_truthy(r)
         {
             return value::encode_f64(i as f64);
         }
@@ -791,7 +796,7 @@ async fn arr_proto_some_async(
             &[elem, idx_val, this_val],
         )
         .await
-        && value::is_truthy(r)
+            && value::is_truthy(r)
         {
             return value::encode_bool(true);
         }
@@ -858,8 +863,13 @@ async fn arr_proto_flat_map_async(
     for i in 0..len {
         let elem = read_array_elem(caller, ptr, i).unwrap_or(value::encode_undefined());
         let idx_val = value::encode_f64(i as f64);
-        let mapped = match call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val])
-            .await
+        let mapped = match call_wasm_callback_async(
+            caller,
+            cb,
+            this_arg,
+            &[elem, idx_val, this_val],
+        )
+        .await
         {
             Ok(r) => r,
             Err(_) => continue,
@@ -976,7 +986,10 @@ pub(crate) async fn proxy_trap_internal_get_async(
         return proxy_trap_call_trap_with_args_async(caller, trap, handler, &[target, prop, proxy])
             .await;
     }
-    Box::pin(proxy_trap_ordinary_get_by_name_id_async(caller, target, name_id)).await
+    Box::pin(proxy_trap_ordinary_get_by_name_id_async(
+        caller, target, name_id,
+    ))
+    .await
 }
 
 pub(crate) async fn proxy_trap_internal_set_async(
@@ -990,9 +1003,13 @@ pub(crate) async fn proxy_trap_internal_set_async(
     };
     if let Some(trap) = proxy_trap_handler_trap(caller, handler, "set") {
         let prop = proxy_trap_property_key_value(caller, name_id);
-        let result =
-            proxy_trap_call_trap_with_args_async(caller, trap, handler, &[target, prop, val, proxy])
-                .await;
+        let result = proxy_trap_call_trap_with_args_async(
+            caller,
+            trap,
+            handler,
+            &[target, prop, val, proxy],
+        )
+        .await;
         if !nanbox_to_bool(result) {
             set_runtime_error(
                 caller.data(),
@@ -1001,7 +1018,10 @@ pub(crate) async fn proxy_trap_internal_set_async(
         }
         return;
     }
-    let _ = Box::pin(proxy_trap_ordinary_set_by_name_id_async(caller, target, name_id, val)).await;
+    let _ = Box::pin(proxy_trap_ordinary_set_by_name_id_async(
+        caller, target, name_id, val,
+    ))
+    .await;
 }
 
 pub(crate) async fn proxy_trap_internal_delete_async(
@@ -1029,7 +1049,9 @@ pub(crate) fn define_proxy_traps_async(
         "env",
         "proxy_trap_get",
         |mut caller: Caller<'_, RuntimeState>, (proxy, name_id): (i64, i32)| {
-            Box::new(async move { proxy_trap_internal_get_async(&mut caller, proxy, name_id).await })
+            Box::new(
+                async move { proxy_trap_internal_get_async(&mut caller, proxy, name_id).await },
+            )
         },
     )?;
 
@@ -1047,9 +1069,9 @@ pub(crate) fn define_proxy_traps_async(
         "env",
         "proxy_trap_delete",
         |mut caller: Caller<'_, RuntimeState>, (proxy, name_id): (i64, i32)| {
-            Box::new(async move {
-                proxy_trap_internal_delete_async(&mut caller, proxy, name_id).await
-            })
+            Box::new(
+                async move { proxy_trap_internal_delete_async(&mut caller, proxy, name_id).await },
+            )
         },
     )?;
 
@@ -1058,7 +1080,7 @@ pub(crate) fn define_proxy_traps_async(
 
 // ── TypedArray async callback overrides ──────────────────────────────────
 
-use super::typedarray_new_methods::{ta_resolve, ta_read, ta_write, sab_read, sab_write};
+use super::typedarray_new_methods::{sab_read, sab_write, ta_read, ta_resolve, ta_write};
 
 async fn typedarray_sort_compare_async(
     caller: &mut Caller<'_, RuntimeState>,
@@ -1107,8 +1129,7 @@ async fn typedarray_proto_sort_async_body(
         let cmp = read_shadow_arg(caller, args_base, 0);
         for i in 0..elems.len() {
             for j in i + 1..elems.len() {
-                if typedarray_sort_compare_async(caller, cmp, elems[i], elems[j])
-                    .await
+                if typedarray_sort_compare_async(caller, cmp, elems[i], elems[j]).await
                     == std::cmp::Ordering::Greater
                 {
                     elems.swap(i, j);
@@ -1120,7 +1141,8 @@ async fn typedarray_proto_sort_async_body(
             .iter()
             .map(|e| render_value(caller, *e).unwrap_or_default())
             .collect();
-        let mut indexed: Vec<(usize, &i64)> = (0..length as usize).map(|i| (i, &elems[i])).collect();
+        let mut indexed: Vec<(usize, &i64)> =
+            (0..length as usize).map(|i| (i, &elems[i])).collect();
         indexed.sort_by(|(ia, _), (ib, _)| {
             let ka = &keys[*ia];
             let kb = &keys[*ib];
@@ -1135,9 +1157,25 @@ async fn typedarray_proto_sort_async_body(
     }
     for (i, &elem) in elems.iter().enumerate() {
         if is_shared {
-            sab_write(caller, buf_handle, byte_offset, elem_size, element_kind, i as u32, elem);
+            sab_write(
+                caller,
+                buf_handle,
+                byte_offset,
+                elem_size,
+                element_kind,
+                i as u32,
+                elem,
+            );
         } else {
-            ta_write(caller, buf_handle, byte_offset, elem_size, element_kind, i as u32, elem);
+            ta_write(
+                caller,
+                buf_handle,
+                byte_offset,
+                elem_size,
+                element_kind,
+                i as u32,
+                elem,
+            );
         };
     }
     this_val
@@ -1213,8 +1251,13 @@ async fn typedarray_proto_map_async(
         }
         .unwrap_or(value::encode_undefined());
         let idx_val = value::encode_f64(i as f64);
-        let mapped = match call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val])
-            .await
+        let mapped = match call_wasm_callback_async(
+            caller,
+            cb,
+            this_arg,
+            &[elem, idx_val, this_val],
+        )
+        .await
         {
             Ok(v) => v,
             Err(_) => return value::encode_undefined(),
@@ -1361,9 +1404,23 @@ async fn typedarray_proto_reduce_right_async(
         init
     } else {
         if is_shared {
-            sab_read(caller, buf_handle, byte_offset, elem_size, element_kind, length - 1)
+            sab_read(
+                caller,
+                buf_handle,
+                byte_offset,
+                elem_size,
+                element_kind,
+                length - 1,
+            )
         } else {
-            ta_read(caller, buf_handle, byte_offset, elem_size, element_kind, length - 1)
+            ta_read(
+                caller,
+                buf_handle,
+                byte_offset,
+                elem_size,
+                element_kind,
+                length - 1,
+            )
         }
         .unwrap_or(value::encode_undefined())
     };
@@ -1423,8 +1480,8 @@ async fn typedarray_proto_find_async(
         }
         .unwrap_or(value::encode_undefined());
         let idx_val = value::encode_f64(i as f64);
-        if let Ok(r) = call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val])
-            .await
+        if let Ok(r) =
+            call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val]).await
             && value::is_truthy(r)
         {
             return elem;
@@ -1461,8 +1518,8 @@ async fn typedarray_proto_find_index_async(
         }
         .unwrap_or(value::encode_undefined());
         let idx_val = value::encode_f64(i as f64);
-        if let Ok(r) = call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val])
-            .await
+        if let Ok(r) =
+            call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val]).await
             && value::is_truthy(r)
         {
             return value::encode_f64(i as f64);
@@ -1499,8 +1556,8 @@ async fn typedarray_proto_some_async(
         }
         .unwrap_or(value::encode_undefined());
         let idx_val = value::encode_f64(i as f64);
-        if let Ok(r) = call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val])
-            .await
+        if let Ok(r) =
+            call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val]).await
             && value::is_truthy(r)
         {
             return value::encode_bool(true);
@@ -1577,21 +1634,44 @@ pub(crate) fn define_typedarray_new_methods_async(
         },
     )?;
 
-    wrap_typedarray_callback_async!(linker, "typedarray_proto_for_each", typedarray_proto_for_each_async);
+    wrap_typedarray_callback_async!(
+        linker,
+        "typedarray_proto_for_each",
+        typedarray_proto_for_each_async
+    );
     wrap_typedarray_callback_async!(linker, "typedarray_proto_map", typedarray_proto_map_async);
-    wrap_typedarray_callback_async!(linker, "typedarray_proto_filter", typedarray_proto_filter_async);
-    wrap_typedarray_callback_async!(linker, "typedarray_proto_reduce", typedarray_proto_reduce_async);
-    wrap_typedarray_callback_async!(linker, "typedarray_proto_reduce_right", typedarray_proto_reduce_right_async);
+    wrap_typedarray_callback_async!(
+        linker,
+        "typedarray_proto_filter",
+        typedarray_proto_filter_async
+    );
+    wrap_typedarray_callback_async!(
+        linker,
+        "typedarray_proto_reduce",
+        typedarray_proto_reduce_async
+    );
+    wrap_typedarray_callback_async!(
+        linker,
+        "typedarray_proto_reduce_right",
+        typedarray_proto_reduce_right_async
+    );
     wrap_typedarray_callback_async!(linker, "typedarray_proto_find", typedarray_proto_find_async);
-    wrap_typedarray_callback_async!(linker, "typedarray_proto_find_index", typedarray_proto_find_index_async);
+    wrap_typedarray_callback_async!(
+        linker,
+        "typedarray_proto_find_index",
+        typedarray_proto_find_index_async
+    );
     wrap_typedarray_callback_async!(linker, "typedarray_proto_some", typedarray_proto_some_async);
-    wrap_typedarray_callback_async!(linker, "typedarray_proto_every", typedarray_proto_every_async);
+    wrap_typedarray_callback_async!(
+        linker,
+        "typedarray_proto_every",
+        typedarray_proto_every_async
+    );
 
     Ok(())
 }
 
 // ── Primitive-core async callback override (string_replace) ────────────────────
-
 
 /// 从预收集的命名组数据构建捕获组对象（Send-safe — 不持有 regress::Match 引用）
 fn build_groups_obj_from_named(
@@ -1851,7 +1931,8 @@ async fn string_replace_async_body(
                     start: m.start(),
                     end: m.end(),
                     captures: (0..m.captures.len() + 1).map(|i| m.group(i)).collect(),
-                    named: m.named_groups()
+                    named: m
+                        .named_groups()
                         .map(|(name, range)| (name.to_string(), range))
                         .collect(),
                 })
@@ -1881,7 +1962,14 @@ async fn string_replace_async_body(
                     .await
                 } else {
                     let replace_str = get_string_value(&mut caller, replace);
-                    process_replacement_from_captures(&replace_str, &s, mi.start, mi.end, &mi.captures, &mi.named)
+                    process_replacement_from_captures(
+                        &replace_str,
+                        &s,
+                        mi.start,
+                        mi.end,
+                        &mi.captures,
+                        &mi.named,
+                    )
                 };
                 result.push_str(&replaced);
                 last_end = mi.end;
@@ -1896,8 +1984,10 @@ async fn string_replace_async_body(
                         (0..m.captures.len() + 1).map(|i| m.group(i)).collect();
                     let match_start = m.start();
                     let match_end = m.end();
-                    let named: Vec<(String, Option<std::ops::Range<usize>>)> =
-                        m.named_groups().map(|(name, range)| (name.to_string(), range)).collect();
+                    let named: Vec<(String, Option<std::ops::Range<usize>>)> = m
+                        .named_groups()
+                        .map(|(name, range)| (name.to_string(), range))
+                        .collect();
                     let groups_obj = if named.is_empty() {
                         value::encode_undefined()
                     } else {
@@ -1917,7 +2007,14 @@ async fn string_replace_async_body(
                         .await
                     } else {
                         let replace_str = get_string_value(&mut caller, replace);
-                        process_replacement_from_captures(&replace_str, &s, match_start, match_end, &captures, &named)
+                        process_replacement_from_captures(
+                            &replace_str,
+                            &s,
+                            match_start,
+                            match_end,
+                            &captures,
+                            &named,
+                        )
                     };
                     let mut result = String::new();
                     result.push_str(&s[..match_start]);
@@ -1967,11 +2064,10 @@ pub(crate) fn define_primitive_core_async(
     linker.func_wrap_async(
         "env",
         "string_replace",
-        |mut caller: Caller<'_, RuntimeState>,
-         (receiver, search, replace): (i64, i64, i64)| {
-            Box::new(async move {
-                string_replace_async_body(caller, receiver, search, replace).await
-            })
+        |mut caller: Caller<'_, RuntimeState>, (receiver, search, replace): (i64, i64, i64)| {
+            Box::new(
+                async move { string_replace_async_body(caller, receiver, search, replace).await },
+            )
         },
     )?;
     Ok(())

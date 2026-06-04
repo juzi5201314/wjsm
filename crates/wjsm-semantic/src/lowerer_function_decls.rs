@@ -108,7 +108,7 @@ impl Lowerer {
             let mut closure_block = outer_block;
             let env_val = self.ensure_shared_env(closure_block, &captured, fn_decl.span())?;
             closure_block = self.resolve_store_block(closure_block);
-            store_block = closure_block;  // 关键：必须用 resolve 后的 block 存 StoreVar，保证 CreateClosure 的 dest dominate 后续对 callee_val 的使用
+            store_block = closure_block; // 关键：必须用 resolve 后的 block 存 StoreVar，保证 CreateClosure 的 dest dominate 后续对 callee_val 的使用
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
                 closure_block,

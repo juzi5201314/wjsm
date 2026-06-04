@@ -589,96 +589,96 @@ pub(crate) fn define_array_object(
     )?;
 
     // ── arr_proto_splice (#74) ───────────────────────────────────────
-        let arr_proto_splice_fn = Func::wrap(
-            &mut store,
-            |mut caller: Caller<'_, RuntimeState>,
-             _env_obj: i64,
-             this_val: i64,
-             args_base: i32,
-             args_count: i32|
-             -> i64 {
-                let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+    let arr_proto_splice_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env_obj: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
+                return value::encode_undefined();
+            };
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
+            // 读取 start
+            let raw_start = if args_count > 0 {
+                let s = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                if s.is_nan() { 0 } else { s as i32 }
+            } else {
+                0
+            };
+            let start_idx = if raw_start < 0 {
+                (len + raw_start).max(0)
+            } else {
+                raw_start.min(len)
+            };
+            // 读取 deleteCount
+            let delete_count = if args_count > 1 {
+                let d = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
+                if d.is_nan() { 0 } else { (d as i32).max(0) }
+            } else {
+                (len - start_idx).max(0)
+            };
+            let actual_delete = delete_count.min(len - start_idx);
+            let insert_count = (args_count - 2).max(0);
+            let new_len = len - actual_delete + insert_count;
+            let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0) as i32;
+            let mut ptr = ptr;
+            if new_len > cap {
+                let new_cap = cap.max(1) * 2;
+                let needed = new_len.max(new_cap);
+                if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed as u32) {
+                    ptr = new_ptr;
+                } else {
                     return value::encode_undefined();
-                };
-                let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
-                // 读取 start
-                let raw_start = if args_count > 0 {
-                    let s = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
-                    if s.is_nan() { 0 } else { s as i32 }
+                }
+            }
+            // 收集被删除的元素
+            let deleted_arr = alloc_array(&mut caller, actual_delete as u32);
+            let Some(deleted_ptr) = resolve_array_ptr(&mut caller, deleted_arr) else {
+                return value::encode_undefined();
+            };
+            for i in 0..actual_delete {
+                let elem = read_array_elem(&mut caller, ptr, (start_idx as u32) + i as u32)
+                    .unwrap_or(value::encode_undefined());
+                write_array_elem(&mut caller, deleted_ptr, i as u32, elem);
+            }
+            write_array_length(&mut caller, deleted_ptr, actual_delete as u32);
+            // 移动元素（右移或左移）
+            if insert_count != actual_delete {
+                if insert_count < actual_delete {
+                    // 左移
+                    for i in start_idx..(len - actual_delete + insert_count) {
+                        let src = i + actual_delete - insert_count;
+                        let elem = read_array_elem(&mut caller, ptr, src as u32)
+                            .unwrap_or(value::encode_undefined());
+                        write_array_elem(&mut caller, ptr, i as u32, elem);
+                    }
                 } else {
-                    0
-                };
-                let start_idx = if raw_start < 0 {
-                    (len + raw_start).max(0)
-                } else {
-                    raw_start.min(len)
-                };
-                // 读取 deleteCount
-                let delete_count = if args_count > 1 {
-                    let d = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
-                    if d.is_nan() { 0 } else { (d as i32).max(0) }
-                } else {
-                    (len - start_idx).max(0)
-                };
-                let actual_delete = delete_count.min(len - start_idx);
-                let insert_count = (args_count - 2).max(0);
-                let new_len = len - actual_delete + insert_count;
-                let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0) as i32;
-                let mut ptr = ptr;
-                if new_len > cap {
-                    let new_cap = cap.max(1) * 2;
-                    let needed = new_len.max(new_cap);
-                    if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed as u32) {
-                        ptr = new_ptr;
-                    } else {
-                        return value::encode_undefined();
+                    // 右移（从后往前）
+                    for i in (start_idx..(len - actual_delete + insert_count)).rev() {
+                        let src = i - insert_count + actual_delete;
+                        let elem = read_array_elem(&mut caller, ptr, src as u32)
+                            .unwrap_or(value::encode_undefined());
+                        write_array_elem(
+                            &mut caller,
+                            ptr,
+                            i as u32 + insert_count as u32 - actual_delete as u32,
+                            elem,
+                        );
                     }
                 }
-                // 收集被删除的元素
-                let deleted_arr = alloc_array(&mut caller, actual_delete as u32);
-                let Some(deleted_ptr) = resolve_array_ptr(&mut caller, deleted_arr) else {
-                    return value::encode_undefined();
-                };
-                for i in 0..actual_delete {
-                    let elem = read_array_elem(&mut caller, ptr, (start_idx as u32) + i as u32)
-                        .unwrap_or(value::encode_undefined());
-                    write_array_elem(&mut caller, deleted_ptr, i as u32, elem);
-                }
-                write_array_length(&mut caller, deleted_ptr, actual_delete as u32);
-                // 移动元素（右移或左移）
-                if insert_count != actual_delete {
-                    if insert_count < actual_delete {
-                        // 左移
-                        for i in start_idx..(len - actual_delete + insert_count) {
-                            let src = i + actual_delete - insert_count;
-                            let elem = read_array_elem(&mut caller, ptr, src as u32)
-                                .unwrap_or(value::encode_undefined());
-                            write_array_elem(&mut caller, ptr, i as u32, elem);
-                        }
-                    } else {
-                        // 右移（从后往前）
-                        for i in (start_idx..(len - actual_delete + insert_count)).rev() {
-                            let src = i - insert_count + actual_delete;
-                            let elem = read_array_elem(&mut caller, ptr, src as u32)
-                                .unwrap_or(value::encode_undefined());
-                            write_array_elem(
-                                &mut caller,
-                                ptr,
-                                i as u32 + insert_count as u32 - actual_delete as u32,
-                                elem,
-                            );
-                        }
-                    }
-                }
-                // 插入新元素
-                for i in 0..insert_count {
-                    let item = read_shadow_arg(&mut caller, args_base, 2 + i as u32);
-                    write_array_elem(&mut caller, ptr, (start_idx as u32) + i as u32, item);
-                }
-                write_array_length(&mut caller, ptr, new_len as u32);
-                deleted_arr
-            },
-        );
+            }
+            // 插入新元素
+            for i in 0..insert_count {
+                let item = read_shadow_arg(&mut caller, args_base, 2 + i as u32);
+                write_array_elem(&mut caller, ptr, (start_idx as u32) + i as u32, item);
+            }
+            write_array_length(&mut caller, ptr, new_len as u32);
+            deleted_arr
+        },
+    );
     linker.define(&mut store, "env", "arr_proto_splice", arr_proto_splice_fn)?;
 
     // ── arr_proto_is_array (#75) ──────────────────────────────────────

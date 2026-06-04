@@ -8,7 +8,14 @@ pub(crate) fn parse_fetch_input(
     caller: &mut Caller<'_, RuntimeState>,
     input: i64,
     init: i64,
-) -> (String, String, u32, Option<Vec<u8>>, RedirectMode, Option<u32>) {
+) -> (
+    String,
+    String,
+    u32,
+    Option<Vec<u8>>,
+    RedirectMode,
+    Option<u32>,
+) {
     let url = if value::is_string(input) {
         extract_string_from_value(caller, input)
     } else if value::is_object(input) {
@@ -59,8 +66,15 @@ pub(crate) fn perform_data_url_fetch(
     let bytes = decoded.into_bytes();
     let resp_headers = create_empty_headers(caller);
     Ok(create_response_object(
-        caller, 200, "OK".to_string(), resp_headers,
-        url.to_string(), bytes, ResponseType::Basic, false, None,
+        caller,
+        200,
+        "OK".to_string(),
+        resp_headers,
+        url.to_string(),
+        bytes,
+        ResponseType::Basic,
+        false,
+        None,
     ))
 }
 
@@ -92,7 +106,8 @@ pub(crate) async fn perform_http_fetch(
         .build()
         .map_err(|e| format!("fetch client error: {}", e))?;
 
-    let http_method: reqwest::Method = method.parse()
+    let http_method: reqwest::Method = method
+        .parse()
         .map_err(|e| format!("invalid method: {}", e))?;
 
     let mut builder = client.request(http_method, &url);
@@ -113,7 +128,9 @@ pub(crate) async fn perform_http_fetch(
     }
 
     // 5. 发送请求（await — wasmtime 自动 yield）
-    let response = builder.send().await
+    let response = builder
+        .send()
+        .await
         .map_err(|e| format!("fetch failed: {}", e))?;
 
     // 6. 检查 abort（请求完成后）
@@ -125,7 +142,11 @@ pub(crate) async fn perform_http_fetch(
 
     // 7. 提取响应信息
     let status = response.status().as_u16();
-    let status_text = response.status().canonical_reason().unwrap_or("").to_string();
+    let status_text = response
+        .status()
+        .canonical_reason()
+        .unwrap_or("")
+        .to_string();
     let resp_url = response.url().to_string();
     let redirected = response.url().as_str() != url;
 
@@ -135,31 +156,51 @@ pub(crate) async fn perform_http_fetch(
         let mut htable = caller.data().headers_table.lock().expect("headers mutex");
         if let Some(entry) = htable.get_mut(resp_headers as usize) {
             for (key, value) in response.headers() {
-                entry.pairs.push((key.as_str().to_ascii_lowercase(), value.to_str().unwrap_or("").to_string()));
+                entry.pairs.push((
+                    key.as_str().to_ascii_lowercase(),
+                    value.to_str().unwrap_or("").to_string(),
+                ));
             }
         }
     }
 
     // 9. 存储 reqwest Response（用于后续流式读取）
     let http_handle = {
-        let mut table = caller.data().http_response_table.lock().expect("http_response mutex");
+        let mut table = caller
+            .data()
+            .http_response_table
+            .lock()
+            .expect("http_response mutex");
         let handle = table.len() as u32;
-        table.push(HttpResponseEntry { response: Some(response) });
+        table.push(HttpResponseEntry {
+            response: Some(response),
+        });
         handle
     };
 
     // 10. 构造 Response 对象（body 暂为 null，通过 ReadableStream 懒加载）
     let resp_obj = create_response_object_with_http_handle(
-        caller, status, status_text, resp_headers, resp_url,
-        ResponseType::Basic, redirected, http_handle,
+        caller,
+        status,
+        status_text,
+        resp_headers,
+        resp_url,
+        ResponseType::Basic,
+        redirected,
+        http_handle,
     );
 
     Ok(resp_obj)
 }
 
 pub(crate) fn is_signal_aborted(state: &RuntimeState, handle: u32) -> bool {
-    state.abort_signal_table.lock().expect("abort_signal mutex")
-        .get(handle as usize).map(|e| e.aborted).unwrap_or(false)
+    state
+        .abort_signal_table
+        .lock()
+        .expect("abort_signal mutex")
+        .get(handle as usize)
+        .map(|e| e.aborted)
+        .unwrap_or(false)
 }
 
 pub(crate) fn urlencoding_decode(input: &str) -> String {

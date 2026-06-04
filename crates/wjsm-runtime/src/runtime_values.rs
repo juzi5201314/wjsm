@@ -281,7 +281,6 @@ pub(crate) fn grow_object(
     Some(heap_ptr)
 }
 
-
 /// 沿原型链递归查找属性（带 visited set 防环路）
 pub(crate) fn read_object_property_by_name_proto_walk_with_env<
     C: AsContextMut<Data = RuntimeState>,
@@ -915,7 +914,9 @@ pub(crate) fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i
 }
 
 pub(crate) fn utf16_len(s: &str) -> usize {
-    s.chars().map(|ch| if ch as u32 > 0xFFFF { 2 } else { 1 }).sum()
+    s.chars()
+        .map(|ch| if ch as u32 > 0xFFFF { 2 } else { 1 })
+        .sum()
 }
 
 pub(crate) fn utf16_index_to_byte_offset(s: &str, utf16_idx: usize) -> usize {
@@ -1038,7 +1039,6 @@ pub(crate) fn get_string_value(caller: &mut Caller<'_, RuntimeState>, val: i64) 
     }
 }
 
-
 pub(crate) async fn resolve_and_call_async(
     caller: &mut Caller<'_, RuntimeState>,
     func: i64,
@@ -1107,9 +1107,10 @@ pub(crate) async fn resolve_and_call_async(
         ))
         .await
     } else {
-
-        Box::pin(resolve_callable_and_call_async(caller, func, this_val, args_base, args_count))
-            .await
+        Box::pin(resolve_callable_and_call_async(
+            caller, func, this_val, args_base, args_count,
+        ))
+        .await
     }
 }
 
@@ -1131,8 +1132,10 @@ pub(crate) async fn resolve_callable_and_call_async(
             value::encode_undefined(),
         )
     } else if value::is_bound(callee) {
-        return Box::pin(resolve_and_call_async(caller, callee, this_val, args_base, args_count))
-            .await;
+        return Box::pin(resolve_and_call_async(
+            caller, callee, this_val, args_base, args_count,
+        ))
+        .await;
     } else if value::is_proxy(callee) {
         let handle = value::decode_proxy_handle(callee) as usize;
         let entry = {
@@ -1609,11 +1612,7 @@ pub(crate) fn array_elem_present(
 }
 
 #[inline]
-pub(crate) fn write_array_hole(
-    caller: &mut Caller<'_, RuntimeState>,
-    ptr: usize,
-    index: u32,
-) {
+pub(crate) fn write_array_hole(caller: &mut Caller<'_, RuntimeState>, ptr: usize, index: u32) {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     write_array_hole_with_env(caller, &env, ptr, index);
 }

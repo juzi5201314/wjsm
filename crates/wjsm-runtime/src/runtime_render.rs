@@ -476,9 +476,11 @@ async fn get_to_json_async(caller: &mut Caller<'_, RuntimeState>, key: &str, val
     } else {
         resolve_handle(caller, value)
     };
-    let Some(ptr) = ptr_opt else { return value; };
-    let to_json = read_object_property_by_name(caller, ptr, "toJSON")
-        .unwrap_or_else(value::encode_undefined);
+    let Some(ptr) = ptr_opt else {
+        return value;
+    };
+    let to_json =
+        read_object_property_by_name(caller, ptr, "toJSON").unwrap_or_else(value::encode_undefined);
     if !is_callable_in_runtime(caller, to_json) {
         return value;
     }
@@ -626,7 +628,11 @@ async fn serialize_json_property_async(
                 &next_indent,
             ))
             .await;
-            parts.push(if s == "undefined" { "null".to_string() } else { s });
+            parts.push(if s == "undefined" {
+                "null".to_string()
+            } else {
+                s
+            });
         }
         stack.pop();
         return if parts.is_empty() {
@@ -765,9 +771,7 @@ async fn serialize_json_property_async(
     }
 
     "null".to_string()
-
 }
-
 
 pub(crate) fn read_string(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Result<String> {
     let data = read_string_bytes(caller, ptr);

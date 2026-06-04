@@ -61,6 +61,9 @@ pub(crate) const BUILTIN_GLOBALS: &[&str] = &[
     "Response",
     "ReadableStream",
     "WritableStream",
+    "TransformStream",
+    "CountQueuingStrategy",
+    "ByteLengthQueuingStrategy",
     "AbortController",
     "Intl",
     "Iterator",
@@ -86,6 +89,9 @@ pub(crate) fn builtin_from_global_ident(name: &str) -> Option<Builtin> {
         "ReadableStream" => Some(Builtin::ReadableStreamConstructor),
         "eval" => Some(Builtin::Eval),
         "WritableStream" => Some(Builtin::WritableStreamConstructor),
+        "TransformStream" => Some(Builtin::TransformStreamConstructor),
+        "CountQueuingStrategy" => Some(Builtin::CountQueuingStrategyConstructor),
+        "ByteLengthQueuingStrategy" => Some(Builtin::ByteLengthQueuingStrategyConstructor),
         "Symbol" => Some(Builtin::SymbolCreate),
         "queueMicrotask" => Some(Builtin::QueueMicrotask),
         "Proxy" => Some(Builtin::ProxyCreate),
@@ -668,6 +674,8 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         // ── Arguments Exotic Object ──
         Builtin::CreateUnmappedArgumentsObject => ("create_unmapped_arguments_object", 2),
         Builtin::CreateMappedArgumentsObject => ("create_mapped_arguments_object", 3),
+        Builtin::CountQueuingStrategyConstructor => ("CountQueuingStrategy", 1),
+        Builtin::ByteLengthQueuingStrategyConstructor => ("ByteLengthQueuingStrategy", 1),
         _ => ("builtin", 0),
     }
 }

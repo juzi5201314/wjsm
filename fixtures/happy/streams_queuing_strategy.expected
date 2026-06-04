@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+count hwm: 4
+count size: 1
+byte hwm: 8
+byte size view: 3
+byte size object: 5
+--- stderr ---

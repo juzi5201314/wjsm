@@ -44,9 +44,9 @@ use runtime_eval::*;
 use runtime_heap::*;
 use runtime_host_helpers::*;
 use runtime_json::*;
+use runtime_json::*;
 use runtime_microtask::*;
 use runtime_promises::*;
-use runtime_json::*;
 use runtime_render::*;
 use runtime_values::*;
 // ── Linker 注册辅助函数 ─────────────────────────────────────────
@@ -983,6 +983,7 @@ impl Clone for RuntimeState {
             stream_controller_table: self.stream_controller_table.clone(),
             writable_stream_table: self.writable_stream_table.clone(),
             writer_table: self.writer_table.clone(),
+            transform_stream_table: self.transform_stream_table.clone(),
             shared_state: self.shared_state.clone(),
             non_extensible_handles: self.non_extensible_handles.clone(),
             scope_records: self.scope_records.clone(),
@@ -1092,6 +1093,8 @@ struct RuntimeState {
     writable_stream_table: Arc<Mutex<Vec<WritableStreamEntry>>>,
     /// Writer 侧表：存储 WritableStreamDefaultWriter → stream 映射
     writer_table: Arc<Mutex<Vec<WriterEntry>>>,
+    /// TransformStream 侧表：存储转换流状态
+    transform_stream_table: Arc<Mutex<Vec<TransformStreamEntry>>>,
     /// None in normal (non-agent) execution.
     shared_state: Option<Arc<SharedRuntimeState>>,
     /// 被 preventExtensions 标记为不可扩展对象的 handle 集合（使用完整的 NaN-boxed 值作为 key）
@@ -1207,6 +1210,7 @@ impl RuntimeState {
             reader_table: Arc::new(Mutex::new(Vec::new())),
             stream_controller_table: Arc::new(Mutex::new(Vec::new())),
             writable_stream_table: Arc::new(Mutex::new(Vec::new())),
+            transform_stream_table: Arc::new(Mutex::new(Vec::new())),
             writer_table: Arc::new(Mutex::new(Vec::new())),
             shared_state: Some(Arc::new(SharedRuntimeState {
                 sab_table: Arc::new(Mutex::new(Vec::new())),
@@ -1439,17 +1443,30 @@ struct ReadableStreamEntry {
     disturbed: bool,
     locked: bool,
     http_response_handle: Option<u32>,
+    /// 该流作为 Response.body 暴露时，对应的 Fetch Response 侧表 handle
+    response_body_handle: Option<u32>,
+    /// 该流作为 Response.body 暴露时，对应的 Response JS 对象
+    response_body_object: Option<i64>,
     /// 关联的 controller handle（自定义流使用；HTTP 流为 None）
     controller_handle: Option<u32>,
     /// 是否为 byte stream（Phase 3 BYOB 支持预留）
     is_byte_stream: bool,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ReaderKind {
+    Default,
+    Byob,
+}
+
 #[derive(Clone, Debug)]
 struct ReaderEntry {
     stream_handle: u32,
+    kind: ReaderKind,
     /// 等待 enqueue 的 read Promise（自定义流路径使用）
     pending_read_promise: Option<i64>,
+    /// BYOB read(view) 等待填充的目标 view
+    pending_byob_view: Option<i64>,
     /// reader.closed Promise
     closed_promise: Option<i64>,
 }
@@ -1468,6 +1485,7 @@ struct WritableStreamEntry {
     error: Option<i64>,
     locked: bool,
     controller_handle: Option<u32>,
+    abort_signal: Option<i64>,
 }
 /// WritableStreamDefaultWriter 侧表条目
 #[derive(Debug, Clone)]
@@ -1475,6 +1493,22 @@ struct WriterEntry {
     writable_stream_handle: u32,
     closed_promise: Option<i64>,
     ready_promise: Option<i64>,
+}
+/// TransformStream 侧表条目
+#[derive(Debug, Clone)]
+struct TransformStreamEntry {
+    readable_stream_handle: Option<u32>,
+    writable_stream_handle: Option<u32>,
+    transform_callback: Option<i64>,
+    flush_callback: Option<i64>,
+    readable_controller_handle: Option<u32>,
+    /// transformer 对象（作为 transform/flush 回调的 this 值）
+    transformer_this: Option<i64>,
+    backpressure: bool,
+    /// readable JS 对象缓存（getter 返回用）
+    readable_obj: Option<i64>,
+    /// writable JS 对象缓存（getter 返回用）
+    writable_obj: Option<i64>,
 }
 
 /// Controller 类型
@@ -2204,6 +2238,14 @@ enum NativeCallable {
     // ── WritableStream (WHATWG Streams Phase 4) ──
     /// WritableStream constructor
     WritableStreamConstructor,
+    // ── TransformStream (WHATWG Streams Phase 5) ──
+    /// TransformStream constructor
+    TransformStreamConstructor,
+    /// TransformStream method (readable getter, writable getter)
+    TransformStreamMethod {
+        handle: u32,
+        kind: TransformStreamMethodKind,
+    },
     /// WritableStream method (getWriter, abort, close, getLocked)
     WritableStreamMethod {
         handle: u32,
@@ -2218,6 +2260,13 @@ enum NativeCallable {
     WritableStreamDefaultControllerMethod {
         handle: u32,
         kind: WritableStreamDefaultControllerMethodKind,
+    },
+    /// CountQueuingStrategy / ByteLengthQueuingStrategy constructor
+    CountQueuingStrategyConstructor,
+    ByteLengthQueuingStrategyConstructor,
+    /// QueuingStrategy size(chunk) method
+    QueuingStrategySize {
+        kind: QueuingStrategySizeKind,
     },
 }
 #[derive(Clone, Copy)]
@@ -2333,6 +2382,8 @@ enum ReadableStreamMethodKind {
     Cancel,
     Tee,
     AsyncIterator,
+    PipeTo,
+    PipeThrough,
 }
 #[derive(Clone, Copy)]
 enum ReadableStreamDefaultReaderMethodKind {
@@ -2347,6 +2398,12 @@ enum ReadableStreamDefaultControllerMethodKind {
     Error,
     GetDesiredSize,
 }
+// ── TransformStream (WHATWG Streams Phase 5) method kinds ──
+#[derive(Clone, Copy, Debug)]
+enum TransformStreamMethodKind {
+    GetReadable,
+    GetWritable,
+}
 // ── WritableStream (WHATWG Streams Phase 4) method kinds ──
 #[derive(Clone, Copy)]
 enum WritableStreamMethodKind {
@@ -2360,6 +2417,7 @@ enum WritableStreamDefaultWriterMethodKind {
     Write,
     Close,
     Abort,
+    ReleaseLock,
     GetClosed,
     GetReady,
     GetDesiredSize,
@@ -2367,7 +2425,14 @@ enum WritableStreamDefaultWriterMethodKind {
 #[derive(Clone, Copy)]
 enum WritableStreamDefaultControllerMethodKind {
     Error,
+    GetSignal,
 }
+#[derive(Clone, Copy)]
+enum QueuingStrategySizeKind {
+    Count,
+    ByteLength,
+}
+
 #[derive(Clone, Copy)]
 enum PromiseCombinatorReactionKind {
     AllFulfill,
@@ -2591,6 +2656,21 @@ enum Microtask {
     MicrotaskCallback {
         callback: i64,
     },
+    TransformStreamTransform {
+        callback: i64,
+        this_val: i64,
+        chunk: i64,
+        controller: i64,
+        write_promise: i64,
+    },
+    TransformStreamFlush {
+        callback: Option<i64>,
+        this_val: i64,
+        controller: i64,
+        readable_stream_handle: u32,
+        readable_controller_handle: u32,
+        close_promise: i64,
+    },
     AsyncResume {
         fn_table_idx: u32,
         continuation: i64,
@@ -2681,8 +2761,7 @@ mod tests {
     fn execute_with_writer_prints_string_fixture() -> Result<()> {
         let rt = Runtime::new()?;
         let wasm_bytes = compile_source(r#"console.log("Hello, Async Runtime!");"#)?;
-        let output =
-            rt.block_on(async { execute_with_writer(&wasm_bytes, Vec::new()).await })?;
+        let output = rt.block_on(async { execute_with_writer(&wasm_bytes, Vec::new()).await })?;
         assert_eq!(String::from_utf8(output)?, "Hello, Async Runtime!\n");
         Ok(())
     }
@@ -2697,8 +2776,7 @@ mod tests {
             setTimeout(() => { console.log("async-timer-fired"); }, 0);
         "#,
         )?;
-        let output =
-            rt.block_on(async { execute_with_writer(&wasm_bytes, Vec::new()).await })?;
+        let output = rt.block_on(async { execute_with_writer(&wasm_bytes, Vec::new()).await })?;
         let s = String::from_utf8(output)?;
         assert!(
             s.contains("async-timer-fired"),

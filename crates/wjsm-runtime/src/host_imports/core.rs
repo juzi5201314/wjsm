@@ -33,7 +33,6 @@ fn array_to_string_bytes(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec
     out
 }
 
-
 /// `in` 操作符核心实现：检查属性是否在对象及其原型链上
 /// 被 define_core_async 中的异步 op_in 通过 `use super::core::op_in_impl` 调用
 pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, prop: i64) -> i64 {
@@ -318,7 +317,6 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "iterator_from", f)?;
 
-
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
@@ -423,7 +421,6 @@ pub(crate) fn define_core(
         },
     );
     linker.define(&mut store, "env", "iterator_value", f)?;
-
 
     // ── Import 9: enumerator_from(i64) → i64 ────────────────────────────
     let f = Func::wrap(
@@ -618,7 +615,6 @@ pub(crate) fn define_core(
         },
     );
     linker.define(&mut store, "env", "typeof", f)?;
-
 
     // ── Import 15: op_instanceof(i64, i64) ────────────────────────────
     let f = Func::wrap(
@@ -842,8 +838,12 @@ pub(crate) fn define_core(
                     };
                     let data = memory.data(&caller);
                     if old_accessor {
-                        let g = i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap());
-                        let s = i64::from_le_bytes(data[slot_offset + 24..slot_offset + 32].try_into().unwrap());
+                        let g = i64::from_le_bytes(
+                            data[slot_offset + 16..slot_offset + 24].try_into().unwrap(),
+                        );
+                        let s = i64::from_le_bytes(
+                            data[slot_offset + 24..slot_offset + 32].try_into().unwrap(),
+                        );
                         (g, s)
                     } else {
                         (value::encode_undefined(), value::encode_undefined())
@@ -859,8 +859,10 @@ pub(crate) fn define_core(
                 let data = memory.data_mut(&mut caller);
                 data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
                 data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
-                data[slot_offset + 16..slot_offset + 24].copy_from_slice(&final_getter.to_le_bytes());
-                data[slot_offset + 24..slot_offset + 32].copy_from_slice(&final_setter.to_le_bytes());
+                data[slot_offset + 16..slot_offset + 24]
+                    .copy_from_slice(&final_getter.to_le_bytes());
+                data[slot_offset + 24..slot_offset + 32]
+                    .copy_from_slice(&final_setter.to_le_bytes());
             } else {
                 // 添加新属性
                 let (capacity, num_props) = {

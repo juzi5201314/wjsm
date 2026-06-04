@@ -8,7 +8,6 @@ pub(crate) fn define_string_methods(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-
     fn to_f64_or(val: i64, default: f64) -> f64 {
         if value::is_f64(val) {
             value::decode_f64(val)

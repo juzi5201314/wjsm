@@ -541,8 +541,14 @@ pub(crate) async fn perform_eval_from_caller_async(
         .clone();
     let previous_error_count = caller.data().error_table.lock().unwrap().len();
 
-    match try_compiled_eval_from_caller_async(caller, &code, &module, scope_env, var_writes_to_scope)
-        .await
+    match try_compiled_eval_from_caller_async(
+        caller,
+        &code,
+        &module,
+        scope_env,
+        var_writes_to_scope,
+    )
+    .await
     {
         Ok(value) => value,
         Err(error) => {
@@ -756,9 +762,9 @@ pub(crate) async fn eval_stmt_async(
 ) -> Result<Option<i64>, String> {
     match stmt {
         swc_ast::Stmt::Empty(_) => Ok(None),
-        swc_ast::Stmt::Expr(expr) => {
-            Ok(Some(eval_expr_async(caller, &expr.expr, scope_env, eval_locals).await?))
-        }
+        swc_ast::Stmt::Expr(expr) => Ok(Some(
+            eval_expr_async(caller, &expr.expr, scope_env, eval_locals).await?,
+        )),
         swc_ast::Stmt::Decl(swc_ast::Decl::Var(var_decl)) => {
             for declarator in &var_decl.decls {
                 let Some(name) = pat_ident_name(&declarator.name) else {
@@ -805,16 +811,24 @@ pub(crate) async fn eval_stmt_async(
             }
             Ok(None)
         }
-        swc_ast::Stmt::Block(block) => Box::pin(eval_block_async(
-            caller,
-            &block.stmts,
-            scope_env,
-            var_writes_to_scope,
-            eval_locals,
-        ))
-        .await,
+        swc_ast::Stmt::Block(block) => {
+            Box::pin(eval_block_async(
+                caller,
+                &block.stmts,
+                scope_env,
+                var_writes_to_scope,
+                eval_locals,
+            ))
+            .await
+        }
         swc_ast::Stmt::If(if_stmt) => {
-            let test = Box::pin(eval_expr_async(caller, &if_stmt.test, scope_env, eval_locals)).await?;
+            let test = Box::pin(eval_expr_async(
+                caller,
+                &if_stmt.test,
+                scope_env,
+                eval_locals,
+            ))
+            .await?;
             if !value::is_falsy(test) {
                 Box::pin(eval_stmt_async(
                     caller,
@@ -825,7 +839,14 @@ pub(crate) async fn eval_stmt_async(
                 ))
                 .await
             } else if let Some(alt) = &if_stmt.alt {
-                Box::pin(eval_stmt_async(caller, alt, scope_env, var_writes_to_scope, eval_locals)).await
+                Box::pin(eval_stmt_async(
+                    caller,
+                    alt,
+                    scope_env,
+                    var_writes_to_scope,
+                    eval_locals,
+                ))
+                .await
             } else {
                 Ok(None)
             }
@@ -870,7 +891,9 @@ pub(crate) async fn eval_block_async(
 ) -> Result<Option<i64>, String> {
     let mut completion = None;
     for stmt in stmts {
-        if let Some(value) = eval_stmt_async(caller, stmt, scope_env, var_writes_to_scope, eval_locals).await? {
+        if let Some(value) =
+            eval_stmt_async(caller, stmt, scope_env, var_writes_to_scope, eval_locals).await?
+        {
             completion = Some(value);
         }
     }
@@ -944,7 +967,9 @@ pub(crate) async fn eval_expr_async(
                     .unwrap_or_else(value::encode_undefined),
             )
         }
-        swc_ast::Expr::Paren(paren) => Box::pin(eval_expr_async(caller, &paren.expr, scope_env, eval_locals)).await,
+        swc_ast::Expr::Paren(paren) => {
+            Box::pin(eval_expr_async(caller, &paren.expr, scope_env, eval_locals)).await
+        }
         swc_ast::Expr::Seq(seq) => {
             let mut result = value::encode_undefined();
             for expr in &seq.exprs {
@@ -970,15 +995,20 @@ pub(crate) async fn eval_expr_async(
             eval_unary(unary.op, val)
         }
         swc_ast::Expr::Cond(cond) => {
-            let test = Box::pin(eval_expr_async(caller, &cond.test, scope_env, eval_locals)).await?;
+            let test =
+                Box::pin(eval_expr_async(caller, &cond.test, scope_env, eval_locals)).await?;
             if value::is_falsy(test) {
                 Box::pin(eval_expr_async(caller, &cond.alt, scope_env, eval_locals)).await
             } else {
                 Box::pin(eval_expr_async(caller, &cond.cons, scope_env, eval_locals)).await
             }
         }
-        swc_ast::Expr::Assign(assign) => Box::pin(eval_assign_async(caller, assign, scope_env, eval_locals)).await,
-        swc_ast::Expr::Call(call) => Box::pin(eval_call_async(caller, call, scope_env, eval_locals)).await,
+        swc_ast::Expr::Assign(assign) => {
+            Box::pin(eval_assign_async(caller, assign, scope_env, eval_locals)).await
+        }
+        swc_ast::Expr::Call(call) => {
+            Box::pin(eval_call_async(caller, call, scope_env, eval_locals)).await
+        }
         _ => Err("SyntaxError: unsupported eval expression".to_string()),
     }
 }
@@ -1064,9 +1094,13 @@ pub(crate) async fn eval_logical_async(
     let left = eval_expr_async(caller, &bin.left, scope_env, eval_locals).await?;
     match bin.op {
         swc_ast::BinaryOp::LogicalAnd if value::is_falsy(left) => Ok(left),
-        swc_ast::BinaryOp::LogicalAnd => eval_expr_async(caller, &bin.right, scope_env, eval_locals).await,
+        swc_ast::BinaryOp::LogicalAnd => {
+            eval_expr_async(caller, &bin.right, scope_env, eval_locals).await
+        }
         swc_ast::BinaryOp::LogicalOr if !value::is_falsy(left) => Ok(left),
-        swc_ast::BinaryOp::LogicalOr => eval_expr_async(caller, &bin.right, scope_env, eval_locals).await,
+        swc_ast::BinaryOp::LogicalOr => {
+            eval_expr_async(caller, &bin.right, scope_env, eval_locals).await
+        }
         swc_ast::BinaryOp::NullishCoalescing
             if value::is_null(left) || value::is_undefined(left) =>
         {
@@ -1459,14 +1493,32 @@ pub(crate) async fn eval_function_stmt_async(
             Ok(Some(value))
         }
         swc_ast::Stmt::Block(block) => {
-            Box::pin(eval_function_block_async(caller, &block.stmts, scope_env, eval_locals)).await
+            Box::pin(eval_function_block_async(
+                caller,
+                &block.stmts,
+                scope_env,
+                eval_locals,
+            ))
+            .await
         }
         swc_ast::Stmt::If(if_stmt) => {
             let test = eval_expr_async(caller, &if_stmt.test, scope_env, eval_locals).await?;
             if !value::is_falsy(test) {
-                Box::pin(eval_function_stmt_async(caller, &if_stmt.cons, scope_env, eval_locals)).await
+                Box::pin(eval_function_stmt_async(
+                    caller,
+                    &if_stmt.cons,
+                    scope_env,
+                    eval_locals,
+                ))
+                .await
             } else if let Some(alt) = &if_stmt.alt {
-                Box::pin(eval_function_stmt_async(caller, alt, scope_env, eval_locals)).await
+                Box::pin(eval_function_stmt_async(
+                    caller,
+                    alt,
+                    scope_env,
+                    eval_locals,
+                ))
+                .await
             } else {
                 Ok(None)
             }

@@ -13,7 +13,8 @@ pub(crate) fn define_fetch(
 ) -> Result<()> {
     // fetch(i64, i64) → i64  [input, init]
     linker.func_wrap_async(
-        "env", "fetch",
+        "env",
+        "fetch",
         |mut caller: Caller<'_, RuntimeState>, (input, init): (i64, i64)| {
             Box::new(async move {
                 let promise = alloc_promise_from_caller(&mut caller, PromiseEntry::pending());
@@ -21,7 +22,10 @@ pub(crate) fn define_fetch(
                 let (method, url, headers_handle, body_opt, redirect, signal_handle) =
                     parse_fetch_input(&mut caller, input, init);
                 if url.is_empty() {
-                    let err = alloc_type_error_from_caller(&mut caller, "Failed to parse URL from request.");
+                    let err = alloc_type_error_from_caller(
+                        &mut caller,
+                        "Failed to parse URL from request.",
+                    );
                     settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
                     return promise;
                 }
@@ -29,19 +33,41 @@ pub(crate) fn define_fetch(
                 if url.starts_with("data:") {
                     match perform_data_url_fetch(&mut caller, &url) {
                         Ok(response_val) => {
-                            settle_promise(caller.data_mut(), promise, PromiseSettlement::Fulfill(response_val));
+                            settle_promise(
+                                caller.data_mut(),
+                                promise,
+                                PromiseSettlement::Fulfill(response_val),
+                            );
                         }
                         Err(msg) => {
                             let err = alloc_type_error_from_caller(&mut caller, &msg);
-                            settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
+                            settle_promise(
+                                caller.data_mut(),
+                                promise,
+                                PromiseSettlement::Reject(err),
+                            );
                         }
                     }
                     return promise;
                 }
                 // HTTP/HTTPS — 异步路径
-                match perform_http_fetch(&mut caller, method, url, headers_handle, body_opt, redirect, signal_handle).await {
+                match perform_http_fetch(
+                    &mut caller,
+                    method,
+                    url,
+                    headers_handle,
+                    body_opt,
+                    redirect,
+                    signal_handle,
+                )
+                .await
+                {
                     Ok(response_val) => {
-                        settle_promise(caller.data_mut(), promise, PromiseSettlement::Fulfill(response_val));
+                        settle_promise(
+                            caller.data_mut(),
+                            promise,
+                            PromiseSettlement::Fulfill(response_val),
+                        );
                     }
                     Err(msg) => {
                         let err = alloc_type_error_from_caller(&mut caller, &msg);
@@ -127,7 +153,8 @@ pub(crate) fn define_fetch(
             let args: Vec<i64> = (0..args_count.max(0))
                 .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
                 .collect();
-            construct_abort_controller(&mut caller, this_val, &args).unwrap_or_else(value::encode_undefined)
+            construct_abort_controller(&mut caller, this_val, &args)
+                .unwrap_or_else(value::encode_undefined)
         },
     );
     linker.define(
@@ -166,6 +193,65 @@ pub(crate) fn define_fetch(
                     .unwrap_or_else(value::encode_undefined)
             })
         },
+    )?;
+    linker.func_wrap_async(
+        "env",
+        "transform_stream_constructor",
+        |mut caller: Caller<'_, RuntimeState>,
+         (_env, this_val, args_base, args_count): (i64, i64, i32, i32)| {
+            Box::new(async move {
+                let args: Vec<i64> = (0..args_count.max(0))
+                    .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
+                    .collect();
+                construct_transform_stream(&mut caller, this_val, &args)
+                    .await
+                    .unwrap_or_else(value::encode_undefined)
+            })
+        },
+    )?;
+
+    let count_queuing_strategy_constructor = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let args: Vec<i64> = (0..args_count.max(0))
+                .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
+                .collect();
+            construct_count_queuing_strategy(&mut caller, this_val, &args)
+                .unwrap_or_else(value::encode_undefined)
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "count_queuing_strategy_constructor",
+        count_queuing_strategy_constructor,
+    )?;
+
+    let byte_length_queuing_strategy_constructor = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>,
+         _env: i64,
+         this_val: i64,
+         args_base: i32,
+         args_count: i32|
+         -> i64 {
+            let args: Vec<i64> = (0..args_count.max(0))
+                .map(|index| read_shadow_arg(&mut caller, args_base, index as u32))
+                .collect();
+            construct_byte_length_queuing_strategy(&mut caller, this_val, &args)
+                .unwrap_or_else(value::encode_undefined)
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "byte_length_queuing_strategy_constructor",
+        byte_length_queuing_strategy_constructor,
     )?;
     Ok(())
 }

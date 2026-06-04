@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+controller signal type: object
+controller signal aborted: false
+saved signal type: object
+stream locked: false
+--- stderr ---

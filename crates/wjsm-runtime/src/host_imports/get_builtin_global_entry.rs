@@ -57,6 +57,15 @@ pub(crate) fn define_get_builtin_global(
                     "WritableStream" => {
                         native_callables.push(NativeCallable::WritableStreamConstructor)
                     }
+                    "TransformStream" => {
+                        native_callables.push(NativeCallable::TransformStreamConstructor)
+                    }
+                    "CountQueuingStrategy" => {
+                        native_callables.push(NativeCallable::CountQueuingStrategyConstructor)
+                    }
+                    "ByteLengthQueuingStrategy" => {
+                        native_callables.push(NativeCallable::ByteLengthQueuingStrategyConstructor)
+                    }
                     "ArrayBuffer" => {
                         native_callables.push(NativeCallable::ArrayBufferConstructorGlobal)
                     }

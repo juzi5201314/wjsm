@@ -239,7 +239,6 @@ pub(crate) fn define_typedarray_new_methods(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-
     // ── typedarray_proto_fill (Type 17, 4-arg: this, value, start, end) ──
     let typedarray_proto_fill_fn = Func::wrap(
         &mut store,

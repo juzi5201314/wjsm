@@ -1,6 +1,8 @@
+use super::streams_readable::{
+    create_closed_readable_stream_from_bytes, mark_response_body_used_from_caller,
+};
 use crate::*;
 use wasmtime::Caller;
-use super::streams_readable::create_closed_readable_stream_from_bytes;
 
 // ── Object construction helpers (Headers / Response / Request) ──────────────
 
@@ -89,7 +91,7 @@ pub(crate) fn create_response_object(
             .map(|entry| entry.body.clone())
     };
     let body_val = if let Some(ref bytes) = body_bytes_opt {
-        create_closed_readable_stream_from_bytes(caller, bytes)
+        create_closed_readable_stream_from_bytes(caller, bytes, Some(handle), Some(obj))
     } else {
         value::encode_null()
     };
@@ -177,9 +179,10 @@ pub(crate) fn create_response_object_with_http_handle(
     let _ = define_host_data_property_from_caller(caller, obj, "redirected", redirected_val);
 
     // body / bodyUsed
-    let stream_obj = create_readable_stream_object(caller, http_handle);
+    let stream_obj = create_readable_stream_object(caller, http_handle, Some(handle), Some(obj));
     let _ = define_host_data_property_from_caller(caller, obj, "body", stream_obj);
-    let _ = define_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(false));
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(false));
 
     let headers_obj = create_headers_object_from_handle(caller, headers_handle);
     let _ = define_host_data_property_from_caller(caller, obj, "headers", headers_obj);
@@ -199,7 +202,8 @@ pub(crate) fn create_request_object(
     target_obj: Option<i64>,
     signal_handle: Option<u32>,
 ) -> i64 {
-    let mut table = caller.data()
+    let mut table = caller
+        .data()
         .fetch_request_table
         .lock()
         .expect("fetch_request_table mutex");
@@ -314,7 +318,10 @@ fn attach_request_methods(caller: &mut Caller<'_, RuntimeState>, obj: i64, handl
     let _ = define_host_data_property_from_caller(caller, obj, "clone", val);
 }
 
-pub(crate) fn push_native_callable(caller: &mut Caller<'_, RuntimeState>, callable: NativeCallable) -> u32 {
+pub(crate) fn push_native_callable(
+    caller: &mut Caller<'_, RuntimeState>,
+    callable: NativeCallable,
+) -> u32 {
     let mut table = caller
         .data()
         .native_callables
@@ -477,8 +484,14 @@ pub(crate) fn call_response_method_from_caller(
     if is_consuming && http_response_handle.is_some() {
         let http_handle = http_response_handle.unwrap();
         let response = {
-            let mut table = caller.data().http_response_table.lock().expect("http_response mutex");
-            table.get_mut(http_handle as usize).and_then(|e| e.response.take())
+            let mut table = caller
+                .data()
+                .http_response_table
+                .lock()
+                .expect("http_response mutex");
+            table
+                .get_mut(http_handle as usize)
+                .and_then(|e| e.response.take())
         };
         if let Some(response) = response {
             let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
@@ -533,10 +546,22 @@ pub(crate) fn call_response_method_from_caller(
                             promise: promise_clone,
                             materialize: Box::new(move |store, env| {
                                 let obj = crate::runtime_heap::alloc_host_object(store, env, 2);
-                                let name_val = crate::runtime_render::store_runtime_string_in_state(store.data(), "TypeError".to_string());
-                                let msg_val = crate::runtime_render::store_runtime_string_in_state(store.data(), e.to_string());
-                                let _ = crate::runtime_host_helpers::define_host_data_property_with_env(store, env, obj, "name", name_val);
-                                let _ = crate::runtime_host_helpers::define_host_data_property_with_env(store, env, obj, "message", msg_val);
+                                let name_val = crate::runtime_render::store_runtime_string_in_state(
+                                    store.data(),
+                                    "TypeError".to_string(),
+                                );
+                                let msg_val = crate::runtime_render::store_runtime_string_in_state(
+                                    store.data(),
+                                    e.to_string(),
+                                );
+                                let _ =
+                                    crate::runtime_host_helpers::define_host_data_property_with_env(
+                                        store, env, obj, "name", name_val,
+                                    );
+                                let _ =
+                                    crate::runtime_host_helpers::define_host_data_property_with_env(
+                                        store, env, obj, "message", msg_val,
+                                    );
                                 PromiseSettlement::Reject(obj)
                             }),
                         });
@@ -654,7 +679,8 @@ pub(crate) fn call_request_method_from_caller(
                 });
                 nh
             };
-            let req = create_request_object(caller, method, url, new_headers, body, redirect, None, None);
+            let req =
+                create_request_object(caller, method, url, new_headers, body, redirect, None, None);
             if let Some(url_val) = object_property(caller, this_val, "url") {
                 let _ = set_host_data_property_from_caller(caller, req, "url", url_val);
             }
@@ -839,7 +865,9 @@ pub(crate) fn construct_request(
         }
         if let Some(init_signal) = object_property(caller, init, "signal") {
             if !value::is_undefined(init_signal) {
-                if let Some(handle) = number_property(caller, init_signal, "__abort_signal_handle__") {
+                if let Some(handle) =
+                    number_property(caller, init_signal, "__abort_signal_handle__")
+                {
                     signal_handle = Some(handle as u32);
                 }
             }
@@ -853,7 +881,16 @@ pub(crate) fn construct_request(
         ));
     }
 
-    let req = create_request_object(caller, method, url, headers, body, redirect, Some(this_val), signal_handle);
+    let req = create_request_object(
+        caller,
+        method,
+        url,
+        headers,
+        body,
+        redirect,
+        Some(this_val),
+        signal_handle,
+    );
     define_request_init_properties(caller, req, &cache, &credentials, &integrity, keepalive);
     if copied_request && let Some(url_val) = object_property(caller, input, "url") {
         let _ = set_host_data_property_from_caller(caller, req, "url", url_val);
@@ -936,7 +973,10 @@ pub(crate) fn construct_response(
 
 // ── Small helpers ───────────────────────────────────────────────────────────
 
-pub(crate) fn get_headers_handle_from_object(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<u32> {
+pub(crate) fn get_headers_handle_from_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+) -> Option<u32> {
     if !value::is_object(obj) {
         return None;
     }
@@ -945,7 +985,10 @@ pub(crate) fn get_headers_handle_from_object(caller: &mut Caller<'_, RuntimeStat
     Some(value::decode_f64(prop) as u32)
 }
 
-pub(crate) fn get_response_handle_from_object(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<u32> {
+pub(crate) fn get_response_handle_from_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+) -> Option<u32> {
     if !value::is_object(obj) {
         return None;
     }
@@ -954,7 +997,10 @@ pub(crate) fn get_response_handle_from_object(caller: &mut Caller<'_, RuntimeSta
     Some(value::decode_f64(prop) as u32)
 }
 
-pub(crate) fn get_request_handle_from_object(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> Option<u32> {
+pub(crate) fn get_request_handle_from_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+) -> Option<u32> {
     if !value::is_object(obj) {
         return None;
     }
@@ -963,7 +1009,10 @@ pub(crate) fn get_request_handle_from_object(caller: &mut Caller<'_, RuntimeStat
     Some(value::decode_f64(prop) as u32)
 }
 
-pub(crate) fn create_arraybuffer_with_bytes(caller: &mut Caller<'_, RuntimeState>, bytes: &[u8]) -> i64 {
+pub(crate) fn create_arraybuffer_with_bytes(
+    caller: &mut Caller<'_, RuntimeState>,
+    bytes: &[u8],
+) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let ab = alloc_host_object(caller, &env, 1);
     let mut ab_table = caller
@@ -987,7 +1036,10 @@ pub(crate) fn create_arraybuffer_with_bytes(caller: &mut Caller<'_, RuntimeState
     ab
 }
 
-pub(crate) fn alloc_type_error_from_caller(caller: &mut Caller<'_, RuntimeState>, message: &str) -> i64 {
+pub(crate) fn alloc_type_error_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    message: &str,
+) -> i64 {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj = alloc_host_object(caller, &env, 2);
     let name_val = store_runtime_string(caller, "TypeError".to_string());
@@ -1037,7 +1089,11 @@ fn js_string_from_value(
         .to_string())
 }
 
-pub(crate) fn object_property(caller: &mut Caller<'_, RuntimeState>, obj: i64, name: &str) -> Option<i64> {
+pub(crate) fn object_property(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+) -> Option<i64> {
     let ptr = resolve_handle(caller, obj)?;
     read_object_property_by_name(caller, ptr, name)
 }
@@ -1393,9 +1449,15 @@ pub(crate) fn extract_string_property(
 pub(crate) fn create_readable_stream_object(
     caller: &mut Caller<'_, RuntimeState>,
     http_response_handle: u32,
+    response_body_handle: Option<u32>,
+    response_body_object: Option<i64>,
 ) -> i64 {
     let stream_handle = {
-        let mut table = caller.data().readable_stream_table.lock().expect("stream mutex");
+        let mut table = caller
+            .data()
+            .readable_stream_table
+            .lock()
+            .expect("stream mutex");
         let handle = table.len() as u32;
         table.push(ReadableStreamEntry {
             state: StreamState::Readable,
@@ -1403,6 +1465,8 @@ pub(crate) fn create_readable_stream_object(
             disturbed: false,
             locked: false,
             http_response_handle: Some(http_response_handle),
+            response_body_handle,
+            response_body_object,
             controller_handle: None,
             is_byte_stream: false,
         });
@@ -1413,11 +1477,17 @@ pub(crate) fn create_readable_stream_object(
     let handle_val = value::encode_f64(stream_handle as f64);
     let _ = define_host_data_property_from_caller(caller, obj, "__stream_handle__", handle_val);
     let _ = define_host_data_property_from_caller(caller, obj, "locked", value::encode_bool(false));
-    let callable = NativeCallable::StreamMethod { handle: stream_handle, kind: StreamMethodKind::GetReader };
+    let callable = NativeCallable::StreamMethod {
+        handle: stream_handle,
+        kind: StreamMethodKind::GetReader,
+    };
     let idx = push_native_callable(caller, callable);
     let val = value::encode_native_callable_idx(idx);
     let _ = define_host_data_property_from_caller(caller, obj, "getReader", val);
-    let cancel_callable = NativeCallable::StreamMethod { handle: stream_handle, kind: StreamMethodKind::Cancel };
+    let cancel_callable = NativeCallable::StreamMethod {
+        handle: stream_handle,
+        kind: StreamMethodKind::Cancel,
+    };
     let cancel_idx = push_native_callable(caller, cancel_callable);
     let cancel_val = value::encode_native_callable_idx(cancel_idx);
     let _ = define_host_data_property_from_caller(caller, obj, "cancel", cancel_val);
@@ -1433,7 +1503,9 @@ pub(crate) fn create_reader_object(
         let handle = table.len() as u32;
         table.push(ReaderEntry {
             stream_handle,
+            kind: ReaderKind::Default,
             pending_read_promise: None,
+            pending_byob_view: None,
             closed_promise: None,
         });
         handle
@@ -1442,11 +1514,17 @@ pub(crate) fn create_reader_object(
     let obj = alloc_host_object(caller, &env, 4);
     let handle_val = value::encode_f64(reader_handle as f64);
     let _ = define_host_data_property_from_caller(caller, obj, "__reader_handle__", handle_val);
-    let read_callable = NativeCallable::ReaderMethod { handle: reader_handle, kind: ReaderMethodKind::Read };
+    let read_callable = NativeCallable::ReaderMethod {
+        handle: reader_handle,
+        kind: ReaderMethodKind::Read,
+    };
     let read_idx = push_native_callable(caller, read_callable);
     let read_val = value::encode_native_callable_idx(read_idx);
     let _ = define_host_data_property_from_caller(caller, obj, "read", read_val);
-    let release_callable = NativeCallable::ReaderMethod { handle: reader_handle, kind: ReaderMethodKind::ReleaseLock };
+    let release_callable = NativeCallable::ReaderMethod {
+        handle: reader_handle,
+        kind: ReaderMethodKind::ReleaseLock,
+    };
     let release_idx = push_native_callable(caller, release_callable);
     let release_val = value::encode_native_callable_idx(release_idx);
     let _ = define_host_data_property_from_caller(caller, obj, "releaseLock", release_val);
@@ -1462,17 +1540,24 @@ pub(crate) fn call_stream_method_from_caller(
 ) -> Option<i64> {
     match kind {
         StreamMethodKind::GetReader => {
-            let locked = {
-                let mut stream_table = caller.data().readable_stream_table.lock().expect("stream mutex");
+            let (locked, response_body) = {
+                let mut stream_table = caller
+                    .data()
+                    .readable_stream_table
+                    .lock()
+                    .expect("stream mutex");
                 let entry = stream_table.get_mut(handle as usize)?;
-                if entry.locked {
-                    true
-                } else {
+                let locked = entry.locked;
+                let response_body = (entry.response_body_handle, entry.response_body_object);
+                if !locked {
                     entry.locked = true;
                     entry.disturbed = true;
-                    false
                 }
+                (locked, response_body)
             };
+            if !locked {
+                mark_response_body_used_from_caller(caller, response_body.0, response_body.1);
+            }
             if locked {
                 return Some(type_error_exception(caller, "ReadableStream is locked"));
             }
@@ -1480,7 +1565,11 @@ pub(crate) fn call_stream_method_from_caller(
             Some(reader)
         }
         StreamMethodKind::Cancel => {
-            let mut stream_table = caller.data().readable_stream_table.lock().expect("stream mutex");
+            let mut stream_table = caller
+                .data()
+                .readable_stream_table
+                .lock()
+                .expect("stream mutex");
             if let Some(entry) = stream_table.get_mut(handle as usize) {
                 entry.state = StreamState::Closed;
             }
@@ -1503,13 +1592,23 @@ pub(crate) fn call_reader_method_from_caller(
                 reader_table.get(handle as usize)?.stream_handle
             };
             let http_handle = {
-                let stream_table = caller.data().readable_stream_table.lock().expect("stream mutex");
+                let stream_table = caller
+                    .data()
+                    .readable_stream_table
+                    .lock()
+                    .expect("stream mutex");
                 let entry = stream_table.get(stream_handle as usize)?;
                 entry.http_response_handle?
             };
             let response = {
-                let mut http_table = caller.data().http_response_table.lock().expect("http_response mutex");
-                http_table.get_mut(http_handle as usize).and_then(|e| e.response.take())
+                let mut http_table = caller
+                    .data()
+                    .http_response_table
+                    .lock()
+                    .expect("http_response mutex");
+                http_table
+                    .get_mut(http_handle as usize)
+                    .and_then(|e| e.response.take())
             };
             if response.is_none() {
                 let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
@@ -1528,7 +1627,8 @@ pub(crate) fn call_reader_method_from_caller(
                             promise: promise_clone,
                             materialize: Box::new(move |store, env| {
                                 let arr = create_uint8array_with_env(store, env, &chunk);
-                                let result = build_reader_result_with_env(store, env, false, Some(arr));
+                                let result =
+                                    build_reader_result_with_env(store, env, false, Some(arr));
                                 PromiseSettlement::Fulfill(result)
                             }),
                         });
@@ -1546,7 +1646,11 @@ pub(crate) fn call_reader_method_from_caller(
                         let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
                             promise: promise_clone,
                             materialize: Box::new(move |store, env| {
-                                let err = crate::runtime_heap::alloc_type_error_with_env(store, env, e.to_string());
+                                let err = crate::runtime_heap::alloc_type_error_with_env(
+                                    store,
+                                    env,
+                                    e.to_string(),
+                                );
                                 PromiseSettlement::Reject(err)
                             }),
                         });
@@ -1560,7 +1664,11 @@ pub(crate) fn call_reader_method_from_caller(
                 let reader_table = caller.data().reader_table.lock().expect("reader mutex");
                 reader_table.get(handle as usize)?.stream_handle
             };
-            let mut stream_table = caller.data().readable_stream_table.lock().expect("stream mutex");
+            let mut stream_table = caller
+                .data()
+                .readable_stream_table
+                .lock()
+                .expect("stream mutex");
             if let Some(entry) = stream_table.get_mut(stream_handle as usize) {
                 entry.locked = false;
             }
@@ -1578,7 +1686,9 @@ fn create_uint8array_with_env<C: AsContextMut<Data = RuntimeState>>(
         let mut store = ctx.as_context_mut();
         let mut ab_table = store.data_mut().arraybuffer_table.lock().expect("mutex");
         let handle = ab_table.len() as u32;
-        ab_table.push(ArrayBufferEntry { data: bytes.to_vec() });
+        ab_table.push(ArrayBufferEntry {
+            data: bytes.to_vec(),
+        });
         handle
     };
     let ta_handle = {
@@ -1597,13 +1707,39 @@ fn create_uint8array_with_env<C: AsContextMut<Data = RuntimeState>>(
     };
     let obj = crate::runtime_heap::alloc_host_object(ctx, env, 4);
     let ta_handle_val = value::encode_f64(ta_handle as f64);
-    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(ctx, env, obj, "__typedarray_handle__", ta_handle_val);
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "__typedarray_handle__",
+        ta_handle_val,
+    );
     let ab_handle_val = value::encode_f64(ab_handle as f64);
-    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(ctx, env, obj, "__arraybuffer_handle__", ab_handle_val);
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "__arraybuffer_handle__",
+        ab_handle_val,
+    );
     let len_val = value::encode_f64(bytes.len() as f64);
-    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(ctx, env, obj, "length", len_val);
-    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(ctx, env, obj, "byteLength", len_val);
-    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(ctx, env, obj, "byteOffset", value::encode_f64(0.0));
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx, env, obj, "length", len_val,
+    );
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "byteLength",
+        len_val,
+    );
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "byteOffset",
+        value::encode_f64(0.0),
+    );
     obj
 }
 
@@ -1614,9 +1750,17 @@ fn build_reader_result_with_env<C: AsContextMut<Data = RuntimeState>>(
     value: Option<i64>,
 ) -> i64 {
     let obj = crate::runtime_heap::alloc_host_object(ctx, env, 2);
-    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(ctx, env, obj, "done", value::encode_bool(done));
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "done",
+        value::encode_bool(done),
+    );
     let val = value.unwrap_or_else(value::encode_undefined);
-    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(ctx, env, obj, "value", val);
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx, env, obj, "value", val,
+    );
     obj
 }
 
@@ -1636,7 +1780,11 @@ pub(crate) fn construct_abort_controller(
 ) -> Option<i64> {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let signal_handle = {
-        let mut table = caller.data().abort_signal_table.lock().expect("abort_signal mutex");
+        let mut table = caller
+            .data()
+            .abort_signal_table
+            .lock()
+            .expect("abort_signal mutex");
         let handle = table.len() as u32;
         table.push(AbortSignalEntry {
             aborted: false,
@@ -1646,10 +1794,25 @@ pub(crate) fn construct_abort_controller(
     };
     let signal_obj = alloc_host_object(caller, &env, 2);
     let handle_val = value::encode_f64(signal_handle as f64);
-    let _ = define_host_data_property_from_caller(caller, signal_obj, "__abort_signal_handle__", handle_val);
-    let _ = define_host_data_property_from_caller(caller, signal_obj, "aborted", value::encode_bool(false));
+    let _ = define_host_data_property_from_caller(
+        caller,
+        signal_obj,
+        "__abort_signal_handle__",
+        handle_val,
+    );
+    let _ = define_host_data_property_from_caller(
+        caller,
+        signal_obj,
+        "aborted",
+        value::encode_bool(false),
+    );
     let _ = define_host_data_property_from_caller(caller, this_val, "signal", signal_obj);
-    let _ = define_host_data_property_from_caller(caller, this_val, "__abort_signal_handle__", handle_val);
+    let _ = define_host_data_property_from_caller(
+        caller,
+        this_val,
+        "__abort_signal_handle__",
+        handle_val,
+    );
     Some(this_val)
 }
 
@@ -1658,7 +1821,11 @@ pub(crate) fn abort_controller_abort(
     signal_handle: u32,
     args: &[i64],
 ) -> Option<i64> {
-    let mut table = caller.data().abort_signal_table.lock().expect("abort_signal mutex");
+    let mut table = caller
+        .data()
+        .abort_signal_table
+        .lock()
+        .expect("abort_signal mutex");
     if let Some(entry) = table.get_mut(signal_handle as usize) {
         entry.aborted = true;
         entry.reason = args.first().copied();

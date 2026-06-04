@@ -9,8 +9,6 @@ fn compile_source(source: &str) -> Result<Vec<u8>> {
     wjsm_backend_wasm::compile(&program)
 }
 
-
-
 fn run_async(source: &str) -> Result<String> {
     let wasm = compile_source(source)?;
     let rt = Runtime::new()?;
@@ -21,8 +19,6 @@ fn run_async(source: &str) -> Result<String> {
 fn run_async_source(source: &str) -> Result<String> {
     run_async(source)
 }
-
-
 
 #[test]
 fn promise_microtasks_drain_after_main_in_order() -> Result<()> {

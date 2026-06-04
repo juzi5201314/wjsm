@@ -224,7 +224,9 @@ pub(crate) fn pump_async_generator_from_caller(
 ///   在 Store::epoch_deadline_async_yield_and_update 之后，
 ///   *所有* 经由该 Store 的 Wasm 调用（主 + 回调，包括此处 resume 中的 continuation 恢复调用）都必须走 async API（call_async 等）。
 ///   本文件中的 async 版本即为此准备；sync 版本仅留给未切换的 sync execute 路径。
-pub(crate) async fn resume_async_function_async<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+pub(crate) async fn resume_async_function_async<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
     ctx: &mut C,
     env: &WasmEnv,
     fn_table_idx: u32,

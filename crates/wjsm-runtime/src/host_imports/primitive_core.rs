@@ -889,7 +889,6 @@ pub(crate) fn define_primitive_core(
     );
     linker.define(&mut store, "env", "string_match", string_match_fn)?;
 
-
     // ── Import 114: string_search(i64, i64) → i64 ────────────────────────────────
     let string_search_fn = Func::wrap(
         &mut store,

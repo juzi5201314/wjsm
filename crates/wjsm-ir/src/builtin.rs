@@ -433,6 +433,9 @@ pub enum Builtin {
     // ── WHATWG Streams ──
     ReadableStreamConstructor,
     WritableStreamConstructor,
+    TransformStreamConstructor,
+    CountQueuingStrategyConstructor,
+    ByteLengthQueuingStrategyConstructor,
 }
 
 impl fmt::Display for Builtin {
@@ -816,6 +819,9 @@ impl fmt::Display for Builtin {
             Self::ScopeRecordDestroy => "scope_record_destroy",
             Self::ReadableStreamConstructor => "ReadableStream",
             Self::WritableStreamConstructor => "WritableStream",
+            Self::TransformStreamConstructor => "TransformStream",
+            Self::CountQueuingStrategyConstructor => "CountQueuingStrategy",
+            Self::ByteLengthQueuingStrategyConstructor => "ByteLengthQueuingStrategy",
         })
     }
 }
