@@ -1619,7 +1619,16 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             trigger_gc(caller);
             Some(value::encode_undefined())
         }
-        NativeCallable::SharedArrayBufferConstructor => Some(value::encode_undefined()),
+        NativeCallable::SharedArrayBufferConstructor => {
+            let length = argument;
+            let options = args
+                .get(1)
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            Some(crate::shared_buffer::construct_shared_array_buffer(
+                caller, length, options, this_val,
+            ))
+        }
         // ── Agent harness ──
         NativeCallable::AgentStart => {
             // Simplified: no-op for now (would parse script and spawn thread)

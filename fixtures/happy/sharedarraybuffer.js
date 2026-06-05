@@ -1,4 +1,16 @@
 var sab = new SharedArrayBuffer(16);
 console.log(sab.byteLength);
+console.log(sab.growable);
+console.log(sab.maxByteLength);
+var view = new Uint8Array(sab);
+view[4] = 99;
 var sliced = sab.slice(4, 8);
 console.log(sliced.byteLength);
+console.log(new Uint8Array(sliced)[0]);
+var growable = new SharedArrayBuffer(4, { maxByteLength: 12 });
+console.log(growable.byteLength);
+console.log(growable.growable);
+console.log(growable.maxByteLength);
+growable.grow(8);
+console.log(growable.byteLength);
+console.log(new Uint8Array(growable)[6]);

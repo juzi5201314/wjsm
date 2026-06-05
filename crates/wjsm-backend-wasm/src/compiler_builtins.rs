@@ -714,7 +714,8 @@ impl Compiler {
             }
             // ── Math.random: () -> i64 ──
             Builtin::MathRandom
-            | Builtin::DateNow => {
+            | Builtin::DateNow
+            | Builtin::AtomicsPause => {
                 let func_idx = self
                     .builtin_func_indices
                     .get(builtin)
@@ -811,8 +812,9 @@ impl Compiler {
             | Builtin::ArrayBufferConstructor
             | Builtin::ArrayBufferProtoByteLength
             // ── SharedArrayBuffer builtins ──
-            | Builtin::SharedArrayBufferConstructor
             | Builtin::SharedArrayBufferProtoByteLength
+            | Builtin::SharedArrayBufferProtoGrowable
+            | Builtin::SharedArrayBufferProtoMaxByteLength
             | Builtin::SharedArrayBufferSpecies
             // ── Atomics single-arg builtins ──
             | Builtin::AtomicsIsLockFree
@@ -855,10 +857,11 @@ impl Compiler {
             | Builtin::WeakSetProtoDelete
             // ── ArrayBuffer multi-arg builtins ──
             | Builtin::ArrayBufferProtoSlice
-            // ── SharedArrayBuffer multi-arg builtins ──
+            // ── SharedArrayBuffer builtins (2-arg / 3-arg) ──
             | Builtin::SharedArrayBufferProtoSlice
-            // ── Atomics multi-arg builtins ──
+            // ── Atomics multi-arg builtins (2 args padded to 3) ──
             | Builtin::AtomicsLoad
+            // ── Atomics multi-arg builtins (3 args) ──
             | Builtin::AtomicsStore
             | Builtin::AtomicsAdd
             | Builtin::AtomicsSub
@@ -866,11 +869,9 @@ impl Compiler {
             | Builtin::AtomicsOr
             | Builtin::AtomicsXor
             | Builtin::AtomicsExchange
-            | Builtin::AtomicsCompareExchange
             | Builtin::AtomicsNotify
-            | Builtin::AtomicsWait
-            | Builtin::AtomicsWaitAsync
             // ── DataView constructor ──
+            | Builtin::SharedArrayBufferConstructor
             | Builtin::DataViewConstructor
             // ── DataView get methods ──
             | Builtin::DataViewProtoGetFloat64
@@ -916,6 +917,46 @@ impl Compiler {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
                 }
                 for _ in args.len()..3 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── Atomics 4-arg builtins (compareExchange, wait, waitAsync) ──
+            Builtin::AtomicsCompareExchange
+            | Builtin::AtomicsWait
+            | Builtin::AtomicsWaitAsync => {
+                for arg in args.iter().take(4) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                for _ in args.len()..4 {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+                }
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .with_context(|| format!("no WASM func index for builtin {builtin}"))?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(())
+            }
+            // ── SharedArrayBuffer 2-arg builtins ──
+            Builtin::SharedArrayBufferProtoGrow => {
+                for arg in args.iter().take(2) {
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(arg.0)));
+                }
+                for _ in args.len()..2 {
                     self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
                 let func_idx = self

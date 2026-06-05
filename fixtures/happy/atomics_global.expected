@@ -1,13 +1,4 @@
 exit_code: 0
 --- stdout ---
-16
-false
-16
-4
-99
-4
-true
-12
-8
-0
+11
 --- stderr ---

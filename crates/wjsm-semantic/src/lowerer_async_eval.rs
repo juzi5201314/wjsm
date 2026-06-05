@@ -1503,6 +1503,7 @@ impl Lowerer {
                         | Builtin::WeakSetConstructor
                         | Builtin::DateConstructor
                         | Builtin::ArrayBufferConstructor
+                        | Builtin::SharedArrayBufferConstructor
                         | Builtin::DataViewConstructor
                         | Builtin::Int8ArrayConstructor
                         | Builtin::Uint8ArrayConstructor

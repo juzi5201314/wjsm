@@ -1,4 +1,16 @@
 exit_code: 0
 --- stdout ---
-undefined
+42
+42
+42
+50
+50
+7
+7
+3
+true
+not-equal
+timed-out
+false
+not-equal
 --- stderr ---
