@@ -923,8 +923,11 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ArrayBufferProtoByteLength => ("ArrayBuffer.prototype.byteLength", 1),
         Builtin::ArrayBufferProtoSlice => ("ArrayBuffer.prototype.slice", 3),
         // ── SharedArrayBuffer builtins ──
-        Builtin::SharedArrayBufferConstructor => ("sharedarraybuffer_constructor", 1),
+        Builtin::SharedArrayBufferConstructor => ("sharedarraybuffer_constructor", 3),
         Builtin::SharedArrayBufferProtoByteLength => ("sharedarraybuffer_proto_byte_length", 1),
+        Builtin::SharedArrayBufferProtoGrow => ("sharedarraybuffer_proto_grow", 2),
+        Builtin::SharedArrayBufferProtoGrowable => ("sharedarraybuffer_proto_growable", 1),
+        Builtin::SharedArrayBufferProtoMaxByteLength => ("sharedarraybuffer_proto_max_byte_length", 1),
         Builtin::SharedArrayBufferProtoSlice => ("sharedarraybuffer_proto_slice", 3),
         Builtin::SharedArrayBufferSpecies => ("sharedarraybuffer_species", 1),
         // ── Atomics builtins ──
@@ -938,10 +941,10 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::AtomicsExchange => ("atomics_exchange", 3),
         Builtin::AtomicsCompareExchange => ("atomics_compare_exchange", 4),
         Builtin::AtomicsIsLockFree => ("atomics_is_lock_free", 1),
+        Builtin::AtomicsPause => ("atomics_pause", 0),
         Builtin::AtomicsWait => ("atomics_wait", 4),
         Builtin::AtomicsNotify => ("atomics_notify", 3),
         Builtin::AtomicsWaitAsync => ("atomics_wait_async", 3),
-        // ── DataView builtins ──
         Builtin::DataViewConstructor => ("DataView", 3),
         Builtin::DataViewProtoGetFloat64 => ("DataView.prototype.getFloat64", 2),
         Builtin::DataViewProtoGetFloat32 => ("DataView.prototype.getFloat32", 2),

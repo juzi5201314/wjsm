@@ -175,6 +175,18 @@ fn emitted_builtin_imports_have_registry_keys() {
             "sharedarraybuffer_proto_byte_length",
         ),
         (
+            Builtin::SharedArrayBufferProtoGrow,
+            "sharedarraybuffer_proto_grow",
+        ),
+        (
+            Builtin::SharedArrayBufferProtoGrowable,
+            "sharedarraybuffer_proto_growable",
+        ),
+        (
+            Builtin::SharedArrayBufferProtoMaxByteLength,
+            "sharedarraybuffer_proto_max_byte_length",
+        ),
+        (
             Builtin::SharedArrayBufferProtoSlice,
             "sharedarraybuffer_proto_slice",
         ),

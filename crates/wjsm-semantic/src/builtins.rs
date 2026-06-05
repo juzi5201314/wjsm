@@ -284,6 +284,7 @@ pub(crate) fn builtin_from_static_member(object: &str, property: &str) -> Option
             "exchange" => Some(Builtin::AtomicsExchange),
             "compareExchange" => Some(Builtin::AtomicsCompareExchange),
             "isLockFree" => Some(Builtin::AtomicsIsLockFree),
+            "pause" => Some(Builtin::AtomicsPause),
             "wait" => Some(Builtin::AtomicsWait),
             "notify" => Some(Builtin::AtomicsNotify),
             "waitAsync" => Some(Builtin::AtomicsWaitAsync),
@@ -460,6 +461,18 @@ pub(crate) fn builtin_from_error_proto_method(name: &str) -> Option<Builtin> {
     let _ = name;
     None
 }
+/// 将 SharedArrayBuffer.prototype 方法名映射到 Builtin 变体。
+pub(crate) fn builtin_from_sharedarraybuffer_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "byteLength" => Some(SharedArrayBufferProtoByteLength),
+        "grow" => Some(SharedArrayBufferProtoGrow),
+        "growable" => Some(SharedArrayBufferProtoGrowable),
+        "maxByteLength" => Some(SharedArrayBufferProtoMaxByteLength),
+        "slice" => Some(SharedArrayBufferProtoSlice),
+        _ => None,
+    }
+}
 
 pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
     match builtin {
@@ -605,6 +618,29 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::ArrayBufferConstructor => ("ArrayBuffer", 1),
         Builtin::ArrayBufferProtoByteLength => ("ArrayBuffer.prototype.byteLength", 1),
         Builtin::ArrayBufferProtoSlice => ("ArrayBuffer.prototype.slice", 3),
+        // ── SharedArrayBuffer builtins ──
+        Builtin::SharedArrayBufferConstructor => ("SharedArrayBuffer", 3),
+        Builtin::SharedArrayBufferProtoByteLength => ("SharedArrayBuffer.prototype.byteLength", 1),
+        Builtin::SharedArrayBufferProtoGrow => ("SharedArrayBuffer.prototype.grow", 2),
+        Builtin::SharedArrayBufferProtoGrowable => ("SharedArrayBuffer.prototype.growable", 1),
+        Builtin::SharedArrayBufferProtoMaxByteLength => ("SharedArrayBuffer.prototype.maxByteLength", 1),
+        Builtin::SharedArrayBufferProtoSlice => ("SharedArrayBuffer.prototype.slice", 3),
+        Builtin::SharedArrayBufferSpecies => ("SharedArrayBuffer[Symbol.species]", 1),
+        // ── Atomics builtins ──
+        Builtin::AtomicsLoad => ("Atomics.load", 2),
+        Builtin::AtomicsStore => ("Atomics.store", 3),
+        Builtin::AtomicsAdd => ("Atomics.add", 3),
+        Builtin::AtomicsSub => ("Atomics.sub", 3),
+        Builtin::AtomicsAnd => ("Atomics.and", 3),
+        Builtin::AtomicsOr => ("Atomics.or", 3),
+        Builtin::AtomicsXor => ("Atomics.xor", 3),
+        Builtin::AtomicsExchange => ("Atomics.exchange", 3),
+        Builtin::AtomicsCompareExchange => ("Atomics.compareExchange", 4),
+        Builtin::AtomicsIsLockFree => ("Atomics.isLockFree", 1),
+        Builtin::AtomicsPause => ("Atomics.pause", 0),
+        Builtin::AtomicsWait => ("Atomics.wait", 4),
+        Builtin::AtomicsNotify => ("Atomics.notify", 3),
+        Builtin::AtomicsWaitAsync => ("Atomics.waitAsync", 3),
         // ── DataView builtins ──
         Builtin::DataViewConstructor => ("DataView", 3),
         Builtin::DataViewProtoGetFloat64 => ("DataView.prototype.getFloat64", 2),

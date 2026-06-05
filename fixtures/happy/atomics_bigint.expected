@@ -1,13 +1,9 @@
 exit_code: 0
 --- stdout ---
-16
-false
-16
-4
-99
-4
-true
-12
-8
-0
+5n
+5n
+5n
+8n
+8n
+1n
 --- stderr ---

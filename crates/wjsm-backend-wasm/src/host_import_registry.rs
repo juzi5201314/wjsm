@@ -2286,7 +2286,7 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
     },
     HostImportSpec {
         name: "sharedarraybuffer_constructor",
-        type_idx: 3,
+        type_idx: 16,
         key: Some(HostImportKey::Builtin(
             Builtin::SharedArrayBufferConstructor,
         )),
@@ -2297,6 +2297,26 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         type_idx: 3,
         key: Some(HostImportKey::Builtin(
             Builtin::SharedArrayBufferProtoByteLength,
+        )),
+        group: None,
+    },
+    HostImportSpec {
+        name: "sharedarraybuffer_proto_grow",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::SharedArrayBufferProtoGrow)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "sharedarraybuffer_proto_growable",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::SharedArrayBufferProtoGrowable)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "sharedarraybuffer_proto_max_byte_length",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(
+            Builtin::SharedArrayBufferProtoMaxByteLength,
         )),
         group: None,
     },
@@ -2314,7 +2334,7 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
     },
     HostImportSpec {
         name: "atomics_load",
-        type_idx: 2,
+        type_idx: 16,
         key: Some(HostImportKey::Builtin(Builtin::AtomicsLoad)),
         group: None,
     },
@@ -2370,6 +2390,12 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         name: "atomics_is_lock_free",
         type_idx: 3,
         key: Some(HostImportKey::Builtin(Builtin::AtomicsIsLockFree)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "atomics_pause",
+        type_idx: 4,
+        key: Some(HostImportKey::Builtin(Builtin::AtomicsPause)),
         group: None,
     },
     HostImportSpec {

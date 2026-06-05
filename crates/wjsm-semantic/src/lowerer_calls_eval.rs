@@ -111,6 +111,27 @@ impl Lowerer {
                         );
                         return Ok(dest);
                     }
+                    // SharedArrayBuffer.prototype：须在 String 之前，避免 sab.slice 被字符串优化拦截。
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
+                        && let Some(sab_builtin) =
+                            builtin_from_sharedarraybuffer_proto_method(&prop_ident.sym)
+                    {
+                        this_val = self.lower_expr(&member_expr.obj, block)?;
+                        let mut builtin_args = vec![this_val];
+                        for arg in &call.args {
+                            builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                        }
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: sab_builtin,
+                                args: builtin_args,
+                            },
+                        );
+                        return Ok(dest);
+                    }
                     // String.prototype 方法调用优化（必须在 Array 之前，因为 at/slice/concat 等方法在 String 和 Array 上同名）
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(string_builtin) =
@@ -210,6 +231,28 @@ impl Lowerer {
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin: ta_builtin,
+                                    args: builtin_args,
+                                },
+                            );
+                            return Ok(dest);
+                        }
+
+
+                        // SharedArrayBuffer.prototype 方法：走 CallBuiltin 宿主实现。
+                        if let Some(sab_builtin) =
+                            builtin_from_sharedarraybuffer_proto_method(&prop_ident.sym)
+                        {
+                            this_val = self.lower_expr(&member_expr.obj, block)?;
+                            let mut builtin_args = vec![this_val];
+                            for arg in &call.args {
+                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                            }
+                            let dest = self.alloc_value();
+                            self.current_function.append_instruction(
+                                block,
+                                Instruction::CallBuiltin {
+                                    dest: Some(dest),
+                                    builtin: sab_builtin,
                                     args: builtin_args,
                                 },
                             );

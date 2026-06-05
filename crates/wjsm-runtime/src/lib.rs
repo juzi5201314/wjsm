@@ -6,8 +6,8 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use swc_core::ecma::ast as swc_ast;
 use tokio::time::Instant;
@@ -27,6 +27,8 @@ mod runtime_host_helpers;
 mod runtime_json;
 mod runtime_microtask;
 mod runtime_promises;
+mod shared_buffer;
+pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;
 
 mod host_imports;
@@ -1095,7 +1097,7 @@ struct RuntimeState {
     writer_table: Arc<Mutex<Vec<WriterEntry>>>,
     /// TransformStream 侧表：存储转换流状态
     transform_stream_table: Arc<Mutex<Vec<TransformStreamEntry>>>,
-    /// None in normal (non-agent) execution.
+    /// normal execution 拥有单 agent cluster；$262.agent 可共享同一状态。
     shared_state: Option<Arc<SharedRuntimeState>>,
     /// 被 preventExtensions 标记为不可扩展对象的 handle 集合（使用完整的 NaN-boxed 值作为 key）
     non_extensible_handles: Arc<Mutex<HashSet<u64>>>,
@@ -1212,13 +1214,7 @@ impl RuntimeState {
             writable_stream_table: Arc::new(Mutex::new(Vec::new())),
             transform_stream_table: Arc::new(Mutex::new(Vec::new())),
             writer_table: Arc::new(Mutex::new(Vec::new())),
-            shared_state: Some(Arc::new(SharedRuntimeState {
-                sab_table: Arc::new(Mutex::new(Vec::new())),
-                agent_state: Arc::new(AgentState {
-                    reports: Arc::new(Mutex::new(Vec::new())),
-                    waiters: Arc::new(Mutex::new(HashMap::new())),
-                }),
-            })),
+            shared_state: Some(new_shared_runtime_state()),
             non_extensible_handles: Arc::new(Mutex::new(HashSet::new())),
             scope_records: HashMap::new(),
             scope_record_next_handle: 0,
@@ -1290,27 +1286,6 @@ struct FinalizationRegistration {
 #[derive(Clone, Debug)]
 struct ArrayBufferEntry {
     data: Vec<u8>,
-}
-
-#[derive(Clone, Debug)]
-struct SharedArrayBufferEntry {
-    data: Arc<RwLock<Vec<u8>>>,
-    byte_length: u64,
-}
-
-struct SharedRuntimeState {
-    sab_table: Arc<Mutex<Vec<SharedArrayBufferEntry>>>,
-    agent_state: Arc<AgentState>,
-}
-
-struct AgentState {
-    reports: Arc<Mutex<Vec<String>>>,
-    waiters: Arc<Mutex<HashMap<(u32, u32), Vec<Waiter>>>>,
-}
-
-struct Waiter {
-    condvar: Arc<Condvar>,
-    notified: Arc<AtomicBool>,
 }
 
 #[derive(Clone, Debug)]
@@ -1850,6 +1825,7 @@ pub(crate) fn typedarray_construct(
 ) -> i64 {
     let elem_size_u32 = elem_size as u32;
     let mut initial_values: Option<Vec<i64>> = None;
+    let mut backing_is_shared = false;
 
     let (buf_handle, offset, len, byte_len) = if value::is_array(buffer) {
         let Some(arr_ptr) = resolve_array_ptr(caller, buffer) else {
@@ -1914,12 +1890,28 @@ pub(crate) fn typedarray_construct(
         let Some(obj_ptr) = resolve_handle(caller, buffer) else {
             return value::encode_undefined();
         };
-        let handle_val = read_object_property_by_name(caller, obj_ptr, "__arraybuffer_handle__");
+        let sab_handle_val =
+            read_object_property_by_name(caller, obj_ptr, "__sharedarraybuffer_handle__");
+        let ab_handle_val = read_object_property_by_name(caller, obj_ptr, "__arraybuffer_handle__");
         let byte_len_val = read_object_property_by_name(caller, obj_ptr, "byteLength");
-        let (Some(handle_val), Some(byte_len_val)) = (handle_val, byte_len_val) else {
+        let Some(byte_len_val) = byte_len_val else {
             return value::encode_undefined();
         };
         let byte_len = value::decode_f64(byte_len_val) as u32;
+        let buf_handle = if let Some(sab_h) = sab_handle_val {
+            if !value::is_f64(sab_h) {
+                return value::encode_undefined();
+            }
+            backing_is_shared = true;
+            value::decode_f64(sab_h) as u32
+        } else if let Some(ab_h) = ab_handle_val {
+            if !value::is_f64(ab_h) {
+                return value::encode_undefined();
+            }
+            value::decode_f64(ab_h) as u32
+        } else {
+            return value::encode_undefined();
+        };
         if offset > byte_len || offset % elem_size_u32 != 0 {
             set_typedarray_runtime_error(caller, "RangeError: Invalid typed array byteOffset");
             return value::encode_undefined();
@@ -1951,7 +1943,7 @@ pub(crate) fn typedarray_construct(
             return value::encode_undefined();
         };
         (
-            value::decode_f64(handle_val) as u32,
+            buf_handle,
             offset,
             len,
             view_byte_len,
@@ -1993,7 +1985,7 @@ pub(crate) fn typedarray_construct(
             length: len,
             element_size: elem_size,
             element_kind,
-            is_shared: false,
+            is_shared: backing_is_shared,
         });
         handle
     };
