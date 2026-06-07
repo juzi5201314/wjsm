@@ -29,20 +29,21 @@ module {
     c26 = undefined
     c27 = number(99)
     c28 = functionref(@0)
-    c29 = string("then")
-    c30 = number(0)
-    c31 = functionref(@1)
-    c32 = number(4)
-    c33 = number(2)
-    c34 = number(3)
-    c35 = undefined
-    c36 = number(0)
-    c37 = undefined
-    c38 = bool(false)
-    c39 = functionref(@2)
-    c40 = undefined
-    c41 = functionref(@3)
-    c42 = undefined
+    c29 = undefined
+    c30 = string("then")
+    c31 = number(0)
+    c32 = functionref(@1)
+    c33 = number(4)
+    c34 = number(2)
+    c35 = number(3)
+    c36 = undefined
+    c37 = number(0)
+    c38 = undefined
+    c39 = bool(false)
+    c40 = functionref(@2)
+    c41 = undefined
+    c42 = functionref(@3)
+    c43 = undefined
 
   fn @anon_0 [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
     bb0:
@@ -90,29 +91,31 @@ module {
       %13 = new_object(capacity=4)
       %14 = const c28
       %15 = const c29
-      set_prop %13, %15, %14
-      %16 = load var $1.$promise
-      promise_resolve %16, %13
+      %16 = call builtin.create_closure(%14, %15)
+      %17 = const c30
+      set_prop %13, %17, %16
+      %18 = load var $1.$promise
+      promise_resolve %18, %13
       return
 
   fn @foo [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c30
+      %1 = const c31
       %2 = call builtin.create_unmapped_arguments_object(%0, %1)
       store var $3.arguments, %2
       %3 = new_promise
-      %4 = const c31
-      %5 = const c32
+      %4 = const c32
+      %5 = const c33
       %6 = call builtin.continuation.create(%4, %3, %5)
-      %7 = const c33
+      %7 = const c34
       call builtin.continuation.save_var(%6, %7, %3)
-      %8 = const c34
-      %9 = const c35
+      %8 = const c35
+      %9 = const c36
       call builtin.continuation.save_var(%6, %8, %9)
-      %10 = const c36
-      %11 = const c37
-      %12 = const c38
+      %10 = const c37
+      %11 = const c38
+      %12 = const c39
       call builtin.async_function.resume(%4, %6, %10, %11, %12)
       return %3
 
@@ -166,13 +169,13 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c39
+      %21 = const c40
       store var $0.foo, %21
-      %22 = const c40
+      %22 = const c41
       %23 = load var $0.foo
       %24 = call %23, this=%22
-      %25 = const c41
-      %26 = const c42
+      %25 = const c42
+      %26 = const c43
       %27 = call builtin.promise.then(%24, %25, %26)
       %28 = is_exception %27
       branch %28, bb2, bb1
