@@ -961,30 +961,15 @@ pub(crate) fn define_collections_buffers(
          byte_offset: i64,
          byte_length: i64|
          -> i64 {
+            let (buf_handle, buf_byte_length, is_shared) = match crate::shared_buffer::resolve_buffer_backing(&mut caller, buffer) {
+                Some(crate::shared_buffer::BufferBacking::SharedArrayBuffer { handle, byte_length, .. }) => (handle, byte_length, true),
+                Some(crate::shared_buffer::BufferBacking::ArrayBuffer { handle, byte_length }) => (handle, byte_length, false),
+                None => return value::encode_undefined(),
+            };
             let offset = if value::is_undefined(byte_offset) {
                 0
             } else {
                 value::decode_f64(byte_offset) as u32
-            };
-            let (buf_handle, buf_byte_length) = {
-                let obj_ptr = resolve_handle(&mut caller, buffer);
-                match obj_ptr {
-                    Some(ptr) => {
-                        let h = read_object_property_by_name(
-                            &mut caller,
-                            ptr,
-                            "__arraybuffer_handle__",
-                        );
-                        let bl = read_object_property_by_name(&mut caller, ptr, "byteLength");
-                        match (h, bl) {
-                            (Some(hv), Some(lv)) => {
-                                (value::decode_f64(hv) as u32, value::decode_f64(lv) as u32)
-                            }
-                            _ => return value::encode_undefined(),
-                        }
-                    }
-                    None => return value::encode_undefined(),
-                }
             };
             let length = if value::is_undefined(byte_length) {
                 buf_byte_length.saturating_sub(offset)
@@ -1003,6 +988,7 @@ pub(crate) fn define_collections_buffers(
                     buffer_handle: buf_handle,
                     byte_offset: offset,
                     byte_length: length,
+                    is_shared,
                 });
             }
             let obj = {
@@ -1049,7 +1035,7 @@ pub(crate) fn define_collections_buffers(
                         }
                         None => return value::encode_undefined(),
                     };
-                    let (buf_handle, dv_offset, dv_length) = {
+                    let (buf_handle, dv_offset, dv_length, is_shared) = {
                         let dv_table = caller
                             .data()
                             .dataview_table
@@ -1057,31 +1043,33 @@ pub(crate) fn define_collections_buffers(
                             .expect("dataview_table mutex");
                         if dv_handle < dv_table.len() {
                             let e = &dv_table[dv_handle];
-                            (e.buffer_handle, e.byte_offset, e.byte_length)
+                            (e.buffer_handle, e.byte_offset, e.byte_length, e.is_shared)
                         } else {
                             return value::encode_undefined();
                         }
                     };
                     let abs_offset = dv_offset as usize + offset as usize;
-                    let ab_table = caller
-                        .data()
-                        .arraybuffer_table
-                        .lock()
-                        .expect("arraybuffer_table mutex");
-                    if let Some(buf_entry) = ab_table.get(buf_handle as usize) {
-                        if offset + $size as u32 > dv_length
-                            || abs_offset + $size > buf_entry.data.len()
-                        {
-                            *caller.data().runtime_error.lock().expect("error mutex") = Some(
-                                "RangeError: Offset is outside the bounds of the DataView"
-                                    .to_string(),
-                            );
-                            return value::encode_undefined();
-                        }
-                        let bytes = &buf_entry.data[abs_offset..abs_offset + $size];
-                        return $conv(bytes);
+                    if offset + $size as u32 > dv_length {
+                        *caller.data().runtime_error.lock().expect("error mutex") = Some(
+                            "RangeError: Offset is outside the bounds of the DataView".to_string(),
+                        );
+                        return value::encode_undefined();
                     }
-                    value::encode_undefined()
+                    let mut bytes = [0u8; 8];
+                    if !crate::shared_buffer::dataview_read_bytes(
+                        &mut caller,
+                        buf_handle,
+                        is_shared,
+                        abs_offset,
+                        &mut bytes[..$size],
+                    ) {
+                        *caller.data().runtime_error.lock().expect("error mutex") = Some(
+                            "RangeError: Offset is outside the bounds of the DataView"
+                                .to_string(),
+                        );
+                        return value::encode_undefined();
+                    }
+                    return $conv(&bytes[..$size]);
                 },
             );
             linker.define(&mut store, "env", $import, $name)?;
@@ -1173,7 +1161,7 @@ pub(crate) fn define_collections_buffers(
                         }
                         None => return value::encode_undefined(),
                     };
-                    let (buf_handle, dv_offset, dv_length) = {
+                    let (buf_handle, dv_offset, dv_length, is_shared) = {
                         let dv_table = caller
                             .data()
                             .dataview_table
@@ -1181,30 +1169,31 @@ pub(crate) fn define_collections_buffers(
                             .expect("dataview_table mutex");
                         if dv_handle < dv_table.len() {
                             let e = &dv_table[dv_handle];
-                            (e.buffer_handle, e.byte_offset, e.byte_length)
+                            (e.buffer_handle, e.byte_offset, e.byte_length, e.is_shared)
                         } else {
                             return value::encode_undefined();
                         }
                     };
                     let abs_offset = dv_offset as usize + offset as usize;
-                    let mut ab_table = caller
-                        .data()
-                        .arraybuffer_table
-                        .lock()
-                        .expect("arraybuffer_table mutex");
-                    if let Some(buf_entry) = ab_table.get_mut(buf_handle as usize) {
-                        if offset + $size as u32 > dv_length
-                            || abs_offset + $size > buf_entry.data.len()
-                        {
-                            *caller.data().runtime_error.lock().expect("error mutex") = Some(
-                                "RangeError: Offset is outside the bounds of the DataView"
-                                    .to_string(),
-                            );
-                            return value::encode_undefined();
-                        }
-                        let bytes = $write(value_arg);
-                        buf_entry.data[abs_offset..abs_offset + $size]
-                            .copy_from_slice(&bytes[..$size]);
+                    if offset + $size as u32 > dv_length {
+                        *caller.data().runtime_error.lock().expect("error mutex") = Some(
+                            "RangeError: Offset is outside the bounds of the DataView".to_string(),
+                        );
+                        return value::encode_undefined();
+                    }
+                    let bytes = $write(value_arg);
+                    if !crate::shared_buffer::dataview_set_bytes(
+                        &mut caller,
+                        buf_handle,
+                        is_shared,
+                        abs_offset,
+                        &bytes[..$size],
+                    ) {
+                        *caller.data().runtime_error.lock().expect("error mutex") = Some(
+                            "RangeError: Offset is outside the bounds of the DataView"
+                                .to_string(),
+                        );
+                        return value::encode_undefined();
                     }
                     value::encode_undefined()
                 },
@@ -1876,16 +1865,17 @@ pub(crate) fn define_collections_buffers(
 
             let _ = define_host_data_property_from_caller(&mut caller, obj, "globalThis", obj);
 
-            // Create $262.agent for test262 multi-agent testing
-            let sub_agent_obj = {
+            // test262 harness: global `$262` with `.agent` methods
+            let agent_obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 6)
+                alloc_host_object(&mut caller, &_wjsm_env, 7)
             };
             let agent_methods: &[(&str, NativeCallable)] = &[
                 ("start", NativeCallable::AgentStart),
                 ("broadcast", NativeCallable::AgentBroadcast),
                 ("receiveBroadcast", NativeCallable::AgentReceiveBroadcast),
                 ("getReport", NativeCallable::AgentGetReport),
+                ("report", NativeCallable::AgentReport),
                 ("sleep", NativeCallable::AgentSleep),
                 ("monotonicNow", NativeCallable::AgentMonotonicNow),
             ];
@@ -1895,10 +1885,14 @@ pub(crate) fn define_collections_buffers(
                 nc.push(callable.clone());
                 let val = value::encode_native_callable_idx(idx);
                 drop(nc);
-                let _ =
-                    define_host_data_property_from_caller(&mut caller, sub_agent_obj, name, val);
+                let _ = define_host_data_property_from_caller(&mut caller, agent_obj, name, val);
             }
-            let _ = define_host_data_property_from_caller(&mut caller, obj, "$262", sub_agent_obj);
+            let harness_obj = {
+                let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                alloc_host_object(&mut caller, &_wjsm_env, 1)
+            };
+            let _ = define_host_data_property_from_caller(&mut caller, harness_obj, "agent", agent_obj);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "$262", harness_obj);
 
             obj
         });

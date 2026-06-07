@@ -7,6 +7,19 @@
 
 按已批准设计补齐 ECMAScript Structured Data §25.2 SharedArrayBuffer Objects 与 §25.4 Atomics Object 的完整可观测行为：fixed-length/growable SAB、TypedArray/DataView shared backing、Atomics 全方法、wait/notify/waitAsync、BigInt64Array waitable、agent cluster waiter store。
 
+**状态 (2026-06-07)**:
+- Phase C 完成：`Atomics.wait` async host、`Atomics.waitAsync` Promise 路径、`Atomics.notify` 唤醒结算。
+- Phase D 完成：DataView `is_shared` 分流 + semantic `dataview_bindings` 直连 `CallBuiltin`（修复 DataView getter `indirect call type mismatch`）。
+- Phase E 完成：本 spec/plan/checkpoint 同步。
+- **Task 10 完成**：`$262.agent` harness、`happy__atomics_agent_notify`（agent `report('done')` + `Atomics.wait(5000)` + `getReport()`）；`compiler_module.rs::emit_init_module_global_for_js_function` 修复嵌套函数 `$0.$global` 未初始化。
+- 已验证 fixtures/commands：
+  - `cargo nextest run -E 'test(happy__atomics_wait_async) or test(happy__dataview_sharedarraybuffer)'`
+  - `cargo nextest run -E 'test(happy__sharedarraybuffer) or test(happy__sharedarraybuffer_constructor) or test(happy__atomics) or test(happy__atomics_global) or test(happy__atomics_bigint) or test(happy__atomics_wait_async) or test(happy__dataview_sharedarraybuffer) or test(errors__sharedarraybuffer_grow_invalid) or test(errors__atomics_wrong_type) or test(errors__atomics_oob)'`
+  - `cargo nextest run -p wjsm-runtime -p wjsm-backend-wasm`
+  - `cargo nextest run -E 'test(errors__sharedarraybuffer) or test(errors__atomics) or test(host_import_registry)'`
+  - `cargo check -p wjsm-semantic -p wjsm-backend-wasm -p wjsm-runtime`
+  - 结果：上述选择器全部通过（2026-06-07）。
+
 ## Architecture
 
 ```text
@@ -698,7 +711,7 @@ cargo nextest run -p wjsm-runtime
 cargo nextest run -p wjsm-backend-wasm
 ```
 
-If generated names differ, inspect generated fixture names and run every SAB/Atomics exact test. Do not claim full ES behavior unless wait/notify/waitAsync, BigInt64Array, growable SAB, and error fixtures all pass.
+Task 10 已覆盖：`fixtures/happy/atomics_agent_notify.js` 验证 `$262.agent.start` / `broadcast` / `receiveBroadcast` 与主 agent 共享 SAB waiter/backing。
 
 ## Risks
 

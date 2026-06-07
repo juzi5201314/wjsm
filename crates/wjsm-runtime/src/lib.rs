@@ -27,6 +27,7 @@ mod runtime_host_helpers;
 mod runtime_json;
 mod runtime_microtask;
 mod runtime_promises;
+mod agent_cluster;
 mod shared_buffer;
 pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;
@@ -797,9 +798,34 @@ pub async fn execute(wasm_bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 pub async fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> {
+    execute_with_writer_shared(wasm_bytes, writer, None).await
+}
+
+pub async fn execute_with_writer_shared_agent<W: Write>(
+    wasm_bytes: &[u8],
+    writer: W,
+    shared_state: Arc<SharedRuntimeState>,
+) -> Result<W> {
+    execute_with_writer_shared_inner(wasm_bytes, writer, Some(shared_state), false).await
+}
+pub async fn execute_with_writer_shared<W: Write>(
+    wasm_bytes: &[u8],
+    mut writer: W,
+    shared_state: Option<Arc<SharedRuntimeState>>,
+) -> Result<W> {
+    execute_with_writer_shared_inner(wasm_bytes, writer, shared_state, true).await
+}
+async fn execute_with_writer_shared_inner<W: Write>(
+    wasm_bytes: &[u8],
+    mut writer: W,
+    shared_state: Option<Arc<SharedRuntimeState>>,
+    use_epoch_async_yield: bool,
+) -> Result<W> {
     let mut config = Config::new();
     config.async_support(true);
-    config.epoch_interruption(true);
+    if use_epoch_async_yield {
+        config.epoch_interruption(true);
+    }
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
 
@@ -810,12 +836,14 @@ pub async fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Resu
         }
     };
 
-    let mut store = Store::new(&engine, RuntimeState::new());
+    let mut store = Store::new(&engine, RuntimeState::new_with_shared(shared_state));
     let output = Arc::clone(&store.data().output);
     let runtime_error = Arc::clone(&store.data().runtime_error);
 
-    store.set_epoch_deadline(1);
-    store.epoch_deadline_async_yield_and_update(1);
+    if use_epoch_async_yield {
+        store.set_epoch_deadline(1);
+        store.epoch_deadline_async_yield_and_update(1);
+    }
 
     // Phase 6: 创建 channel + counter（仅 async 路径）
     let (host_completion_tx, mut host_completion_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1121,6 +1149,12 @@ struct RuntimeState {
 }
 
 impl RuntimeState {
+    fn new_with_shared(shared_state: Option<Arc<SharedRuntimeState>>) -> Self {
+        let mut state = Self::new();
+        state.shared_state = shared_state.or_else(|| Some(new_shared_runtime_state()));
+        state
+    }
+
     /// 构造一个新的 RuntimeState，所有侧表初始化为空，well-known symbols 预分配。
     fn new() -> Self {
         const GC_THRESHOLD: u64 = 1000;
@@ -1293,6 +1327,7 @@ struct DataViewEntry {
     buffer_handle: u32,
     byte_offset: u32,
     byte_length: u32,
+    is_shared: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -1890,28 +1925,17 @@ pub(crate) fn typedarray_construct(
         let Some(obj_ptr) = resolve_handle(caller, buffer) else {
             return value::encode_undefined();
         };
-        let sab_handle_val =
-            read_object_property_by_name(caller, obj_ptr, "__sharedarraybuffer_handle__");
-        let ab_handle_val = read_object_property_by_name(caller, obj_ptr, "__arraybuffer_handle__");
         let byte_len_val = read_object_property_by_name(caller, obj_ptr, "byteLength");
         let Some(byte_len_val) = byte_len_val else {
             return value::encode_undefined();
         };
         let byte_len = value::decode_f64(byte_len_val) as u32;
-        let buf_handle = if let Some(sab_h) = sab_handle_val {
-            if !value::is_f64(sab_h) {
-                return value::encode_undefined();
-            }
-            backing_is_shared = true;
-            value::decode_f64(sab_h) as u32
-        } else if let Some(ab_h) = ab_handle_val {
-            if !value::is_f64(ab_h) {
-                return value::encode_undefined();
-            }
-            value::decode_f64(ab_h) as u32
-        } else {
-            return value::encode_undefined();
+        let (buf_handle, is_shared_from_backing) = match crate::shared_buffer::resolve_buffer_backing(caller, buffer) {
+            Some(crate::shared_buffer::BufferBacking::SharedArrayBuffer { handle, .. }) => (handle, true),
+            Some(crate::shared_buffer::BufferBacking::ArrayBuffer { handle, .. }) => (handle, false),
+            _ => return value::encode_undefined(),
         };
+        backing_is_shared = is_shared_from_backing;
         if offset > byte_len || offset % elem_size_u32 != 0 {
             set_typedarray_runtime_error(caller, "RangeError: Invalid typed array byteOffset");
             return value::encode_undefined();
@@ -2172,6 +2196,7 @@ enum NativeCallable {
     AgentBroadcast,
     AgentReceiveBroadcast,
     AgentGetReport,
+    AgentReport,
     AgentSleep,
     AgentMonotonicNow,
     // ── Fetch / Headers / Response / Request method dispatch ──

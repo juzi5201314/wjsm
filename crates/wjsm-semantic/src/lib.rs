@@ -1324,6 +1324,13 @@ struct Lowerer {
     /// 用于在 lower_call_expr 中让 arr.at()/arr.indexOf() 等走 TypedArray dispatch，
     /// 而不是被 String.prototype dispatch 错误拦截。
     typedarray_bindings: std::collections::HashSet<(usize, String)>,
+    /// 追踪当前作用域中已推断为 SharedArrayBuffer 的绑定（scope_id, name）。
+    /// 用于在 lower_call_expr 中让 sab.slice() / sab.grow() 等走 SAB dispatch，
+    /// 而不是被 String.prototype dispatch 错误拦截（修复评审 P1 劫持问题）。
+    sab_bindings: std::collections::HashSet<(usize, String)>,
+    /// 追踪当前作用域中已推断为 DataView 的绑定（scope_id, name）。
+    /// DataView 原型方法使用专用宿主导入签名，静态已知 receiver 必须直连 CallBuiltin，避免通用 call_indirect 调用约定不匹配。
+    dataview_bindings: std::collections::HashSet<(usize, String)>,
 }
 
 /// 追踪当前作用域中的 using 变量，用于在作用域退出时自动 dispose。
@@ -1479,6 +1486,24 @@ fn is_typedarray_constructor_expr(expr: &swc_ast::Expr) -> bool {
                     | "BigInt64Array"
                     | "BigUint64Array"
             );
+        }
+    }
+    false
+}
+/// 判断表达式是否为 SharedArrayBuffer 构造函数调用（`new SharedArrayBuffer(...)` 形式）。
+fn is_sharedarraybuffer_constructor_expr(expr: &swc_ast::Expr) -> bool {
+    if let swc_ast::Expr::New(new_expr) = expr {
+        if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+            return ident.sym.as_ref() == "SharedArrayBuffer";
+        }
+    }
+    false
+}
+/// 判断表达式是否为 DataView 构造函数调用（`new DataView(...)` 形式）。
+fn is_dataview_constructor_expr(expr: &swc_ast::Expr) -> bool {
+    if let swc_ast::Expr::New(new_expr) = expr {
+        if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+            return ident.sym.as_ref() == "DataView";
         }
     }
     false

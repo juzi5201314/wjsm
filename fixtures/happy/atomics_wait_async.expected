@@ -1,0 +1,10 @@
+exit_code: 0
+--- stdout ---
+false
+not-equal
+n1=0
+true
+obj
+n2=1
+settled:ok
+--- stderr ---

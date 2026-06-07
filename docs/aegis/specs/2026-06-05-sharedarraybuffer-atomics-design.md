@@ -1,7 +1,7 @@
 # SharedArrayBuffer + Atomics ES 全量实现设计规格
 
 **日期**: 2026-06-05
-**状态**: Draft - awaiting user review
+**状态**: Implemented (2026-06-07) — Phase C/D/E 完成；单线程 wait 模型已落地
 **范围**: ECMAScript Structured Data §25.2 SharedArrayBuffer Objects + §25.4 Atomics Object 当前版本全量行为；包含 fixed-length 与 growable SharedArrayBuffer、TypedArray/DataView shared backing、Atomics 全方法、wait/notify/waitAsync、BigInt64Array waitable 路径、agent cluster waiter store。
 
 ---
@@ -18,6 +18,7 @@
 6. `typedarray_construct` 只识别 `__arraybuffer_handle__`，不识别 `__sharedarraybuffer_handle__`，并固定写入 `TypedArrayEntry { is_shared: false }`。
 7. `AtomicsGlobal` 当前返回空 host object，正常 JS 访问不到完整方法。
 8. 现有 `fixtures/happy/sharedarraybuffer.js` 与 `fixtures/happy/atomics.js` 的 `.expected` 记录的是 broken behavior：输出 `undefined`。
+9. 2026-06-07 已完成：`shared_buffer.rs` owner、SAB 构造/grow/slice、TypedArray/DataView shared backing、`Atomics.wait`/`waitAsync`/`notify` waiter store、DataView 静态绑定直连 `CallBuiltin`（修复 `indirect call type mismatch`）。
 
 本设计目标不是让这些 fixture 局部变绿，而是把 SharedArrayBuffer + Atomics 补成按 ES 规范可维护的完整实现。
 
@@ -312,6 +313,26 @@ WaiterRecord
 4. remove up to count waiters in FIFO order。
 5. blocking waiter wakes condvar; async waiter schedules promise resolution.
 6. return number removed.
+
+### 6.7.1 单线程 wait 模型（wjsm 当前实现）
+
+wjsm 当前是单 agent cluster 执行模型，不启动真实 OS 线程阻塞 JS 主执行。`Atomics.wait` / `Atomics.waitAsync` 因此采用 **async host import + tokio + Promise/microtask** 组合，而不是 pthread 级阻塞：
+
+1. `Atomics.wait` 使用 `linker.func_wrap_async("env", "atomics_wait", ...)`。
+2. 值不匹配或 `timeout <= 0` 时同步返回 `"not-equal"` / `"timed-out"` 字符串。
+3. 值匹配且 `timeout > 0` 时：
+   - `shared_buffer::enter_waiter((sab_handle, byte_offset), promise=None)` 入队；
+   - async future 通过 `tokio::sync::Notify` 等待 `Atomics.notify` 唤醒，或与 `tokio::time::sleep_until(deadline)` 竞争；
+   - 唤醒返回 `"ok"`，超时返回 `"timed-out"` 并 `remove_waiter`。
+4. `Atomics.waitAsync` 在 `timeout > 0` 且值匹配时：
+   - 分配 pending Promise；
+   - `enter_waiter(..., Some(promise))`；
+   - 返回 `{ async: true, value: promise }`；
+   - `Atomics.notify` 通过 `notify_waiters_with_promises` FIFO 弹出 waiter，并对 async waiter Promise `settle_promise(Fulfill("ok"))`；
+   - 超时路径通过 `AsyncHostCompletion::Materialize` 在 host completion channel 上结算 `"timed-out"`。
+5. microtask 排空仍走现有 runtime Promise/microtask owner；worker 线程只发送可 `Send` 的 completion，不直接触碰 `Store`。
+
+该模型保证单线程 fixture 可观测语义与 ES §25.4 一致，同时避免测试挂死；多 agent `$262.agent` harness 仍共享同一 `SharedRuntimeState.waiter_lists`。
 
 ### 6.8 Growable SAB
 

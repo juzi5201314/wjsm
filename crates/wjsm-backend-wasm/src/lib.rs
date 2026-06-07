@@ -944,7 +944,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::AtomicsPause => ("atomics_pause", 0),
         Builtin::AtomicsWait => ("atomics_wait", 4),
         Builtin::AtomicsNotify => ("atomics_notify", 3),
-        Builtin::AtomicsWaitAsync => ("atomics_wait_async", 3),
+        Builtin::AtomicsWaitAsync => ("atomics_wait_async", 4),
         Builtin::DataViewConstructor => ("DataView", 3),
         Builtin::DataViewProtoGetFloat64 => ("DataView.prototype.getFloat64", 2),
         Builtin::DataViewProtoGetFloat32 => ("DataView.prototype.getFloat32", 2),

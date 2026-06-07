@@ -1,0 +1,7 @@
+exit_code: 0
+--- stdout ---
+77
+77
+88
+9
+--- stderr ---

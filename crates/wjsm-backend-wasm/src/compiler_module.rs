@@ -16,6 +16,29 @@ impl Compiler {
     pub(crate) fn call_env_obj_scratch(&self) -> u32 {
         self.string_concat_scratch_idx + 1
     }
+    /// Nested JS functions may LoadVar `$0.$global` (builtin globals like `$262`); only `main` stores it at init.
+    fn emit_init_module_global_for_js_function(&mut self, function: &IrFunction) {
+        let needs = function.blocks().iter().flat_map(|b| b.instructions()).any(|inst| {
+            matches!(
+                inst,
+                Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
+                    if name == "$0.$global"
+            )
+        });
+        if !needs {
+            return;
+        }
+        let Some(&local_idx) = self.var_locals.get("$0.$global") else {
+            return;
+        };
+        let func_idx = self
+            .builtin_func_indices
+            .get(&Builtin::CreateGlobalObject)
+            .copied()
+            .expect("create_global_object builtin");
+        self.emit(WasmInstruction::Call(func_idx));
+        self.emit(WasmInstruction::LocalSet(local_idx));
+    }
 
     pub(crate) fn emit_resolve_callable_for_helper(
         &self,
@@ -832,6 +855,7 @@ impl Compiler {
             self.emit(WasmInstruction::End);
         }
 
+        self.emit_init_module_global_for_js_function(function);
         let cfg = Cfg::from_function(function);
         let region_tree = RegionTree::build(function, &cfg)
             .map_err(|error| anyhow::anyhow!("failed to build region tree: {error:?}"))?;

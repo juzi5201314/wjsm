@@ -1,3 +1,4 @@
-exit_code: 0
+exit_code: 2
 --- stdout ---
 --- stderr ---
+Runtime error: TypeError: Typed array is not an integer type for Atomics

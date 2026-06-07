@@ -50,7 +50,17 @@ impl Lowerer {
                     let name = binding.id.sym.to_string();
                     if is_typedarray_constructor_expr(init) {
                         if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
-                            self.typedarray_bindings.insert((scope_id, name));
+                            self.typedarray_bindings.insert((scope_id, name.clone()));
+                        }
+                    }
+                    if is_sharedarraybuffer_constructor_expr(init) {
+                        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+                            self.sab_bindings.insert((scope_id, name.clone()));
+                        }
+                    }
+                    if is_dataview_constructor_expr(init) {
+                        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+                            self.dataview_bindings.insert((scope_id, name));
                         }
                     }
                 }

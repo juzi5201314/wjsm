@@ -468,6 +468,18 @@ impl Lowerer {
                 } else {
                     self.typedarray_bindings.remove(&(scope_id, name.clone()));
                 }
+                // 更新 SharedArrayBuffer 绑定跟踪（与 TypedArray 平行）
+                if is_sharedarraybuffer_constructor_expr(assign.right.as_ref()) {
+                    self.sab_bindings.insert((scope_id, name.clone()));
+                } else {
+                    self.sab_bindings.remove(&(scope_id, name.clone()));
+                }
+                // 更新 DataView 绑定跟踪（专用宿主导入调用约定）。
+                if is_dataview_constructor_expr(assign.right.as_ref()) {
+                    self.dataview_bindings.insert((scope_id, name.clone()));
+                } else {
+                    self.dataview_bindings.remove(&(scope_id, name.clone()));
+                }
                 Ok(rhs)
             }
             op => {

@@ -1631,11 +1631,18 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         }
         // ── Agent harness ──
         NativeCallable::AgentStart => {
-            // Simplified: no-op for now (would parse script and spawn thread)
-            Some(value::encode_undefined())
+            let script = argument;
+            crate::agent_cluster::agent_start(caller, script)
         }
-        NativeCallable::AgentBroadcast => Some(value::encode_undefined()),
-        NativeCallable::AgentReceiveBroadcast => Some(value::encode_undefined()),
+        NativeCallable::AgentBroadcast => {
+            let sab = argument;
+            crate::agent_cluster::agent_broadcast(caller, sab)
+        }
+        NativeCallable::AgentReceiveBroadcast => crate::agent_cluster::agent_receive_broadcast(caller, argument),
+        NativeCallable::AgentReport => {
+            let msg = argument;
+            crate::agent_cluster::agent_report(caller, msg)
+        }
         NativeCallable::AgentGetReport => {
             let shared = match caller.data().shared_state.clone() {
                 Some(s) => s,
@@ -1872,6 +1879,29 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         }
         NativeCallable::EvalFunction(function) => {
             Some(call_eval_function_from_caller_async(caller, function, args).await)
+        }
+        NativeCallable::AgentReceiveBroadcast => {
+            crate::agent_cluster::agent_receive_broadcast_async(caller, argument).await
+        }
+        NativeCallable::AgentReport => crate::agent_cluster::agent_report(caller, argument),
+        NativeCallable::AgentGetReport => {
+            let shared = match caller.data().shared_state.clone() {
+                Some(s) => s,
+                None => return Some(value::encode_undefined()),
+            };
+            let report = shared.agent_state.reports.lock().unwrap().pop();
+            match report {
+                Some(r) => Some(store_runtime_string(caller, r)),
+                None => Some(value::encode_null()),
+            }
+        }
+        NativeCallable::AgentSleep => {
+            let ms = args.first().copied().map(value::decode_f64).unwrap_or(0.0) as u64;
+            std::thread::sleep(std::time::Duration::from_millis(ms));
+            Some(value::encode_undefined())
+        }
+        NativeCallable::AgentStart | NativeCallable::AgentBroadcast | NativeCallable::AgentMonotonicNow => {
+            call_native_callable_with_args_from_caller(caller, callable, this_val, args)
         }
         _ => call_native_callable_with_args_from_caller(caller, callable, this_val, args),
     }

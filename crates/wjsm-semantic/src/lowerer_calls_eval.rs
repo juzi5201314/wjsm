@@ -111,10 +111,14 @@ impl Lowerer {
                         );
                         return Ok(dest);
                     }
-                    // SharedArrayBuffer.prototype：须在 String 之前，避免 sab.slice 被字符串优化拦截。
+                    // SharedArrayBuffer.prototype 方法调用优化（带 receiver guard）。
+                    // 必须在 String 之前，以确保 sab.slice 等优先匹配；仅当 obj 是已知 SAB 绑定时才拦截，
+                    // 否则回退通用路径，避免劫持 String.prototype.slice / Array 等同名方法（P1 修复）。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
                         && let Some(sab_builtin) =
                             builtin_from_sharedarraybuffer_proto_method(&prop_ident.sym)
+                        && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
+                        && self.is_sharedarraybuffer_binding(receiver_ident)
                     {
                         this_val = self.lower_expr(&member_expr.obj, block)?;
                         let mut builtin_args = vec![this_val];
@@ -127,6 +131,29 @@ impl Lowerer {
                             Instruction::CallBuiltin {
                                 dest: Some(dest),
                                 builtin: sab_builtin,
+                                args: builtin_args,
+                            },
+                        );
+                        return Ok(dest);
+                    }
+                    // DataView.prototype get/set 方法使用非 Type 12 的专用宿主导入；
+                    // 对静态已知 DataView receiver 直连 CallBuiltin，避免通用 call_indirect 调用约定不匹配。
+                    if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
+                        && let Some(dv_builtin) = builtin_from_dataview_proto_method(&prop_ident.sym)
+                        && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
+                        && self.is_dataview_binding(receiver_ident)
+                    {
+                        this_val = self.lower_expr(&member_expr.obj, block)?;
+                        let mut builtin_args = vec![this_val];
+                        for arg in &call.args {
+                            builtin_args.push(self.lower_expr(&arg.expr, block)?);
+                        }
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: dv_builtin,
                                 args: builtin_args,
                             },
                         );
@@ -238,26 +265,6 @@ impl Lowerer {
                         }
 
 
-                        // SharedArrayBuffer.prototype 方法：走 CallBuiltin 宿主实现。
-                        if let Some(sab_builtin) =
-                            builtin_from_sharedarraybuffer_proto_method(&prop_ident.sym)
-                        {
-                            this_val = self.lower_expr(&member_expr.obj, block)?;
-                            let mut builtin_args = vec![this_val];
-                            for arg in &call.args {
-                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                            }
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: sab_builtin,
-                                    args: builtin_args,
-                                },
-                            );
-                            return Ok(dest);
-                        }
 
                         // Function.prototype.call/apply/bind: func.call(thisArg, ...args)
                         if let Some(func_builtin) =
