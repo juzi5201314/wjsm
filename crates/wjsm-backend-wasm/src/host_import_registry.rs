@@ -272,7 +272,7 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
     },
     HostImportSpec {
         name: "closure_create",
-        type_idx: 13,
+        type_idx: 2,
         key: Some(HostImportKey::Special(SpecialHostImport::ClosureCreate)),
         group: None,
     },

@@ -75,6 +75,8 @@ impl Lowerer {
             eval_caller_has_arguments: false,
             active_using_vars: Vec::new(),
             typedarray_bindings: std::collections::HashSet::new(),
+            sab_bindings: std::collections::HashSet::new(),
+            dataview_bindings: std::collections::HashSet::new(),
             eval_continue_block: None,
             new_expr_continue_block: None,
             await_continue_block: None,
@@ -778,6 +780,27 @@ impl Lowerer {
         let name = ident.sym.to_string();
         if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
             self.typedarray_bindings.contains(&(scope_id, name))
+        } else {
+            false
+        }
+    }
+    /// 检查指定 Ident 是否为已知的 SharedArrayBuffer 绑定。
+    /// 仅对 `let sab = new SharedArrayBuffer(n)` 等静态已知绑定返回 true，
+    /// 使 sab.slice / sab.grow 等在 lower_call_expr 走 CallBuiltin 优化路径；
+    /// 动态 receiver 回退通用 Call，避免劫持 String/Array 的同名方法。
+    pub(crate) fn is_sharedarraybuffer_binding(&self, ident: &swc_ast::Ident) -> bool {
+        let name = ident.sym.to_string();
+        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+            self.sab_bindings.contains(&(scope_id, name))
+        } else {
+            false
+        }
+    }
+    /// 检查指定 Ident 是否为已知的 DataView 绑定。
+    pub(crate) fn is_dataview_binding(&self, ident: &swc_ast::Ident) -> bool {
+        let name = ident.sym.to_string();
+        if let Ok((scope_id, _)) = self.scopes.lookup(&name) {
+            self.dataview_bindings.contains(&(scope_id, name))
         } else {
             false
         }

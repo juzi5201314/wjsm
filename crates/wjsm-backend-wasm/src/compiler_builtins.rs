@@ -121,10 +121,8 @@ impl Compiler {
                 let env_obj_val = args
                     .get(1)
                     .with_context(|| "CreateClosure expects env_obj arg")?;
-                // 推入 func_idx (i32): 从 NaN-boxed 函数值提取
+                // 推入 func_ref (i64) 与 env_obj (i64)；运行时 decode_function_idx
                 self.emit(WasmInstruction::LocalGet(self.local_idx(func_ref_val.0)));
-                self.emit(WasmInstruction::I32WrapI64);
-                // 推入 env_obj (i64)
                 self.emit(WasmInstruction::LocalGet(self.local_idx(env_obj_val.0)));
                 // 调用 closure_create
                 self.emit(WasmInstruction::Call(self.special_host_import_indices[&SpecialHostImport::ClosureCreate]));
@@ -873,15 +871,6 @@ impl Compiler {
             // ── DataView constructor ──
             | Builtin::SharedArrayBufferConstructor
             | Builtin::DataViewConstructor
-            // ── DataView get methods ──
-            | Builtin::DataViewProtoGetFloat64
-            | Builtin::DataViewProtoGetFloat32
-            | Builtin::DataViewProtoGetInt32
-            | Builtin::DataViewProtoGetUint32
-            | Builtin::DataViewProtoGetInt16
-            | Builtin::DataViewProtoGetUint16
-            | Builtin::DataViewProtoGetInt8
-            | Builtin::DataViewProtoGetUint8
             // ── DataView set methods ──
             | Builtin::DataViewProtoSetFloat64
             | Builtin::DataViewProtoSetFloat32
@@ -970,6 +959,15 @@ impl Compiler {
                 }
                 Ok(())
             }
+            // ── DataView get methods: Type 2 (this, byteOffset) ──
+            Builtin::DataViewProtoGetFloat64
+            | Builtin::DataViewProtoGetFloat32
+            | Builtin::DataViewProtoGetInt32
+            | Builtin::DataViewProtoGetUint32
+            | Builtin::DataViewProtoGetInt16
+            | Builtin::DataViewProtoGetUint16
+            | Builtin::DataViewProtoGetInt8
+            | Builtin::DataViewProtoGetUint8
             // ── TypedArray 新增原型方法: Type 2 (2-arg: this, arg1) ──
             // join 的 separator 参数是可选的，缺省时用 undefined 填充。
             | Builtin::TypedArrayProtoJoin

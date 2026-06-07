@@ -7,14 +7,26 @@ pub(crate) fn define_timers_arrays(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    // ── Import 34: closure_create(i32, i64) -> i64 ────────────────────────────
+    // ── Import 34: closure_create(i64, i64) -> i64 ────────────────────────────
     let f = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, func_idx: i32, env_obj: i64| -> i64 {
+        |caller: Caller<'_, RuntimeState>, func_ref: i64, env_obj: i64| -> i64 {
+            let func_idx = if value::is_function(func_ref) {
+                value::decode_function_idx(func_ref)
+            } else if value::is_closure(func_ref) {
+                let idx = value::decode_closure_idx(func_ref) as usize;
+                let closures = caller.data().closures.lock().expect("closures mutex");
+                closures
+                    .get(idx)
+                    .map(|e| e.func_idx)
+                    .unwrap_or(0)
+            } else {
+                0
+            };
             let mut closures = caller.data().closures.lock().expect("closures mutex");
             let idx = closures.len() as u32;
             closures.push(ClosureEntry {
-                func_idx: func_idx as u32,
+                func_idx,
                 env_obj,
             });
             value::encode_closure_idx(idx)

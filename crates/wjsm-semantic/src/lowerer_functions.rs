@@ -105,24 +105,34 @@ impl Lowerer {
             },
         );
 
-        // 如果有捕获变量，使用共享 env 对象 + CreateClosure
-        let callee_val = if captured.is_empty() {
-            func_ref_val
-        } else {
-            let mut closure_block = block;
-            let env_val = self.ensure_shared_env(closure_block, &captured, fn_expr.span())?;
-            closure_block = self.resolve_store_block(closure_block);
-            let closure_val = self.alloc_value();
+        // 始终 materialize 为闭包，保证 func_idx 经 closure_create 解析（含无捕获箭头/函数表达式）
+        let mut closure_block = block;
+        let env_val = if captured.is_empty() {
+            let undef = self.alloc_value();
             self.current_function.append_instruction(
                 closure_block,
-                Instruction::CallBuiltin {
-                    dest: Some(closure_val),
-                    builtin: Builtin::CreateClosure,
-                    args: vec![func_ref_val, env_val],
+                Instruction::Const {
+                    dest: undef,
+                    constant: self.module.add_constant(Constant::Undefined),
                 },
             );
-            closure_val
+            closure_block = self.resolve_store_block(closure_block);
+            undef
+        } else {
+            let e = self.ensure_shared_env(closure_block, &captured, fn_expr.span())?;
+            closure_block = self.resolve_store_block(closure_block);
+            e
         };
+        let closure_val = self.alloc_value();
+        self.current_function.append_instruction(
+            closure_block,
+            Instruction::CallBuiltin {
+                dest: Some(closure_val),
+                builtin: Builtin::CreateClosure,
+                args: vec![func_ref_val, env_val],
+            },
+        );
+        let callee_val = closure_val;
 
         Ok(callee_val)
     }

@@ -474,6 +474,30 @@ pub(crate) fn builtin_from_sharedarraybuffer_proto_method(name: &str) -> Option<
     }
 }
 
+/// 将 DataView.prototype get/set 方法名映射到 Builtin 变体。
+pub(crate) fn builtin_from_dataview_proto_method(name: &str) -> Option<Builtin> {
+    use Builtin::*;
+    match name {
+        "getFloat64" => Some(DataViewProtoGetFloat64),
+        "getFloat32" => Some(DataViewProtoGetFloat32),
+        "getInt32" => Some(DataViewProtoGetInt32),
+        "getUint32" => Some(DataViewProtoGetUint32),
+        "getInt16" => Some(DataViewProtoGetInt16),
+        "getUint16" => Some(DataViewProtoGetUint16),
+        "getInt8" => Some(DataViewProtoGetInt8),
+        "getUint8" => Some(DataViewProtoGetUint8),
+        "setFloat64" => Some(DataViewProtoSetFloat64),
+        "setFloat32" => Some(DataViewProtoSetFloat32),
+        "setInt32" => Some(DataViewProtoSetInt32),
+        "setUint32" => Some(DataViewProtoSetUint32),
+        "setInt16" => Some(DataViewProtoSetInt16),
+        "setUint16" => Some(DataViewProtoSetUint16),
+        "setInt8" => Some(DataViewProtoSetInt8),
+        "setUint8" => Some(DataViewProtoSetUint8),
+        _ => None,
+    }
+}
+
 pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) {
     match builtin {
         Builtin::ConsoleLog => ("console.log", 1),
@@ -619,7 +643,7 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::ArrayBufferProtoByteLength => ("ArrayBuffer.prototype.byteLength", 1),
         Builtin::ArrayBufferProtoSlice => ("ArrayBuffer.prototype.slice", 3),
         // ── SharedArrayBuffer builtins ──
-        Builtin::SharedArrayBufferConstructor => ("SharedArrayBuffer", 3),
+        Builtin::SharedArrayBufferConstructor => ("SharedArrayBuffer", 1),
         Builtin::SharedArrayBufferProtoByteLength => ("SharedArrayBuffer.prototype.byteLength", 1),
         Builtin::SharedArrayBufferProtoGrow => ("SharedArrayBuffer.prototype.grow", 2),
         Builtin::SharedArrayBufferProtoGrowable => ("SharedArrayBuffer.prototype.growable", 1),
@@ -640,7 +664,7 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::AtomicsPause => ("Atomics.pause", 0),
         Builtin::AtomicsWait => ("Atomics.wait", 4),
         Builtin::AtomicsNotify => ("Atomics.notify", 3),
-        Builtin::AtomicsWaitAsync => ("Atomics.waitAsync", 3),
+        Builtin::AtomicsWaitAsync => ("Atomics.waitAsync", 4),
         // ── DataView builtins ──
         Builtin::DataViewConstructor => ("DataView", 3),
         Builtin::DataViewProtoGetFloat64 => ("DataView.prototype.getFloat64", 2),

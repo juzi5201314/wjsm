@@ -260,12 +260,12 @@ pub(crate) async fn call_wasm_callback_async(
     if value::is_native_callable(resolved) {
         // 先恢复 shadow_sp，因为 native_callable 不走 WASM 调用路径
         let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
-        return call_native_callable_with_args_from_caller_async(
+        return Box::pin(call_native_callable_with_args_from_caller_async(
             &mut *caller,
             resolved,
             this_val,
             args.to_vec(),
-        )
+        ))
         .await
         .ok_or_else(|| anyhow::anyhow!("native callable returned None"));
     }
