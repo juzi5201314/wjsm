@@ -1,9 +1,4 @@
-exit_code: 2
+exit_code: 0
 --- stdout ---
+h
 --- stderr ---
-Runtime error: WASM trap: error while executing at wasm backtrace:
-    0:   0x4f3b - <unknown>!<wasm function 400>
-
-Caused by:
-    wasm trap: wasm `unreachable` instruction executed
-

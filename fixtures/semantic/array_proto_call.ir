@@ -26,6 +26,7 @@ module {
     c23 = number(0)
     c24 = number(2)
     c25 = functionref(@0)
+    c26 = undefined
 
   fn @anon_0 [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
     bb0:
@@ -92,7 +93,9 @@ module {
       store var $0.a, %21
       %25 = load var $0.a
       %26 = const c25
-      %27 = call builtin.array.map(%25, %26)
-      store var $0.b, %27
+      %27 = const c26
+      %28 = call builtin.create_closure(%26, %27)
+      %29 = call builtin.array.map(%25, %28)
+      store var $0.b, %29
       return
 }

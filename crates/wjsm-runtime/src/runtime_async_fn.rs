@@ -3,6 +3,67 @@ use std::io::Write;
 
 use wasmtime::{Instance, Store};
 
+fn fresh_continuation_entry(
+    fn_table_idx: u32,
+    outer_promise: i64,
+    captured_len: usize,
+) -> ContinuationEntry {
+    let mut captured_vars = vec![value::encode_undefined(); captured_len.max(4)];
+    captured_vars[0] = value::encode_f64(0.0);
+    captured_vars[1] = value::encode_bool(false);
+    ContinuationEntry {
+        fn_table_idx,
+        outer_promise,
+        captured_vars,
+        completed: false,
+    }
+}
+
+pub(crate) fn alloc_continuation_handle(
+    state: &RuntimeState,
+    fn_table_idx: u32,
+    outer_promise: i64,
+    captured_var_count: usize,
+) -> u32 {
+    let mut table = state.continuation_table.lock().expect("continuation table mutex");
+    let mut free = state
+        .continuation_free_slots
+        .lock()
+        .expect("continuation free slots mutex");
+    while let Some(slot) = free.pop() {
+        let idx = slot as usize;
+        if idx < table.len() {
+            table[idx] = fresh_continuation_entry(fn_table_idx, outer_promise, captured_var_count);
+            return slot;
+        }
+    }
+    let handle = table.len() as u32;
+    table.push(fresh_continuation_entry(
+        fn_table_idx,
+        outer_promise,
+        captured_var_count,
+    ));
+    handle
+}
+
+pub(crate) fn recycle_completed_continuations(state: &RuntimeState) {
+    let mut table = state.continuation_table.lock().expect("continuation table mutex");
+    let mut free = state
+        .continuation_free_slots
+        .lock()
+        .expect("continuation free slots mutex");
+    for (idx, entry) in table.iter_mut().enumerate() {
+        if !entry.completed {
+            continue;
+        }
+        entry.completed = false;
+        entry.fn_table_idx = 0;
+        entry.outer_promise = value::encode_undefined();
+        entry.captured_vars.clear();
+        free.push(idx as u32);
+    }
+}
+
 pub(crate) fn create_async_generator_method(
     state: &RuntimeState,
     generator: i64,
@@ -385,4 +446,22 @@ pub(crate) async fn run_main_completion_block_async<W: Write>(
     main_result?;
 
     Ok(writer)
+}
+
+#[cfg(test)]
+mod continuation_tests {
+    use super::*;
+
+    #[test]
+    fn continuation_handle_stable_after_recycle() {
+        let state = RuntimeState::new();
+        let h0 = alloc_continuation_handle(&state, 1, value::encode_f64(1.0), 4);
+        {
+            let mut table = state.continuation_table.lock().expect("continuation table mutex");
+            table[h0 as usize].completed = true;
+        }
+        recycle_completed_continuations(&state);
+        let h1 = alloc_continuation_handle(&state, 2, value::encode_f64(2.0), 4);
+        assert_eq!(h0, h1);
+    }
 }

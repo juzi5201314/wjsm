@@ -27,6 +27,7 @@ module {
     c24 = number(0)
     c25 = number(2)
     c26 = functionref(@0)
+    c27 = undefined
 
   fn @anon_0 [params: $1.$env, $1.$this, $1.x] [entry=bb0]:
     bb0:
@@ -95,7 +96,9 @@ module {
       store var $0.a, %21
       %26 = load var $0.a
       %27 = const c26
-      %28 = call builtin.array.filter(%26, %27)
-      store var $0.b, %28
+      %28 = const c27
+      %29 = call builtin.create_closure(%27, %28)
+      %30 = call builtin.array.filter(%26, %29)
+      store var $0.b, %30
       return
 }

@@ -13,7 +13,7 @@ use crate::runtime_render::read_runtime_string;
 use crate::shared_buffer::{
     materialize_shared_array_buffer_by_handle, read_sab_handle_from_object, SharedRuntimeState,
 };
-use crate::{call_wasm_callback, call_wasm_callback_async, RuntimeState, WasmEnv};
+use crate::{call_wasm_callback_async, RuntimeState, WasmEnv};
 
 const BROADCAST_WAIT_MS: u64 = 60_000;
 
@@ -148,7 +148,16 @@ pub(crate) fn agent_receive_broadcast(
     let handle = wait_broadcast_sab_handle(caller, &shared)?;
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let sab_obj = materialize_shared_array_buffer_by_handle(caller, &env, &shared, handle);
-    if let Err(e) = call_wasm_callback(caller, callback, value::encode_undefined(), &[sab_obj]) {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("agent receiveBroadcast tokio runtime");
+    if let Err(e) = rt.block_on(call_wasm_callback_async(
+        caller,
+        callback,
+        value::encode_undefined(),
+        &[sab_obj],
+    )) {
         push_agent_report(&shared, format!("agent callback error: {e:#}"));
     }
     signal_broadcast_callback_done(&shared);

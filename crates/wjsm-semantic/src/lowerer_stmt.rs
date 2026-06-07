@@ -672,15 +672,10 @@ impl Lowerer {
         );
         self.current_function
             .set_terminator(next_block, Terminator::Jump { target: header });
-        // 关键：若 body 因 return/throw/break/continue 而 Terminated，for-of 本身也必须报告 Terminated（而非 Open(exit)），
-        // 避免外层 function decl/expr 在 for-of 之后看到 Open 而注入隐式 return undefined。
-        // 迭代器关闭已在 abrupt 路径（lower_return/break 中的 emit_iterator_closes + label iterator_to_close）完成，符合 spec 13.7.5.13 关于 for-of 作为 abrupt completion 的规则。
-        let for_of_flow = if matches!(body_flow, StmtFlow::Terminated) {
-            StmtFlow::Terminated
-        } else {
-            StmtFlow::Open(exit)
-        };
-        Ok(for_of_flow)
+        // break/continue/return/throw 走 abrupt 路径；正常完成与 break→close→exit 均以 Open(exit) 结束，
+        // 使 exit 块得到 Return 而非 Unreachable（for-of break 关闭迭代器场景）。
+        let _ = body_flow;
+        Ok(StmtFlow::Open(exit))
     }
 
     pub(crate) fn lower_for_await_of(

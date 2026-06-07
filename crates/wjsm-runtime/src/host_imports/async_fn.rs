@@ -22,24 +22,22 @@ pub(crate) fn define_async_fn(
             };
             let outer_promise = alloc_promise(&mut caller, PromiseEntry::pending());
 
-            let mut c_table = caller
-                .data()
-                .continuation_table
-                .lock()
-                .expect("continuation table mutex");
-            let cont_handle = c_table.len() as u32;
-            c_table.push(ContinuationEntry {
+            let cont_handle = crate::runtime_async_fn::alloc_continuation_handle(
+                caller.data(),
                 fn_table_idx,
                 outer_promise,
-                captured_vars: vec![value::encode_undefined(); 4],
-                completed: false,
-            });
-            if let Some(entry) = c_table.get_mut(cont_handle as usize) {
-                entry.captured_vars[0] = value::encode_f64(0.0);
-                entry.captured_vars[1] = value::encode_bool(false);
-                entry.captured_vars[2] = outer_promise;
+                4,
+            );
+            {
+                let mut c_table = caller
+                    .data()
+                    .continuation_table
+                    .lock()
+                    .expect("continuation table mutex");
+                if let Some(entry) = c_table.get_mut(cont_handle as usize) {
+                    entry.captured_vars[2] = outer_promise;
+                }
             }
-            drop(c_table);
 
             let mut queue = caller
                 .data()
@@ -48,7 +46,7 @@ pub(crate) fn define_async_fn(
                 .expect("microtask queue mutex");
             queue.push_back(Microtask::AsyncResume {
                 fn_table_idx,
-                continuation: cont_handle as i64,
+                continuation: value::encode_object_handle(cont_handle),
                 state: 0,
                 resume_val: value::encode_undefined(),
                 is_rejected: false,
@@ -217,23 +215,13 @@ pub(crate) fn define_async_fn(
             } else {
                 nanbox_to_u32(fn_table_idx)
             };
-            let mut table = caller
-                .data()
-                .continuation_table
-                .lock()
-                .expect("continuation table mutex");
-            let handle = table.len() as u32;
             let total_slots = nanbox_to_usize(captured_var_count);
-            table.push(ContinuationEntry {
-                fn_table_idx: resolved_fn_idx,
+            let handle = crate::runtime_async_fn::alloc_continuation_handle(
+                caller.data(),
+                resolved_fn_idx,
                 outer_promise,
-                captured_vars: vec![value::encode_undefined(); total_slots],
-                completed: false,
-            });
-            if let Some(entry) = table.get_mut(handle as usize) {
-                entry.captured_vars[0] = value::encode_f64(0.0);
-                entry.captured_vars[1] = value::encode_bool(false);
-            }
+                total_slots,
+            );
             value::encode_object_handle(handle)
         },
     );
