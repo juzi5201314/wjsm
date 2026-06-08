@@ -126,6 +126,13 @@ fn create_readable_stream_js_object_for_transform(
     let async_iter_val = value::encode_native_callable_idx(async_iter_idx);
     let _ =
         define_host_data_property_from_caller(caller, obj, "Symbol.asyncIterator", async_iter_val);
+    let _ = define_host_data_property_by_name_id_with_flags(
+        caller,
+        obj,
+        encode_symbol_name_id(3),
+        async_iter_val,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+    );
 
     obj
 }

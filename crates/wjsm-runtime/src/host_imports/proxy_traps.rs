@@ -56,6 +56,9 @@ pub(crate) fn proxy_trap_property_key_value(
     caller: &mut Caller<'_, RuntimeState>,
     name_id: i32,
 ) -> i64 {
+    if let Some(symbol_key) = name_id_to_property_key_value(name_id as u32) {
+        return symbol_key;
+    }
     let name = read_string(caller, name_id as u32).unwrap_or_default();
     store_runtime_string(caller, name)
 }

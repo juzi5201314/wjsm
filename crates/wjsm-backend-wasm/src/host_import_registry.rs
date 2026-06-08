@@ -38,6 +38,7 @@ pub enum SpecialHostImport {
     StringConcat,
     StringConcatVa,
     SymbolPropertyKey,
+    NativeCallableGetProperty,
     PrimitiveNumberGetMethod,
     TypedArraySetByIndex,
 }
@@ -295,6 +296,12 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         name: "arr_push",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::ArrayPush)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "array_push_spread",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::ArrayPushSpread)),
         group: None,
     },
     HostImportSpec {
@@ -615,6 +622,12 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         name: "obj_get_own_prop_names",
         type_idx: 3,
         key: Some(HostImportKey::Builtin(Builtin::ObjectGetOwnPropertyNames)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "obj_get_own_prop_symbols",
+        type_idx: 3,
+        key: Some(HostImportKey::Builtin(Builtin::ObjectGetOwnPropertySymbols)),
         group: None,
     },
     HostImportSpec {
@@ -2446,9 +2459,19 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "native_callable_get_property",
+        type_idx: 8,
+        key: Some(HostImportKey::Special(
+            SpecialHostImport::NativeCallableGetProperty,
+        )),
+        group: None,
+    },
+    HostImportSpec {
         name: "primitive_number_get_method",
         type_idx: 8,
-        key: Some(HostImportKey::Special(SpecialHostImport::PrimitiveNumberGetMethod)),
+        key: Some(HostImportKey::Special(
+            SpecialHostImport::PrimitiveNumberGetMethod,
+        )),
         group: None,
     },
     HostImportSpec {

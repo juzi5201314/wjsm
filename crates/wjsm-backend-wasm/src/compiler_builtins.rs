@@ -552,7 +552,9 @@ impl Compiler {
                 let desc_arg = args.get(2).context("DefineProperty expects 3 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
-                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::Call(
+                    self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+                ));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(desc_arg.0)));
                 let func_idx = self
                     .builtin_func_indices
@@ -572,7 +574,9 @@ impl Compiler {
                 let key_arg = args.get(1).context("GetOwnPropDesc expects 2 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
-                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::Call(
+                    self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+                ));
                 let func_idx = self
                     .builtin_func_indices
                     .get(builtin)
@@ -586,6 +590,7 @@ impl Compiler {
             }
             // ── Array method builtins ─────────────────────────────────────
             Builtin::ArrayPush
+            | Builtin::ArrayPushSpread
             | Builtin::ArrayPop
             | Builtin::ArrayIncludes
             | Builtin::ArrayJoin
@@ -1207,6 +1212,7 @@ impl Compiler {
             | Builtin::ObjectEntries
             | Builtin::ObjectGetPrototypeOf
             | Builtin::ObjectGetOwnPropertyNames
+            | Builtin::ObjectGetOwnPropertySymbols
             | Builtin::ObjectIsExtensible
             | Builtin::ObjectPreventExtensions
             | Builtin::ObjectProtoToString

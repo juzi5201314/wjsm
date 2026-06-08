@@ -4,6 +4,96 @@ use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
+fn push_array_value(caller: &mut Caller<'_, RuntimeState>, arr: i64, val: i64) -> Option<()> {
+    let mut ptr = resolve_array_ptr(caller, arr)?;
+    let len = read_array_length(caller, ptr).unwrap_or(0);
+    let cap = read_array_capacity(caller, ptr).unwrap_or(0);
+    if len >= cap {
+        let new_cap = cap.max(1) * 2;
+        ptr = grow_array(caller, ptr, arr, new_cap.max(len + 1))?;
+    }
+    write_array_elem(caller, ptr, len, val);
+    write_array_length(caller, ptr, len + 1);
+    Some(())
+}
+
+fn call_iterator_next(caller: &mut Caller<'_, RuntimeState>, iterator: i64, next: i64) -> i64 {
+    if value::is_native_callable(next) {
+        call_native_callable_with_args_from_caller(caller, next, iterator, vec![])
+            .unwrap_or_else(value::encode_undefined)
+    } else {
+        value::encode_undefined()
+    }
+}
+
+fn push_iterator_values(caller: &mut Caller<'_, RuntimeState>, arr: i64, iterator: i64) -> bool {
+    let Some(iter_ptr) = resolve_handle(caller, iterator) else {
+        return false;
+    };
+    let Some(next) = read_object_property_by_name(caller, iter_ptr, "next") else {
+        return false;
+    };
+    if !value::is_callable(next) {
+        return false;
+    }
+    loop {
+        let result = call_iterator_next(caller, iterator, next);
+        let Some(result_ptr) = resolve_handle(caller, result) else {
+            return false;
+        };
+        let done = read_object_property_by_name(caller, result_ptr, "done")
+            .is_some_and(|done| !value::is_falsy(done));
+        if done {
+            return true;
+        }
+        let val = read_object_property_by_name(caller, result_ptr, "value")
+            .unwrap_or_else(value::encode_undefined);
+        let _ = push_array_value(caller, arr, val);
+    }
+}
+
+fn array_push_spread_impl(caller: &mut Caller<'_, RuntimeState>, arr: i64, iterable: i64) -> i64 {
+    if value::is_array(iterable)
+        && let Some(ptr) = resolve_array_ptr(caller, iterable)
+    {
+        let len = read_array_length(caller, ptr).unwrap_or(0);
+        for i in 0..len {
+            let val = read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
+            let _ = push_array_value(caller, arr, val);
+        }
+        return value::encode_undefined();
+    }
+
+    if let Some(bytes) = read_value_string_bytes(caller, iterable) {
+        for byte in bytes {
+            let val = store_runtime_string(caller, (byte as char).to_string());
+            let _ = push_array_value(caller, arr, val);
+        }
+        return value::encode_undefined();
+    }
+
+    if let Some(ptr) = resolve_handle(caller, iterable)
+        && let Some(method) = read_object_property_by_name_id(caller, ptr, encode_symbol_name_id(0))
+        && value::is_callable(method)
+    {
+        let iterator = if value::is_native_callable(method) {
+            call_native_callable_with_args_from_caller(caller, method, iterable, vec![])
+                .unwrap_or_else(value::encode_undefined)
+        } else {
+            value::encode_undefined()
+        };
+        if push_iterator_values(caller, arr, iterator) {
+            return value::encode_undefined();
+        }
+    }
+
+    set_runtime_error(
+        caller.data(),
+        "TypeError: value is not iterable".to_string(),
+    );
+    value::encode_undefined()
+}
+
 pub(crate) fn define_array_object(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -41,6 +131,15 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "arr_proto_push", arr_proto_push_fn)?;
+
+    // ── array_push_spread(arr, iterable) → undefined ───────────────────
+    let array_push_spread_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, arr: i64, iterable: i64| -> i64 {
+            array_push_spread_impl(&mut caller, arr, iterable)
+        },
+    );
+    linker.define(&mut store, "env", "array_push_spread", array_push_spread_fn)?;
 
     // ── arr_proto_pop (#50) ───────────────────────────────────────────
     let arr_proto_pop_fn = Func::wrap(
@@ -1156,6 +1255,32 @@ pub(crate) fn define_array_object(
         "obj_get_own_prop_names",
         obj_get_own_prop_names_fn,
     )?;
+
+    // ── Import: obj_get_own_prop_symbols(i64) -> i64 ────────────────────────
+    let obj_get_own_prop_symbols_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return value::encode_undefined();
+            };
+            let symbols = collect_own_property_key_values(&mut caller, ptr, true);
+            let arr = alloc_array(&mut caller, symbols.len() as u32);
+            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
+                return value::encode_undefined();
+            };
+            for (i, symbol) in symbols.iter().enumerate() {
+                write_array_elem(&mut caller, arr_ptr, i as u32, *symbol);
+            }
+            write_array_length(&mut caller, arr_ptr, symbols.len() as u32);
+            arr
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "obj_get_own_prop_symbols",
+        obj_get_own_prop_symbols_fn,
+    )?;
     // ── Import 92: obj_is(i64, i64) -> i64 ────────────────────────────────────
     let obj_is_fn = Func::wrap(
         &mut store,
@@ -1218,8 +1343,10 @@ pub(crate) fn define_array_object(
     let obj_proto_init_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let to_string = create_native_callable(caller.data(), NativeCallable::ObjectProtoToString);
-            let value_of = create_native_callable(caller.data(), NativeCallable::ObjectProtoValueOf);
+            let to_string =
+                create_native_callable(caller.data(), NativeCallable::ObjectProtoToString);
+            let value_of =
+                create_native_callable(caller.data(), NativeCallable::ObjectProtoValueOf);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "toString", to_string);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "valueOf", value_of);
             value::encode_undefined()

@@ -398,6 +398,9 @@ pub(crate) fn read_object_property_by_name_with_env<C: AsContextMut<Data = Runti
         }
     }
     for (i, name_id) in name_ids.iter().enumerate() {
+        if is_symbol_name_id(*name_id) {
+            continue;
+        }
         let name_bytes = read_string_bytes_mem(ctx, &env.memory, *name_id);
         if name_bytes == prop_name.as_bytes() {
             let data = env.memory.data(&*ctx);
@@ -458,7 +461,11 @@ pub(crate) fn find_property_slot_by_name_id_with_env<C: AsContextMut<Data = Runt
             data[obj_ptr + 15],
         ]) as usize
     };
-    let target_name_bytes = read_string_bytes_mem(ctx, &env.memory, name_id);
+    let target_name_bytes = if is_symbol_name_id(name_id) {
+        Vec::new()
+    } else {
+        read_string_bytes_mem(ctx, &env.memory, name_id)
+    };
     for i in 0..num_props {
         let slot_offset = obj_ptr + 16 + i * 32;
         let (slot_name_id, flags, val) = {
@@ -491,7 +498,9 @@ pub(crate) fn find_property_slot_by_name_id_with_env<C: AsContextMut<Data = Runt
             (slot_name_id, flags, val)
         };
         let same_name = slot_name_id == name_id
-            || (!target_name_bytes.is_empty()
+            || (!is_symbol_name_id(name_id)
+                && !is_symbol_name_id(slot_name_id)
+                && !target_name_bytes.is_empty()
                 && read_string_bytes_mem(ctx, &env.memory, slot_name_id) == target_name_bytes);
         if same_name {
             return Some((slot_offset, flags, val));
@@ -632,6 +641,9 @@ pub(crate) fn enumerate_object_keys(
 
     let mut keys = Vec::with_capacity(name_ids.len());
     for name_id in name_ids {
+        if is_symbol_name_id(name_id) {
+            continue;
+        }
         let name_bytes = read_string_bytes(caller, name_id);
         if let Ok(name) = std::str::from_utf8(&name_bytes) {
             keys.push(name.to_string());

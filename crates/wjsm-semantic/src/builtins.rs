@@ -157,6 +157,7 @@ pub(crate) fn builtin_from_static_member(object: &str, property: &str) -> Option
             "getPrototypeOf" => Some(Builtin::ObjectGetPrototypeOf),
             "setPrototypeOf" => Some(Builtin::ObjectSetPrototypeOf),
             "getOwnPropertyNames" => Some(Builtin::ObjectGetOwnPropertyNames),
+            "getOwnPropertySymbols" => Some(Builtin::ObjectGetOwnPropertySymbols),
             "is" => Some(Builtin::ObjectIs),
             "groupBy" => Some(Builtin::ObjectGroupBy),
             "isExtensible" => Some(Builtin::ObjectIsExtensible),
@@ -525,6 +526,7 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::ObjectGetPrototypeOf => ("Object.getPrototypeOf", 1),
         Builtin::ObjectSetPrototypeOf => ("Object.setPrototypeOf", 2),
         Builtin::ObjectGetOwnPropertyNames => ("Object.getOwnPropertyNames", 1),
+        Builtin::ObjectGetOwnPropertySymbols => ("Object.getOwnPropertySymbols", 1),
         Builtin::ObjectIs => ("Object.is", 2),
         // ── BigInt builtins ──
         Builtin::BigIntFromLiteral => ("BigInt.fromLiteral", 1),

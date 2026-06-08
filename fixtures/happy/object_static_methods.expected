@@ -31,7 +31,7 @@ is(1, '1'): false
 
 === Object.getPrototypeOf ===
 proto is Object.prototype: false
-arr proto is Array.prototype: false
+arr proto is Array.prototype: true
 
 === Object.setPrototypeOf ===
 inherited: true

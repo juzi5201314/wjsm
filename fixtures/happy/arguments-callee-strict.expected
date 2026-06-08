@@ -1,4 +1,9 @@
 exit_code: 0
 --- stdout ---
-throw
+direct:TypeError
+reflect:TypeError
+descriptor:function:function
+flags:false:false
+getter_call:TypeError
+setter_call:TypeError
 --- stderr ---

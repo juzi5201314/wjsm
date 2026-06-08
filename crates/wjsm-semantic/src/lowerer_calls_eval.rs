@@ -1041,7 +1041,6 @@ impl Lowerer {
         }
     }
 
-
     /// `toString` / `valueOf` 对任意 `*.toString()` 误匹配会抢走 Error 等对象；仅数值字面量走快路径。
     /// `toFixed` 等格式方法仍对数值字面量 `(42).toFixed(2)` 保持快路径。
     fn should_use_number_proto_call_fast_path(
@@ -1057,7 +1056,6 @@ impl Lowerer {
             _ => false,
         }
     }
-
 
     /// 检测表达式是否为 Object.prototype.toString 或 Object.prototype.valueOf
     /// 用于优化 Function.prototype.call 调用模式

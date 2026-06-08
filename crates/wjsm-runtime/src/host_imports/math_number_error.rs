@@ -954,6 +954,6 @@ pub(crate) fn define_math_number_error(
         primitive_number_get_method_fn,
     )?;
 
-     // ── Map / Set helper: SameValueZero equality ──────────────────────
-     Ok(())
+    // ── Map / Set helper: SameValueZero equality ──────────────────────
+    Ok(())
 }
