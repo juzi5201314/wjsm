@@ -7,10 +7,11 @@ impl Lowerer {
         kind: VarKind,
         value: ValueId,
         block: BasicBlockId,
-    ) {
+    ) -> Result<BasicBlockId, LoweringError> {
         if self.eval_var_writes_to_scope && matches!(kind, VarKind::Var) {
-            self.append_eval_env_write(name, value, block);
+            return self.append_eval_env_write(name, value, block);
         }
+        Ok(block)
     }
 
     pub(crate) fn lower_ident(
@@ -403,7 +404,7 @@ impl Lowerer {
                     );
                     return Ok(rhs);
                 }
-                if self.strict_mode {
+                if self.strict_mode && !self.eval_scope_record {
                     // strict eval: 对未声明变量赋值 → ReferenceError
                     let msg_const = self.module.add_constant(Constant::String(format!(
                         "assignment to undeclared variable '{name}'"
@@ -461,7 +462,7 @@ impl Lowerer {
                         value: rhs,
                     },
                 );
-                self.append_eval_var_leak_if_needed(&name, kind, rhs, store_block);
+                self.append_eval_var_leak_if_needed(&name, kind, rhs, store_block)?;
                 // 更新 TypedArray 绑定跟踪：arr = new Int32Array -> 标记；arr = 其他 -> 取消标记
                 if is_typedarray_constructor_expr(assign.right.as_ref()) {
                     self.typedarray_bindings.insert((scope_id, name.clone()));
@@ -551,7 +552,7 @@ impl Lowerer {
                         value: dest,
                     },
                 );
-                self.append_eval_var_leak_if_needed(&name, kind, dest, block);
+                self.append_eval_var_leak_if_needed(&name, kind, dest, block)?;
 
                 Ok(dest)
             }
@@ -566,7 +567,8 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         if assign.op == swc_ast::AssignOp::Assign {
             let rhs = self.lower_expr(assign.right.as_ref(), block)?;
-            self.append_eval_env_write(name, rhs, block);
+            let block = self.append_eval_env_write(name, rhs, block)?;
+            self.expr_merge_block = Some(block);
             return Ok(rhs);
         }
 
@@ -617,7 +619,8 @@ impl Lowerer {
                 );
             }
         }
-        self.append_eval_env_write(name, dest, block);
+        let block = self.append_eval_env_write(name, dest, block)?;
+        self.expr_merge_block = Some(block);
         Ok(dest)
     }
 
@@ -853,6 +856,8 @@ impl Lowerer {
                 },
             );
         } else {
+            // LEGACY: flat-object eval scope bridge. ScopeRecord eval uses EvalGetBinding above;
+            // keep this branch for non-ScopeRecord fallback paths until those are retired.
             let key_val = self.append_eval_env_key_const(block, name);
             self.current_function.append_instruction(
                 block,
@@ -899,7 +904,7 @@ impl Lowerer {
 
         let rhs = self.lower_expr(assign.right.as_ref(), assign_block)?;
         let assign_end = self.resolve_store_block(assign_block);
-        self.append_eval_env_write(name, rhs, assign_end);
+        self.append_eval_env_write(name, rhs, assign_end)?;
         self.current_function
             .set_terminator(assign_end, Terminator::Jump { target: merge });
 

@@ -47,6 +47,7 @@ pub(crate) fn create_unmapped_arguments_object(
     // Set length = 实际参数个数（writable, enumerable=false, configurable=true）
     let _ =
         define_host_data_property_from_caller(caller, obj, "length", value::encode_f64(len as f64));
+    // Symbol.iterator (@@iterator → %Array.prototype.values%): deferred — define_host_data_property_from_caller uses string keys only.
 
     obj
 }
@@ -96,9 +97,13 @@ pub(crate) fn create_mapped_arguments_object(
         }
     }
 
-    // Set length = 实际参数个数
-    let _ =
-        define_host_data_property_from_caller(caller, obj, "length", value::encode_f64(len as f64));
+    let _ = define_host_data_property_from_caller(
+        caller,
+        obj,
+        "length",
+        value::encode_f64(len as f64),
+    );
+    // Symbol.iterator (@@iterator): deferred — host property helpers use string keys only.
 
     // Set callee = func_ref（仅非严格模式）
     if !value::is_undefined(func_ref) {

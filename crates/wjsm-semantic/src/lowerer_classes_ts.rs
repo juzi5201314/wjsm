@@ -144,6 +144,7 @@ impl Lowerer {
                 };
 
                 self.push_function_context(&fn_name, BasicBlockId(0));
+                self.is_method = true;
                 self.super_allowed = true;
                 let env_scope_id = self
                     .scopes
@@ -172,7 +173,11 @@ impl Lowerer {
                 }
                 let m_entry = BasicBlockId(0);
                 self.emit_hoisted_var_initializers(m_entry);
+                self.arguments_param_count = pm.function.params.len() as u32;
                 let m_entry = self.emit_arguments_init(m_entry)?;
+                self.eval_caller_has_arguments =
+                    Self::detect_param_arguments(&pm.function.params)
+                        || self.scopes.lookup("arguments").is_ok();
                 let mut m_flow = StmtFlow::Open(m_entry);
                 if let Some(body) = &pm.function.body {
                     for stmt in &body.stmts {
@@ -208,6 +213,7 @@ impl Lowerer {
 
         let ctor_name = format!("{}.constructor", class_name);
         self.push_function_context(&ctor_name, BasicBlockId(0));
+        self.is_method = true;
         self.super_allowed = true;
         self.super_call_allowed = class_decl.class.super_class.is_some();
 
@@ -305,10 +311,36 @@ impl Lowerer {
             StmtFlow::Open(field_block)
         };
         if let Some(_ctor) = constructor {
-            inner_flow = StmtFlow::Open(self.emit_arguments_init(match inner_flow {
+            let ctor_params_len = constructor
+                .map(|c| {
+                    c.params
+                        .iter()
+                        .filter(|p| matches!(p, swc_ast::ParamOrTsParamProp::Param(_)))
+                        .count()
+                })
+                .unwrap_or(0) as u32;
+            self.arguments_param_count = ctor_params_len;
+            let args_block = self.emit_arguments_init(match inner_flow {
                 StmtFlow::Open(b) => b,
                 _ => entry,
-            })?);
+            })?;
+            self.eval_caller_has_arguments = if let Some(c) = constructor {
+                c.params
+                    .iter()
+                    .filter_map(|p| match p {
+                        swc_ast::ParamOrTsParamProp::Param(param) => Some(&param.pat),
+                        _ => None,
+                    })
+                    .any(|pat| {
+                        let mut names = Vec::new();
+                        Self::extract_pat_bindings(std::slice::from_ref(pat), &mut names);
+                        names.iter().any(|n| n == "arguments")
+                    })
+                    || self.scopes.lookup("arguments").is_ok()
+            } else {
+                self.scopes.lookup("arguments").is_ok()
+            };
+            inner_flow = StmtFlow::Open(args_block);
         }
         if let Some(ctor) = constructor
             && let Some(body) = &ctor.body
@@ -491,6 +523,7 @@ impl Lowerer {
 
                             let fn_name = format!("{}.{}", class_name, method_name);
                             self.push_function_context(&fn_name, BasicBlockId(0));
+                            self.is_method = true;
                             self.super_allowed = true;
 
                             let env_scope_id = self
@@ -523,7 +556,11 @@ impl Lowerer {
 
                             let m_entry = BasicBlockId(0);
                             self.emit_hoisted_var_initializers(m_entry);
+                            self.arguments_param_count = method.function.params.len() as u32;
                             let m_entry = self.emit_arguments_init(m_entry)?;
+                            self.eval_caller_has_arguments =
+                                Self::detect_param_arguments(&method.function.params)
+                                    || self.scopes.lookup("arguments").is_ok();
 
                             let mut m_flow = StmtFlow::Open(m_entry);
                             if let Some(body) = &method.function.body {
@@ -632,6 +669,7 @@ impl Lowerer {
 
                             let fn_name = format!("{}.{}_{}", class_name, accessor, method_name);
                             self.push_function_context(&fn_name, BasicBlockId(0));
+                            self.is_method = true;
                             self.super_allowed = true;
 
                             let env_scope_id = self
@@ -664,7 +702,11 @@ impl Lowerer {
 
                             let m_entry = BasicBlockId(0);
                             self.emit_hoisted_var_initializers(m_entry);
+                            self.arguments_param_count = method.function.params.len() as u32;
                             let m_entry = self.emit_arguments_init(m_entry)?;
+                            self.eval_caller_has_arguments =
+                                Self::detect_param_arguments(&method.function.params)
+                                    || self.scopes.lookup("arguments").is_ok();
 
                             let mut m_flow = StmtFlow::Open(m_entry);
                             if let Some(body) = &method.function.body {
@@ -735,6 +777,7 @@ impl Lowerer {
                     static_init_idx += 1;
 
                     self.push_function_context(&fn_name, BasicBlockId(0));
+                    self.is_method = true;
                     self.super_allowed = true;
 
                     let env_scope_id = self
@@ -755,7 +798,9 @@ impl Lowerer {
 
                     let m_entry = BasicBlockId(0);
                     self.emit_hoisted_var_initializers(m_entry);
+                    self.arguments_param_count = 0;
                     let m_entry = self.emit_arguments_init(m_entry)?;
+                    self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 
                     let mut m_flow = StmtFlow::Open(m_entry);
                     for stmt in &static_block.body.stmts {
@@ -927,6 +972,7 @@ impl Lowerer {
                 };
 
                 self.push_function_context(&fn_name, BasicBlockId(0));
+                self.is_method = true;
                 self.super_allowed = true;
                 let env_scope_id = self
                     .scopes
@@ -955,7 +1001,11 @@ impl Lowerer {
                 }
                 let m_entry = BasicBlockId(0);
                 self.emit_hoisted_var_initializers(m_entry);
+                self.arguments_param_count = pm.function.params.len() as u32;
                 let m_entry = self.emit_arguments_init(m_entry)?;
+                self.eval_caller_has_arguments =
+                    Self::detect_param_arguments(&pm.function.params)
+                        || self.scopes.lookup("arguments").is_ok();
                 let mut m_flow = StmtFlow::Open(m_entry);
                 if let Some(body) = &pm.function.body {
                     for stmt in &body.stmts {
@@ -991,6 +1041,7 @@ impl Lowerer {
 
         let ctor_name = format!("{}.constructor", class_name);
         self.push_function_context(&ctor_name, BasicBlockId(0));
+        self.is_method = true;
         self.super_allowed = true;
         self.super_call_allowed = class_expr.class.super_class.is_some();
 
@@ -1084,10 +1135,36 @@ impl Lowerer {
             StmtFlow::Open(field_block)
         };
         if let Some(_ctor) = constructor {
-            inner_flow = StmtFlow::Open(self.emit_arguments_init(match inner_flow {
+            let ctor_params_len = constructor
+                .map(|c| {
+                    c.params
+                        .iter()
+                        .filter(|p| matches!(p, swc_ast::ParamOrTsParamProp::Param(_)))
+                        .count()
+                })
+                .unwrap_or(0) as u32;
+            self.arguments_param_count = ctor_params_len;
+            let args_block = self.emit_arguments_init(match inner_flow {
                 StmtFlow::Open(b) => b,
                 _ => entry,
-            })?);
+            })?;
+            self.eval_caller_has_arguments = if let Some(c) = constructor {
+                c.params
+                    .iter()
+                    .filter_map(|p| match p {
+                        swc_ast::ParamOrTsParamProp::Param(param) => Some(&param.pat),
+                        _ => None,
+                    })
+                    .any(|pat| {
+                        let mut names = Vec::new();
+                        Self::extract_pat_bindings(std::slice::from_ref(pat), &mut names);
+                        names.iter().any(|n| n == "arguments")
+                    })
+                    || self.scopes.lookup("arguments").is_ok()
+            } else {
+                self.scopes.lookup("arguments").is_ok()
+            };
+            inner_flow = StmtFlow::Open(args_block);
         }
         if let Some(ctor) = constructor
             && let Some(body) = &ctor.body
@@ -1261,6 +1338,7 @@ impl Lowerer {
 
                         let fn_name = format!("{}.{}", class_name, method_name);
                         self.push_function_context(&fn_name, BasicBlockId(0));
+                        self.is_method = true;
                         self.super_allowed = true;
 
                         let env_scope_id = self
@@ -1293,7 +1371,11 @@ impl Lowerer {
 
                         let m_entry = BasicBlockId(0);
                         self.emit_hoisted_var_initializers(m_entry);
+                        self.arguments_param_count = method.function.params.len() as u32;
                         let m_entry = self.emit_arguments_init(m_entry)?;
+                        self.eval_caller_has_arguments =
+                            Self::detect_param_arguments(&method.function.params)
+                                || self.scopes.lookup("arguments").is_ok();
 
                         let mut m_flow = StmtFlow::Open(m_entry);
                         if let Some(body) = &method.function.body {
@@ -1397,6 +1479,7 @@ impl Lowerer {
 
                         let fn_name = format!("{}.{}_{}", class_name, accessor, method_name);
                         self.push_function_context(&fn_name, BasicBlockId(0));
+                        self.is_method = true;
                         self.super_allowed = true;
 
                         let env_scope_id = self
@@ -1429,7 +1512,11 @@ impl Lowerer {
 
                         let m_entry = BasicBlockId(0);
                         self.emit_hoisted_var_initializers(m_entry);
+                        self.arguments_param_count = method.function.params.len() as u32;
                         let m_entry = self.emit_arguments_init(m_entry)?;
+                        self.eval_caller_has_arguments =
+                            Self::detect_param_arguments(&method.function.params)
+                                || self.scopes.lookup("arguments").is_ok();
 
                         let mut m_flow = StmtFlow::Open(m_entry);
                         if let Some(body) = &method.function.body {
@@ -1493,6 +1580,7 @@ impl Lowerer {
                     static_init_idx += 1;
 
                     self.push_function_context(&fn_name, BasicBlockId(0));
+                    self.is_method = true;
                     self.super_allowed = true;
 
                     let env_scope_id = self
@@ -1513,7 +1601,9 @@ impl Lowerer {
 
                     let m_entry = BasicBlockId(0);
                     self.emit_hoisted_var_initializers(m_entry);
+                    self.arguments_param_count = 0;
                     let m_entry = self.emit_arguments_init(m_entry)?;
+                    self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 
                     let mut m_flow = StmtFlow::Open(m_entry);
                     for stmt in &static_block.body.stmts {

@@ -734,6 +734,63 @@ impl Lowerer {
                 args: vec![scope_record, super_key, super_base],
             },
         );
+        // 7b. new.target (meta key=3) for non-arrow eval callers
+        if !self.is_arrow {
+            let nt_key = self.const_val_i64(eval_block, 3);
+            let new_target = self.alloc_value();
+            let dummy_const = self.module.add_constant(Constant::Undefined);
+            let dummy_val = self.alloc_value();
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::Const {
+                    dest: dummy_val,
+                    constant: dummy_const,
+                },
+            );
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::CallBuiltin {
+                    dest: Some(new_target),
+                    builtin: Builtin::NewTarget,
+                    args: vec![dummy_val],
+                },
+            );
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ScopeRecordSetMeta,
+                    args: vec![scope_record, nt_key, new_target],
+                },
+            );
+            let nt_name = self
+                .module
+                .add_constant(Constant::String("__wjsm_new_target".to_string()));
+            let nt_name_val = self.alloc_value();
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::Const {
+                    dest: nt_name_val,
+                    constant: nt_name,
+                },
+            );
+            let nt_false = self.const_val_i64(eval_block, 0);
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::ScopeRecordAddBinding,
+                    args: vec![
+                        scope_record,
+                        nt_name_val,
+                        new_target,
+                        nt_false,
+                        nt_false,
+                    ],
+                },
+            );
+        }
+
         // 8. Call Eval(code, scope_record)
         let dest = self.alloc_value();
         self.current_function.append_instruction(
@@ -778,7 +835,10 @@ impl Lowerer {
         self.emit_throw_value(exc_block, thrown_val)?;
 
         // 10. Writeback: for each initialised binding, read from ScopeRecord
-        for (scope_id, name, _, _) in &all_bindings {
+        for (scope_id, name, _, is_initialised) in &all_bindings {
+            if !is_initialised {
+                continue;
+            }
             let binding = CapturedBinding::new(name.clone(), *scope_id);
 
             let name_const = self.module.add_constant(Constant::String(name.clone()));
@@ -934,9 +994,9 @@ impl Lowerer {
         name: &str,
         value: ValueId,
         block: BasicBlockId,
-    ) {
+    ) -> Result<BasicBlockId, LoweringError> {
         if !self.eval_scope_bridge_active() {
-            return;
+            return Ok(block);
         }
         let env = self.load_eval_scope_env(block);
         if self.eval_scope_record {
@@ -949,25 +1009,55 @@ impl Lowerer {
                     constant: name_const,
                 },
             );
+            let set_result = self.alloc_value();
             self.current_function.append_instruction(
                 block,
                 Instruction::CallBuiltin {
-                    dest: None,
+                    dest: Some(set_result),
                     builtin: Builtin::EvalSetBinding,
                     args: vec![env, name_val, value],
                 },
             );
-        } else {
-            let key = self.append_eval_env_key_const(block, name);
+            let is_exc = self.alloc_value();
             self.current_function.append_instruction(
                 block,
-                Instruction::SetProp {
-                    object: env,
-                    key,
-                    value,
+                Instruction::IsException {
+                    dest: is_exc,
+                    value: set_result,
                 },
             );
+            let ok_block = self.current_function.new_block();
+            let exc_block = self.current_function.new_block();
+            self.current_function.set_terminator(
+                block,
+                Terminator::Branch {
+                    condition: is_exc,
+                    true_block: exc_block,
+                    false_block: ok_block,
+                },
+            );
+            let thrown_val = self.alloc_value();
+            self.current_function.append_instruction(
+                exc_block,
+                Instruction::CallBuiltin {
+                    dest: Some(thrown_val),
+                    builtin: Builtin::ExceptionValue,
+                    args: vec![set_result],
+                },
+            );
+            self.emit_throw_value(exc_block, thrown_val)?;
+            return Ok(ok_block);
         }
+        let key = self.append_eval_env_key_const(block, name);
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object: env,
+                key,
+                value,
+            },
+        );
+        Ok(block)
     }
     fn const_val_i64(&mut self, block: BasicBlockId, value: i64) -> ValueId {
         let dest = self.alloc_value();

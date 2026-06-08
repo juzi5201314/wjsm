@@ -1258,6 +1258,8 @@ struct Lowerer {
     super_call_allowed: bool,
     function_super_allowed_stack: Vec<bool>,
     function_super_call_allowed_stack: Vec<bool>,
+    function_is_arrow_stack: Vec<bool>,
+    function_is_method_stack: Vec<bool>,
     /// 每层函数的共享 env 对象 (ValueId) + 已注册的捕获绑定集合。
     /// 同一外层函数中的多个闭包共享同一个 env 对象，确保可变捕获变量的修改对所有闭包可见。
     shared_env_stack: Vec<Option<(ValueId, std::collections::HashSet<CapturedBinding>)>>,
@@ -1301,6 +1303,10 @@ struct Lowerer {
     async_closure_env_ir_name: Option<String>,
     pending_suspends: Vec<lowerer_async_eval::PendingSuspend>,
     strict_mode: bool,
+    pub(crate) is_arrow: bool,
+    pub(crate) is_method: bool,
+    /// 当前函数形参个数，供 emit_arguments_init 使用。
+    arguments_param_count: u32,
     script_mode: bool,
     eval_mode: bool,
     eval_has_scope_bridge: bool,

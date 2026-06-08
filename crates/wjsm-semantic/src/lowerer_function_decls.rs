@@ -40,12 +40,11 @@ impl Lowerer {
         // Emit parameter initialization (default values + destructuring)
         let body_entry = self.emit_param_inits(&fn_decl.function.params, &param_ir_names, entry)?;
 
-        // Detect if calling context has explicit arguments binding
-        let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_decl.function.params) || has_explicit_arguments;
+        self.arguments_param_count = fn_decl.function.params.len() as u32;
         let body_entry = self.emit_arguments_init(body_entry)?;
-
+        self.eval_caller_has_arguments =
+            Self::detect_param_arguments(&fn_decl.function.params)
+                || self.scopes.lookup("arguments").is_ok();
         // Lower the function body.
         let mut inner_flow = StmtFlow::Open(body_entry);
         if let Some(body) = &fn_decl.function.body {
@@ -133,7 +132,7 @@ impl Lowerer {
                 value: callee_val,
             },
         );
-        self.append_eval_var_leak_if_needed(&name, VarKind::Var, callee_val, store_block);
+        let store_block = self.append_eval_var_leak_if_needed(&name, VarKind::Var, callee_val, store_block)?;
 
         Ok(StmtFlow::Open(store_block))
     }
@@ -372,12 +371,11 @@ impl Lowerer {
         let after_inits =
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
-        // Detect if calling context has explicit arguments binding
-        let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_decl.function.params) || has_explicit_arguments;
+        self.arguments_param_count = fn_decl.function.params.len() as u32;
         let after_inits = self.emit_arguments_init(after_inits)?;
-
+        self.eval_caller_has_arguments =
+            Self::detect_param_arguments(&fn_decl.function.params)
+                || self.scopes.lookup("arguments").is_ok();
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
@@ -518,12 +516,11 @@ impl Lowerer {
             wrapper_entry,
         )?;
 
-        // Detect if calling context has explicit arguments binding
-        let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_decl.function.params) || has_explicit_arguments;
+        self.arguments_param_count = fn_decl.function.params.len() as u32;
         let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
-
+        self.eval_caller_has_arguments =
+            Self::detect_param_arguments(&fn_decl.function.params)
+                || self.scopes.lookup("arguments").is_ok();
         let func_ref_const = self
             .module
             .add_constant(Constant::FunctionRef(async_gen_fn_id));
@@ -964,12 +961,11 @@ impl Lowerer {
         let after_inits =
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
-        // Detect if calling context has explicit arguments binding
-        let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_decl.function.params) || has_explicit_arguments;
+        self.arguments_param_count = fn_decl.function.params.len() as u32;
         let after_inits = self.emit_arguments_init(after_inits)?;
-
+        self.eval_caller_has_arguments =
+            Self::detect_param_arguments(&fn_decl.function.params)
+                || self.scopes.lookup("arguments").is_ok();
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
@@ -1125,12 +1121,11 @@ impl Lowerer {
             wrapper_entry,
         )?;
 
-        // Detect if calling context has explicit arguments binding
-        let has_explicit_arguments = self.scopes.lookup("arguments").is_ok();
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_decl.function.params) || has_explicit_arguments;
+        self.arguments_param_count = fn_decl.function.params.len() as u32;
         let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
-
+        self.eval_caller_has_arguments =
+            Self::detect_param_arguments(&fn_decl.function.params)
+                || self.scopes.lookup("arguments").is_ok();
         let promise_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,

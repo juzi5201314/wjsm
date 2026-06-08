@@ -1,3 +1,3 @@
-(function(arguments) {
+(function f() {
   eval('var arguments = "bad";');
 })();

@@ -68,6 +68,7 @@ pub(crate) const BUILTIN_GLOBALS: &[&str] = &[
     "Intl",
     "Iterator",
     "AsyncIterator",
+    "gc",
     "$262",
 ];
 

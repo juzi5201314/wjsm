@@ -39,6 +39,8 @@ impl Lowerer {
             super_call_allowed: false,
             function_super_allowed_stack: Vec::new(),
             function_super_call_allowed_stack: Vec::new(),
+            function_is_arrow_stack: Vec::new(),
+            function_is_method_stack: Vec::new(),
             shared_env_stack: Vec::new(),
             current_module_id: None,
             import_bindings: std::collections::HashMap::new(),
@@ -67,6 +69,9 @@ impl Lowerer {
             async_closure_env_ir_name: None,
             pending_suspends: Vec::new(),
             strict_mode: false,
+            is_arrow: false,
+            is_method: false,
+            arguments_param_count: 0,
             script_mode: false,
             eval_mode: false,
             eval_has_scope_bridge: false,
@@ -161,7 +166,10 @@ impl Lowerer {
             .push(self.super_call_allowed);
         self.super_allowed = false;
         self.super_call_allowed = false;
-        self.shared_env_stack.push(None); // 新函数上下文，尚无共享 env 对象
+        self.function_is_arrow_stack.push(self.is_arrow);
+        self.function_is_method_stack.push(self.is_method);
+        self.is_arrow = false;
+        self.is_method = false;
         self.function_hoisted_stack.push((
             std::mem::take(&mut self.hoisted_vars),
             std::mem::take(&mut self.hoisted_vars_set),
@@ -180,6 +188,7 @@ impl Lowerer {
             .push(std::mem::take(&mut self.active_finalizers));
         self.function_pending_loop_label_stack
             .push(self.pending_loop_label.take());
+        self.shared_env_stack.push(None);
         self.reset_async_context();
     }
 
@@ -194,11 +203,21 @@ impl Lowerer {
             .function_super_allowed_stack
             .pop()
             .expect("super context stack underflow");
+        self.is_arrow = self
+            .function_is_arrow_stack
+            .pop()
+            .expect("is_arrow stack underflow");
+        self.is_method = self
+            .function_is_method_stack
+            .pop()
+            .expect("is_method stack underflow");
         self.super_call_allowed = self
             .function_super_call_allowed_stack
             .pop()
             .expect("super call context stack underflow");
-        self.shared_env_stack.pop();
+        if self.shared_env_stack.len() > 1 {
+            self.shared_env_stack.pop();
+        }
         let (vars, set) = self
             .function_hoisted_stack
             .pop()
