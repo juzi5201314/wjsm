@@ -1,7 +1,7 @@
 exit_code: 0
 --- stdout ---
 === Object.keys on proxy ===
-keys: ["Symbol.asyncIterator","Symbol.toStringTag"]
+keys: ["Symbol.asyncIterator"]
 
 === Object.entries on proxy ===
 entries: [["Symbol.toStringTag","AsyncGenerator"]]

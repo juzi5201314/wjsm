@@ -297,8 +297,8 @@ impl Compiler {
         }
 
         self.compile_number_proto_wrappers();
-         // Pass 3: Compile object helper functions.
-         self.compile_object_helpers();
+        // Pass 3: Compile object helper functions.
+        self.compile_object_helpers();
         // 编译数组辅助函数
         self.compile_array_helpers();
         self.table.table(TableType {

@@ -54,6 +54,13 @@ pub(crate) fn define_async_generator(
                 "Symbol.asyncIterator",
                 async_iter,
             );
+            let _ = define_host_data_property_by_name_id_with_flags(
+                &mut caller,
+                generator,
+                encode_symbol_name_id(3),
+                async_iter,
+                constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+            );
 
             let handle = value::decode_object_handle(generator) as usize;
             let mut table = caller

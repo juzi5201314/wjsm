@@ -1419,30 +1419,41 @@ impl Lowerer {
             },
         );
 
-        // 遍历元素：对每个元素 push 到数组
+        // 遍历元素：普通元素 push；spread 元素按 iterator 协议展开。
         for elem in &arr.elems {
-            let val = match elem {
-                Some(elem) => self.lower_expr(&elem.expr, block)?,
-                None => {
-                    // 稀疏数组的空位 → undefined
-                    let undef_const = self.module.add_constant(Constant::Undefined);
-                    let val_dest = self.alloc_value();
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::Const {
-                            dest: val_dest,
-                            constant: undef_const,
-                        },
-                    );
-                    val_dest
-                }
+            let Some(elem) = elem else {
+                // 稀疏数组的空位 → undefined
+                let undef_const = self.module.add_constant(Constant::Undefined);
+                let val_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: val_dest,
+                        constant: undef_const,
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: None,
+                        builtin: Builtin::ArrayPush,
+                        args: vec![arr_dest, val_dest],
+                    },
+                );
+                continue;
             };
-            // 使用 CallBuiltin(ArrayPush) 添加元素（同时自动更新 length）
+
+            let val = self.lower_expr(&elem.expr, block)?;
+            let builtin = if elem.spread.is_some() {
+                Builtin::ArrayPushSpread
+            } else {
+                Builtin::ArrayPush
+            };
             self.current_function.append_instruction(
                 block,
                 Instruction::CallBuiltin {
                     dest: None,
-                    builtin: Builtin::ArrayPush,
+                    builtin,
                     args: vec![arr_dest, val],
                 },
             );

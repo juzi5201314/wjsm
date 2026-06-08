@@ -21,6 +21,32 @@ impl Compiler {
         func.instruction(&WasmInstruction::LocalGet(handle_local));
     }
 
+    fn emit_property_name_id_match(&self, func: &mut Function, left_local: u32, right_local: u32) {
+        func.instruction(&WasmInstruction::LocalGet(left_local));
+        func.instruction(&WasmInstruction::LocalGet(right_local));
+        func.instruction(&WasmInstruction::I32Eq);
+        func.instruction(&WasmInstruction::LocalGet(left_local));
+        func.instruction(&WasmInstruction::I32Const(
+            constants::NAME_ID_SYMBOL_FLAG as i32,
+        ));
+        func.instruction(&WasmInstruction::I32And);
+        func.instruction(&WasmInstruction::LocalGet(right_local));
+        func.instruction(&WasmInstruction::I32Const(
+            constants::NAME_ID_SYMBOL_FLAG as i32,
+        ));
+        func.instruction(&WasmInstruction::I32And);
+        func.instruction(&WasmInstruction::I32Or);
+        func.instruction(&WasmInstruction::I32Eqz);
+        func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I32)));
+        func.instruction(&WasmInstruction::LocalGet(left_local));
+        func.instruction(&WasmInstruction::LocalGet(right_local));
+        func.instruction(&WasmInstruction::Call(self.string_eq_func_idx));
+        func.instruction(&WasmInstruction::Else);
+        func.instruction(&WasmInstruction::I32Const(0));
+        func.instruction(&WasmInstruction::End);
+        func.instruction(&WasmInstruction::I32Or);
+    }
+
     pub(crate) fn compile_object_helpers(&mut self) {
         let heap_global = self.heap_ptr_global_idx;
         let obj_table_global = self.obj_table_global_idx;
@@ -289,8 +315,19 @@ impl Compiler {
             func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
 
-
-
+            func.instruction(&WasmInstruction::LocalGet(3));
+            func.instruction(&WasmInstruction::I32Const(
+                value::TAG_NATIVE_CALLABLE as i32,
+            ));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::NativeCallableGetProperty],
+            ));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
 
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
@@ -396,12 +433,7 @@ impl Compiler {
                 memory_index: 0,
             }));
             func.instruction(&WasmInstruction::LocalTee(6));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I32Eq);
-            func.instruction(&WasmInstruction::LocalGet(6));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(self.string_eq_func_idx));
-            func.instruction(&WasmInstruction::I32Or);
+            self.emit_property_name_id_match(&mut func, 6, 1);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             // 找到！检查是否为访问器属性
             // 加载 flags (offset 4)
@@ -632,12 +664,7 @@ impl Compiler {
                 memory_index: 0,
             }));
             func.instruction(&WasmInstruction::LocalTee(10));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I32Eq);
-            func.instruction(&WasmInstruction::LocalGet(10));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(self.string_eq_func_idx));
-            func.instruction(&WasmInstruction::I32Or);
+            self.emit_property_name_id_match(&mut func, 10, 1);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             // 找到！检查是否为访问器属性
             // 加载 flags (offset 4)
@@ -785,12 +812,7 @@ impl Compiler {
                 memory_index: 0,
             }));
             func.instruction(&WasmInstruction::LocalTee(10));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I32Eq);
-            func.instruction(&WasmInstruction::LocalGet(10));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(self.string_eq_func_idx));
-            func.instruction(&WasmInstruction::I32Or);
+            self.emit_property_name_id_match(&mut func, 10, 1);
             func.instruction(&WasmInstruction::If(BlockType::Empty)); // name_found
             // 在原型上找到属性，检查是否为 accessor
             func.instruction(&WasmInstruction::LocalGet(6));
@@ -1228,12 +1250,7 @@ impl Compiler {
                 memory_index: 0,
             }));
             func.instruction(&WasmInstruction::LocalTee(6));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I32Eq);
-            func.instruction(&WasmInstruction::LocalGet(6));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(self.string_eq_func_idx));
-            func.instruction(&WasmInstruction::I32Or);
+            self.emit_property_name_id_match(&mut func, 6, 1);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
 
             // 检查 configurable 标志 (flags bit 0)

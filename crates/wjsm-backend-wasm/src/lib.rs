@@ -296,8 +296,8 @@ mod compiler_core;
 mod compiler_data;
 mod compiler_helpers;
 mod compiler_instructions;
-mod compiler_number_proto;
 mod compiler_module;
+mod compiler_number_proto;
 
 // ── Value ID collection ─────────────────────────────────────────────────
 fn block_has_suspend(block: &BasicBlock) -> bool {
@@ -675,6 +675,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ArrayPush => ("array.push", 2),
         Builtin::ArrayPop => ("array.pop", 1),
         Builtin::ArrayIncludes => ("array.includes", 2),
+        Builtin::ArrayPushSpread => ("array_push_spread", 2),
         Builtin::ArrayIndexOf => ("array.index_of", 3),
         Builtin::ArrayJoin => ("array.join", 2),
         Builtin::ArrayConcat => ("array.concat", 2),
@@ -722,6 +723,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ObjectGetPrototypeOf => ("object.get_prototype_of", 1),
         Builtin::ObjectSetPrototypeOf => ("object.set_prototype_of", 2),
         Builtin::ObjectGetOwnPropertyNames => ("object.get_own_property_names", 1),
+        Builtin::ObjectGetOwnPropertySymbols => ("object.get_own_property_symbols", 1),
         Builtin::ObjectIs => ("object.is", 2),
         Builtin::ObjectGroupBy => ("object.group_by", 2),
         Builtin::ObjectIsExtensible => ("object.is_extensible", 1),

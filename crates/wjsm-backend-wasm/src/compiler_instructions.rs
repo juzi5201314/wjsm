@@ -898,7 +898,6 @@ impl Compiler {
         self.emit(WasmInstruction::End); // close proxy if/else
         self.emit(WasmInstruction::End); // close native callable if/else
 
-
         self.emit(WasmInstruction::LocalSet(result_scratch));
 
         // Step 4: 恢复 new.target 和 shadow_sp

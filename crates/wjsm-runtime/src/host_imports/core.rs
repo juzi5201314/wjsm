@@ -46,6 +46,7 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
         return value::encode_bool(false);
     }
 
+    let prop_symbol_name_id = symbol_value_to_name_id(prop);
     // 获取属性名（ToPropertyKey 转换）
     let prop_str = if value::is_string(prop) {
         if value::is_runtime_string_handle(prop) {
@@ -133,6 +134,15 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
         let _ = data;
 
         for name_id in name_ids {
+            if let Some(symbol_name_id) = prop_symbol_name_id {
+                if name_id == symbol_name_id {
+                    return value::encode_bool(true);
+                }
+                continue;
+            }
+            if is_symbol_name_id(name_id) {
+                continue;
+            }
             let name_str = read_string_bytes(caller, name_id);
             if name_str == prop_str.as_bytes() {
                 return value::encode_bool(true);
@@ -288,6 +298,42 @@ pub(crate) fn define_core(
                     length,
                 });
                 return value::encode_handle(value::TAG_ITERATOR, handle);
+            }
+
+            if (value::is_object(val) || value::is_function(val))
+                && let Some(ptr) = resolve_handle(&mut caller, val)
+                && let Some(method) =
+                    read_object_property_by_name_id(&mut caller, ptr, encode_symbol_name_id(0))
+                && value::is_callable(method)
+            {
+                let iterator = if value::is_native_callable(method) {
+                    call_native_callable_with_args_from_caller(&mut caller, method, val, vec![])
+                        .unwrap_or_else(value::encode_undefined)
+                } else {
+                    value::encode_undefined()
+                };
+                if value::is_iterator(iterator) {
+                    return iterator;
+                }
+                if (value::is_object(iterator) || value::is_function(iterator))
+                    && let Some(iter_ptr) = resolve_handle(&mut caller, iterator)
+                    && let Some(next) = read_object_property_by_name(&mut caller, iter_ptr, "next")
+                    && value::is_callable(next)
+                {
+                    let return_method =
+                        read_object_property_by_name(&mut caller, iter_ptr, "return")
+                            .filter(|candidate| value::is_callable(*candidate));
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let handle = iters.len() as u32;
+                    iters.push(IteratorState::ObjectIter {
+                        next,
+                        return_method,
+                        current_value: value::encode_undefined(),
+                        has_current: false,
+                        done: false,
+                    });
+                    return value::encode_handle(value::TAG_ITERATOR, handle);
+                }
             }
 
             if (value::is_object(val) || value::is_function(val))

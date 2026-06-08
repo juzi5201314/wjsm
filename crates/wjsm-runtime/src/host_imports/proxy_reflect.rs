@@ -410,15 +410,20 @@ pub(crate) fn reflect_get_own_property_descriptor_impl(
     target: i64,
     prop: i64,
 ) -> i64 {
-    let prop_name = match render_value(caller, prop) {
-        Ok(name) => name,
-        Err(_) => return value::encode_undefined(),
-    };
     let Some(ptr) = resolve_handle(caller, target) else {
         return value::encode_undefined();
     };
-    let Some(name_id) = find_memory_c_string(caller, &prop_name) else {
-        return value::encode_undefined();
+    let name_id = if let Some(name_id) = symbol_value_to_name_id(prop) {
+        name_id
+    } else {
+        let prop_name = match render_value(caller, prop) {
+            Ok(name) => name,
+            Err(_) => return value::encode_undefined(),
+        };
+        let Some(name_id) = find_memory_c_string(caller, &prop_name) else {
+            return value::encode_undefined();
+        };
+        name_id
     };
     let Some((slot_offset, flags, val)) = find_property_slot_by_name_id(caller, ptr, name_id)
     else {
@@ -494,11 +499,10 @@ pub(crate) fn reflect_own_keys_impl(caller: &mut Caller<'_, RuntimeState>, targe
     let Some(ptr) = resolve_handle(caller, target) else {
         return value::encode_undefined();
     };
-    let names = collect_own_property_names(caller, ptr, false);
-    let arr = alloc_array(caller, names.len() as u32);
-    for (i, name) in names.into_iter().enumerate() {
-        let name_val = store_runtime_string(caller, name);
-        set_array_elem(caller, arr, i as i32, name_val);
+    let keys = collect_own_property_key_values(caller, ptr, false);
+    let arr = alloc_array(caller, keys.len() as u32);
+    for (i, key) in keys.into_iter().enumerate() {
+        set_array_elem(caller, arr, i as i32, key);
     }
     arr
 }

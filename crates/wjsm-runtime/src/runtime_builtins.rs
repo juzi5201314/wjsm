@@ -1331,7 +1331,6 @@ pub(crate) fn call_map_set_method_from_caller(
     }
 }
 
-
 /// `NumberPrimitiveMethod`：this 为 raw f64，按 method 调用已有 number_proto 语义。
 fn invoke_number_primitive_method(
     caller: &mut Caller<'_, RuntimeState>,
@@ -1408,6 +1407,68 @@ pub(crate) fn call_native_callable_from_caller(
     )
 }
 
+fn array_like_length(caller: &mut Caller<'_, RuntimeState>, target: i64) -> u32 {
+    if value::is_array(target)
+        && let Some(ptr) = resolve_handle(caller, target)
+    {
+        return read_array_length(caller, ptr).unwrap_or(0);
+    }
+    let Some(ptr) = resolve_handle(caller, target) else {
+        return 0;
+    };
+    read_object_property_by_name(caller, ptr, "length")
+        .map(value::decode_f64)
+        .unwrap_or(0.0)
+        .max(0.0) as u32
+}
+
+fn create_array_like_values_iterator(caller: &mut Caller<'_, RuntimeState>, target: i64) -> i64 {
+    let length = array_like_length(caller, target);
+    let index = Arc::new(Mutex::new(0));
+    let next = create_native_callable(
+        caller.data(),
+        NativeCallable::ArrayLikeIteratorNext {
+            target,
+            index,
+            length,
+        },
+    );
+    let obj = {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        alloc_host_object(caller, &env, 1)
+    };
+    let _ = define_host_data_property_from_caller(caller, obj, "next", next);
+    obj
+}
+
+fn advance_array_like_values_iterator(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    index: Arc<Mutex<u32>>,
+    length: u32,
+) -> i64 {
+    let idx = {
+        let mut index = index.lock().expect("array-like iterator index mutex");
+        if *index >= length {
+            return alloc_iterator_result_from_caller(caller, value::encode_undefined(), true);
+        }
+        let idx = *index;
+        *index += 1;
+        idx
+    };
+    let value = if value::is_array(target) {
+        resolve_handle(caller, target)
+            .and_then(|ptr| read_array_elem(caller, ptr, idx))
+            .unwrap_or_else(value::encode_undefined)
+    } else {
+        let key = idx.to_string();
+        resolve_handle(caller, target)
+            .and_then(|ptr| read_object_property_by_name(caller, ptr, &key))
+            .unwrap_or_else(value::encode_undefined)
+    };
+    alloc_iterator_result_from_caller(caller, value, false)
+}
+
 pub(crate) fn call_native_callable_with_args_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     callable: i64,
@@ -1436,9 +1497,19 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::ArgumentsStrictCalleeGetter => Some(
             crate::runtime_arguments::arguments_strict_callee_getter(caller, this_val),
         ),
-        NativeCallable::NumberPrimitiveMethod { method } => {
-            Some(invoke_number_primitive_method(caller, this_val, method, &args))
+        NativeCallable::ArrayProtoValues => {
+            Some(create_array_like_values_iterator(caller, this_val))
         }
+        NativeCallable::ArrayLikeIteratorNext {
+            target,
+            index,
+            length,
+        } => Some(advance_array_like_values_iterator(
+            caller, target, index, length,
+        )),
+        NativeCallable::NumberPrimitiveMethod { method } => Some(invoke_number_primitive_method(
+            caller, this_val, method, &args,
+        )),
         NativeCallable::EvalIndirect => Some(perform_eval_from_caller(caller, argument, None)),
         NativeCallable::EvalFunction(function) => {
             Some(call_eval_function_from_caller(caller, function, args))

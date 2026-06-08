@@ -321,6 +321,7 @@ Auto-update: `WJSM_UPDATE_FIXTURES=1 cargo nextest run` 写入新的 `.expected`
 
 ### Covered by fixtures
 **Happy path** (365+ fixtures): 344 `.js` + 21 `.ts`/`.tsx`. Comprehensive E2E coverage for: timer API (setTimeout/setInterval/clear* — all 0-delay, KNOWN-BROKEN: timer callbacks do not currently fire), advanced class features (getter/setter/static/static blocks/private/computed methods/super-prop/super-constructor/inheritance/static-super/object-literal-super/direct-eval-super — NOTE: setters bypassed, computed methods not supported), console variants (log/error/warn/info/debug/trace + cross-domain), full JSON (parse with reviver + stringify with replacer/space/toJSON/cycle detection + all boundary cases; SIMD-accelerated parser in runtime_json.rs).
+**Arguments coverage**: strict-mode `arguments.callee` throws immediately; arguments objects expose real `@@iterator` Symbol keys, support spread/for-of, symbol descriptors/enumeration, and Proxy Symbol-key trap propagation.
 **Note on gaps** (normative gaps or implementation limitations — documented in fixtures):
   - fetch: data: URLs only, synchronous string, no Promise/Response. Not conformant. `fetch_data_url.js` is behavior record only.
   - Timer callbacks: do not currently fire (only main-thread + microtask output captured). Timer fixtures carry KNOWN-BROKEN headers.

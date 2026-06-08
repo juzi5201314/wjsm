@@ -18,6 +18,7 @@ const SHADOW_STACK_SIZE: u32 = 65536;
 
 use wjsm_ir::{constants, value};
 mod agent_cluster;
+mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
 mod runtime_builtins;
@@ -37,6 +38,7 @@ mod runtime_render;
 mod runtime_values;
 mod wasm_env;
 use host_imports::*;
+use property_key::*;
 pub(crate) use wasm_env::WasmEnv;
 
 use runtime_arguments::*;
@@ -163,29 +165,47 @@ fn register_common_bridges(
     // symbol_property_key
     let f = Func::wrap(
         &mut *store,
-        |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
-            if value::is_symbol(key) {
-                let handle = value::decode_handle(key) as usize;
-                let desc_str = {
-                    let table = caller.data().symbol_table.lock().expect("symbol table");
-                    table.get(handle).and_then(|e| e.description.clone())
-                };
-                if let Some(desc) = desc_str {
-                    let trimmed = desc
-                        .strip_prefix("Symbol(")
-                        .and_then(|s| s.strip_suffix(")"))
-                        .unwrap_or(&desc);
-                    let name_id = find_memory_c_string(&mut caller, trimmed)
-                        .or_else(|| alloc_heap_c_string(&mut caller, trimmed));
-                    if let Some(id) = name_id {
-                        return id as i32;
-                    }
-                }
+        |_caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+            if let Some(name_id) = symbol_value_to_name_id(key) {
+                return name_id as i32;
             }
             key as i32
         },
     );
     linker.define(&mut *store, "env", "symbol_property_key", f)?;
+    // native_callable_get_property
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, native: i64, name_id: i32| -> i64 {
+            let name_id = name_id as u32;
+            if is_symbol_name_id(name_id) || read_string_bytes(&mut caller, name_id) != b"prototype"
+            {
+                return value::encode_undefined();
+            }
+            let idx = value::decode_native_callable_idx(native) as usize;
+            let record = {
+                let table = caller
+                    .data()
+                    .native_callables
+                    .lock()
+                    .expect("native callable table mutex");
+                table.get(idx).cloned()
+            };
+            match record {
+                Some(NativeCallable::ArrayConstructor) => {
+                    let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                    let handle = env.array_proto_handle.get(&mut caller).i32().unwrap_or(-1);
+                    if handle >= 0 {
+                        value::encode_object_handle(handle as u32)
+                    } else {
+                        value::encode_undefined()
+                    }
+                }
+                _ => value::encode_undefined(),
+            }
+        },
+    );
+    linker.define(&mut *store, "env", "native_callable_get_property", f)?;
     // array.from
     let f = Func::wrap(
         &mut *store,
@@ -462,9 +482,12 @@ fn register_complex_bridges(
                     }
                 }
                 // 尝试 @@asyncIterator
-                if let Some(method) =
-                    read_object_property_by_name(&mut caller, ptr, "Symbol.asyncIterator")
-                {
+                let async_iterator_method =
+                    read_object_property_by_name_id(&mut caller, ptr, encode_symbol_name_id(3))
+                        .or_else(|| {
+                            read_object_property_by_name(&mut caller, ptr, "Symbol.asyncIterator")
+                        });
+                if let Some(method) = async_iterator_method {
                     if value::is_callable(method) {
                         let iterator = if value::is_native_callable(method) {
                             call_native_callable_with_args_from_caller(
@@ -920,6 +943,14 @@ async fn execute_with_writer_shared_inner<W: Write>(
         "Symbol.asyncIterator",
         async_iterator_symbol_async_iterator,
     );
+    let _ = define_host_data_property_by_name_id_with_env(
+        &mut store,
+        &wasm_env,
+        async_iterator_proto,
+        encode_symbol_name_id(3),
+        async_iterator_symbol_async_iterator,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+    );
     let async_iterator_tag =
         store_runtime_string_in_state(store.data(), "AsyncIterator".to_string());
     let _ = define_host_data_property_with_env(
@@ -989,6 +1020,7 @@ impl Clone for RuntimeState {
             async_from_sync_iterators: self.async_from_sync_iterators.clone(),
             async_iterator_prototype: self.async_iterator_prototype,
             async_gen_prototype: self.async_gen_prototype,
+            array_proto_values: AtomicI64::new(self.array_proto_values.load(Ordering::Relaxed)),
             combinator_contexts: self.combinator_contexts.clone(),
             module_namespace_cache: self.module_namespace_cache.clone(),
             error_table: self.error_table.clone(),
@@ -1091,6 +1123,8 @@ struct RuntimeState {
     weakset_table: Arc<Mutex<Vec<WeakSetEntry>>>,
     /// WeakRef 侧表：存储 WeakRef 对象的 target handle
     weakref_table: Arc<Mutex<Vec<WeakRefEntry>>>,
+    /// Array.prototype.values 缓存，用于规范要求复用该函数对象的 @@iterator。
+    array_proto_values: AtomicI64,
     /// FinalizationRegistry 侧表：存储 registry 对象、callback 和注册信息
     finalization_registry_table: Arc<Mutex<Vec<FinalizationRegistryEntry>>>,
     /// GC 后待调度的清理回调
@@ -1238,6 +1272,7 @@ impl RuntimeState {
             dataview_table: Arc::new(Mutex::new(Vec::new())),
             typedarray_table: Arc::new(Mutex::new(Vec::new())),
             headers_table: Arc::new(Mutex::new(Vec::new())),
+            array_proto_values: AtomicI64::new(value::encode_undefined()),
             fetch_response_table: Arc::new(Mutex::new(Vec::new())),
             fetch_request_table: Arc::new(Mutex::new(Vec::new())),
             abort_signal_table: Arc::new(Mutex::new(Vec::new())),
@@ -2105,7 +2140,9 @@ enum NativeCallable {
     EvalIndirect,
 
     /// raw f64 上 `n.toString()` 等；`method`: 0=toString, 1=valueOf, 2=toFixed, 3=toExponential, 4=toPrecision
-    NumberPrimitiveMethod { method: u8 },
+    NumberPrimitiveMethod {
+        method: u8,
+    },
     ArgumentsStrictCalleeGetter,
     EvalFunction(EvalFunction),
     PromiseResolvingFunction {
@@ -2127,6 +2164,13 @@ enum NativeCallable {
     },
     /// %AsyncIteratorPrototype%[Symbol.asyncIterator]() → return this
     AsyncIteratorProtoSymbolAsyncIterator,
+    /// Array.prototype.values() / arguments @@iterator。
+    ArrayProtoValues,
+    ArrayLikeIteratorNext {
+        target: i64,
+        index: Arc<Mutex<u32>>,
+        length: u32,
+    },
     /// AsyncFromSyncIterator.prototype.next()
     AsyncFromSyncNext {
         handle: u32,

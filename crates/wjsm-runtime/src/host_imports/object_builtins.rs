@@ -199,6 +199,32 @@ pub(crate) fn define_object_builtins(
         object_get_own_property_names_fn,
     )?;
 
+    // ── Object.getOwnPropertySymbols(obj) → all own Symbol keys ───────
+    // type_idx 3: (i64) -> i64
+    let object_get_own_property_symbols_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            if !value::is_js_object(obj) {
+                return alloc_array(&mut caller, 0);
+            }
+            let Some(ptr) = resolve_handle(&mut caller, obj) else {
+                return alloc_array(&mut caller, 0);
+            };
+            let symbols = collect_own_property_key_values(&mut caller, ptr, true);
+            let arr = alloc_array(&mut caller, symbols.len() as u32);
+            for (i, symbol) in symbols.into_iter().enumerate() {
+                set_array_elem(&mut caller, arr, i as i32, symbol);
+            }
+            arr
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "object.get_own_property_symbols",
+        object_get_own_property_symbols_fn,
+    )?;
+
     // ── Object.setPrototypeOf(obj, proto) → obj ───────────────────────
     // type_idx 2: (i64, i64) -> i64
     let object_set_prototype_of_fn = Func::wrap(
