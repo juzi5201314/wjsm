@@ -1,3 +1,5 @@
 exit_code: 0
 --- stdout ---
+undefined
+false
 --- stderr ---

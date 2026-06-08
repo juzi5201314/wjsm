@@ -20,6 +20,7 @@
 | 2026-06-03 | Fetch Standard Implementation | [plans/2026-06-03-fetch-standard.md](plans/2026-06-03-fetch-standard.md) |
 | 2026-06-05 | SharedArrayBuffer + Atomics ES Full Implementation | [plans/2026-06-05-sharedarraybuffer-atomics.md](plans/2026-06-05-sharedarraybuffer-atomics.md) |
 | 2026-06-07 | Runtime Side Table Lifecycle | [plans/2026-06-07-runtime-side-table-lifecycle.md](plans/2026-06-07-runtime-side-table-lifecycle.md) |
+| 2026-06-07 | Eval Arguments/TDZ/Super Gap Closure | [plans/2026-06-07-eval-arguments-tdz-super-gaps.md](plans/2026-06-07-eval-arguments-tdz-super-gaps.md) |
 | 2026-06-03 | WHATWG Streams Standard Implementation | [plans/2026-06-03-streams-standard.md](plans/2026-06-03-streams-standard.md) |
 
 ## Baselines

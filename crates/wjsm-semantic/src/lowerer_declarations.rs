@@ -392,17 +392,20 @@ impl Lowerer {
         &mut self,
         block: BasicBlockId,
     ) -> Result<BasicBlockId, LoweringError> {
-        // arguments may already be declared (var arguments in body or eval predeclare)
-        let scope_id = match self.scopes.declare("arguments", VarKind::Let, true) {
-            Ok(id) => {
-                self.scopes
-                    .set_implicit_arguments("arguments")
-                    .expect("arguments should have been declared");
-                id
-            }
-            Err(_) => {
-                // Already declared (var/let arguments in body or eval predeclare)
-                self.scopes.resolve_scope_id("arguments").unwrap_or(0)
+        // arguments may already be declared (parameter, var, or prior init)
+        let scope_id = if self.scopes.lookup("arguments").is_ok()
+            || self.scopes.resolve_scope_id("arguments").is_ok()
+        {
+            self.scopes.resolve_scope_id("arguments").unwrap_or(0)
+        } else {
+            match self.scopes.declare("arguments", VarKind::Let, true) {
+                Ok(id) => {
+                    self.scopes
+                        .set_implicit_arguments("arguments")
+                        .map_err(|msg| LoweringError::Diagnostic(Diagnostic::new(0, 0, msg)))?;
+                    id
+                }
+                Err(_) => self.scopes.resolve_scope_id("arguments").unwrap_or(0),
             }
         };
         let ir_name = format!("${scope_id}.arguments");
@@ -417,8 +420,7 @@ impl Lowerer {
             },
         );
 
-        // 2) Build param_count constant (0 = unused for unmapped mode, needed for future mapped mode)
-        let param_count = 0.0;
+        let param_count = self.arguments_param_count as f64;
         let param_count_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -428,18 +430,36 @@ impl Lowerer {
             },
         );
 
-        // 3) Call CreateUnmappedArgumentsObject (produces proper Arguments exotic object)
         let arguments_obj = self.alloc_value();
+        let needs_mapped = !self.strict_mode && !self.is_arrow && !self.is_method;
+        let undef_const = self.module.add_constant(Constant::Undefined);
+        let func_ref_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
-            Instruction::CallBuiltin {
-                dest: Some(arguments_obj),
-                builtin: Builtin::CreateUnmappedArgumentsObject,
-                args: vec![args_array, param_count_val],
+            Instruction::Const {
+                dest: func_ref_val,
+                constant: undef_const,
             },
         );
-
-        // 4) Store to arguments variable
+        if needs_mapped {
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(arguments_obj),
+                    builtin: Builtin::CreateMappedArgumentsObject,
+                    args: vec![args_array, param_count_val, func_ref_val],
+                },
+            );
+        } else {
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(arguments_obj),
+                    builtin: Builtin::CreateUnmappedArgumentsObject,
+                    args: vec![args_array, param_count_val],
+                },
+            );
+        }
         let store_block = self.resolve_store_block(block);
         self.current_function.append_instruction(
             store_block,
@@ -584,7 +604,7 @@ impl Lowerer {
                         value: src_val,
                     },
                 );
-                self.append_eval_var_leak_if_needed(&name, kind, src_val, store_block);
+                let store_block = self.append_eval_var_leak_if_needed(&name, kind, src_val, store_block)?;
                 Ok(store_block)
             }
             swc_ast::Pat::Object(object_pat) => {
@@ -675,7 +695,7 @@ impl Lowerer {
                                 value: resolved,
                             },
                         );
-                        self.append_eval_var_leak_if_needed(&name, kind, resolved, block);
+                        block = self.append_eval_var_leak_if_needed(&name, kind, resolved, block)?;
                     } else {
                         block = self.lower_destructure_pattern(
                             &swc_ast::Pat::Ident(assign.key.clone()),

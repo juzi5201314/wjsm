@@ -27,117 +27,129 @@ module {
     c24 = number(2)
     c25 = undefined
     c26 = number(3)
-    c27 = number(0)
-    c28 = functionref(@0)
-    c29 = undefined
+    c27 = number(1)
+    c28 = undefined
+    c29 = functionref(@0)
     c30 = undefined
     c31 = undefined
-    c32 = string("first")
+    c32 = undefined
     c33 = undefined
-    c34 = string("second")
-    c35 = number(0)
-    c36 = functionref(@1)
-    c37 = undefined
+    c34 = string("first")
+    c35 = undefined
+    c36 = string("second")
+    c37 = number(1)
     c38 = undefined
-    c39 = undefined
-    c40 = string("ok")
+    c39 = functionref(@1)
+    c40 = undefined
     c41 = undefined
-    c42 = string("fail")
-    c43 = number(0)
-    c44 = number(0)
-    c45 = string("status")
-    c46 = number(1)
-    c47 = string("status")
-    c48 = functionref(@2)
-    c49 = undefined
-    c50 = undefined
-    c51 = undefined
-    c52 = string("err")
-    c53 = undefined
-    c54 = string("win")
-    c55 = number(0)
-    c56 = functionref(@3)
+    c42 = undefined
+    c43 = undefined
+    c44 = string("ok")
+    c45 = undefined
+    c46 = string("fail")
+    c47 = number(1)
+    c48 = undefined
+    c49 = number(0)
+    c50 = string("status")
+    c51 = number(1)
+    c52 = string("status")
+    c53 = functionref(@2)
+    c54 = undefined
+    c55 = undefined
+    c56 = undefined
     c57 = undefined
+    c58 = string("err")
+    c59 = undefined
+    c60 = string("win")
+    c61 = number(1)
+    c62 = undefined
+    c63 = functionref(@3)
+    c64 = undefined
+    c65 = undefined
 
   fn @anon_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c27
-      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      %3 = const c28
+      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $1.arguments, %2
-      %3 = load var $1.v
-      %4 = call builtin.console.log(%3)
-      %5 = is_exception %4
-      branch %5, bb2, bb1
+      %4 = load var $1.v
+      %5 = call builtin.console.log(%4)
+      %6 = is_exception %5
+      branch %6, bb2, bb1
     bb1:
       return
     bb2:
-      %6 = call builtin.exception_value(%4)
-      throw %6
+      %7 = call builtin.exception_value(%5)
+      throw %7
 
   fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c35
-      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      %1 = const c37
+      %3 = const c38
+      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $2.arguments, %2
-      %3 = load var $2.v
-      %4 = call builtin.console.log(%3)
-      %5 = is_exception %4
-      branch %5, bb2, bb1
+      %4 = load var $2.v
+      %5 = call builtin.console.log(%4)
+      %6 = is_exception %5
+      branch %6, bb2, bb1
     bb1:
       return
     bb2:
-      %6 = call builtin.exception_value(%4)
-      throw %6
+      %7 = call builtin.exception_value(%5)
+      throw %7
 
   fn @anon_2 [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c43
-      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      %1 = const c47
+      %3 = const c48
+      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $3.arguments, %2
-      %3 = load var $3.v
-      %4 = const c44
-      %5 = get_elem %3, %4
-      %6 = const c45
-      %7 = get_prop %5, %6
-      %8 = call builtin.console.log(%7)
-      %9 = is_exception %8
-      branch %9, bb2, bb1
+      %4 = load var $3.v
+      %5 = const c49
+      %6 = get_elem %4, %5
+      %7 = const c50
+      %8 = get_prop %6, %7
+      %9 = call builtin.console.log(%8)
+      %10 = is_exception %9
+      branch %10, bb2, bb1
     bb1:
-      %11 = load var $3.v
-      %12 = const c46
-      %13 = get_elem %11, %12
-      %14 = const c47
-      %15 = get_prop %13, %14
-      %16 = call builtin.console.log(%15)
-      %17 = is_exception %16
-      branch %17, bb4, bb3
+      %12 = load var $3.v
+      %13 = const c51
+      %14 = get_elem %12, %13
+      %15 = const c52
+      %16 = get_prop %14, %15
+      %17 = call builtin.console.log(%16)
+      %18 = is_exception %17
+      branch %18, bb4, bb3
     bb2:
-      %10 = call builtin.exception_value(%8)
-      throw %10
+      %11 = call builtin.exception_value(%9)
+      throw %11
     bb3:
       return
     bb4:
-      %18 = call builtin.exception_value(%16)
-      throw %18
+      %19 = call builtin.exception_value(%17)
+      throw %19
 
   fn @anon_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c55
-      %2 = call builtin.create_unmapped_arguments_object(%0, %1)
+      %1 = const c61
+      %3 = const c62
+      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $4.arguments, %2
-      %3 = load var $4.v
-      %4 = call builtin.console.log(%3)
-      %5 = is_exception %4
-      branch %5, bb2, bb1
+      %4 = load var $4.v
+      %5 = call builtin.console.log(%4)
+      %6 = is_exception %5
+      branch %6, bb2, bb1
     bb1:
       return
     bb2:
-      %6 = call builtin.exception_value(%4)
-      throw %6
+      %7 = call builtin.exception_value(%5)
+      throw %7
 
   fn @main [entry=bb0]:
     bb0:
@@ -198,74 +210,82 @@ module {
       %31 = call builtin.promise.resolve_static(%29, %30)
       call builtin.array.push(%22, %31)
       %32 = call builtin.promise.all(%21, %22)
-      %33 = const c28
-      %34 = const c29
-      %35 = call builtin.promise.then(%32, %33, %34)
-      %36 = is_exception %35
-      branch %36, bb2, bb1
+      %33 = const c29
+      %34 = const c30
+      %35 = call builtin.create_closure(%33, %34)
+      %36 = const c31
+      %37 = call builtin.promise.then(%32, %35, %36)
+      %38 = is_exception %37
+      branch %38, bb2, bb1
     bb1:
-      %38 = const c30
-      %39 = new_array(capacity=4)
-      %40 = const c31
-      %41 = const c32
-      %42 = call builtin.promise.resolve_static(%40, %41)
-      call builtin.array.push(%39, %42)
-      %43 = const c33
-      %44 = const c34
-      %45 = call builtin.promise.resolve_static(%43, %44)
-      call builtin.array.push(%39, %45)
-      %46 = call builtin.promise.race(%38, %39)
-      %47 = const c36
-      %48 = const c37
-      %49 = call builtin.promise.then(%46, %47, %48)
-      %50 = is_exception %49
-      branch %50, bb4, bb3
+      %40 = const c32
+      %41 = new_array(capacity=4)
+      %42 = const c33
+      %43 = const c34
+      %44 = call builtin.promise.resolve_static(%42, %43)
+      call builtin.array.push(%41, %44)
+      %45 = const c35
+      %46 = const c36
+      %47 = call builtin.promise.resolve_static(%45, %46)
+      call builtin.array.push(%41, %47)
+      %48 = call builtin.promise.race(%40, %41)
+      %49 = const c39
+      %50 = const c40
+      %51 = call builtin.create_closure(%49, %50)
+      %52 = const c41
+      %53 = call builtin.promise.then(%48, %51, %52)
+      %54 = is_exception %53
+      branch %54, bb4, bb3
     bb2:
-      %37 = call builtin.exception_value(%35)
-      throw %37
+      %39 = call builtin.exception_value(%37)
+      throw %39
     bb3:
-      %52 = const c38
-      %53 = new_array(capacity=4)
-      %54 = const c39
-      %55 = const c40
-      %56 = call builtin.promise.resolve_static(%54, %55)
-      call builtin.array.push(%53, %56)
-      %57 = const c41
-      %58 = const c42
-      %59 = call builtin.promise.reject_static(%57, %58)
-      call builtin.array.push(%53, %59)
-      %60 = call builtin.promise.all_settled(%52, %53)
-      %61 = const c48
-      %62 = const c49
-      %63 = call builtin.promise.then(%60, %61, %62)
-      %64 = is_exception %63
-      branch %64, bb6, bb5
+      %56 = const c42
+      %57 = new_array(capacity=4)
+      %58 = const c43
+      %59 = const c44
+      %60 = call builtin.promise.resolve_static(%58, %59)
+      call builtin.array.push(%57, %60)
+      %61 = const c45
+      %62 = const c46
+      %63 = call builtin.promise.reject_static(%61, %62)
+      call builtin.array.push(%57, %63)
+      %64 = call builtin.promise.all_settled(%56, %57)
+      %65 = const c53
+      %66 = const c54
+      %67 = call builtin.create_closure(%65, %66)
+      %68 = const c55
+      %69 = call builtin.promise.then(%64, %67, %68)
+      %70 = is_exception %69
+      branch %70, bb6, bb5
     bb4:
-      %51 = call builtin.exception_value(%49)
-      throw %51
+      %55 = call builtin.exception_value(%53)
+      throw %55
     bb5:
-      %66 = const c50
-      %67 = new_array(capacity=4)
-      %68 = const c51
-      %69 = const c52
-      %70 = call builtin.promise.reject_static(%68, %69)
-      call builtin.array.push(%67, %70)
-      %71 = const c53
-      %72 = const c54
-      %73 = call builtin.promise.resolve_static(%71, %72)
-      call builtin.array.push(%67, %73)
-      %74 = call builtin.promise.any(%66, %67)
-      %75 = const c56
-      %76 = const c57
-      %77 = call builtin.promise.then(%74, %75, %76)
-      %78 = is_exception %77
-      branch %78, bb8, bb7
+      %72 = const c56
+      %73 = new_array(capacity=4)
+      %74 = const c57
+      %75 = const c58
+      %76 = call builtin.promise.reject_static(%74, %75)
+      call builtin.array.push(%73, %76)
+      %77 = const c59
+      %78 = const c60
+      %79 = call builtin.promise.resolve_static(%77, %78)
+      call builtin.array.push(%73, %79)
+      %80 = call builtin.promise.any(%72, %73)
+      %81 = const c63
+      %82 = const c64
+      %83 = call builtin.create_closure(%81, %82)
+      %84 = const c65
+      %85 = call builtin.promise.then(%80, %83, %84)
+      %86 = is_exception %85
+      branch %86, bb8, bb7
     bb6:
-      %65 = call builtin.exception_value(%63)
-      throw %65
+      %71 = call builtin.exception_value(%69)
+      throw %71
     bb7:
       return
     bb8:
-      %79 = call builtin.exception_value(%77)
-      throw %79
+      %87 = call builtin.exception_value(%85)
+      throw %87
 }

@@ -103,6 +103,8 @@ fn async_reentry_audit_forbidden_sync_patterns() {
             || h.contains("call_wasm_callback(caller, reviver, holder,")
             // streams_readable.rs sync call_wasm_callback (source.start(controller) during ReadableStream construction)
             || h.contains("call_wasm_callback(caller, start_fn, source,")
+            // agent_cluster.rs sync receiveBroadcast path; async path uses call_wasm_callback_async.
+            || h.contains("call_wasm_callback(caller, callback, value::encode_undefined(), &[sab_obj])")
             // try_compiled_eval_from_caller sync (Instance::new + entry.call)
             || (h.contains("Instance::new(") && h.contains("eval_module"))
             || h.contains("Ok(entry.call(")
