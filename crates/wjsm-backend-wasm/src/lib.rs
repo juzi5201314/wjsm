@@ -136,10 +136,6 @@ struct Compiler {
     shadow_stack_end_global_idx: u32,
     /// WASM global index for array prototype handle.
     array_proto_handle_global_idx: u32,
-    /// Base table index for Number.prototype methods (Type-12 wrappers).
-    number_proto_table_base: u32,
-    number_proto_method_count: u32,
-    number_proto_lookup: Vec<(u32, u32)>,
     arr_proto_table_base: u32,
     get_proto_from_ctor_func_idx: u32,
     /// WASM function index for nul-terminated string equality helper.

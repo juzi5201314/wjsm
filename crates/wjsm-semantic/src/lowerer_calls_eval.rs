@@ -1026,15 +1026,6 @@ impl Lowerer {
         dest
     }
 
-    fn const_val(&mut self, block: BasicBlockId, constant: ConstantId) -> ValueId {
-        let dest = self.alloc_value();
-        self.current_function
-            .append_instruction(block, Instruction::Const { dest, constant });
-        dest
-    }
-
-
-
     fn expr_is_static_number_receiver(&self, expr: &swc_ast::Expr) -> bool {
         let mut cur = expr;
         loop {
