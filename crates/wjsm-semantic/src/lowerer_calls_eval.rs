@@ -139,7 +139,8 @@ impl Lowerer {
                     // DataView.prototype get/set 方法使用非 Type 12 的专用宿主导入；
                     // 对静态已知 DataView receiver 直连 CallBuiltin，避免通用 call_indirect 调用约定不匹配。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
-                        && let Some(dv_builtin) = builtin_from_dataview_proto_method(&prop_ident.sym)
+                        && let Some(dv_builtin) =
+                            builtin_from_dataview_proto_method(&prop_ident.sym)
                         && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
                         && self.is_dataview_binding(receiver_ident)
                     {
@@ -263,8 +264,6 @@ impl Lowerer {
                             );
                             return Ok(dest);
                         }
-
-
 
                         // Function.prototype.call/apply/bind: func.call(thisArg, ...args)
                         if let Some(func_builtin) =
@@ -432,6 +431,10 @@ impl Lowerer {
 
                         if let Some(number_proto_builtin) =
                             builtin_from_number_proto_method(&prop_ident.sym)
+                            && self.should_use_number_proto_call_fast_path(
+                                prop_ident.sym.as_ref(),
+                                member_expr.obj.as_ref(),
+                            )
                         {
                             this_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![this_val];
@@ -464,26 +467,6 @@ impl Lowerer {
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin: boolean_proto_builtin,
-                                    args: builtin_args,
-                                },
-                            );
-                            return Ok(dest);
-                        }
-
-                        if let Some(error_proto_builtin) =
-                            builtin_from_error_proto_method(&prop_ident.sym)
-                        {
-                            this_val = self.lower_expr(&member_expr.obj, block)?;
-                            let mut builtin_args = vec![this_val];
-                            for arg in &call.args {
-                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                            }
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: error_proto_builtin,
                                     args: builtin_args,
                                 },
                             );
@@ -763,32 +746,7 @@ impl Lowerer {
                     args: vec![scope_record, nt_key, new_target],
                 },
             );
-            let nt_name = self
-                .module
-                .add_constant(Constant::String("__wjsm_new_target".to_string()));
-            let nt_name_val = self.alloc_value();
-            self.current_function.append_instruction(
-                eval_block,
-                Instruction::Const {
-                    dest: nt_name_val,
-                    constant: nt_name,
-                },
-            );
-            let nt_false = self.const_val_i64(eval_block, 0);
-            self.current_function.append_instruction(
-                eval_block,
-                Instruction::CallBuiltin {
-                    dest: None,
-                    builtin: Builtin::ScopeRecordAddBinding,
-                    args: vec![
-                        scope_record,
-                        nt_name_val,
-                        new_target,
-                        nt_false,
-                        nt_false,
-                    ],
-                },
-            );
+            // new.target for eval body: runtime reads atomic + scope meta at eval entry; no binding snapshot.
         }
 
         // 8. Call Eval(code, scope_record)
@@ -834,11 +792,8 @@ impl Lowerer {
         );
         self.emit_throw_value(exc_block, thrown_val)?;
 
-        // 10. Writeback: for each initialised binding, read from ScopeRecord
-        for (scope_id, name, _, is_initialised) in &all_bindings {
-            if !is_initialised {
-                continue;
-            }
+        // 10. Writeback: read post-eval values for visible bindings (incl. TDZ let/const after assign)
+        for (scope_id, name, _, _is_initialised) in &all_bindings {
             let binding = CapturedBinding::new(name.clone(), *scope_id);
 
             let name_const = self.module.add_constant(Constant::String(name.clone()));
@@ -1077,6 +1032,41 @@ impl Lowerer {
             .append_instruction(block, Instruction::Const { dest, constant });
         dest
     }
+
+
+
+    fn expr_is_static_number_receiver(&self, expr: &swc_ast::Expr) -> bool {
+        let mut cur = expr;
+        loop {
+            match cur {
+                swc_ast::Expr::Paren(paren) => cur = paren.expr.as_ref(),
+                swc_ast::Expr::Lit(swc_ast::Lit::Num(_)) => return true,
+                swc_ast::Expr::Unary(unary) => {
+                    return matches!(unary.op, swc_ast::UnaryOp::Minus | swc_ast::UnaryOp::Plus)
+                        && matches!(unary.arg.as_ref(), swc_ast::Expr::Lit(swc_ast::Lit::Num(_)));
+                }
+                _ => return false,
+            }
+        }
+    }
+
+
+    /// `toString` / `valueOf` 对任意 `*.toString()` 误匹配会抢走 Error 等对象；仅数值字面量走快路径。
+    /// `toFixed` 等格式方法仍对数值字面量 `(42).toFixed(2)` 保持快路径。
+    fn should_use_number_proto_call_fast_path(
+        &self,
+        method: &str,
+        receiver: &swc_ast::Expr,
+    ) -> bool {
+        match method {
+            "toString" | "valueOf" => self.expr_is_static_number_receiver(receiver),
+            "toFixed" | "toExponential" | "toPrecision" => {
+                self.expr_is_static_number_receiver(receiver)
+            }
+            _ => false,
+        }
+    }
+
 
     /// 检测表达式是否为 Object.prototype.toString 或 Object.prototype.valueOf
     /// 用于优化 Function.prototype.call 调用模式

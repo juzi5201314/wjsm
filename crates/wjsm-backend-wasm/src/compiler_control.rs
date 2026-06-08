@@ -512,6 +512,19 @@ impl Compiler {
 
                     self.emit(WasmInstruction::End);
 
+                    if let Some(exit_block_ir) = blocks.get(exit_idx)
+                        && self.compiled_blocks.contains(&exit_idx)
+                    {
+                        for instruction in exit_block_ir.instructions() {
+                            if self.compile_instruction(module, instruction)? {
+                                break;
+                            }
+                        }
+                        if let Terminator::Return { value } = exit_block_ir.terminator() {
+                            self.emit_return(value);
+                        }
+                    }
+
                     if self.compiled_blocks.contains(&exit_idx) {
                         if let Some(continuation) =
                             self.branch_continuation_target(blocks, exit_idx)
@@ -1053,6 +1066,84 @@ impl Compiler {
                 Ok(true)
             }
             Terminator::Unreachable => Ok(true),
+            Terminator::Switch {
+                value,
+                cases,
+                default_block,
+                exit_block,
+            } => {
+                let exit_idx = exit_block.0 as usize;
+                let default_target_idx = default_block.0 as usize;
+
+                struct SwitchEntry {
+                    is_default: bool,
+                    constant_idx: Option<u32>,
+                    target_idx: usize,
+                }
+
+                let mut entries: Vec<SwitchEntry> = Vec::new();
+                for case in cases.iter() {
+                    entries.push(SwitchEntry {
+                        is_default: false,
+                        constant_idx: Some(case.constant.0),
+                        target_idx: case.target.0 as usize,
+                    });
+                }
+                entries.push(SwitchEntry {
+                    is_default: true,
+                    constant_idx: None,
+                    target_idx: default_target_idx,
+                });
+
+                entries.sort_by_key(|entry| entry.target_idx);
+
+                let num_entries = entries.len();
+                let default_pos = entries.iter().position(|entry| entry.is_default).unwrap();
+                let loops = detect_loops(blocks);
+
+                self.compiled_blocks.insert(default_target_idx);
+
+                self.emit(WasmInstruction::Block(BlockType::Empty));
+                for _ in 0..num_entries {
+                    self.emit(WasmInstruction::Block(BlockType::Empty));
+                }
+
+                for (i, entry) in entries.iter().enumerate() {
+                    if entry.is_default {
+                        continue;
+                    }
+                    self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                    let const_val = self.encode_constant(
+                        &module.constants()[entry.constant_idx.unwrap() as usize],
+                        module,
+                    )?;
+                    self.emit(WasmInstruction::I64Const(const_val));
+                    self.emit(WasmInstruction::I64Eq);
+                    self.emit(WasmInstruction::BrIf(i as u32));
+                }
+                self.emit(WasmInstruction::Br(default_pos as u32));
+
+                for (i, entry) in entries.iter().enumerate() {
+                    if i == default_pos {
+                        self.compiled_blocks.remove(&default_target_idx);
+                    }
+                    self.emit(WasmInstruction::End);
+                    let switch_break_depth = (num_entries - i - 1) as u32;
+                    let switch_extra_depth = extra_depth + (num_entries - i) as u32;
+                    self.compile_switch_case(
+                        module,
+                        blocks,
+                        entry.target_idx,
+                        exit_idx,
+                        switch_break_depth,
+                        switch_extra_depth,
+                        &loops,
+                    )?;
+                }
+
+                self.emit(WasmInstruction::End);
+                Ok(false)
+            }
             Terminator::Branch {
                 condition,
                 true_block,
@@ -1157,10 +1248,6 @@ impl Compiler {
                     } // closes inner else
                 } // closes outer else
             } // closes Branch arm
-            _ => {
-                self.emit(WasmInstruction::Unreachable);
-                Ok(true)
-            }
         }
     }
 

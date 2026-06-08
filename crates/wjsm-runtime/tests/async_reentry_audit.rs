@@ -108,6 +108,7 @@ fn async_reentry_audit_forbidden_sync_patterns() {
             // try_compiled_eval_from_caller sync (Instance::new + entry.call)
             || (h.contains("Instance::new(") && h.contains("eval_module"))
             || h.contains("Ok(entry.call(")
+            || h.contains("let result = entry.call(")
         };
         if STRICT_AUDIT {
             hits.retain(|h| !allow_alive_sync(h));

@@ -508,15 +508,22 @@ impl Lowerer {
 
         // ── Step 1: 确定存储目标类型并加载当前值 ──
         enum Target {
-            Var(String),
+            Var {
+                ir_name: String,
+                name: String,
+                kind: VarKind,
+            },
             Captured(ValueId, ValueId), // env_val, key_val
-            Member { obj: ValueId, key: ValueId },
+            Member {
+                obj: ValueId,
+                key: ValueId,
+            },
         }
 
         let target = match update.arg.as_ref() {
             swc_ast::Expr::Ident(ident) => {
                 let name = ident.sym.to_string();
-                let (scope_id, _kind) = self
+                let (scope_id, kind) = self
                     .scopes
                     .lookup_for_assign(&name)
                     .map_err(|msg| self.error(update.span(), msg))?;
@@ -539,7 +546,11 @@ impl Lowerer {
                     let key_val = self.append_env_key_const(block, &binding);
                     Target::Captured(env_val, key_val)
                 } else {
-                    Target::Var(format!("${scope_id}.{name}"))
+                    Target::Var {
+                        ir_name: format!("${scope_id}.{name}"),
+                        name,
+                        kind,
+                    }
                 }
             }
             swc_ast::Expr::Member(member) => {
@@ -584,7 +595,7 @@ impl Lowerer {
         // 1. 读取当前值
         let old_val = self.alloc_value();
         match &target {
-            Target::Var(ir_name) => {
+            Target::Var { ir_name, .. } => {
                 self.current_function.append_instruction(
                     block,
                     Instruction::LoadVar {
@@ -655,7 +666,11 @@ impl Lowerer {
 
         // 5. 写回 (StoreVar / SetProp / SetProp for captured)
         match target {
-            Target::Var(ir_name) => {
+            Target::Var {
+                ir_name,
+                name,
+                kind,
+            } => {
                 self.current_function.append_instruction(
                     block,
                     Instruction::StoreVar {
@@ -663,6 +678,11 @@ impl Lowerer {
                         value: new_val,
                     },
                 );
+                let after_write_block =
+                    self.append_eval_var_leak_if_needed(&name, kind, new_val, block)?;
+                if after_write_block != block {
+                    self.expr_merge_block = Some(after_write_block);
+                }
             }
             Target::Captured(env_val, key_val) => {
                 self.current_function.append_instruction(

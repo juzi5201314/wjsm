@@ -104,7 +104,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::GlobalSet(heap_global));
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I32Const(-1)); // proto sentinel (0xFFFFFFFF)
+            func.instruction(&WasmInstruction::GlobalGet(
+                self.object_proto_handle_global_idx,
+            ));
             func.instruction(&WasmInstruction::I32Store(MemArg {
                 offset: 0,
                 align: 2,
@@ -269,6 +271,27 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Const(value::encode_undefined()));
             func.instruction(&WasmInstruction::Return);
             func.instruction(&WasmInstruction::End);
+
+            // raw f64：Number.prototype 方法名 → NativeCallable
+            func.instruction(&WasmInstruction::Block(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::I64Const(value::BOX_BASE as i64));
+            func.instruction(&WasmInstruction::I64And);
+            func.instruction(&WasmInstruction::I64Const(value::BOX_BASE as i64));
+            func.instruction(&WasmInstruction::I64Ne);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::PrimitiveNumberGetMethod],
+            ));
+            func.instruction(&WasmInstruction::Return);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::End);
+
+
+
+
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
             func.instruction(&WasmInstruction::LocalTee(4));

@@ -1,4 +1,5 @@
 exit_code: 2
 --- stdout ---
+Uncaught exception: SyntaxError: cannot redeclare identifier `x` in eval
 --- stderr ---
-Runtime error: SyntaxError: cannot redeclare identifier `x` in eval
+Runtime error: Uncaught exception: SyntaxError: cannot redeclare identifier `x` in eval

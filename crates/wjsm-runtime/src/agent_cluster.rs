@@ -1,7 +1,7 @@
 //! test262 `$262.agent` harness：多 OS 线程共享同一 `SharedRuntimeState`。
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -11,9 +11,9 @@ use wjsm_ir::value;
 use crate::runtime_promises::set_runtime_error;
 use crate::runtime_render::read_runtime_string;
 use crate::shared_buffer::{
-    materialize_shared_array_buffer_by_handle, read_sab_handle_from_object, SharedRuntimeState,
+    SharedRuntimeState, materialize_shared_array_buffer_by_handle, read_sab_handle_from_object,
 };
-use crate::{call_wasm_callback, call_wasm_callback_async, RuntimeState, WasmEnv};
+use crate::{RuntimeState, WasmEnv, call_wasm_callback, call_wasm_callback_async};
 
 const BROADCAST_WAIT_MS: u64 = 60_000;
 
@@ -201,10 +201,7 @@ fn wait_broadcast_sab_handle(
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            set_runtime_error(
-                caller.data(),
-                "agent receiveBroadcast: timeout".to_string(),
-            );
+            set_runtime_error(caller.data(), "agent receiveBroadcast: timeout".to_string());
             return None;
         }
         slot = agent

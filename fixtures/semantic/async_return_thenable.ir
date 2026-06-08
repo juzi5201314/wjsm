@@ -54,7 +54,7 @@ module {
       %1 = const c26
       %3 = const c27
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
-      store var $1.arguments, %2
+      store var $2.arguments, %2
       %4 = const c28
       %5 = load var $2.resolve
       %6 = const c29

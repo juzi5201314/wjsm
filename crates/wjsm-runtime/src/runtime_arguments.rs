@@ -1,5 +1,22 @@
 use super::*;
 
+pub(crate) fn arguments_strict_callee_getter(
+    caller: &mut Caller<'_, RuntimeState>,
+    _this: i64,
+) -> i64 {
+    let msg = "TypeError: 'callee' and 'caller' properties are not defined";
+    let msg_val = store_runtime_string(caller, msg.to_string());
+    let error_obj = create_error_object(caller, "TypeError", msg_val);
+    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let idx = errors.len() as u32;
+    errors.push(crate::ErrorEntry {
+        name: "TypeError".to_string(),
+        message: msg.to_string(),
+        value: error_obj,
+    });
+    value::encode_handle(value::TAG_EXCEPTION, idx)
+}
+
 /// CreateUnmappedArgumentsObject (ES §10.4.4.6)
 ///
 /// 用于严格模式函数、箭头函数、方法、类字段。
@@ -20,7 +37,7 @@ pub(crate) fn create_unmapped_arguments_object(
     let len = arr_ptr
         .and_then(|ptr| read_array_length(caller, ptr))
         .unwrap_or(0);
-    let capacity = (len + 1).max(4);
+    let capacity = (len + 2).max(4);
     let obj = {
         let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
         alloc_host_object(caller, &_wjsm_env, capacity)
@@ -47,7 +64,24 @@ pub(crate) fn create_unmapped_arguments_object(
     // Set length = 实际参数个数（writable, enumerable=false, configurable=true）
     let _ =
         define_host_data_property_from_caller(caller, obj, "length", value::encode_f64(len as f64));
-    // Symbol.iterator (@@iterator → %Array.prototype.values%): deferred — define_host_data_property_from_caller uses string keys only.
+
+    let callee_getter = {
+        let mut table = caller
+            .data()
+            .native_callables
+            .lock()
+            .expect("native callable table mutex");
+        let handle = table.len() as u32;
+        table.push(crate::NativeCallable::ArgumentsStrictCalleeGetter);
+        value::encode_native_callable_idx(handle)
+    };
+    let _ = define_host_accessor_property(
+        caller,
+        obj,
+        "callee",
+        callee_getter,
+        value::encode_undefined(),
+    );
 
     obj
 }
@@ -97,12 +131,8 @@ pub(crate) fn create_mapped_arguments_object(
         }
     }
 
-    let _ = define_host_data_property_from_caller(
-        caller,
-        obj,
-        "length",
-        value::encode_f64(len as f64),
-    );
+    let _ =
+        define_host_data_property_from_caller(caller, obj, "length", value::encode_f64(len as f64));
     // Symbol.iterator (@@iterator): deferred — host property helpers use string keys only.
 
     // Set callee = func_ref（仅非严格模式）

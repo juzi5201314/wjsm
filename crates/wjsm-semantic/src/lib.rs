@@ -311,6 +311,15 @@ impl ScopeTree {
                 .ok_or_else(|| "root must be function scope".to_string())?;
         }
     }
+
+    /// True when the current function scope already has a binding named `arguments` (e.g. parameter).
+    fn current_function_has_param_arguments(&self) -> bool {
+        let Ok(scope_id) = self.nearest_function_scope() else {
+            return false;
+        };
+        self.arenas[scope_id].variables.contains_key("arguments")
+    }
+
     /// Mark an existing variable as implicit `arguments`.
     pub(crate) fn set_implicit_arguments(&mut self, name: &str) -> Result<(), String> {
         let mut cursor = Some(self.current);
@@ -632,6 +641,7 @@ pub fn lower_eval_module_with_scope(
     lowerer.eval_has_scope_bridge = has_scope_bridge;
     lowerer.eval_var_writes_to_scope = var_writes_to_scope;
     lowerer.eval_scope_record = true;
+    lowerer.strict_mode = module_has_use_strict_directive(&module);
     lowerer.lower_module(&module)
 }
 

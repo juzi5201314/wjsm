@@ -373,9 +373,6 @@ module {
       %29 = load var $0.$shared_env
       %30 = const c84
       %31 = stricteq %29, %30
-      store var $0.a, %40
-      %41 = const c88
-      %42 = load var $0.a
       branch %31, bb1, bb2
     bb1:
       %32 = new_object(capacity=2)
@@ -396,6 +393,9 @@ module {
       %39 = phi [(bb1, %32), (bb2, %29)]
       store var $0.$shared_env, %39
       %40 = call builtin.create_closure(%28, %39)
+      store var $0.a, %40
+      %41 = const c88
+      %42 = load var $0.a
       %43 = call %42, this=%41
       %44 = const c89
       %45 = const c90

@@ -747,6 +747,14 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
                 if let Some(second) = args.get(1) {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(second.0)));
+                } else if matches!(
+                    builtin,
+                    Builtin::NumberProtoToString
+                        | Builtin::NumberProtoToFixed
+                        | Builtin::NumberProtoToExponential
+                        | Builtin::NumberProtoToPrecision
+                ) {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
                 let func_idx = self
                     .builtin_func_indices

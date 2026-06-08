@@ -1,5 +1,4 @@
 exit_code: 0
 --- stdout ---
-no_throw
 throw
 --- stderr ---

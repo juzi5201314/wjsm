@@ -904,15 +904,14 @@ pub(crate) fn define_math_number_error(
                 resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             let name = obj_ptr
                 .and_then(|p| read_object_property_by_name(&mut caller, p, "name"))
-                .and_then(|v| read_value_string_bytes(&mut caller, v))
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .map(|v| get_string_value(&mut caller, v))
+                .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "Error".to_string());
             let obj_ptr2 =
                 resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             let message = obj_ptr2
                 .and_then(|p| read_object_property_by_name(&mut caller, p, "message"))
-                .and_then(|v| read_value_string_bytes(&mut caller, v))
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .map(|v| get_string_value(&mut caller, v))
                 .unwrap_or_default();
             if message.is_empty() {
                 store_runtime_string(&caller, name)
@@ -928,6 +927,33 @@ pub(crate) fn define_math_number_error(
         error_proto_to_string_fn,
     )?;
 
-    // ── Map / Set helper: SameValueZero equality ──────────────────────
-    Ok(())
+    let primitive_number_get_method_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
+            if (boxed as u64 & value::BOX_BASE) == value::BOX_BASE {
+                return value::encode_undefined();
+            }
+            let method = match read_string_bytes(&mut caller, name_id as u32).as_slice() {
+                b"toString" => 0,
+                b"valueOf" => 1,
+                b"toFixed" => 2,
+                b"toExponential" => 3,
+                b"toPrecision" => 4,
+                _ => return value::encode_undefined(),
+            };
+            create_native_callable(
+                caller.data(),
+                NativeCallable::NumberPrimitiveMethod { method },
+            )
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "primitive_number_get_method",
+        primitive_number_get_method_fn,
+    )?;
+
+     // ── Map / Set helper: SameValueZero equality ──────────────────────
+     Ok(())
 }

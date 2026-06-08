@@ -458,6 +458,17 @@ impl Lowerer {
         })
     }
 
+    pub(crate) fn count_regular_params(params: &[swc_ast::Param]) -> u32 {
+        let mut n = 0u32;
+        for p in params {
+            if matches!(p.pat, swc_ast::Pat::Rest(_)) {
+                break;
+            }
+            n += 1;
+        }
+        n
+    }
+
     pub(crate) fn lower_module(
         mut self,
         module: &swc_ast::Module,

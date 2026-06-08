@@ -18,13 +18,17 @@ impl Compiler {
     }
     /// Nested JS functions may LoadVar `$0.$global` (builtin globals like `$262`); only `main` stores it at init.
     fn emit_init_module_global_for_js_function(&mut self, function: &IrFunction) {
-        let needs = function.blocks().iter().flat_map(|b| b.instructions()).any(|inst| {
-            matches!(
-                inst,
-                Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
-                    if name == "$0.$global"
-            )
-        });
+        let needs = function
+            .blocks()
+            .iter()
+            .flat_map(|b| b.instructions())
+            .any(|inst| {
+                matches!(
+                    inst,
+                    Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
+                        if name == "$0.$global"
+                )
+            });
         if !needs {
             return;
         }
@@ -292,8 +296,9 @@ impl Compiler {
             }
         }
 
-        // Pass 3: Compile object helper functions.
-        self.compile_object_helpers();
+        self.compile_number_proto_wrappers();
+         // Pass 3: Compile object helper functions.
+         self.compile_object_helpers();
         // 编译数组辅助函数
         self.compile_array_helpers();
         self.table.table(TableType {
@@ -658,12 +663,29 @@ impl Compiler {
             }
 
             // ── 初始化 Object.prototype ──
-            // 创建空对象（容量 64），存储 handle 到 Global 10
+            // main 开始前创建 Object.prototype，并安装 toString/valueOf 原生方法。
+            self.emit(WasmInstruction::GlobalGet(
+                self.object_proto_handle_global_idx,
+            ));
+            self.emit(WasmInstruction::I32Const(-1));
+            self.emit(WasmInstruction::I32Eq);
+            self.emit(WasmInstruction::If(BlockType::Empty));
             self.emit(WasmInstruction::I32Const(64));
             self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+            self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
             self.emit(WasmInstruction::GlobalSet(
                 self.object_proto_handle_global_idx,
             ));
+            self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+            self.emit(WasmInstruction::I64ExtendI32U);
+            let object_tag = value::BOX_BASE as i64 | ((value::TAG_OBJECT << 32) as i64);
+            self.emit(WasmInstruction::I64Const(object_tag));
+            self.emit(WasmInstruction::I64Or);
+            self.emit(WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ObjectProtoInit],
+            ));
+            self.emit(WasmInstruction::Drop);
+            self.emit(WasmInstruction::End);
         }
 
         let cfg = Cfg::from_function(function);

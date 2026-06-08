@@ -136,9 +136,11 @@ struct Compiler {
     shadow_stack_end_global_idx: u32,
     /// WASM global index for array prototype handle.
     array_proto_handle_global_idx: u32,
-    /// Base table index for array prototype methods (Table[N+8])
+    /// Base table index for Number.prototype methods (Type-12 wrappers).
+    number_proto_table_base: u32,
+    number_proto_method_count: u32,
+    number_proto_lookup: Vec<(u32, u32)>,
     arr_proto_table_base: u32,
-    /// WASM function index for $get_prototype_from_constructor helper.
     get_proto_from_ctor_func_idx: u32,
     /// WASM function index for nul-terminated string equality helper.
     string_eq_func_idx: u32,
@@ -298,6 +300,7 @@ mod compiler_core;
 mod compiler_data;
 mod compiler_helpers;
 mod compiler_instructions;
+mod compiler_number_proto;
 mod compiler_module;
 
 // ── Value ID collection ─────────────────────────────────────────────────
@@ -927,7 +930,9 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::SharedArrayBufferProtoByteLength => ("sharedarraybuffer_proto_byte_length", 1),
         Builtin::SharedArrayBufferProtoGrow => ("sharedarraybuffer_proto_grow", 2),
         Builtin::SharedArrayBufferProtoGrowable => ("sharedarraybuffer_proto_growable", 1),
-        Builtin::SharedArrayBufferProtoMaxByteLength => ("sharedarraybuffer_proto_max_byte_length", 1),
+        Builtin::SharedArrayBufferProtoMaxByteLength => {
+            ("sharedarraybuffer_proto_max_byte_length", 1)
+        }
         Builtin::SharedArrayBufferProtoSlice => ("sharedarraybuffer_proto_slice", 3),
         Builtin::SharedArrayBufferSpecies => ("sharedarraybuffer_species", 1),
         // ── Atomics builtins ──

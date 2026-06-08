@@ -40,11 +40,10 @@ impl Lowerer {
         // Emit parameter initialization (default values + destructuring)
         let body_entry = self.emit_param_inits(&fn_decl.function.params, &param_ir_names, entry)?;
 
-        self.arguments_param_count = fn_decl.function.params.len() as u32;
+        self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
         let body_entry = self.emit_arguments_init(body_entry)?;
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_decl.function.params)
-                || self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
+            || self.scopes.lookup("arguments").is_ok();
         // Lower the function body.
         let mut inner_flow = StmtFlow::Open(body_entry);
         if let Some(body) = &fn_decl.function.body {
@@ -124,17 +123,46 @@ impl Lowerer {
             .scopes
             .lookup(&name)
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
+        let store_block =
+            self.store_function_decl_callee(store_block, &name, scope_id, callee_val)?;
+
+        Ok(StmtFlow::Open(store_block))
+    }
+
+    fn store_function_decl_callee(
+        &mut self,
+        block: BasicBlockId,
+        name: &str,
+        scope_id: usize,
+        callee_val: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
         let ir_name = format!("${scope_id}.{name}");
         self.current_function.append_instruction(
-            store_block,
+            block,
             Instruction::StoreVar {
                 name: ir_name,
                 value: callee_val,
             },
         );
-        let store_block = self.append_eval_var_leak_if_needed(&name, VarKind::Var, callee_val, store_block)?;
 
-        Ok(StmtFlow::Open(store_block))
+        let binding = CapturedBinding::new(name, scope_id);
+        if self.is_shared_binding(&binding) {
+            // 函数声明可被自身 direct eval 捕获；共享 env 创建时先快照旧值，声明完成后必须同步新函数值。
+            let env_val = self
+                .shared_env_value()
+                .expect("shared binding must have materialized env");
+            let key_val = self.append_env_key_const(block, &binding);
+            self.current_function.append_instruction(
+                block,
+                Instruction::SetProp {
+                    object: env_val,
+                    key: key_val,
+                    value: callee_val,
+                },
+            );
+        }
+
+        self.append_eval_var_leak_if_needed(name, VarKind::Var, callee_val, block)
     }
 
     pub(crate) fn lower_async_gen_fn_decl(
@@ -371,11 +399,10 @@ impl Lowerer {
         let after_inits =
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
-        self.arguments_param_count = fn_decl.function.params.len() as u32;
+        self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
         let after_inits = self.emit_arguments_init(after_inits)?;
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_decl.function.params)
-                || self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
+            || self.scopes.lookup("arguments").is_ok();
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
@@ -516,11 +543,10 @@ impl Lowerer {
             wrapper_entry,
         )?;
 
-        self.arguments_param_count = fn_decl.function.params.len() as u32;
+        self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
         let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_decl.function.params)
-                || self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
+            || self.scopes.lookup("arguments").is_ok();
         let func_ref_const = self
             .module
             .add_constant(Constant::FunctionRef(async_gen_fn_id));
@@ -700,12 +726,14 @@ impl Lowerer {
                 constant: wrapper_ref_const,
             },
         );
+        let mut store_block = outer_block;
         let callee_val = if captured.is_empty() {
             wrapper_ref_val
         } else {
             let mut closure_block = outer_block;
             let env_val = self.ensure_shared_env(closure_block, &captured, fn_decl.span())?;
             closure_block = self.resolve_store_block(closure_block);
+            store_block = closure_block;
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
                 closure_block,
@@ -721,16 +749,10 @@ impl Lowerer {
             .scopes
             .lookup(&name)
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
-        let ir_name = format!("${scope_id}.{name}");
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::StoreVar {
-                name: ir_name,
-                value: callee_val,
-            },
-        );
+        let store_block =
+            self.store_function_decl_callee(store_block, &name, scope_id, callee_val)?;
 
-        Ok(StmtFlow::Open(outer_block))
+        Ok(StmtFlow::Open(store_block))
     }
 
     pub(crate) fn lower_async_fn_decl(
@@ -961,11 +983,10 @@ impl Lowerer {
         let after_inits =
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
-        self.arguments_param_count = fn_decl.function.params.len() as u32;
+        self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
         let after_inits = self.emit_arguments_init(after_inits)?;
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_decl.function.params)
-                || self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
+            || self.scopes.lookup("arguments").is_ok();
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
         self.async_dispatch_block = Some(dispatch_block);
@@ -1121,11 +1142,10 @@ impl Lowerer {
             wrapper_entry,
         )?;
 
-        self.arguments_param_count = fn_decl.function.params.len() as u32;
+        self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
         let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_decl.function.params)
-                || self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
+            || self.scopes.lookup("arguments").is_ok();
         let promise_val = self.alloc_value();
         self.current_function.append_instruction(
             wrapper_after_inits,
@@ -1341,12 +1361,14 @@ impl Lowerer {
             },
         );
 
+        let mut store_block = outer_block;
         let callee_val = if captured.is_empty() {
             wrapper_ref_val
         } else {
             let mut closure_block = outer_block;
             let env_val = self.ensure_shared_env(closure_block, &captured, fn_decl.span())?;
             closure_block = self.resolve_store_block(closure_block);
+            store_block = closure_block;
             let closure_val = self.alloc_value();
             self.current_function.append_instruction(
                 closure_block,
@@ -1363,15 +1385,9 @@ impl Lowerer {
             .scopes
             .lookup(&name)
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
-        let ir_name = format!("${scope_id}.{name}");
-        self.current_function.append_instruction(
-            outer_block,
-            Instruction::StoreVar {
-                name: ir_name,
-                value: callee_val,
-            },
-        );
+        let store_block =
+            self.store_function_decl_callee(store_block, &name, scope_id, callee_val)?;
 
-        Ok(StmtFlow::Open(outer_block))
+        Ok(StmtFlow::Open(store_block))
     }
 }

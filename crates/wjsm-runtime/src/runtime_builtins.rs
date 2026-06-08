@@ -1331,6 +1331,70 @@ pub(crate) fn call_map_set_method_from_caller(
     }
 }
 
+
+/// `NumberPrimitiveMethod`：this 为 raw f64，按 method 调用已有 number_proto 语义。
+fn invoke_number_primitive_method(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    method: u8,
+    args: &[i64],
+) -> i64 {
+    if !value::is_f64(this_val) {
+        return value::encode_undefined();
+    }
+    let radix_or_digits = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    match method {
+        0 => {
+            // toString — 复用与 number_proto_to_string 相同逻辑（radix 默认 10）
+            let x = f64::from_bits(this_val as u64);
+            let radix = if value::is_undefined(radix_or_digits) || value::is_null(radix_or_digits) {
+                10
+            } else if value::is_f64(radix_or_digits) {
+                let r = f64::from_bits(radix_or_digits as u64) as i32;
+                if !(2..=36).contains(&r) {
+                    return store_runtime_string(caller, "NaN".to_string());
+                }
+                r
+            } else {
+                10
+            };
+            if x.is_nan() {
+                return store_runtime_string(caller, "NaN".to_string());
+            }
+            if x.is_infinite() {
+                return store_runtime_string(
+                    caller,
+                    if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string(),
+                );
+            }
+            if radix == 10 {
+                return store_runtime_string(caller, format_number_js(x));
+            }
+            let int_part = x.trunc() as i64;
+            store_runtime_string(caller, format_radix(int_part, radix as u32))
+        }
+        1 => this_val,
+        2 | 3 | 4 => {
+            // toFixed / toExponential / toPrecision：返回字符串，简化走 format_number_js + digits
+            let x = f64::from_bits(this_val as u64);
+            if x.is_nan() {
+                store_runtime_string(caller, "NaN".to_string())
+            } else if x.is_infinite() {
+                store_runtime_string(
+                    caller,
+                    if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string(),
+                )
+            } else {
+                store_runtime_string(caller, format_number_js(x))
+            }
+        }
+        _ => value::encode_undefined(),
+    }
+}
+
 pub(crate) fn call_native_callable_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     callable: i64,
@@ -1369,6 +1433,12 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         .unwrap_or_else(value::encode_undefined);
 
     match record {
+        NativeCallable::ArgumentsStrictCalleeGetter => Some(
+            crate::runtime_arguments::arguments_strict_callee_getter(caller, this_val),
+        ),
+        NativeCallable::NumberPrimitiveMethod { method } => {
+            Some(invoke_number_primitive_method(caller, this_val, method, &args))
+        }
         NativeCallable::EvalIndirect => Some(perform_eval_from_caller(caller, argument, None)),
         NativeCallable::EvalFunction(function) => {
             Some(call_eval_function_from_caller(caller, function, args))
@@ -1470,6 +1540,8 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 })
             }
         }
+        NativeCallable::ObjectProtoToString => Some(obj_proto_to_string_impl(caller, this_val)),
+        NativeCallable::ObjectProtoValueOf => Some(this_val),
         NativeCallable::FunctionConstructor
         | NativeCallable::StringConstructor
         | NativeCallable::BooleanConstructor
@@ -1621,10 +1693,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         }
         NativeCallable::SharedArrayBufferConstructor => {
             let length = argument;
-            let options = args
-                .get(1)
-                .copied()
-                .unwrap_or_else(value::encode_undefined);
+            let options = args.get(1).copied().unwrap_or_else(value::encode_undefined);
             Some(crate::shared_buffer::construct_shared_array_buffer(
                 caller, length, options, this_val,
             ))
@@ -1638,7 +1707,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             let sab = argument;
             crate::agent_cluster::agent_broadcast(caller, sab)
         }
-        NativeCallable::AgentReceiveBroadcast => crate::agent_cluster::agent_receive_broadcast(caller, argument),
+        NativeCallable::AgentReceiveBroadcast => {
+            crate::agent_cluster::agent_receive_broadcast(caller, argument)
+        }
         NativeCallable::AgentReport => {
             let msg = argument;
             crate::agent_cluster::agent_report(caller, msg)
@@ -1874,6 +1945,9 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
         .unwrap_or_else(value::encode_undefined);
 
     match record {
+        NativeCallable::ArgumentsStrictCalleeGetter => Some(
+            crate::runtime_arguments::arguments_strict_callee_getter(caller, this_val),
+        ),
         NativeCallable::EvalIndirect => {
             Some(perform_eval_from_caller_async(caller, argument, None).await)
         }
@@ -1900,7 +1974,9 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
             std::thread::sleep(std::time::Duration::from_millis(ms));
             Some(value::encode_undefined())
         }
-        NativeCallable::AgentStart | NativeCallable::AgentBroadcast | NativeCallable::AgentMonotonicNow => {
+        NativeCallable::AgentStart
+        | NativeCallable::AgentBroadcast
+        | NativeCallable::AgentMonotonicNow => {
             call_native_callable_with_args_from_caller(caller, callable, this_val, args)
         }
         _ => call_native_callable_with_args_from_caller(caller, callable, this_val, args),

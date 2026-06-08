@@ -392,20 +392,22 @@ impl Lowerer {
         &mut self,
         block: BasicBlockId,
     ) -> Result<BasicBlockId, LoweringError> {
-        // arguments may already be declared (parameter, var, or prior init)
-        let scope_id = if self.scopes.lookup("arguments").is_ok()
-            || self.scopes.resolve_scope_id("arguments").is_ok()
-        {
-            self.scopes.resolve_scope_id("arguments").unwrap_or(0)
-        } else {
-            match self.scopes.declare("arguments", VarKind::Let, true) {
-                Ok(id) => {
-                    self.scopes
-                        .set_implicit_arguments("arguments")
-                        .map_err(|msg| LoweringError::Diagnostic(Diagnostic::new(0, 0, msg)))?;
-                    id
+        if self.scopes.current_function_has_param_arguments() {
+            return Ok(block);
+        }
+        let scope_id = match self.scopes.declare("arguments", VarKind::Let, true) {
+            Ok(id) => {
+                self.scopes
+                    .set_implicit_arguments("arguments")
+                    .map_err(|msg| LoweringError::Diagnostic(Diagnostic::new(0, 0, msg)))?;
+                id
+            }
+            Err(_) => {
+                if let Ok((sid, _)) = self.scopes.lookup("arguments") {
+                    sid
+                } else {
+                    return Ok(block);
                 }
-                Err(_) => self.scopes.resolve_scope_id("arguments").unwrap_or(0),
             }
         };
         let ir_name = format!("${scope_id}.arguments");
@@ -604,7 +606,8 @@ impl Lowerer {
                         value: src_val,
                     },
                 );
-                let store_block = self.append_eval_var_leak_if_needed(&name, kind, src_val, store_block)?;
+                let store_block =
+                    self.append_eval_var_leak_if_needed(&name, kind, src_val, store_block)?;
                 Ok(store_block)
             }
             swc_ast::Pat::Object(object_pat) => {
@@ -695,7 +698,8 @@ impl Lowerer {
                                 value: resolved,
                             },
                         );
-                        block = self.append_eval_var_leak_if_needed(&name, kind, resolved, block)?;
+                        block =
+                            self.append_eval_var_leak_if_needed(&name, kind, resolved, block)?;
                     } else {
                         block = self.lower_destructure_pattern(
                             &swc_ast::Pat::Ident(assign.key.clone()),
