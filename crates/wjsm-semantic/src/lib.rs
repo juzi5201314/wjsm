@@ -190,27 +190,6 @@ impl ScopeTree {
         }
     }
 
-    /// 返回当前词法环境可见的绑定；同名绑定只保留最近的一层。
-    fn visible_bindings(&self) -> Vec<(usize, String, VarKind)> {
-        let mut result = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let mut cursor = Some(self.current);
-        while let Some(scope_id) = cursor {
-            let scope = &self.arenas[scope_id];
-            let mut names: Vec<_> = scope.variables.keys().cloned().collect();
-            names.sort();
-            for name in names {
-                if seen.insert(name.clone())
-                    && let Some(info) = scope.variables.get(&name)
-                    && info.initialised
-                {
-                    result.push((scope.id, name, info.kind));
-                }
-            }
-            cursor = scope.parent;
-        }
-        result
-    }
     /// Return all lexically visible bindings, including uninitialized (TDZ) ones.
     /// Returns (scope_id, name, kind, is_initialised).
     fn visible_bindings_all(&self) -> Vec<(usize, String, VarKind, bool)> {

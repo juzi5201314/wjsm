@@ -453,13 +453,6 @@ pub(crate) fn builtin_from_typedarray_proto_method(name: &str) -> Option<Builtin
     }
 }
 
-pub(crate) fn builtin_from_error_proto_method(name: &str) -> Option<Builtin> {
-    use Builtin::*;
-    match name {
-        "toString" => Some(ErrorProtoToString),
-        _ => None,
-    }
-}
 /// 将 SharedArrayBuffer.prototype 方法名映射到 Builtin 变体。
 pub(crate) fn builtin_from_sharedarraybuffer_proto_method(name: &str) -> Option<Builtin> {
     use Builtin::*;
