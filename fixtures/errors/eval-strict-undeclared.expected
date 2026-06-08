@@ -1,3 +1,5 @@
-exit_code: 0
+exit_code: 2
 --- stdout ---
+Uncaught exception: ReferenceError: assignment to undeclared variable `x`
 --- stderr ---
+Runtime error: Uncaught exception: ReferenceError: assignment to undeclared variable `x`

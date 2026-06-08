@@ -16,19 +16,13 @@ pub(crate) fn define_timers_arrays(
             } else if value::is_closure(func_ref) {
                 let idx = value::decode_closure_idx(func_ref) as usize;
                 let closures = caller.data().closures.lock().expect("closures mutex");
-                closures
-                    .get(idx)
-                    .map(|e| e.func_idx)
-                    .unwrap_or(0)
+                closures.get(idx).map(|e| e.func_idx).unwrap_or(0)
             } else {
                 0
             };
             let mut closures = caller.data().closures.lock().expect("closures mutex");
             let idx = closures.len() as u32;
-            closures.push(ClosureEntry {
-                func_idx,
-                env_obj,
-            });
+            closures.push(ClosureEntry { func_idx, env_obj });
             value::encode_closure_idx(idx)
         },
     );

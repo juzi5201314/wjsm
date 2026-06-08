@@ -37,9 +37,7 @@ module {
     c34 = number(0)
     c35 = number(3)
     c36 = undefined
-    c37 = string("__wjsm_new_target")
-    c38 = number(0)
-    c39 = string("x")
+    c37 = string("x")
 
   fn @main [has_eval] [entry=bb0]:
     bb0:
@@ -115,35 +113,32 @@ module {
       %41 = const c36
       %40 = call builtin.new.target(%41)
       call builtin.scope_record_set_meta(%26, %39, %40)
-      %42 = const c37
-      %43 = const c38
-      call builtin.scope_record_add_binding(%26, %42, %40, %43, %43)
-      %44 = call builtin.eval(%24, %26)
-      %45 = is_exception %44
-      branch %45, bb2, bb1
+      %42 = call builtin.eval(%24, %26)
+      %43 = is_exception %42
+      branch %43, bb2, bb1
     bb1:
-      %47 = const c39
-      %48 = call builtin.eval_get_binding(%26, %47)
-      store var $0.x, %48
+      %45 = const c37
+      %46 = call builtin.eval_get_binding(%26, %45)
+      store var $0.x, %46
       call builtin.scope_record_destroy(%26)
       jump bb3
     bb2:
-      %46 = call builtin.exception_value(%44)
-      throw %46
+      %44 = call builtin.exception_value(%42)
+      throw %44
     bb3:
-      %49 = is_exception %44
-      branch %49, bb5, bb4
+      %47 = is_exception %42
+      branch %47, bb5, bb4
     bb4:
-      %51 = load var $0.x
-      %52 = call builtin.console.log(%51)
-      %53 = is_exception %52
-      branch %53, bb7, bb6
+      %49 = load var $0.x
+      %50 = call builtin.console.log(%49)
+      %51 = is_exception %50
+      branch %51, bb7, bb6
     bb5:
-      %50 = call builtin.exception_value(%44)
-      throw %50
+      %48 = call builtin.exception_value(%42)
+      throw %48
     bb6:
       return
     bb7:
-      %54 = call builtin.exception_value(%52)
-      throw %54
+      %52 = call builtin.exception_value(%50)
+      throw %52
 }

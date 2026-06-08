@@ -961,11 +961,19 @@ pub(crate) fn define_collections_buffers(
          byte_offset: i64,
          byte_length: i64|
          -> i64 {
-            let (buf_handle, buf_byte_length, is_shared) = match crate::shared_buffer::resolve_buffer_backing(&mut caller, buffer) {
-                Some(crate::shared_buffer::BufferBacking::SharedArrayBuffer { handle, byte_length, .. }) => (handle, byte_length, true),
-                Some(crate::shared_buffer::BufferBacking::ArrayBuffer { handle, byte_length }) => (handle, byte_length, false),
-                None => return value::encode_undefined(),
-            };
+            let (buf_handle, buf_byte_length, is_shared) =
+                match crate::shared_buffer::resolve_buffer_backing(&mut caller, buffer) {
+                    Some(crate::shared_buffer::BufferBacking::SharedArrayBuffer {
+                        handle,
+                        byte_length,
+                        ..
+                    }) => (handle, byte_length, true),
+                    Some(crate::shared_buffer::BufferBacking::ArrayBuffer {
+                        handle,
+                        byte_length,
+                    }) => (handle, byte_length, false),
+                    None => return value::encode_undefined(),
+                };
             let offset = if value::is_undefined(byte_offset) {
                 0
             } else {
@@ -1064,8 +1072,7 @@ pub(crate) fn define_collections_buffers(
                         &mut bytes[..$size],
                     ) {
                         *caller.data().runtime_error.lock().expect("error mutex") = Some(
-                            "RangeError: Offset is outside the bounds of the DataView"
-                                .to_string(),
+                            "RangeError: Offset is outside the bounds of the DataView".to_string(),
                         );
                         return value::encode_undefined();
                     }
@@ -1190,8 +1197,7 @@ pub(crate) fn define_collections_buffers(
                         &bytes[..$size],
                     ) {
                         *caller.data().runtime_error.lock().expect("error mutex") = Some(
-                            "RangeError: Offset is outside the bounds of the DataView"
-                                .to_string(),
+                            "RangeError: Offset is outside the bounds of the DataView".to_string(),
                         );
                         return value::encode_undefined();
                     }
@@ -1891,7 +1897,8 @@ pub(crate) fn define_collections_buffers(
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
                 alloc_host_object(&mut caller, &_wjsm_env, 1)
             };
-            let _ = define_host_data_property_from_caller(&mut caller, harness_obj, "agent", agent_obj);
+            let _ =
+                define_host_data_property_from_caller(&mut caller, harness_obj, "agent", agent_obj);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "$262", harness_obj);
 
             obj

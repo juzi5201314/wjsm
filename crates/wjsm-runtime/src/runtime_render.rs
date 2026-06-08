@@ -74,6 +74,28 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
         let ptr = value::decode_object_handle(val);
         let obj_ptr = resolve_handle_idx(caller, ptr as usize);
         if let Some(op) = obj_ptr {
+            if let Some(name_val) = read_object_property_by_name(caller, op, "name") {
+                let name = render_value(caller, name_val).unwrap_or_default();
+                if matches!(
+                    name.as_str(),
+                    "Error"
+                        | "TypeError"
+                        | "RangeError"
+                        | "SyntaxError"
+                        | "ReferenceError"
+                        | "URIError"
+                        | "EvalError"
+                ) {
+                    let message = read_object_property_by_name(caller, op, "message")
+                        .map(|message_val| render_value(caller, message_val).unwrap_or_default())
+                        .unwrap_or_default();
+                    if message.is_empty() {
+                        return Ok(name);
+                    }
+                    return Ok(format!("{name}: {message}"));
+                }
+            }
+
             let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;

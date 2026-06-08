@@ -1794,7 +1794,17 @@ fn process_replacement_from_captures(
     result
 }
 
-/// Async version of call_replace_func — uses resolve_and_call_async instead of resolve_and_call
+fn replace_callback_result_to_string(caller: &mut Caller<'_, RuntimeState>, result: i64) -> String {
+    if value::is_undefined(result) {
+        return String::new();
+    }
+    if value::is_runtime_string_handle(result) || value::is_string(result) {
+        return get_string_value(caller, result);
+    }
+    eval_to_string(caller, result)
+}
+
+/// Async version of call_replace_func — uses shared Wasm callback shadow-stack handling.
 async fn call_replace_func_async(
     caller: &mut Caller<'_, RuntimeState>,
     func: i64,
@@ -1804,95 +1814,29 @@ async fn call_replace_func_async(
     captures: &[Option<std::ops::Range<usize>>],
     named_groups_obj: i64,
 ) -> String {
-    // 参数数量：matched + captures + offset + string + groups
-    let capture_count = captures.len().saturating_sub(1); // 不包括 group 0（完整匹配）
-    let args_count = 1 + capture_count + 1 + 1 + 1; // matched + captures + offset + string + groups
+    let capture_count = captures.len().saturating_sub(1);
+    let mut args = Vec::with_capacity(1 + capture_count + 3);
 
-    // 获取 shadow_sp 和 memory
-    let shadow_sp_global = caller
-        .get_export("__shadow_sp")
-        .and_then(|e| e.into_global())
-        .unwrap();
-    let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
-    let memory = caller
-        .get_export("memory")
-        .and_then(|e| e.into_memory())
-        .unwrap();
-
-    // 写入参数到 shadow stack
-    let mut arg_idx = 0;
-
-    // 1. matched substring
-    let matched_val = store_runtime_string(&*caller, s[match_start..match_end].to_string());
-    memory
-        .write(
-            &mut *caller,
-            (shadow_sp + arg_idx * 8) as usize,
-            &matched_val.to_le_bytes(),
-        )
-        .unwrap();
-    arg_idx += 1;
-
-    // 2. capture groups (从 group 1 开始)
+    args.push(store_runtime_string(
+        &*caller,
+        s[match_start..match_end].to_string(),
+    ));
     for i in 1..=capture_count {
         let capture_val = if let Some(Some(range)) = captures.get(i) {
             store_runtime_string(&*caller, s[range.clone()].to_string())
         } else {
             value::encode_undefined()
         };
-        memory
-            .write(
-                &mut *caller,
-                (shadow_sp + arg_idx * 8) as usize,
-                &capture_val.to_le_bytes(),
-            )
-            .unwrap();
-        arg_idx += 1;
+        args.push(capture_val);
     }
+    args.push(value::encode_f64(match_start as f64));
+    args.push(store_runtime_string(&*caller, s.to_string()));
+    args.push(named_groups_obj);
 
-    // 3. offset
-    let offset_val = value::encode_f64(match_start as f64);
-    memory
-        .write(
-            &mut *caller,
-            (shadow_sp + arg_idx * 8) as usize,
-            &offset_val.to_le_bytes(),
-        )
-        .unwrap();
-    arg_idx += 1;
-
-    // 4. original string
-    let string_val = store_runtime_string(&*caller, s.to_string());
-    memory
-        .write(
-            &mut *caller,
-            (shadow_sp + arg_idx * 8) as usize,
-            &string_val.to_le_bytes(),
-        )
-        .unwrap();
-    arg_idx += 1;
-
-    // 5. named groups object
-    memory
-        .write(
-            &mut *caller,
-            (shadow_sp + arg_idx * 8) as usize,
-            &named_groups_obj.to_le_bytes(),
-        )
-        .unwrap();
-
-    // 调用函数（async）
-    let result = resolve_and_call_async(
-        caller,
-        func,
-        value::encode_undefined(),
-        0,
-        args_count as i32,
-    )
-    .await;
-
-    // 将返回值转换为字符串
-    get_string_value(caller, result)
+    let result = call_wasm_callback_async(caller, func, value::encode_undefined(), &args)
+        .await
+        .unwrap_or_else(|_| value::encode_undefined());
+    replace_callback_result_to_string(caller, result)
 }
 
 async fn string_replace_async_body(

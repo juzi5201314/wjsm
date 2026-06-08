@@ -1215,6 +1215,17 @@ pub(crate) fn define_array_object(
         "obj_proto_value_of",
         obj_proto_value_of_fn,
     )?;
+    let obj_proto_init_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            let to_string = create_native_callable(caller.data(), NativeCallable::ObjectProtoToString);
+            let value_of = create_native_callable(caller.data(), NativeCallable::ObjectProtoValueOf);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toString", to_string);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "valueOf", value_of);
+            value::encode_undefined()
+        },
+    );
+    linker.define(&mut store, "env", "obj_proto_init", obj_proto_init_fn)?;
 
     // ═══════════════════════════════════════════════════════════════════
     // ── BigInt host functions ──────────────────────────────────────────

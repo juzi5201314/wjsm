@@ -49,11 +49,10 @@ impl Lowerer {
 
         let body_entry = self.emit_param_inits(&fn_expr.function.params, &param_ir_names, entry)?;
 
-        self.arguments_param_count = fn_expr.function.params.len() as u32;
+        self.arguments_param_count = Self::count_regular_params(&fn_expr.function.params);
         let body_entry = self.emit_arguments_init(body_entry)?;
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_expr.function.params)
-                || self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_expr.function.params)
+            || self.scopes.lookup("arguments").is_ok();
 
         // Lower body.
         let mut inner_flow = StmtFlow::Open(body_entry);
@@ -374,11 +373,10 @@ impl Lowerer {
         let after_inits =
             self.emit_param_inits(&fn_expr.function.params, &user_param_ir_names, entry)?;
 
-        self.arguments_param_count = fn_expr.function.params.len() as u32;
+        self.arguments_param_count = Self::count_regular_params(&fn_expr.function.params);
         let after_inits = self.emit_arguments_init(after_inits)?;
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_expr.function.params)
-                || self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_expr.function.params)
+            || self.scopes.lookup("arguments").is_ok();
 
         let dispatch_block = self.current_function.new_block();
         let body_entry = self.current_function.new_block();
@@ -530,11 +528,10 @@ impl Lowerer {
             wrapper_entry,
         )?;
 
-        self.arguments_param_count = fn_expr.function.params.len() as u32;
+        self.arguments_param_count = Self::count_regular_params(&fn_expr.function.params);
         let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
-        self.eval_caller_has_arguments =
-            Self::detect_param_arguments(&fn_expr.function.params)
-                || self.scopes.lookup("arguments").is_ok();
+        self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_expr.function.params)
+            || self.scopes.lookup("arguments").is_ok();
 
         let promise_val = self.alloc_value();
         self.current_function.append_instruction(

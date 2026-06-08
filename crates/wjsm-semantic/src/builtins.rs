@@ -332,16 +332,12 @@ pub(crate) fn builtin_from_function_proto_method(name: &str) -> Option<Builtin> 
     }
 }
 /// 将 Object.prototype 方法名映射到 Builtin 变体，用于语义层优化。
-/// 当 `obj.hasOwnProperty(key)` 被识别时，跳过运行时属性解析，直接发出 CallBuiltin。
 ///
-/// 注意: toString / valueOf 在此处拦截，用于 Object.prototype.toString/valueOf 调用。
-/// 对于 Array.prototype.toString、Date.prototype.valueOf 等特定原型的实现，
-/// 仍需通过运行时原型链查找调用（当前未实现）。
+/// 只拦截无需读取同名函数值的 `hasOwnProperty`。`toString` / `valueOf` 必须走运行时属性
+/// 查找，否则对象自有方法会被错误地静态改写为 Object.prototype 方法。
 pub(crate) fn builtin_from_object_proto_method(name: &str) -> Option<Builtin> {
     match name {
         "hasOwnProperty" => Some(Builtin::HasOwnProperty),
-        "toString" => Some(Builtin::ObjectProtoToString),
-        "valueOf" => Some(Builtin::ObjectProtoValueOf),
         _ => None,
     }
 }
@@ -377,8 +373,7 @@ pub(crate) fn builtin_from_string_proto_method(name: &str) -> Option<Builtin> {
         "trim" => Some(StringTrim),
         "trimEnd" => Some(StringTrimEnd),
         "trimStart" => Some(StringTrimStart),
-        "toString" => Some(StringToString),
-        "valueOf" => Some(StringValueOf),
+
         _ => None,
     }
 }
@@ -408,6 +403,8 @@ pub(crate) fn builtin_from_promise_proto_method(name: &str) -> Option<Builtin> {
 pub(crate) fn builtin_from_number_proto_method(name: &str) -> Option<Builtin> {
     use Builtin::*;
     match name {
+        "toString" => Some(NumberProtoToString),
+        "valueOf" => Some(NumberProtoValueOf),
         "toFixed" => Some(NumberProtoToFixed),
         "toExponential" => Some(NumberProtoToExponential),
         "toPrecision" => Some(NumberProtoToPrecision),
@@ -457,10 +454,11 @@ pub(crate) fn builtin_from_typedarray_proto_method(name: &str) -> Option<Builtin
 }
 
 pub(crate) fn builtin_from_error_proto_method(name: &str) -> Option<Builtin> {
-    // Error.prototype methods (toString) are dispatched at runtime
-    // via property lookup on the Error prototype object, not via CallBuiltin.
-    let _ = name;
-    None
+    use Builtin::*;
+    match name {
+        "toString" => Some(ErrorProtoToString),
+        _ => None,
+    }
 }
 /// 将 SharedArrayBuffer.prototype 方法名映射到 Builtin 变体。
 pub(crate) fn builtin_from_sharedarraybuffer_proto_method(name: &str) -> Option<Builtin> {
@@ -648,7 +646,9 @@ pub(crate) fn builtin_call_signature(builtin: Builtin) -> (&'static str, usize) 
         Builtin::SharedArrayBufferProtoByteLength => ("SharedArrayBuffer.prototype.byteLength", 1),
         Builtin::SharedArrayBufferProtoGrow => ("SharedArrayBuffer.prototype.grow", 2),
         Builtin::SharedArrayBufferProtoGrowable => ("SharedArrayBuffer.prototype.growable", 1),
-        Builtin::SharedArrayBufferProtoMaxByteLength => ("SharedArrayBuffer.prototype.maxByteLength", 1),
+        Builtin::SharedArrayBufferProtoMaxByteLength => {
+            ("SharedArrayBuffer.prototype.maxByteLength", 1)
+        }
         Builtin::SharedArrayBufferProtoSlice => ("SharedArrayBuffer.prototype.slice", 3),
         Builtin::SharedArrayBufferSpecies => ("SharedArrayBuffer[Symbol.species]", 1),
         // ── Atomics builtins ──

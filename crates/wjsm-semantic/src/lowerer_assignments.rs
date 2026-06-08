@@ -404,8 +404,8 @@ impl Lowerer {
                     );
                     return Ok(rhs);
                 }
-                if self.strict_mode && !self.eval_scope_record {
-                    // strict eval: 对未声明变量赋值 → ReferenceError
+                if self.strict_mode && !self.eval_scope_bridge_active() {
+                    // strict script/module: 对未声明变量赋值 → ReferenceError
                     let msg_const = self.module.add_constant(Constant::String(format!(
                         "assignment to undeclared variable '{name}'"
                     )));
@@ -462,7 +462,11 @@ impl Lowerer {
                         value: rhs,
                     },
                 );
-                self.append_eval_var_leak_if_needed(&name, kind, rhs, store_block)?;
+                let after_write_block =
+                    self.append_eval_var_leak_if_needed(&name, kind, rhs, store_block)?;
+                if after_write_block != store_block {
+                    self.expr_merge_block = Some(after_write_block);
+                }
                 // 更新 TypedArray 绑定跟踪：arr = new Int32Array -> 标记；arr = 其他 -> 取消标记
                 if is_typedarray_constructor_expr(assign.right.as_ref()) {
                     self.typedarray_bindings.insert((scope_id, name.clone()));
@@ -552,7 +556,11 @@ impl Lowerer {
                         value: dest,
                     },
                 );
-                self.append_eval_var_leak_if_needed(&name, kind, dest, block)?;
+                let after_write_block =
+                    self.append_eval_var_leak_if_needed(&name, kind, dest, block)?;
+                if after_write_block != block {
+                    self.expr_merge_block = Some(after_write_block);
+                }
 
                 Ok(dest)
             }
@@ -903,8 +911,7 @@ impl Lowerer {
         );
 
         let rhs = self.lower_expr(assign.right.as_ref(), assign_block)?;
-        let assign_end = self.resolve_store_block(assign_block);
-        self.append_eval_env_write(name, rhs, assign_end)?;
+        let assign_end = self.append_eval_env_write(name, rhs, assign_block)?;
         self.current_function
             .set_terminator(assign_end, Terminator::Jump { target: merge });
 
@@ -925,6 +932,7 @@ impl Lowerer {
                 ],
             },
         );
+        self.expr_merge_block = Some(merge);
         Ok(result)
     }
 

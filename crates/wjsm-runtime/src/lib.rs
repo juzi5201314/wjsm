@@ -17,6 +17,7 @@ use wasmtime::*;
 const SHADOW_STACK_SIZE: u32 = 65536;
 
 use wjsm_ir::{constants, value};
+mod agent_cluster;
 mod runtime_arguments;
 mod runtime_async_fn;
 mod runtime_builtins;
@@ -27,7 +28,6 @@ mod runtime_host_helpers;
 mod runtime_json;
 mod runtime_microtask;
 mod runtime_promises;
-mod agent_cluster;
 mod shared_buffer;
 pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;
@@ -119,16 +119,16 @@ fn register_common_bridges(
     // eval_get_binding
     let f = Func::wrap(
         &mut *store,
-        |caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
-            eval_get_binding(caller, record, name)
+        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+            eval_get_binding(&mut caller, record, name)
         },
     );
     linker.define(&mut *store, "env", "eval_get_binding", f)?;
     // eval_set_binding
     let f = Func::wrap(
         &mut *store,
-        |caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64| -> i64 {
-            eval_set_binding(caller, record, name, val)
+        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64| -> i64 {
+            eval_set_binding(&mut caller, record, name, val)
         },
     );
     linker.define(&mut *store, "env", "eval_set_binding", f)?;
@@ -1930,11 +1930,16 @@ pub(crate) fn typedarray_construct(
             return value::encode_undefined();
         };
         let byte_len = value::decode_f64(byte_len_val) as u32;
-        let (buf_handle, is_shared_from_backing) = match crate::shared_buffer::resolve_buffer_backing(caller, buffer) {
-            Some(crate::shared_buffer::BufferBacking::SharedArrayBuffer { handle, .. }) => (handle, true),
-            Some(crate::shared_buffer::BufferBacking::ArrayBuffer { handle, .. }) => (handle, false),
-            _ => return value::encode_undefined(),
-        };
+        let (buf_handle, is_shared_from_backing) =
+            match crate::shared_buffer::resolve_buffer_backing(caller, buffer) {
+                Some(crate::shared_buffer::BufferBacking::SharedArrayBuffer { handle, .. }) => {
+                    (handle, true)
+                }
+                Some(crate::shared_buffer::BufferBacking::ArrayBuffer { handle, .. }) => {
+                    (handle, false)
+                }
+                _ => return value::encode_undefined(),
+            };
         backing_is_shared = is_shared_from_backing;
         if offset > byte_len || offset % elem_size_u32 != 0 {
             set_typedarray_runtime_error(caller, "RangeError: Invalid typed array byteOffset");
@@ -1966,12 +1971,7 @@ pub(crate) fn typedarray_construct(
         let Some(view_byte_len) = typedarray_byte_len(caller, len, elem_size_u32) else {
             return value::encode_undefined();
         };
-        (
-            buf_handle,
-            offset,
-            len,
-            view_byte_len,
-        )
+        (buf_handle, offset, len, view_byte_len)
     } else {
         let Some(len) =
             typedarray_to_index(caller, buffer, "RangeError: Invalid typed array length")
@@ -2103,6 +2103,10 @@ struct ClosureEntry {
 #[derive(Clone)]
 enum NativeCallable {
     EvalIndirect,
+
+    /// raw f64 上 `n.toString()` 等；`method`: 0=toString, 1=valueOf, 2=toFixed, 3=toExponential, 4=toPrecision
+    NumberPrimitiveMethod { method: u8 },
+    ArgumentsStrictCalleeGetter,
     EvalFunction(EvalFunction),
     PromiseResolvingFunction {
         promise: i64,
@@ -2152,6 +2156,8 @@ enum NativeCallable {
     FinalizationRegistryUnregisterMethod,
     ArrayConstructor,
     ObjectConstructor,
+    ObjectProtoToString,
+    ObjectProtoValueOf,
     FunctionConstructor,
     StringConstructor,
     BooleanConstructor,

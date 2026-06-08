@@ -63,12 +63,33 @@ pub(crate) fn try_compiled_eval_from_caller(
         }
     }
 
+    if let Some(env) = scope_env {
+        let handle = value::decode_scope_record_handle(env);
+        if let Some(rec) = caller.data().scope_records.get(&handle) {
+            let nt = rec
+                .new_target
+                .filter(|v| !value::is_undefined(*v))
+                .or_else(|| {
+                    rec.bindings.iter().find_map(|(n, v, init, _)| {
+                        (n == "__wjsm_new_target" && *init && !value::is_undefined(*v))
+                            .then_some(*v)
+                    })
+                });
+            if let Some(nt) = nt {
+                caller
+                    .data()
+                    .new_target
+                    .store(nt, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
     let instance = Instance::new(&mut *caller, &eval_module, &imports)?;
     let entry = instance.get_typed_func::<i64, i64>(&mut *caller, "__eval_entry")?;
-    Ok(entry.call(
+    let result = entry.call(
         &mut *caller,
         scope_env.unwrap_or_else(value::encode_undefined),
-    )?)
+    )?;
+    Ok(result)
 }
 /// Phase 3 must-convert 之 compiled eval 路径（按 2026-05-31-async-scheduler-implementation-plan.md 审计条目 + 26-async-audit-refactor-design.md）：
 /// 为 `try_compiled_eval_from_caller`（eval 编译路径的 Instance::new + __eval_entry.call 点，perform_eval_from_caller 唯一 caller）添加 async 版本，与现有 sync `try_compiled_eval_from_caller` 并存。
@@ -172,7 +193,7 @@ pub(crate) fn cached_eval_wasm(
     has_scope_bridge.hash(&mut hasher);
     var_writes_to_scope.hash(&mut hasher);
     data_base.hash(&mut hasher);
-    const SCOPE_RECORD_CACHE_VERSION: u64 = 1;
+    const SCOPE_RECORD_CACHE_VERSION: u64 = 5;
     SCOPE_RECORD_CACHE_VERSION.hash(&mut hasher);
     let key = hasher.finish();
 
@@ -317,10 +338,6 @@ pub(crate) fn perform_eval_from_caller(
         return code_value;
     }
 
-    if !value::is_string(code_value) {
-        return code_value;
-    }
-
     let code = match read_value_string_bytes(caller, code_value)
         .and_then(|bytes| String::from_utf8(bytes).ok())
     {
@@ -342,29 +359,6 @@ pub(crate) fn perform_eval_from_caller(
             entry.offset % 8 == 0 && !entry.function_name.is_empty() && !entry.var_name.is_empty()
         })
         .count();
-    // ── SyntaxError 检测：eval 代码中声明 var/function arguments ──
-    // 检查规则（EvalDeclarationInstantiation）：
-    // 如果 eval 代码声明 var arguments 且调用上下文没有 arguments 绑定 → SyntaxError
-    // ── SyntaxError 检测：eval 代码中声明 var/function arguments ──
-    // 检查规则（EvalDeclarationInstantiation）：
-    // 如果调用上下文有 arguments 绑定且 eval 代码声明了某个同名绑定 → SyntaxError
-    if let Some(env) = scope_env {
-        let handle = value::decode_scope_record_handle(env);
-        let has_arguments = caller
-            .data()
-            .scope_records
-            .get(&handle)
-            .map(|r| r.has_arguments_binding)
-            .unwrap_or(false);
-        if has_arguments {
-            let binding_names = wjsm_semantic::eval_literal_binding_names(&code);
-            if binding_names.iter().any(|n| n == "arguments") {
-                let msg = "SyntaxError: declaring 'arguments' in eval code is invalid";
-                set_runtime_error(caller.data(), msg.to_string());
-                return value::encode_undefined();
-            }
-        }
-    }
 
     let module = match wjsm_parser::parse_script_as_module(&code) {
         Ok(module) => module,
@@ -374,9 +368,19 @@ pub(crate) fn perform_eval_from_caller(
         }
     };
     let strict_eval_source = runtime_module_has_use_strict_directive(&module);
-    let var_writes_to_scope = scope_env
-        .map(|env| !strict_eval_source && !eval_scope_has_strict_marker(caller, env))
+    if strict_eval_source {
+        if let Some(env) = scope_env {
+            let handle = value::decode_scope_record_handle(env);
+            if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
+                rec.is_strict = true;
+            }
+        }
+    }
+    let caller_is_strict = scope_env
+        .map(|env| eval_scope_has_strict_marker(caller, env))
         .unwrap_or(false);
+    let strict_eval = strict_eval_source || caller_is_strict;
+    let var_writes_to_scope = scope_env.map(|_| !strict_eval).unwrap_or(false);
 
     // ── 非可定义函数检查（CanDeclareGlobalFunction）──
     // eval 代码中声明 function NaN/Infinity/undefined → TypeError
@@ -397,7 +401,7 @@ pub(crate) fn perform_eval_from_caller(
                         message: msg,
                         value: error_obj,
                     });
-                    return value::encode_handle(value::TAG_EXCEPTION, idx + 1);
+                    return value::encode_handle(value::TAG_EXCEPTION, idx);
                 }
             }
         }
@@ -419,6 +423,9 @@ pub(crate) fn perform_eval_from_caller(
 
     match try_compiled_eval_from_caller(caller, &code, &module, scope_env, var_writes_to_scope) {
         Ok(value) => {
+            if value::is_exception(value) {
+                return value;
+            }
             let current_runtime_error = caller
                 .data()
                 .runtime_error
@@ -426,35 +433,7 @@ pub(crate) fn perform_eval_from_caller(
                 .expect("runtime_error mutex")
                 .clone();
             if value::is_undefined(value) && current_runtime_error != previous_runtime_error {
-                caller
-                    .data()
-                    .output
-                    .lock()
-                    .expect("runtime output buffer mutex")
-                    .truncate(output_len);
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime_error mutex") = previous_runtime_error.clone();
-                let mut eval_locals = HashMap::new();
-                match eval_module_items(
-                    caller,
-                    &module.body,
-                    scope_env,
-                    var_writes_to_scope,
-                    &mut eval_locals,
-                ) {
-                    Ok(Some(v)) => return v,
-                    Ok(None) => return value::encode_undefined(),
-                    Err(msg) if msg.starts_with("Uncaught exception:") => {
-                        return eval_exception_from_message(caller, msg);
-                    }
-                    Err(msg) => {
-                        set_runtime_error(caller.data(), msg);
-                        return value::encode_undefined();
-                    }
-                }
+                return value::encode_undefined();
             }
             value
         }
@@ -482,7 +461,6 @@ pub(crate) fn perform_eval_from_caller(
                     .expect("runtime_error mutex") = previous_runtime_error;
                 return value::encode_handle(value::TAG_EXCEPTION, idx);
             }
-
             caller
                 .data()
                 .output
@@ -502,15 +480,8 @@ pub(crate) fn perform_eval_from_caller(
                 var_writes_to_scope,
                 &mut eval_locals,
             ) {
-                Ok(Some(v)) => return v,
-                Ok(None) => return value::encode_undefined(),
-                Err(msg) if msg.starts_with("Uncaught exception:") => {
-                    return eval_exception_from_message(caller, msg);
-                }
-                Err(msg) => {
-                    set_runtime_error(caller.data(), msg);
-                    return value::encode_undefined();
-                }
+                Ok(completion) => completion.unwrap_or_else(value::encode_undefined),
+                Err(msg) => eval_exception_from_message(caller, msg),
             }
         }
     }
@@ -546,23 +517,6 @@ pub(crate) async fn perform_eval_from_caller_async(
             entry.offset % 8 == 0 && !entry.function_name.is_empty() && !entry.var_name.is_empty()
         })
         .count();
-    if let Some(env) = scope_env {
-        let handle = value::decode_scope_record_handle(env);
-        let has_arguments = caller
-            .data()
-            .scope_records
-            .get(&handle)
-            .map(|r| r.has_arguments_binding)
-            .unwrap_or(false);
-        if has_arguments {
-            let binding_names = wjsm_semantic::eval_literal_binding_names(&code);
-            if binding_names.iter().any(|n| n == "arguments") {
-                let msg = "SyntaxError: declaring 'arguments' in eval code is invalid";
-                set_runtime_error(caller.data(), msg.to_string());
-                return value::encode_undefined();
-            }
-        }
-    }
 
     let module = match wjsm_parser::parse_script_as_module(&code) {
         Ok(module) => module,
@@ -572,9 +526,19 @@ pub(crate) async fn perform_eval_from_caller_async(
         }
     };
     let strict_eval_source = runtime_module_has_use_strict_directive(&module);
-    let var_writes_to_scope = scope_env
-        .map(|env| !strict_eval_source && !eval_scope_has_strict_marker(caller, env))
+    if strict_eval_source {
+        if let Some(env) = scope_env {
+            let handle = value::decode_scope_record_handle(env);
+            if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
+                rec.is_strict = true;
+            }
+        }
+    }
+    let caller_is_strict = scope_env
+        .map(|env| eval_scope_has_strict_marker(caller, env))
         .unwrap_or(false);
+    let strict_eval = strict_eval_source || caller_is_strict;
+    let var_writes_to_scope = scope_env.map(|_| !strict_eval).unwrap_or(false);
 
     for item in &module.body {
         if let swc_ast::ModuleItem::Stmt(swc_ast::Stmt::Decl(swc_ast::Decl::Fn(fn_decl))) = item {
@@ -591,7 +555,7 @@ pub(crate) async fn perform_eval_from_caller_async(
                         message: msg,
                         value: error_obj,
                     });
-                    return value::encode_handle(value::TAG_EXCEPTION, idx + 1);
+                    return value::encode_handle(value::TAG_EXCEPTION, idx);
                 }
             }
         }
@@ -621,6 +585,9 @@ pub(crate) async fn perform_eval_from_caller_async(
     .await
     {
         Ok(value) => {
+            if value::is_exception(value) {
+                return value;
+            }
             let current_runtime_error = caller
                 .data()
                 .runtime_error
@@ -628,35 +595,7 @@ pub(crate) async fn perform_eval_from_caller_async(
                 .expect("runtime_error mutex")
                 .clone();
             if value::is_undefined(value) && current_runtime_error != previous_runtime_error {
-                caller
-                    .data()
-                    .output
-                    .lock()
-                    .expect("runtime output buffer mutex")
-                    .truncate(output_len);
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime_error mutex") = previous_runtime_error.clone();
-                let mut eval_locals = HashMap::new();
-                match eval_module_items(
-                    caller,
-                    &module.body,
-                    scope_env,
-                    var_writes_to_scope,
-                    &mut eval_locals,
-                ) {
-                    Ok(Some(v)) => return v,
-                    Ok(None) => return value::encode_undefined(),
-                    Err(msg) if msg.starts_with("Uncaught exception:") => {
-                        return eval_exception_from_message(caller, msg);
-                    }
-                    Err(msg) => {
-                        set_runtime_error(caller.data(), msg);
-                        return value::encode_undefined();
-                    }
-                }
+                return value::encode_undefined();
             }
             value
         }
@@ -704,15 +643,8 @@ pub(crate) async fn perform_eval_from_caller_async(
                 var_writes_to_scope,
                 &mut eval_locals,
             ) {
-                Ok(Some(v)) => return v,
-                Ok(None) => return value::encode_undefined(),
-                Err(msg) if msg.starts_with("Uncaught exception:") => {
-                    return eval_exception_from_message(caller, msg);
-                }
-                Err(msg) => {
-                    set_runtime_error(caller.data(), msg);
-                    return value::encode_undefined();
-                }
+                Ok(completion) => completion.unwrap_or_else(value::encode_undefined),
+                Err(msg) => eval_exception_from_message(caller, msg),
             }
         }
     }
@@ -733,7 +665,6 @@ fn eval_exception_from_message(caller: &mut Caller<'_, RuntimeState>, msg: Strin
     });
     value::encode_exception(idx)
 }
-
 
 pub(crate) fn runtime_module_has_use_strict_directive(module: &swc_ast::Module) -> bool {
     for item in &module.body {
@@ -797,7 +728,13 @@ fn eval_for_head_init(
                 };
                 match var_decl.kind {
                     swc_ast::VarDeclKind::Var if var_writes_to_scope => {
-                        eval_write_binding(caller, scope_env, eval_locals, name, value)?;
+                        eval_declare_or_write_var_binding(
+                            caller,
+                            scope_env,
+                            eval_locals,
+                            name,
+                            value,
+                        )?;
                     }
                     swc_ast::VarDeclKind::Var => {
                         eval_declare_local(eval_locals, name, EvalLocalKind::Var, value)?;
@@ -829,15 +766,22 @@ fn eval_for_in_lhs(
 ) -> Result<(), String> {
     match left {
         swc_ast::ForHead::VarDecl(var_decl) => {
-            let declarator = var_decl.decls.first().ok_or_else(|| {
-                "SyntaxError: unsupported eval for-in declaration".to_string()
-            })?;
+            let declarator = var_decl
+                .decls
+                .first()
+                .ok_or_else(|| "SyntaxError: unsupported eval for-in declaration".to_string())?;
             let Some(name) = pat_ident_name(&declarator.name) else {
                 return Err("SyntaxError: unsupported eval for-in pattern".to_string());
             };
             match var_decl.kind {
                 swc_ast::VarDeclKind::Var if var_writes_to_scope => {
-                    eval_write_binding(caller, scope_env, eval_locals, name, key_val)?;
+                    eval_declare_or_write_var_binding(
+                        caller,
+                        scope_env,
+                        eval_locals,
+                        name,
+                        key_val,
+                    )?;
                 }
                 _ => {
                     eval_declare_local(eval_locals, name, EvalLocalKind::Var, key_val)?;
@@ -884,15 +828,13 @@ pub(crate) fn eval_stmt(
                 };
                 match var_decl.kind {
                     swc_ast::VarDeclKind::Var if var_writes_to_scope => {
-                        if eval_locals
-                            .get(name)
-                            .is_some_and(|binding| !matches!(binding.kind, EvalLocalKind::Var))
-                        {
-                            return Err(format!(
-                                "SyntaxError: cannot redeclare identifier `{name}` in eval"
-                            ));
-                        }
-                        eval_write_binding(caller, scope_env, eval_locals, name, value)?;
+                        eval_declare_or_write_var_binding(
+                            caller,
+                            scope_env,
+                            eval_locals,
+                            name,
+                            value,
+                        )?;
                     }
                     swc_ast::VarDeclKind::Var => {
                         eval_declare_local(eval_locals, name, EvalLocalKind::Var, value)?;
@@ -912,7 +854,7 @@ pub(crate) fn eval_stmt(
             let value = create_eval_function(caller.data(), function);
             let name = fn_decl.ident.sym.as_ref();
             if var_writes_to_scope {
-                eval_write_binding(caller, scope_env, eval_locals, name, value)?;
+                eval_declare_or_write_var_binding(caller, scope_env, eval_locals, name, value)?;
             } else {
                 eval_declare_local(eval_locals, name, EvalLocalKind::Var, value)?;
             }
@@ -1002,9 +944,7 @@ pub(crate) fn eval_stmt(
             }
             Ok(completion)
         }
-        swc_ast::Stmt::ForOf(_) => {
-            Err("SyntaxError: unsupported eval statement".to_string())
-        }
+        swc_ast::Stmt::ForOf(_) => Err("SyntaxError: unsupported eval statement".to_string()),
         swc_ast::Stmt::While(while_stmt) => {
             let mut completion = None;
             loop {
@@ -1066,13 +1006,9 @@ pub(crate) fn eval_stmt(
                         if matches!(stmt, swc_ast::Stmt::Break(_)) {
                             return Ok(completion);
                         }
-                        if let Some(value) = eval_stmt(
-                            caller,
-                            stmt,
-                            scope_env,
-                            var_writes_to_scope,
-                            eval_locals,
-                        )? {
+                        if let Some(value) =
+                            eval_stmt(caller, stmt, scope_env, var_writes_to_scope, eval_locals)?
+                        {
                             completion = Some(value);
                         }
                     }
@@ -1084,13 +1020,9 @@ pub(crate) fn eval_stmt(
                         if matches!(stmt, swc_ast::Stmt::Break(_)) {
                             return Ok(completion);
                         }
-                        if let Some(value) = eval_stmt(
-                            caller,
-                            stmt,
-                            scope_env,
-                            var_writes_to_scope,
-                            eval_locals,
-                        )? {
+                        if let Some(value) =
+                            eval_stmt(caller, stmt, scope_env, var_writes_to_scope, eval_locals)?
+                        {
                             completion = Some(value);
                         }
                     }
@@ -1168,15 +1100,13 @@ pub(crate) fn eval_stmt(
             };
             Ok(Some(value))
         }
-        swc_ast::Stmt::Labeled(label_stmt) => {
-            eval_stmt(
-                caller,
-                &label_stmt.body,
-                scope_env,
-                var_writes_to_scope,
-                eval_locals,
-            )
-        }
+        swc_ast::Stmt::Labeled(label_stmt) => eval_stmt(
+            caller,
+            &label_stmt.body,
+            scope_env,
+            var_writes_to_scope,
+            eval_locals,
+        ),
         swc_ast::Stmt::Break(_) | swc_ast::Stmt::Continue(_) => {
             Err("SyntaxError: unsupported eval statement".to_string())
         }
@@ -1209,7 +1139,6 @@ pub(crate) fn eval_block(
     Ok(completion)
 }
 
-
 fn eval_array_lit(
     caller: &mut Caller<'_, RuntimeState>,
     arr: &swc_ast::ArrayLit,
@@ -1228,7 +1157,9 @@ fn eval_array_lit(
                 write_array_hole(caller, ptr, index);
                 index += 1;
             }
-            Some(swc_ast::ExprOrSpread { spread: Some(_), .. }) => {
+            Some(swc_ast::ExprOrSpread {
+                spread: Some(_), ..
+            }) => {
                 return Err("SyntaxError: unsupported eval array spread".to_string());
             }
             Some(swc_ast::ExprOrSpread { spread: None, expr }) => {
@@ -1323,10 +1254,12 @@ pub(crate) fn eval_expr(
 ) -> Result<i64, String> {
     match expr {
         swc_ast::Expr::Lit(lit) => eval_lit(caller, lit),
-        swc_ast::Expr::Ident(ident) => Ok(
-            eval_read_binding(caller, scope_env, eval_locals, ident.sym.as_ref())
-                .unwrap_or_else(value::encode_undefined),
-        ),
+        swc_ast::Expr::Ident(ident) => {
+            Ok(
+                eval_read_binding(caller, scope_env, eval_locals, ident.sym.as_ref())
+                    .unwrap_or_else(value::encode_undefined),
+            )
+        }
         swc_ast::Expr::Paren(paren) => eval_expr(caller, &paren.expr, scope_env, eval_locals),
         swc_ast::Expr::Seq(seq) => {
             let mut result = value::encode_undefined();
@@ -1467,7 +1400,6 @@ pub(crate) fn eval_logical(
     }
 }
 
-
 pub(crate) fn eval_unary(op: swc_ast::UnaryOp, val: i64) -> Result<i64, String> {
     match op {
         swc_ast::UnaryOp::Minus => Ok(value::encode_f64(-eval_to_number(val))),
@@ -1540,7 +1472,6 @@ pub(crate) fn eval_assign(
     }
 }
 
-
 pub(crate) fn eval_call(
     caller: &mut Caller<'_, RuntimeState>,
     call: &swc_ast::CallExpr,
@@ -1593,7 +1524,6 @@ pub(crate) fn eval_call(
     Err("SyntaxError: unsupported eval call".to_string())
 }
 
-
 pub(crate) fn pat_ident_name(pat: &swc_ast::Pat) -> Option<&str> {
     match pat {
         swc_ast::Pat::Ident(ident) => Some(ident.id.sym.as_ref()),
@@ -1629,12 +1559,47 @@ pub(crate) fn eval_read_binding(
         "Infinity" => return Some(value::encode_f64(f64::INFINITY)),
         _ => {}
     }
-    // LEGACY: flat-object eval scope bridge fallback. ScopeRecord eval is handled by
-    // compiled EvalGetBinding/EvalSetBinding; interpreted fallback keeps this for
-    // non-ScopeRecord callers.
+    if let Some(env) = scope_env
+        && value::is_scope_record(env)
+    {
+        let name_val = store_runtime_string(caller, name.to_string());
+        let got = eval_get_binding(caller, env, name_val);
+        if value::is_exception(got) {
+            let idx = value::decode_handle(got) as u32;
+            let msg = caller
+                .data()
+                .error_table
+                .lock()
+                .ok()
+                .and_then(|e| e.get(idx as usize).map(|x| x.message.clone()))
+                .unwrap_or_else(|| "ReferenceError".to_string());
+            set_runtime_error(caller.data(), msg);
+            return None;
+        }
+        return Some(got);
+    }
     let env = scope_env?;
     let ptr = resolve_handle(caller, env)?;
     read_object_property_by_name(caller, ptr, name)
+}
+
+fn eval_apply_set_binding_result(
+    caller: &mut Caller<'_, RuntimeState>,
+    result: i64,
+) -> Result<(), String> {
+    if value::is_exception(result) {
+        let idx = value::decode_handle(result) as u32;
+        let msg = caller
+            .data()
+            .error_table
+            .lock()
+            .ok()
+            .and_then(|e| e.get(idx as usize).map(|x| x.message.clone()))
+            .unwrap_or_else(|| "ReferenceError".to_string());
+        set_runtime_error(caller.data(), msg.clone());
+        return Err(msg);
+    }
+    Ok(())
 }
 
 pub(crate) fn eval_write_binding(
@@ -1654,9 +1619,48 @@ pub(crate) fn eval_write_binding(
     let Some(env) = scope_env else {
         return Ok(());
     };
-    // LEGACY: flat-object eval scope bridge fallback; see eval_read_binding.
+    if value::is_scope_record(env) {
+        let name_val = store_runtime_string(caller, name.to_string());
+        let result = eval_set_binding(caller, env, name_val, val);
+        return eval_apply_set_binding_result(caller, result);
+    }
     let _ = set_host_data_property_from_caller(caller, env, name, val);
     Ok(())
+}
+
+pub(crate) fn eval_declare_or_write_var_binding(
+    caller: &mut Caller<'_, RuntimeState>,
+    scope_env: Option<i64>,
+    eval_locals: &mut HashMap<String, EvalLocalBinding>,
+    name: &str,
+    val: i64,
+) -> Result<(), String> {
+    if let Some(binding) = eval_locals.get(name)
+        && !matches!(binding.kind, EvalLocalKind::Var)
+    {
+        return Err(format!(
+            "SyntaxError: cannot redeclare identifier `{name}` in eval"
+        ));
+    }
+
+    let Some(env) = scope_env else {
+        return eval_declare_local(eval_locals, name, EvalLocalKind::Var, val);
+    };
+
+    if value::is_scope_record(env) {
+        let handle = value::decode_scope_record_handle(env);
+        if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle)
+            && !rec
+                .bindings
+                .iter()
+                .any(|(binding_name, _, _, _)| binding_name == name)
+        {
+            rec.bindings.push((name.to_string(), val, true, false));
+            return Ok(());
+        }
+    }
+
+    eval_write_binding(caller, Some(env), eval_locals, name, val)
 }
 
 pub(crate) fn eval_function_from_decl(
@@ -2012,7 +2016,7 @@ pub(crate) fn scope_record_add_binding(
 }
 
 pub(crate) fn eval_get_binding(
-    mut caller: Caller<'_, RuntimeState>,
+    mut caller: &mut Caller<'_, RuntimeState>,
     record: i64,
     name: i64,
 ) -> i64 {
@@ -2023,15 +2027,20 @@ pub(crate) fn eval_get_binding(
     if name_str.is_empty() {
         return value::encode_undefined();
     }
-    // Magic name for new.target stored via scope_record_set_meta(key=3)
     if name_str == "__wjsm_new_target" {
         if let Some(rec) = caller.data().scope_records.get(&handle) {
-            if let Some(nt) = rec.new_target {
-                if !value::is_undefined(nt) {
-                    return nt;
+            if let Some(nt) = rec.new_target.filter(|v| !value::is_undefined(*v)) {
+                return nt;
+            }
+            for (n, v, init, _) in &rec.bindings {
+                if n == "__wjsm_new_target" && *init && !value::is_undefined(*v) {
+                    return *v;
                 }
             }
-            return caller.data().new_target.load(std::sync::atomic::Ordering::Relaxed);
+            return caller
+                .data()
+                .new_target
+                .load(std::sync::atomic::Ordering::Relaxed);
         }
         return value::encode_undefined();
     }
@@ -2050,7 +2059,7 @@ pub(crate) fn eval_get_binding(
                             message: msg,
                             value: error_obj,
                         });
-                        return value::encode_handle(value::TAG_EXCEPTION, idx + 1);
+                        return value::encode_handle(value::TAG_EXCEPTION, idx);
                     }
                 }
                 return *v;
@@ -2061,7 +2070,7 @@ pub(crate) fn eval_get_binding(
 }
 
 pub(crate) fn eval_set_binding(
-    mut caller: Caller<'_, RuntimeState>,
+    mut caller: &mut Caller<'_, RuntimeState>,
     record: i64,
     name: i64,
     val: i64,
@@ -2088,7 +2097,7 @@ pub(crate) fn eval_set_binding(
                             message: msg,
                             value: error_obj,
                         });
-                        return value::encode_handle(value::TAG_EXCEPTION, idx + 1);
+                        return value::encode_handle(value::TAG_EXCEPTION, idx);
                     }
                 }
                 *v = val;
@@ -2108,7 +2117,7 @@ pub(crate) fn eval_set_binding(
                     message: msg,
                     value: error_obj,
                 });
-                return value::encode_handle(value::TAG_EXCEPTION, idx + 1);
+                return value::encode_handle(value::TAG_EXCEPTION, idx);
             }
         }
         return val;
@@ -2153,6 +2162,16 @@ pub(crate) fn eval_super_base(caller: Caller<'_, RuntimeState>, record: i64) -> 
     value::encode_undefined()
 }
 
+fn decode_scope_record_meta_bool(val: i64) -> bool {
+    if value::is_bool(val) {
+        value::decode_bool(val)
+    } else if value::is_f64(val) {
+        value::decode_f64(val) != 0.0
+    } else {
+        val != 0
+    }
+}
+
 pub(crate) fn scope_record_set_meta(
     mut caller: Caller<'_, RuntimeState>,
     record: i64,
@@ -2167,10 +2186,14 @@ pub(crate) fn scope_record_set_meta(
     };
     if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
         match tag {
-            0 => rec.is_strict = value::decode_bool(val),
-            1 => rec.has_arguments_binding = value::decode_bool(val),
+            0 => rec.is_strict = decode_scope_record_meta_bool(val),
+            1 => rec.has_arguments_binding = decode_scope_record_meta_bool(val),
             2 => rec.home_object = Some(val),
-            3 => rec.new_target = Some(val),
+            3 => {
+                if !value::is_undefined(val) {
+                    rec.new_target = Some(val);
+                }
+            }
             _ => debug_assert!(false, "unknown scope record meta key: {}", tag),
         }
     }

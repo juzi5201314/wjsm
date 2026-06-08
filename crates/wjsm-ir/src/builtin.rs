@@ -726,7 +726,9 @@ impl fmt::Display for Builtin {
             Self::SharedArrayBufferProtoByteLength => "SharedArrayBuffer.prototype.byteLength",
             Self::SharedArrayBufferProtoGrow => "SharedArrayBuffer.prototype.grow",
             Self::SharedArrayBufferProtoGrowable => "SharedArrayBuffer.prototype.growable",
-            Self::SharedArrayBufferProtoMaxByteLength => "SharedArrayBuffer.prototype.maxByteLength",
+            Self::SharedArrayBufferProtoMaxByteLength => {
+                "SharedArrayBuffer.prototype.maxByteLength"
+            }
             Self::SharedArrayBufferProtoSlice => "SharedArrayBuffer.prototype.slice",
             Self::SharedArrayBufferSpecies => "SharedArrayBuffer[Symbol.species]",
             Self::AtomicsLoad => "Atomics.load",

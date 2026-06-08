@@ -59,12 +59,53 @@ impl Lowerer {
 
         let result_block = match expr_stmt.expr.as_ref() {
             swc_ast::Expr::Call(call) => self.lower_call(call, block)?,
+            swc_ast::Expr::Member(_) | swc_ast::Expr::OptChain(_) => {
+                let value = self.lower_expr(expr_stmt.expr.as_ref(), block)?;
+                self.lower_value_exception_branch(block, value)?
+            }
             expr => {
                 let _value = self.lower_expr(expr, block)?;
                 self.resolve_store_block(block)
             }
         };
         Ok(StmtFlow::Open(result_block))
+    }
+
+    pub(crate) fn lower_value_exception_branch(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let working_block = self.resolve_store_block(block);
+        let is_exception = self.alloc_value();
+        self.current_function.append_instruction(
+            working_block,
+            Instruction::IsException {
+                dest: is_exception,
+                value,
+            },
+        );
+        let continue_block = self.current_function.new_block();
+        let exc_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            working_block,
+            Terminator::Branch {
+                condition: is_exception,
+                true_block: exc_block,
+                false_block: continue_block,
+            },
+        );
+        let thrown_val = self.alloc_value();
+        self.current_function.append_instruction(
+            exc_block,
+            Instruction::CallBuiltin {
+                dest: Some(thrown_val),
+                builtin: Builtin::ExceptionValue,
+                args: vec![value],
+            },
+        );
+        self.emit_throw_value(exc_block, thrown_val)?;
+        Ok(self.resolve_store_block(continue_block))
     }
 
     pub(crate) fn lower_call(
@@ -672,15 +713,8 @@ impl Lowerer {
         );
         self.current_function
             .set_terminator(next_block, Terminator::Jump { target: header });
-        // 关键：若 body 因 return/throw/break/continue 而 Terminated，for-of 本身也必须报告 Terminated（而非 Open(exit)），
-        // 避免外层 function decl/expr 在 for-of 之后看到 Open 而注入隐式 return undefined。
-        // 迭代器关闭已在 abrupt 路径（lower_return/break 中的 emit_iterator_closes + label iterator_to_close）完成，符合 spec 13.7.5.13 关于 for-of 作为 abrupt completion 的规则。
-        let for_of_flow = if matches!(body_flow, StmtFlow::Terminated) {
-            StmtFlow::Terminated
-        } else {
-            StmtFlow::Open(exit)
-        };
-        Ok(for_of_flow)
+        // break/continue 走 abrupt 路径关闭迭代器；正常完成与 break 后均落到 exit，由外层 seal return。
+        Ok(StmtFlow::Open(exit))
     }
 
     pub(crate) fn lower_for_await_of(

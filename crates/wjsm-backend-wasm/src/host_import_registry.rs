@@ -28,6 +28,7 @@ pub enum SpecialHostImport {
     NativeCall,
     NewTargetSet,
     ObjGetByIndex,
+    ObjectProtoInit,
     ObjSpread,
     ProxyApply,
     ProxyConstruct,
@@ -37,12 +38,14 @@ pub enum SpecialHostImport {
     StringConcat,
     StringConcatVa,
     SymbolPropertyKey,
+    PrimitiveNumberGetMethod,
     TypedArraySetByIndex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HostImportGroup {
     ArrayPrototypeMethod,
+    NumberPrototypeMethod,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -630,6 +633,12 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         name: "obj_proto_value_of",
         type_idx: 3,
         key: Some(HostImportKey::Builtin(Builtin::ObjectProtoValueOf)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "obj_proto_init",
+        type_idx: 3,
+        key: Some(HostImportKey::Special(SpecialHostImport::ObjectProtoInit)),
         group: None,
     },
     HostImportSpec {
@@ -1480,31 +1489,31 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         name: "number_proto_to_string",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::NumberProtoToString)),
-        group: None,
+        group: Some(HostImportGroup::NumberPrototypeMethod),
     },
     HostImportSpec {
         name: "number_proto_value_of",
         type_idx: 3,
         key: Some(HostImportKey::Builtin(Builtin::NumberProtoValueOf)),
-        group: None,
+        group: Some(HostImportGroup::NumberPrototypeMethod),
     },
     HostImportSpec {
         name: "number_proto_to_fixed",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::NumberProtoToFixed)),
-        group: None,
+        group: Some(HostImportGroup::NumberPrototypeMethod),
     },
     HostImportSpec {
         name: "number_proto_to_exponential",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::NumberProtoToExponential)),
-        group: None,
+        group: Some(HostImportGroup::NumberPrototypeMethod),
     },
     HostImportSpec {
         name: "number_proto_to_precision",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::NumberProtoToPrecision)),
-        group: None,
+        group: Some(HostImportGroup::NumberPrototypeMethod),
     },
     HostImportSpec {
         name: "boolean_constructor",
@@ -2309,7 +2318,9 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
     HostImportSpec {
         name: "sharedarraybuffer_proto_growable",
         type_idx: 3,
-        key: Some(HostImportKey::Builtin(Builtin::SharedArrayBufferProtoGrowable)),
+        key: Some(HostImportKey::Builtin(
+            Builtin::SharedArrayBufferProtoGrowable,
+        )),
         group: None,
     },
     HostImportSpec {
@@ -2432,6 +2443,12 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         name: "map.group_by",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::MapGroupBy)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "primitive_number_get_method",
+        type_idx: 8,
+        key: Some(HostImportKey::Special(SpecialHostImport::PrimitiveNumberGetMethod)),
         group: None,
     },
     HostImportSpec {

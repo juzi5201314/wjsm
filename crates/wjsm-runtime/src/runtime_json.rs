@@ -642,9 +642,70 @@ fn json_parse_to_string(caller: &mut Caller<'_, RuntimeState>, value: i64) -> Re
             if !is_callable_in_runtime(caller, method) {
                 continue;
             }
-            if let Ok(result) = call_wasm_callback(caller, method, value, &[])
-                && !value::is_js_object(result)
-            {
+            let Ok(result) = call_wasm_callback(caller, method, value, &[]) else {
+                continue;
+            };
+            if value::is_exception(result) {
+                return Err(result);
+            }
+            if !value::is_js_object(result) {
+                return json_parse_to_string(caller, result);
+            }
+        }
+        return Ok("[object Object]".to_string());
+    }
+    Ok(eval_to_string(caller, value))
+}
+
+async fn json_parse_to_string_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    value: i64,
+) -> Result<String, i64> {
+    if value::is_string(value) {
+        return Ok(read_runtime_string(caller, value));
+    }
+    if value::is_symbol(value) {
+        return Err(make_exception(
+            caller,
+            "TypeError",
+            "Cannot convert a Symbol to a string".to_string(),
+        ));
+    }
+    if value::is_bigint(value) {
+        let handle = value::decode_bigint_handle(value) as usize;
+        let table = caller
+            .data()
+            .bigint_table
+            .lock()
+            .expect("bigint_table mutex");
+        return Ok(table
+            .get(handle)
+            .map(|bigint| bigint.to_string())
+            .unwrap_or_default());
+    }
+    if value::is_f64(value)
+        || value::is_bool(value)
+        || value::is_null(value)
+        || value::is_undefined(value)
+    {
+        return Ok(eval_to_string(caller, value));
+    }
+    if value::is_js_object(value)
+        && let Some(ptr) = resolve_handle(caller, value)
+    {
+        for method_name in ["toString", "valueOf"] {
+            let method = read_object_property_by_name(caller, ptr, method_name)
+                .unwrap_or_else(value::encode_undefined);
+            if !is_callable_in_runtime(caller, method) {
+                continue;
+            }
+            let Ok(result) = call_wasm_callback_async(caller, method, value, &[]).await else {
+                continue;
+            };
+            if value::is_exception(result) {
+                return Err(result);
+            }
+            if !value::is_js_object(result) {
                 return json_parse_to_string(caller, result);
             }
         }
@@ -928,7 +989,7 @@ pub async fn json_parse_to_wasm_async(
     text: i64,
     reviver: i64,
 ) -> i64 {
-    let text_str = match json_parse_to_string(caller, text) {
+    let text_str = match json_parse_to_string_async(caller, text).await {
         Ok(text) => text,
         Err(exception) => return exception,
     };
