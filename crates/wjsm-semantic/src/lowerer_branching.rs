@@ -341,8 +341,17 @@ impl Lowerer {
             }
         }
 
-        // 设置 switch terminator：default 指向 case_blocks[default_pos]，无 default 则指向 exit
-        let default_target = default_pos.map(|p| case_blocks[p]).unwrap_or(exit);
+        // 设置 switch terminator：default 指向 case_blocks[default_pos]，无 default 则分配合成块 jump 到 exit
+        let default_target = if let Some(p) = default_pos {
+            case_blocks[p]
+        } else {
+            let synthetic_default = self.current_function.new_block();
+            self.current_function.set_terminator(
+                synthetic_default,
+                Terminator::Jump { target: exit },
+            );
+            synthetic_default
+        };
 
         self.current_function.set_terminator(
             block,

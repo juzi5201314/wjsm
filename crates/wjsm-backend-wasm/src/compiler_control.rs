@@ -1069,8 +1069,24 @@ impl Compiler {
                         case_start,
                         extra_depth,
                     )
+                } else if self.if_depth > 0
+                    && target_idx < idx
+                    && !self.compiled_blocks.contains(&target_idx)
+                    && !matches!(
+                        blocks.get(target_idx).map(|b| b.terminator()),
+                        Some(Terminator::Return { .. })
+                    )
+                {
+                    self.emit_phi_moves(blocks, idx, target_idx);
+                    self.compiled_blocks.insert(target_idx);
+                    self.compile_branch_body_with_context(
+                        module,
+                        blocks,
+                        target_idx,
+                        case_start,
+                        extra_depth,
+                    )
                 } else {
-                    // 普通 merge 跳转
                     self.emit_phi_moves(blocks, idx, target_idx);
                     Ok(false)
                 }
@@ -1093,6 +1109,7 @@ impl Compiler {
                 default_block,
                 exit_block,
             } => {
+                self.compiled_blocks.insert(idx);
                 let exit_idx = exit_block.0 as usize;
                 let default_target_idx = default_block.0 as usize;
 
@@ -1163,7 +1180,17 @@ impl Compiler {
                 }
 
                 self.emit(WasmInstruction::End);
-                Ok(false)
+                if self.compiled_blocks.contains(&exit_idx) {
+                    Ok(true)
+                } else {
+                    self.compile_branch_body_with_context(
+                        module,
+                        blocks,
+                        exit_idx,
+                        case_start,
+                        extra_depth,
+                    )
+                }
             }
             Terminator::Branch {
                 condition,
