@@ -64,6 +64,8 @@ struct Compiler {
     phi_locals: HashMap<u32, u32>,
     /// Set of block indices already compiled (for dedup in structured compilation).
     compiled_blocks: std::collections::HashSet<usize>,
+    /// Set when emit_return runs; suppresses tail unreachable in compile_structured.
+    control_flow_returned: bool,
     /// Next available WASM function index (starts after imports).
     _next_import_func: u32,
     /// Map builtin → WASM function index.

@@ -102,28 +102,6 @@ pub(crate) fn define_object_builtins(
     );
     linker.define(&mut store, "env", "object.assign", object_assign_fn)?;
 
-    // ── Object.keys(obj) → array of enumerable own string keys ────────
-    // type_idx 3: (i64) -> i64
-    let object_keys_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            if !value::is_js_object(obj) {
-                return alloc_array(&mut caller, 0);
-            }
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return alloc_array(&mut caller, 0);
-            };
-            let names = collect_own_property_names(&mut caller, ptr, true);
-            let arr = alloc_array(&mut caller, names.len() as u32);
-            for (i, name) in names.into_iter().enumerate() {
-                let name_val = store_runtime_string(&mut caller, name);
-                set_array_elem(&mut caller, arr, i as i32, name_val);
-            }
-            arr
-        },
-    );
-    linker.define(&mut store, "env", "object.keys", object_keys_fn)?;
-
     // ── Object.values(obj) → array of enumerable own property values ──
     // type_idx 3: (i64) -> i64
     let object_values_fn = Func::wrap(
@@ -144,60 +122,6 @@ pub(crate) fn define_object_builtins(
         },
     );
     linker.define(&mut store, "env", "object.values", object_values_fn)?;
-
-    // ── Object.entries(obj) → array of [key, value] pairs ─────────────
-    // type_idx 3: (i64) -> i64
-    let object_entries_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            if !value::is_js_object(obj) {
-                return alloc_array(&mut caller, 0);
-            }
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return alloc_array(&mut caller, 0);
-            };
-            let names = collect_own_property_names(&mut caller, ptr, true);
-            let vals = collect_own_property_values(&mut caller, ptr, true);
-            let count = names.len().min(vals.len());
-            let arr = alloc_array(&mut caller, count as u32);
-            for i in 0..count {
-                let name_val = store_runtime_string(&mut caller, names[i].clone());
-                let pair = alloc_array(&mut caller, 2);
-                set_array_elem(&mut caller, pair, 0, name_val);
-                set_array_elem(&mut caller, pair, 1, vals[i]);
-                set_array_elem(&mut caller, arr, i as i32, pair);
-            }
-            arr
-        },
-    );
-    linker.define(&mut store, "env", "object.entries", object_entries_fn)?;
-
-    // ── Object.getOwnPropertyNames(obj) → all own string keys ─────────
-    // type_idx 3: (i64) -> i64
-    let object_get_own_property_names_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            if !value::is_js_object(obj) {
-                return alloc_array(&mut caller, 0);
-            }
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return alloc_array(&mut caller, 0);
-            };
-            let names = collect_own_property_names(&mut caller, ptr, false);
-            let arr = alloc_array(&mut caller, names.len() as u32);
-            for (i, name) in names.into_iter().enumerate() {
-                let name_val = store_runtime_string(&mut caller, name);
-                set_array_elem(&mut caller, arr, i as i32, name_val);
-            }
-            arr
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
-        "object.get_own_property_names",
-        object_get_own_property_names_fn,
-    )?;
 
     // ── Object.getOwnPropertySymbols(obj) → all own Symbol keys ───────
     // type_idx 3: (i64) -> i64

@@ -489,21 +489,7 @@ fn register_complex_bridges(
                         });
                 if let Some(method) = async_iterator_method {
                     if value::is_callable(method) {
-                        let iterator = if value::is_native_callable(method) {
-                            call_native_callable_with_args_from_caller(
-                                &mut caller,
-                                method,
-                                iterable,
-                                vec![],
-                            )
-                            .unwrap_or_else(value::encode_undefined)
-                        } else if let Ok(result) =
-                            call_wasm_callback_async(&mut caller, method, iterable, &[]).await
-                        {
-                            result
-                        } else {
-                            value::encode_undefined()
-                        };
+                        let iterator = call_iterable_method_async(&mut caller, method, iterable).await;
                         if value::is_object(iterator) {
                             if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
                                 let next =
@@ -520,6 +506,7 @@ fn register_complex_bridges(
                                         caller.data().iterators.lock().expect("iterators mutex");
                                     let handle = iters.len() as u32;
                                     iters.push(IteratorState::ObjectIter {
+                                        iterator,
                                         next: next_fn,
                                         return_method,
                                         current_value: value::encode_undefined(),
@@ -544,21 +531,7 @@ fn register_complex_bridges(
                     read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
                 {
                     if value::is_callable(method) {
-                        let sync_iter = if value::is_native_callable(method) {
-                            call_native_callable_with_args_from_caller(
-                                &mut caller,
-                                method,
-                                iterable,
-                                vec![],
-                            )
-                            .unwrap_or_else(value::encode_undefined)
-                        } else if let Ok(result) =
-                            call_wasm_callback_async(&mut caller, method, iterable, &[]).await
-                        {
-                            result
-                        } else {
-                            value::encode_undefined()
-                        };
+                        let sync_iter = call_iterable_method_async(&mut caller, method, iterable).await;
                         if value::is_object(sync_iter) {
                             if let Some(sync_ptr) = resolve_handle(&mut caller, sync_iter) {
                                 let next_fn =
@@ -579,6 +552,7 @@ fn register_complex_bridges(
                                             .expect("iterators mutex");
                                         let sync_handle = iters.len() as u32;
                                         iters.push(IteratorState::ObjectIter {
+                                            iterator: sync_iter,
                                             next: next_fn,
                                             return_method,
                                             current_value: value::encode_undefined(),
@@ -936,13 +910,6 @@ async fn execute_with_writer_shared_inner<W: Write>(
         table.push(NativeCallable::AsyncIteratorProtoSymbolAsyncIterator);
         value::encode_native_callable_idx(handle)
     };
-    let _ = define_host_data_property_with_env(
-        &mut store,
-        &wasm_env,
-        async_iterator_proto,
-        "Symbol.asyncIterator",
-        async_iterator_symbol_async_iterator,
-    );
     let _ = define_host_data_property_by_name_id_with_env(
         &mut store,
         &wasm_env,
@@ -2583,6 +2550,7 @@ enum IteratorState {
         length: u32,
     },
     ObjectIter {
+        iterator: i64,
         next: i64,
         return_method: Option<i64>,
         current_value: i64,

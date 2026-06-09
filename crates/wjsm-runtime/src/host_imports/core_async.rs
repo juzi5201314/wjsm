@@ -101,7 +101,7 @@ pub(crate) fn define_core_async(
         let Some(func_table) = table else {
             return value::encode_undefined();
         };
-        let next = {
+        let (iterator, next) = {
             let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             let Some(iter) = iters.get_mut(handle_idx) else {
                 return value::encode_undefined();
@@ -128,7 +128,7 @@ pub(crate) fn define_core_async(
                     *index += 1;
                     return value::encode_undefined();
                 }
-                IteratorState::ObjectIter { next, .. } => *next,
+                IteratorState::ObjectIter { iterator, next, .. } => (*iterator, *next),
                 IteratorState::Error => {
                     drop(iters);
                     return alloc_iterator_result_from_caller(
@@ -140,7 +140,7 @@ pub(crate) fn define_core_async(
             }
         };
         let (result, current_value, done, has_current) =
-            advance_object_iterator_from_caller_async(caller, &func_table, next).await;
+            advance_object_iterator_from_caller_async(caller, &func_table, iterator, next).await;
         if let Some(IteratorState::ObjectIter {
             current_value: stored_value,
             done: stored_done,
@@ -166,7 +166,7 @@ pub(crate) fn define_core_async(
         let Some(func_table) = table else {
             return value::encode_bool(true);
         };
-        let next = {
+        let (iterator, next) = {
             let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             let Some(iter) = iters.get_mut(handle_idx) else {
                 return value::encode_bool(true);
@@ -189,6 +189,7 @@ pub(crate) fn define_core_async(
                     return value::encode_bool(*index >= *length);
                 }
                 IteratorState::ObjectIter {
+                    iterator,
                     next,
                     done,
                     has_current,
@@ -200,7 +201,7 @@ pub(crate) fn define_core_async(
                     if *has_current {
                         return value::encode_bool(*done);
                     }
-                    *next
+                    (*iterator, *next)
                 }
                 IteratorState::Error => {
                     set_runtime_error(
@@ -212,7 +213,7 @@ pub(crate) fn define_core_async(
             }
         };
         let (_, next_value, next_done, has_current) =
-            advance_object_iterator_from_caller_async(caller, &func_table, next).await;
+            advance_object_iterator_from_caller_async(caller, &func_table, iterator, next).await;
         if let Some(IteratorState::ObjectIter {
             current_value,
             done,
@@ -234,32 +235,31 @@ pub(crate) fn define_core_async(
 
     async fn iterator_close_async(caller: &mut Caller<'_, RuntimeState>, handle: i64) {
         let handle_idx = value::decode_handle(handle) as usize;
-        let return_method = {
+        let (iterator, return_method) = {
             let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             match iters.get_mut(handle_idx) {
                 Some(IteratorState::ObjectIter {
+                    iterator,
                     return_method,
                     done,
                     ..
-                }) if !*done => *return_method,
-                _ => None,
+                }) if !*done => (*iterator, *return_method),
+                _ => return,
             }
         };
 
         let Some(return_method) = return_method else {
             return;
         };
-        let table = caller.get_export("__table").and_then(|e| e.into_table());
-        let Some(func_table) = table else { return };
-        let result = call_host_function_from_caller_async(
+        let result = call_iterator_method_async(
             caller,
-            &func_table,
             return_method,
+            iterator,
             value::encode_undefined(),
         )
         .await;
-        if let Some(result) = result
-            && !(value::is_object(result) || value::is_function(result) || value::is_array(result))
+        if !(value::is_object(result) || value::is_function(result) || value::is_array(result))
+            && !value::is_undefined(result)
         {
             set_runtime_error(
                 caller.data(),
@@ -276,6 +276,16 @@ pub(crate) fn define_core_async(
             *done = true;
         }
     }
+
+    linker.func_wrap_async(
+        "env",
+        "iterator_from",
+        |mut caller: Caller<'_, RuntimeState>, (val,): (i64,)| {
+            Box::new(async move {
+                super::core::iterator_from_impl_async(&mut caller, val).await
+            })
+        },
+    )?;
 
     linker.func_wrap_async(
         "env",

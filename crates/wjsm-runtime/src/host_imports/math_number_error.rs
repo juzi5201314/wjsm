@@ -654,16 +654,7 @@ pub(crate) fn define_math_number_error(
                     "RangeError: toFixed() digits argument must be between 0 and 100".to_string(),
                 );
             }
-            if x.is_nan() {
-                return store_runtime_string(&caller, "NaN".to_string());
-            }
-            if x.is_infinite() {
-                return store_runtime_string(
-                    &caller,
-                    if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string(),
-                );
-            }
-            let s = format!("{:.1$}", x, digits as usize);
+            let s = format_number_to_fixed_js(x, digits);
             store_runtime_string(&caller, s)
         },
     );
@@ -680,35 +671,14 @@ pub(crate) fn define_math_number_error(
                 return store_runtime_string(&caller, "NaN".to_string());
             }
             let x = f64::from_bits(this_val as u64);
-            if x.is_nan() {
-                return store_runtime_string(&caller, "NaN".to_string());
-            }
-            if x.is_infinite() {
-                return store_runtime_string(
-                    &caller,
-                    if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string(),
-                );
-            }
             let digits = if value::is_undefined(digits_val) || value::is_null(digits_val) {
-                -1i32
+                None
             } else if value::is_f64(digits_val) {
-                f64::from_bits(digits_val as u64) as i32
+                Some(f64::from_bits(digits_val as u64) as i32)
             } else {
-                -1
+                None
             };
-            if x == 0.0 {
-                if digits > 0 {
-                    let s = format!("0.{}e+0", "0".repeat(digits as usize));
-                    return store_runtime_string(&caller, s);
-                }
-                return store_runtime_string(&caller, "0e+0".to_string());
-            }
-            let s = if digits >= 0 {
-                format!("{:.1$e}", x, digits as usize)
-            } else {
-                format!("{:e}", x)
-            };
-            let s = normalize_exponent(&s);
+            let s = format_number_to_exponential_js(x, digits);
             store_runtime_string(&caller, s)
         },
     );
@@ -725,33 +695,22 @@ pub(crate) fn define_math_number_error(
                 return store_runtime_string(&caller, "NaN".to_string());
             }
             let x = f64::from_bits(this_val as u64);
-            if x.is_nan() {
-                return store_runtime_string(&caller, "NaN".to_string());
-            }
-            if x.is_infinite() {
-                return store_runtime_string(
-                    &caller,
-                    if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string(),
-                );
-            }
-            let precision = if value::is_undefined(digits_val) || value::is_null(digits_val) {
-                -1i32
+            let precision = if value::is_undefined(digits_val) {
+                None
             } else if value::is_f64(digits_val) {
-                f64::from_bits(digits_val as u64) as i32
+                Some(f64::from_bits(digits_val as u64) as i32)
             } else {
-                -1
+                Some(-1)
             };
-            if !(1..=21).contains(&precision) {
-                if value::is_undefined(digits_val) {
-                    let s = format_number_js(x);
-                    return store_runtime_string(&caller, s);
-                }
+            if let Some(precision) = precision
+                && !(1..=21).contains(&precision)
+            {
                 return store_runtime_string(
                     &caller,
                     "RangeError: toPrecision() argument must be between 1 and 21".to_string(),
                 );
             }
-            let s = format!("{:.1$}", x, precision as usize);
+            let s = format_number_to_precision_js(x, precision);
             store_runtime_string(&caller, s)
         },
     );

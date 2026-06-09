@@ -1,11 +1,12 @@
 exit_code: 0
 --- stdout ---
 === Object.keys on proxy ===
-keys: ["Symbol.asyncIterator"]
+ownKeys trap
+keys: ["a","b","c"]
 
 === Object.entries on proxy ===
-entries: [["Symbol.toStringTag","AsyncGenerator"]]
+entries: [["foo","bar"],["baz","qux"]]
 
 === Object.getOwnPropertyNames on proxy ===
-own names: ["length","name"]
+own names: ["a","b","hidden"]
 --- stderr ---

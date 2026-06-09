@@ -16,6 +16,32 @@ pub(crate) struct ScopeRecord {
     pub(crate) is_strict: bool,
 }
 
+fn sync_eval_new_target_from_scope_record(
+    caller: &mut Caller<'_, RuntimeState>,
+    scope_env: Option<i64>,
+) {
+    let Some(env) = scope_env else {
+        return;
+    };
+    let handle = value::decode_scope_record_handle(env);
+    if let Some(rec) = caller.data().scope_records.get(&handle) {
+        let nt = rec
+            .new_target
+            .filter(|v| !value::is_undefined(*v))
+            .or_else(|| {
+                rec.bindings.iter().find_map(|(n, v, init, _)| {
+                    (n == "__wjsm_new_target" && *init && !value::is_undefined(*v)).then_some(*v)
+                })
+            });
+        if let Some(nt) = nt {
+            caller
+                .data()
+                .new_target
+                .store(nt, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
 pub(crate) fn try_compiled_eval_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     code: &str,
@@ -63,26 +89,7 @@ pub(crate) fn try_compiled_eval_from_caller(
         }
     }
 
-    if let Some(env) = scope_env {
-        let handle = value::decode_scope_record_handle(env);
-        if let Some(rec) = caller.data().scope_records.get(&handle) {
-            let nt = rec
-                .new_target
-                .filter(|v| !value::is_undefined(*v))
-                .or_else(|| {
-                    rec.bindings.iter().find_map(|(n, v, init, _)| {
-                        (n == "__wjsm_new_target" && *init && !value::is_undefined(*v))
-                            .then_some(*v)
-                    })
-                });
-            if let Some(nt) = nt {
-                caller
-                    .data()
-                    .new_target
-                    .store(nt, std::sync::atomic::Ordering::Relaxed);
-            }
-        }
-    }
+    sync_eval_new_target_from_scope_record(caller, scope_env);
     let instance = Instance::new(&mut *caller, &eval_module, &imports)?;
     let entry = instance.get_typed_func::<i64, i64>(&mut *caller, "__eval_entry")?;
     let result = entry.call(
@@ -152,6 +159,7 @@ pub(crate) async fn try_compiled_eval_from_caller_async(
         }
     }
 
+    sync_eval_new_target_from_scope_record(caller, scope_env);
     let instance = Instance::new_async(&mut *caller, &eval_module, &imports).await?;
     let entry = instance.get_typed_func::<i64, i64>(&mut *caller, "__eval_entry")?;
     Ok(entry

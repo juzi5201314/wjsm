@@ -463,6 +463,16 @@ pub(crate) fn define_array_object_async(
 
     linker.func_wrap_async(
         "env",
+        "array_push_spread",
+        |mut caller: Caller<'_, RuntimeState>, (arr, iterable): (i64, i64)| {
+            Box::new(async move {
+                super::array_object::array_push_spread_impl_async(&mut caller, arr, iterable).await
+            })
+        },
+    )?;
+
+    linker.func_wrap_async(
+        "env",
         "func_call",
         |mut caller: Caller<'_, RuntimeState>,
          (func, this_val, args_base, args_count): (i64, i64, i32, i32)| {

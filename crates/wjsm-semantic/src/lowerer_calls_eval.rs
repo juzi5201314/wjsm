@@ -717,9 +717,24 @@ impl Lowerer {
                 args: vec![scope_record, super_key, super_base],
             },
         );
-        // 7b. new.target (meta key=3) for non-arrow eval callers
-        if !self.is_arrow {
-            let nt_key = self.const_val_i64(eval_block, 3);
+        // 7b. new.target (meta key=3). 箭头函数从词法环境捕获，普通函数读取当前调用上下文。
+        let nt_key = self.const_val_i64(eval_block, 3);
+        let new_target = if self.is_arrow {
+            let binding = CapturedBinding::lexical_new_target();
+            self.record_capture(binding.clone());
+            let env_val = self.load_env_object(eval_block);
+            let key_val = self.append_env_key_const(eval_block, &binding);
+            let new_target = self.alloc_value();
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::GetProp {
+                    dest: new_target,
+                    object: env_val,
+                    key: key_val,
+                },
+            );
+            new_target
+        } else {
             let new_target = self.alloc_value();
             let dummy_const = self.module.add_constant(Constant::Undefined);
             let dummy_val = self.alloc_value();
@@ -738,16 +753,17 @@ impl Lowerer {
                     args: vec![dummy_val],
                 },
             );
-            self.current_function.append_instruction(
-                eval_block,
-                Instruction::CallBuiltin {
-                    dest: None,
-                    builtin: Builtin::ScopeRecordSetMeta,
-                    args: vec![scope_record, nt_key, new_target],
-                },
-            );
-            // new.target for eval body: runtime reads atomic + scope meta at eval entry; no binding snapshot.
-        }
+            new_target
+        };
+        self.current_function.append_instruction(
+            eval_block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ScopeRecordSetMeta,
+                args: vec![scope_record, nt_key, new_target],
+            },
+        );
+        // new.target for eval body: runtime reads scope meta first, then runtime global fallback.
 
         // 8. Call Eval(code, scope_record)
         let dest = self.alloc_value();

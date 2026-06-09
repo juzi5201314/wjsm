@@ -342,6 +342,10 @@ impl FunctionBuilder {
         self.has_eval
     }
 
+    fn name(&self) -> &str {
+        &self._name
+    }
+
     fn new_block(&mut self) -> BasicBlockId {
         let id = BasicBlockId(self.blocks.len() as u32);
         self.blocks.push(BasicBlock::new(id));
@@ -1381,6 +1385,17 @@ impl CapturedBinding {
             name: "$this".to_string(),
             scope_id: None,
         }
+    }
+
+    fn lexical_new_target() -> Self {
+        Self {
+            name: "__wjsm_new_target".to_string(),
+            scope_id: None,
+        }
+    }
+
+    fn is_lexical_new_target(&self) -> bool {
+        self.scope_id.is_none() && self.name == "__wjsm_new_target"
     }
 
     fn env_key(&self) -> String {

@@ -521,6 +521,19 @@ pub(crate) fn read_object_property_by_name_id(
     Some(val)
 }
 
+pub(crate) fn read_iterator_method(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+) -> Option<i64> {
+    let method = read_object_property_by_name_id(caller, obj_ptr, encode_symbol_name_id(0))
+        .or_else(|| read_object_property_by_name(caller, obj_ptr, "Symbol.iterator"))?;
+    if value::is_callable(method) {
+        Some(method)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn write_object_property_by_name_id(
     caller: &mut Caller<'_, RuntimeState>,
     obj_ptr: usize,
