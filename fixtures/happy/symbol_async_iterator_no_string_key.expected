@@ -1,0 +1,12 @@
+exit_code: 0
+--- stdout ---
+["next","return","throw"]
+1
+true
+["Symbol.toStringTag"]
+1
+["__stream_handle__","locked","getReader","cancel","tee","pipeTo","pipeThrough"]
+1
+["__stream_handle__","locked","getReader","cancel","tee"]
+1
+--- stderr ---

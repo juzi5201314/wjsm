@@ -356,6 +356,42 @@ impl Lowerer {
         block: BasicBlockId,
         binding: &CapturedBinding,
     ) -> ValueId {
+        if binding.is_lexical_new_target() {
+            if self.is_arrow {
+                self.record_capture(binding.clone());
+                let env_val = self.load_env_object(block);
+                let key_val = self.append_env_key_const(block, binding);
+                let current_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::GetProp {
+                        dest: current_val,
+                        object: env_val,
+                        key: key_val,
+                    },
+                );
+                return current_val;
+            }
+            let dummy_const = self.module.add_constant(Constant::Undefined);
+            let dummy_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: dummy_val,
+                    constant: dummy_const,
+                },
+            );
+            let current_val = self.alloc_value();
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(current_val),
+                    builtin: Builtin::NewTarget,
+                    args: vec![dummy_val],
+                },
+            );
+            return current_val;
+        }
         if self.binding_belongs_to_current_function(binding) {
             let current_val = self.alloc_value();
             self.current_function.append_instruction(

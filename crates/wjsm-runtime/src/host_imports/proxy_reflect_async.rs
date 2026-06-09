@@ -4,10 +4,10 @@ use anyhow::Result;
 use wasmtime::{Caller, Linker};
 
 use super::proxy_reflect::{
-    extract_array_like_elements, reflect_apply_impl_async, reflect_construct_impl_async,
-    reflect_delete_property_impl, reflect_get_own_property_descriptor_impl,
-    reflect_get_prototype_of_async, reflect_has_impl, reflect_own_keys_impl, reflect_set_impl,
-    reflect_set_prototype_of_fn_impl,
+    extract_array_like_elements, proxy_own_keys_trap_async, reflect_apply_impl_async,
+    reflect_construct_impl_async, reflect_delete_property_impl,
+    reflect_get_own_property_descriptor_impl, reflect_get_prototype_of_async, reflect_has_impl,
+    reflect_own_keys_impl, reflect_set_impl, reflect_set_prototype_of_fn_impl,
 };
 use crate::*;
 
@@ -404,70 +404,25 @@ pub(crate) fn define_proxy_reflect_async(
     linker.func_wrap_async("env", "reflect_own_keys", |mut caller: Caller<'_, RuntimeState>, (target,): (i64,)| {
         Box::new(async move {
             if value::is_proxy(target) {
+                let res = proxy_own_keys_trap_async(&mut caller, target).await;
+                if !value::is_undefined(res) {
+                    return res;
+                }
+                if caller.data().runtime_error.lock().expect("runtime error mutex").is_some() {
+                    return value::encode_undefined();
+                }
                 let handle = value::decode_proxy_handle(target) as usize;
-                let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
+                let entry = caller
+                    .data()
+                    .proxy_table
+                    .lock()
+                    .expect("proxy_table mutex")
+                    .get(handle)
+                    .cloned();
                 if let Some(entry) = entry {
-                    if entry.revoked {
-                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'ownKeys' on a proxy that has been revoked".to_string());
-                        return value::encode_undefined();
-                    }
-                    if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                        let trap = read_object_property_by_name(&mut caller, handler_ptr, "ownKeys").unwrap_or_else(value::encode_undefined);
-                        if !value::is_undefined(trap) && !value::is_null(trap) {
-                            let trap_res = call_wasm_callback_async(&mut caller, trap, entry.handler, &[entry.target]).await;
-                            let keys_val = match trap_res {
-                                Ok(res) => res,
-                                Err(e) => {
-                                    set_runtime_error(caller.data(), format!("TypeError: Proxy ownKeys trap failed: {}", e));
-                                    return value::encode_undefined();
-                                }
-                            };
-                            let keys = match extract_array_like_elements(&mut caller, keys_val) {
-                                Ok(arr) => arr,
-                                Err(err) => {
-                                    set_runtime_error(caller.data(), err);
-                                    return value::encode_undefined();
-                                }
-                            };
-                            let ext = is_extensible_impl(&mut caller, entry.target);
-                            let Some(t_ptr) = resolve_handle(&mut caller, entry.target) else {
-                                return value::encode_undefined();
-                            };
-                            let target_keys = collect_own_property_names(&mut caller, t_ptr, false);
-                            let mut trap_keys_str = Vec::new();
-                            for &k in &keys {
-                                if value::is_symbol(k) { continue; }
-                                if let Ok(k_str) = render_value(&mut caller, k) { trap_keys_str.push(k_str); }
-                            }
-                            if !ext {
-                                let mut match_all = true;
-                                for tk in &target_keys {
-                                    if !trap_keys_str.contains(tk) { match_all = false; break; }
-                                }
-                                if !match_all || trap_keys_str.len() != target_keys.len() {
-                                    set_runtime_error(caller.data(), "TypeError: Proxy ownKeys invariant violated: target is non-extensible and keys do not match target keys".to_string());
-                                    return value::encode_undefined();
-                                }
-                            } else {
-                                for tk in &target_keys {
-                                    if let Some(tk_c) = find_memory_c_string(&mut caller, tk) {
-                                        if let Some((_, flags, _)) = find_property_slot_by_name_id(&mut caller, t_ptr, tk_c) {
-                                            let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
-                                            if !configurable && !trap_keys_str.contains(tk) {
-                                                set_runtime_error(caller.data(), format!("TypeError: Proxy ownKeys invariant violated: non-configurable property '{}' is missing in trap result", tk));
-                                                return value::encode_undefined();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            let arr = alloc_array(&mut caller, keys.len() as u32);
-                            for (i, &key) in keys.iter().enumerate() { set_array_elem(&mut caller, arr, i as i32, key); }
-                            return arr;
-                        }
-                    }
                     return reflect_own_keys_impl(&mut caller, entry.target);
                 }
+                return value::encode_undefined();
             }
             reflect_own_keys_impl(&mut caller, target)
         })

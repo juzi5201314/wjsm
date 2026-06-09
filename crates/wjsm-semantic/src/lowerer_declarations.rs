@@ -443,6 +443,28 @@ impl Lowerer {
                 constant: undef_const,
             },
         );
+        let fn_name = self.current_function.name().to_string();
+        let mapped_self_binding = if needs_mapped {
+            self.scopes
+                .lookup(&fn_name)
+                .ok()
+                .map(|(scope_id, _)| CapturedBinding::new(&fn_name, scope_id))
+        } else {
+            None
+        };
+        if !needs_mapped {
+            // func_ref_val already undefined for unmapped / strict paths
+        } else if mapped_self_binding.is_none() {
+            let function_id = wjsm_ir::FunctionId(self.module.functions().len() as u32);
+            let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: func_ref_val,
+                    constant: func_ref_const,
+                },
+            );
+        }
         if needs_mapped {
             self.current_function.append_instruction(
                 block,
@@ -470,6 +492,40 @@ impl Lowerer {
                 value: arguments_obj,
             },
         );
+
+        if let Some(binding) = mapped_self_binding {
+            let patch_block = self.resolve_store_block(store_block);
+            let env_val = self.load_env_object(patch_block);
+            let env_key_val = self.append_env_key_const(patch_block, &binding);
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                patch_block,
+                Instruction::GetProp {
+                    dest: closure_val,
+                    object: env_val,
+                    key: env_key_val,
+                },
+            );
+            let callee_key = self.alloc_value();
+            self.current_function.append_instruction(
+                patch_block,
+                Instruction::Const {
+                    dest: callee_key,
+                    constant: self
+                        .module
+                        .add_constant(Constant::String("callee".to_string())),
+                },
+            );
+            self.current_function.append_instruction(
+                patch_block,
+                Instruction::SetProp {
+                    object: arguments_obj,
+                    key: callee_key,
+                    value: closure_val,
+                },
+            );
+            return Ok(self.resolve_store_block(patch_block));
+        }
 
         if self.scopes.mark_initialised("arguments").is_err() {
             // Already initialised, that's fine

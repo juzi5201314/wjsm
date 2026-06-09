@@ -977,6 +977,64 @@ pub(crate) fn format_number_js(x: f64) -> String {
     s
 }
 
+pub(crate) fn format_number_to_fixed_js(x: f64, digits: i32) -> String {
+    if x.is_nan() {
+        return "NaN".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    format!("{:.1$}", x, digits as usize)
+}
+
+pub(crate) fn format_number_to_exponential_js(x: f64, digits: Option<i32>) -> String {
+    if x.is_nan() {
+        return "NaN".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    if x == 0.0 {
+        if let Some(digits) = digits
+            && digits > 0
+        {
+            return format!("0.{}e+0", "0".repeat(digits as usize));
+        }
+        return "0e+0".to_string();
+    }
+    let s = if let Some(digits) = digits {
+        format!("{:.1$e}", x, digits as usize)
+    } else {
+        format!("{:e}", x)
+    };
+    normalize_exponent(&s)
+}
+
+pub(crate) fn format_number_to_precision_js(x: f64, precision: Option<i32>) -> String {
+    if x.is_nan() {
+        return "NaN".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    let Some(precision) = precision else {
+        return format_number_js(x);
+    };
+    if x == 0.0 {
+        if precision == 1 {
+            return "0".to_string();
+        }
+        return format!("0.{}", "0".repeat((precision - 1) as usize));
+    }
+    let exponent = x.abs().log10().floor() as i32;
+    if exponent >= precision || exponent < -6 {
+        let s = format!("{:.1$e}", x, (precision - 1) as usize);
+        return normalize_exponent(&s);
+    }
+    let fraction_digits = (precision - exponent - 1).max(0) as usize;
+    format!("{:.1$}", x, fraction_digits)
+}
+
 pub(crate) fn format_radix(mut value: i64, radix: u32) -> String {
     if value == 0 {
         return "0".to_string();

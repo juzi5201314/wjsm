@@ -512,9 +512,46 @@ impl Compiler {
 
                     self.emit(WasmInstruction::End);
 
-                    if let Some(exit_block_ir) = blocks.get(exit_idx)
+                    // 当 exit == default 时，exit block 的内容已在 default case 位置编译过，
+                    // 但 break 会跳过那个位置，直接到 switch 之后。
+                    // 所以需要在 switch 结束后再次编译 exit block，让 break 能继续执行。
+                    if exit_idx == default_target_idx {
+                        // exit == default: 在 switch 之后重新编译 exit block
+                        if let Some(exit_block_ir) = blocks.get(exit_idx) {
+                            for instruction in exit_block_ir.instructions() {
+                                if self.compile_instruction(module, instruction)? {
+                                    break;
+                                }
+                            }
+                            match exit_block_ir.terminator() {
+                                Terminator::Return { value } => {
+                                    self.emit_return(value);
+                                    idx = blocks.len(); // 终止主循环
+                                }
+                                Terminator::Jump { target } => {
+                                    // exit block 可能跳到其他地方
+                                    let target_idx = target.0 as usize;
+                                    if let Some(continuation) =
+                                        self.branch_continuation_target(blocks, target_idx)
+                                    {
+                                        idx = self
+                                            .loop_exit_for_header(continuation)
+                                            .unwrap_or(continuation);
+                                    } else {
+                                        idx = target_idx;
+                                    }
+                                }
+                                _ => {
+                                    idx = exit_idx + 1;
+                                }
+                            }
+                        } else {
+                            idx = exit_idx;
+                        }
+                    } else if let Some(exit_block_ir) = blocks.get(exit_idx)
                         && self.compiled_blocks.contains(&exit_idx)
                     {
+                        // exit != default 且 exit 已被编译：重新发射（适用于共享 exit 的情况）
                         for instruction in exit_block_ir.instructions() {
                             if self.compile_instruction(module, instruction)? {
                                 break;
@@ -523,19 +560,21 @@ impl Compiler {
                         if let Terminator::Return { value } = exit_block_ir.terminator() {
                             self.emit_return(value);
                         }
-                    }
-
-                    if self.compiled_blocks.contains(&exit_idx) {
-                        if let Some(continuation) =
-                            self.branch_continuation_target(blocks, exit_idx)
-                        {
-                            idx = self
-                                .loop_exit_for_header(continuation)
-                                .unwrap_or(continuation);
+                        if self.compiled_blocks.contains(&exit_idx) {
+                            if let Some(continuation) =
+                                self.branch_continuation_target(blocks, exit_idx)
+                            {
+                                idx = self
+                                    .loop_exit_for_header(continuation)
+                                    .unwrap_or(continuation);
+                            } else {
+                                idx = exit_idx;
+                            }
                         } else {
                             idx = exit_idx;
                         }
                     } else {
+                        // exit 未被编译：正常继续
                         idx = exit_idx;
                     }
                 }
@@ -641,7 +680,7 @@ impl Compiler {
                     if target_idx == exit_idx {
                         // switch break
                         self.emit_phi_moves(blocks, idx, target_idx);
-                        self.emit(WasmInstruction::Br(switch_break_depth));
+                        self.emit(WasmInstruction::Br(switch_break_depth + self.if_depth));
                         break;
                     } else if let Some(depth) = self.loop_continue_depth(target_idx) {
                         // loop continue（仅当循环在 case body 外部时加 extra_depth）

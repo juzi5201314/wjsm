@@ -272,96 +272,7 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "throw", f)?;
 
-    // ── Import 4: iterator_from(i64) → i64 ──────────────────────────────
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
-            if let Some(string_data) = read_value_string_bytes(&mut caller, val) {
-                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                let handle = iters.len() as u32;
-                iters.push(IteratorState::StringIter {
-                    data: string_data,
-                    byte_pos: 0,
-                });
-                return value::encode_handle(value::TAG_ITERATOR, handle);
-            }
 
-            if value::is_array(val)
-                && let Some(ptr) = resolve_handle(&mut caller, val)
-            {
-                let length = read_array_length(&mut caller, ptr).unwrap_or(0);
-                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                let handle = iters.len() as u32;
-                iters.push(IteratorState::ArrayIter {
-                    ptr,
-                    index: 0,
-                    length,
-                });
-                return value::encode_handle(value::TAG_ITERATOR, handle);
-            }
-
-            if (value::is_object(val) || value::is_function(val))
-                && let Some(ptr) = resolve_handle(&mut caller, val)
-                && let Some(method) =
-                    read_object_property_by_name_id(&mut caller, ptr, encode_symbol_name_id(0))
-                && value::is_callable(method)
-            {
-                let iterator = if value::is_native_callable(method) {
-                    call_native_callable_with_args_from_caller(&mut caller, method, val, vec![])
-                        .unwrap_or_else(value::encode_undefined)
-                } else {
-                    value::encode_undefined()
-                };
-                if value::is_iterator(iterator) {
-                    return iterator;
-                }
-                if (value::is_object(iterator) || value::is_function(iterator))
-                    && let Some(iter_ptr) = resolve_handle(&mut caller, iterator)
-                    && let Some(next) = read_object_property_by_name(&mut caller, iter_ptr, "next")
-                    && value::is_callable(next)
-                {
-                    let return_method =
-                        read_object_property_by_name(&mut caller, iter_ptr, "return")
-                            .filter(|candidate| value::is_callable(*candidate));
-                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                    let handle = iters.len() as u32;
-                    iters.push(IteratorState::ObjectIter {
-                        next,
-                        return_method,
-                        current_value: value::encode_undefined(),
-                        has_current: false,
-                        done: false,
-                    });
-                    return value::encode_handle(value::TAG_ITERATOR, handle);
-                }
-            }
-
-            if (value::is_object(val) || value::is_function(val))
-                && let Some(ptr) = resolve_handle(&mut caller, val)
-                && let Some(next) = read_object_property_by_name(&mut caller, ptr, "next")
-                && value::is_callable(next)
-            {
-                let return_method = read_object_property_by_name(&mut caller, ptr, "return")
-                    .filter(|candidate| value::is_callable(*candidate));
-                let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-                let handle = iters.len() as u32;
-                iters.push(IteratorState::ObjectIter {
-                    next,
-                    return_method,
-                    current_value: value::encode_undefined(),
-                    has_current: false,
-                    done: false,
-                });
-                return value::encode_handle(value::TAG_ITERATOR, handle);
-            }
-
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-            let handle = iters.len() as u32;
-            iters.push(IteratorState::Error);
-            value::encode_handle(value::TAG_ITERATOR, handle)
-        },
-    );
-    linker.define(&mut store, "env", "iterator_from", f)?;
 
     let f = Func::wrap(
         &mut store,
@@ -1737,4 +1648,87 @@ pub(crate) fn define_core(
 
     // ── Import 27: set_timeout(i64, i64) → i64 ────────────────────────────
     Ok(())
+}
+
+pub(crate) async fn iterator_from_impl_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+) -> i64 {
+    if let Some(string_data) = read_value_string_bytes(caller, val) {
+        let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+        let handle = iters.len() as u32;
+        iters.push(IteratorState::StringIter {
+            data: string_data,
+            byte_pos: 0,
+        });
+        return value::encode_handle(value::TAG_ITERATOR, handle);
+    }
+
+    if value::is_array(val)
+        && let Some(ptr) = resolve_handle(caller, val)
+    {
+        let length = read_array_length(caller, ptr).unwrap_or(0);
+        let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+        let handle = iters.len() as u32;
+        iters.push(IteratorState::ArrayIter {
+            ptr,
+            index: 0,
+            length,
+        });
+        return value::encode_handle(value::TAG_ITERATOR, handle);
+    }
+
+    if (value::is_object(val) || value::is_function(val))
+        && let Some(ptr) = resolve_handle(caller, val)
+        && let Some(method) = read_iterator_method(caller, ptr)
+    {
+        let iterator = call_iterable_method_async(caller, method, val).await;
+        if value::is_iterator(iterator) {
+            return iterator;
+        }
+        if (value::is_object(iterator) || value::is_function(iterator))
+            && let Some(iter_ptr) = resolve_handle(caller, iterator)
+            && let Some(next) = read_object_property_by_name(caller, iter_ptr, "next")
+            && value::is_callable(next)
+        {
+            let return_method = read_object_property_by_name(caller, iter_ptr, "return")
+                .filter(|candidate| value::is_callable(*candidate));
+            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+            let handle = iters.len() as u32;
+            iters.push(IteratorState::ObjectIter {
+                iterator,
+                next,
+                return_method,
+                current_value: value::encode_undefined(),
+                has_current: false,
+                done: false,
+            });
+            return value::encode_handle(value::TAG_ITERATOR, handle);
+        }
+    }
+
+    if (value::is_object(val) || value::is_function(val))
+        && let Some(ptr) = resolve_handle(caller, val)
+        && let Some(next) = read_object_property_by_name(caller, ptr, "next")
+        && value::is_callable(next)
+    {
+        let return_method = read_object_property_by_name(caller, ptr, "return")
+            .filter(|candidate| value::is_callable(*candidate));
+        let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+        let handle = iters.len() as u32;
+        iters.push(IteratorState::ObjectIter {
+            iterator: val,
+            next,
+            return_method,
+            current_value: value::encode_undefined(),
+            has_current: false,
+            done: false,
+        });
+        return value::encode_handle(value::TAG_ITERATOR, handle);
+    }
+
+    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+    let handle = iters.len() as u32;
+    iters.push(IteratorState::Error);
+    value::encode_handle(value::TAG_ITERATOR, handle)
 }

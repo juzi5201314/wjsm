@@ -17,16 +17,13 @@ fn push_array_value(caller: &mut Caller<'_, RuntimeState>, arr: i64, val: i64) -
     Some(())
 }
 
-fn call_iterator_next(caller: &mut Caller<'_, RuntimeState>, iterator: i64, next: i64) -> i64 {
-    if value::is_native_callable(next) {
-        call_native_callable_with_args_from_caller(caller, next, iterator, vec![])
-            .unwrap_or_else(value::encode_undefined)
-    } else {
-        value::encode_undefined()
-    }
-}
 
-fn push_iterator_values(caller: &mut Caller<'_, RuntimeState>, arr: i64, iterator: i64) -> bool {
+
+async fn push_iterator_values_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr: i64,
+    iterator: i64,
+) -> bool {
     let Some(iter_ptr) = resolve_handle(caller, iterator) else {
         return false;
     };
@@ -37,12 +34,14 @@ fn push_iterator_values(caller: &mut Caller<'_, RuntimeState>, arr: i64, iterato
         return false;
     }
     loop {
-        let result = call_iterator_next(caller, iterator, next);
+        let result = call_iterator_method_async(caller, next, iterator, value::encode_undefined())
+            .await;
         let Some(result_ptr) = resolve_handle(caller, result) else {
             return false;
         };
         let done = read_object_property_by_name(caller, result_ptr, "done")
-            .is_some_and(|done| !value::is_falsy(done));
+            .map(nanbox_to_bool)
+            .unwrap_or(true);
         if done {
             return true;
         }
@@ -52,7 +51,11 @@ fn push_iterator_values(caller: &mut Caller<'_, RuntimeState>, arr: i64, iterato
     }
 }
 
-fn array_push_spread_impl(caller: &mut Caller<'_, RuntimeState>, arr: i64, iterable: i64) -> i64 {
+pub(crate) async fn array_push_spread_impl_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr: i64,
+    iterable: i64,
+) -> i64 {
     if value::is_array(iterable)
         && let Some(ptr) = resolve_array_ptr(caller, iterable)
     {
@@ -73,16 +76,10 @@ fn array_push_spread_impl(caller: &mut Caller<'_, RuntimeState>, arr: i64, itera
     }
 
     if let Some(ptr) = resolve_handle(caller, iterable)
-        && let Some(method) = read_object_property_by_name_id(caller, ptr, encode_symbol_name_id(0))
-        && value::is_callable(method)
+        && let Some(method) = read_iterator_method(caller, ptr)
     {
-        let iterator = if value::is_native_callable(method) {
-            call_native_callable_with_args_from_caller(caller, method, iterable, vec![])
-                .unwrap_or_else(value::encode_undefined)
-        } else {
-            value::encode_undefined()
-        };
-        if push_iterator_values(caller, arr, iterator) {
+        let iterator = call_iterable_method_async(caller, method, iterable).await;
+        if push_iterator_values_async(caller, arr, iterator).await {
             return value::encode_undefined();
         }
     }
@@ -93,6 +90,7 @@ fn array_push_spread_impl(caller: &mut Caller<'_, RuntimeState>, arr: i64, itera
     );
     value::encode_undefined()
 }
+
 
 pub(crate) fn define_array_object(
     linker: &mut Linker<RuntimeState>,
@@ -132,14 +130,6 @@ pub(crate) fn define_array_object(
     );
     linker.define(&mut store, "env", "arr_proto_push", arr_proto_push_fn)?;
 
-    // ── array_push_spread(arr, iterable) → undefined ───────────────────
-    let array_push_spread_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, iterable: i64| -> i64 {
-            array_push_spread_impl(&mut caller, arr, iterable)
-        },
-    );
-    linker.define(&mut store, "env", "array_push_spread", array_push_spread_fn)?;
 
     // ── arr_proto_pop (#50) ───────────────────────────────────────────
     let arr_proto_pop_fn = Func::wrap(
@@ -880,27 +870,6 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "has_own_property", has_own_property_fn)?;
-    // ── Import 84: obj_keys(i64) -> i64 ───────────────────────────────────────
-    let obj_keys_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return value::encode_undefined();
-            };
-            let names = collect_own_property_names(&mut caller, ptr, true);
-            let arr = alloc_array(&mut caller, names.len() as u32);
-            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_undefined();
-            };
-            for (i, name) in names.iter().enumerate() {
-                let key_val = store_runtime_string(&caller, name.clone());
-                write_array_elem(&mut caller, arr_ptr, i as u32, key_val);
-            }
-            write_array_length(&mut caller, arr_ptr, names.len() as u32);
-            arr
-        },
-    );
-    linker.define(&mut store, "env", "obj_keys", obj_keys_fn)?;
     // ── Import 85: obj_values(i64) -> i64 ─────────────────────────────────────
     let obj_values_fn = Func::wrap(
         &mut store,
@@ -921,37 +890,6 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "obj_values", obj_values_fn)?;
-    // ── Import 86: obj_entries(i64) -> i64 ────────────────────────────────────
-    let obj_entries_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return value::encode_undefined();
-            };
-            let names = collect_own_property_names(&mut caller, ptr, true);
-            let values = collect_own_property_values(&mut caller, ptr, true);
-            let len = names.len().min(values.len());
-            let arr = alloc_array(&mut caller, len as u32);
-            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_undefined();
-            };
-            for i in 0..len {
-                // 每个元素是一个 [key, value] 子数组
-                let sub_arr = alloc_array(&mut caller, 2);
-                let Some(sub_ptr) = resolve_array_ptr(&mut caller, sub_arr) else {
-                    continue;
-                };
-                let key_val = store_runtime_string(&caller, names[i].clone());
-                write_array_elem(&mut caller, sub_ptr, 0, key_val);
-                write_array_elem(&mut caller, sub_ptr, 1, values[i]);
-                write_array_length(&mut caller, sub_ptr, 2);
-                write_array_elem(&mut caller, arr_ptr, i as u32, sub_arr);
-            }
-            write_array_length(&mut caller, arr_ptr, len as u32);
-            arr
-        },
-    );
-    linker.define(&mut store, "env", "obj_entries", obj_entries_fn)?;
     // ── Import 87: obj_assign(i64, i64, i32, i32) -> i64 ──────────────────────
     let obj_assign_fn = Func::wrap(
         &mut store,
@@ -1229,32 +1167,6 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "obj_set_proto_of", obj_set_proto_of_fn)?;
-    // ── Import 91: obj_get_own_prop_names(i64) -> i64 ─────────────────────────
-    let obj_get_own_prop_names_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return value::encode_undefined();
-            };
-            let names = collect_own_property_names(&mut caller, ptr, false);
-            let arr = alloc_array(&mut caller, names.len() as u32);
-            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_undefined();
-            };
-            for (i, name) in names.iter().enumerate() {
-                let key_val = store_runtime_string(&caller, name.clone());
-                write_array_elem(&mut caller, arr_ptr, i as u32, key_val);
-            }
-            write_array_length(&mut caller, arr_ptr, names.len() as u32);
-            arr
-        },
-    );
-    linker.define(
-        &mut store,
-        "env",
-        "obj_get_own_prop_names",
-        obj_get_own_prop_names_fn,
-    )?;
 
     // ── Import: obj_get_own_prop_symbols(i64) -> i64 ────────────────────────
     let obj_get_own_prop_symbols_fn = Func::wrap(

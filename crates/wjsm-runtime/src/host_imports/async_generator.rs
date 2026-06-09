@@ -48,12 +48,6 @@ pub(crate) fn define_async_generator(
             let _ = define_host_data_property_from_caller(&mut caller, generator, "return", ret);
             let _ = define_host_data_property_from_caller(&mut caller, generator, "throw", throw);
             let async_iter = create_async_generator_identity(caller.data(), generator);
-            let _ = define_host_data_property_from_caller(
-                &mut caller,
-                generator,
-                "Symbol.asyncIterator",
-                async_iter,
-            );
             let _ = define_host_data_property_by_name_id_with_flags(
                 &mut caller,
                 generator,

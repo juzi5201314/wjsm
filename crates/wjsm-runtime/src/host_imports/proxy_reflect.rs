@@ -500,9 +500,348 @@ pub(crate) fn reflect_own_keys_impl(caller: &mut Caller<'_, RuntimeState>, targe
         return value::encode_undefined();
     };
     let keys = collect_own_property_key_values(caller, ptr, false);
-    let arr = alloc_array(caller, keys.len() as u32);
+    let len = keys.len() as u32;
+    let arr = alloc_array(caller, len);
     for (i, key) in keys.into_iter().enumerate() {
         set_array_elem(caller, arr, i as i32, key);
+    }
+    if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+        write_array_length(caller, arr_ptr, len);
+    }
+    arr
+}
+
+/// Proxy ownKeys 陷阱：返回陷阱结果数组，失败或应回退时返回 undefined。
+pub(crate) async fn proxy_own_keys_trap_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+) -> i64 {
+    if !value::is_proxy(target) {
+        return value::encode_undefined();
+    }
+    let handle = value::decode_proxy_handle(target) as usize;
+    let entry = {
+        let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+        table.get(handle).cloned()
+    };
+    let Some(entry) = entry else {
+        return value::encode_undefined();
+    };
+    if entry.revoked {
+        set_runtime_error(
+            caller.data(),
+            "TypeError: Cannot perform 'ownKeys' on a proxy that has been revoked".to_string(),
+        );
+        return value::encode_undefined();
+    }
+    let Some(handler_ptr) = resolve_handle(caller, entry.handler) else {
+        return reflect_own_keys_impl(caller, entry.target);
+    };
+    let trap = read_object_property_by_name(caller, handler_ptr, "ownKeys")
+        .unwrap_or_else(value::encode_undefined);
+    if value::is_undefined(trap) || value::is_null(trap) {
+        return reflect_own_keys_impl(caller, entry.target);
+    }
+    let trap_res = call_wasm_callback_async(caller, trap, entry.handler, &[entry.target]).await;
+    let keys_val = match trap_res {
+        Ok(res) => res,
+        Err(e) => {
+            set_runtime_error(
+                caller.data(),
+                format!("TypeError: Proxy ownKeys trap failed: {}", e),
+            );
+            return value::encode_undefined();
+        }
+    };
+    let keys = match extract_array_like_elements(caller, keys_val) {
+        Ok(arr) => arr,
+        Err(err) => {
+            set_runtime_error(caller.data(), err);
+            return value::encode_undefined();
+        }
+    };
+    let ext = is_extensible_impl(caller, entry.target);
+    let Some(t_ptr) = resolve_handle(caller, entry.target) else {
+        return value::encode_undefined();
+    };
+    let target_keys = collect_own_property_names(caller, t_ptr, false);
+    let mut trap_keys_str = Vec::new();
+    for &k in &keys {
+        if value::is_symbol(k) {
+            continue;
+        }
+        if let Ok(k_str) = render_value(caller, k) {
+            trap_keys_str.push(k_str);
+        }
+    }
+    if !ext {
+        let mut match_all = true;
+        for tk in &target_keys {
+            if !trap_keys_str.contains(tk) {
+                match_all = false;
+                break;
+            }
+        }
+        if !match_all || trap_keys_str.len() != target_keys.len() {
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Proxy ownKeys invariant violated: target is non-extensible and keys do not match target keys".to_string(),
+            );
+            return value::encode_undefined();
+        }
+    } else {
+        for tk in &target_keys {
+            if let Some(tk_c) = find_memory_c_string(caller, tk) {
+                if let Some((_, flags, _)) = find_property_slot_by_name_id(caller, t_ptr, tk_c) {
+                    let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
+                    if !configurable && !trap_keys_str.contains(tk) {
+                        set_runtime_error(
+                            caller.data(),
+                            format!(
+                                "TypeError: Proxy ownKeys invariant violated: non-configurable property '{}' is missing in trap result",
+                                tk
+                            ),
+                        );
+                        return value::encode_undefined();
+                    }
+                }
+            }
+        }
+    }
+    let len = keys.len() as u32;
+    let arr = alloc_array(caller, len);
+    for (i, &key) in keys.iter().enumerate() {
+        set_array_elem(caller, arr, i as i32, key);
+    }
+    if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+        write_array_length(caller, arr_ptr, len);
+    }
+    arr
+}
+
+/// 通过 Reflect.getOwnPropertyDescriptor（含 proxy 陷阱）判断 enumerable。
+async fn descriptor_enumerable_on_proxy_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    key: i64,
+) -> bool {
+    let desc = reflect_get_own_property_descriptor_on_object_async(caller, obj, key).await;
+    if !value::is_undefined(desc) {
+        if let Some(desc_ptr) = resolve_handle(caller, desc) {
+            let prop_enum = read_object_property_by_name(caller, desc_ptr, "enumerable");
+            return prop_enum.is_some_and(|v| !value::is_falsy(v));
+        }
+    }
+    // 陷阱描述符解析失败时，回退到 target 上的 enumerable（与常见 ownKeys+getOwnPropertyDescriptor 转发 handler 一致）
+    if value::is_proxy(obj) {
+        let handle = value::decode_proxy_handle(obj) as usize;
+        let entry = caller
+            .data()
+            .proxy_table
+            .lock()
+            .expect("proxy_table mutex")
+            .get(handle)
+            .cloned();
+        if let Some(entry) = entry {
+            let target_desc = reflect_get_own_property_descriptor_impl(caller, entry.target, key);
+            if !value::is_undefined(target_desc) {
+                if let Some(desc_ptr) = resolve_handle(caller, target_desc) {
+                    let prop_enum = read_object_property_by_name(caller, desc_ptr, "enumerable");
+                    return prop_enum.is_some_and(|v| !value::is_falsy(v));
+                }
+            }
+        }
+    }
+    false
+}
+
+async fn reflect_get_own_property_descriptor_on_object_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+    prop: i64,
+) -> i64 {
+    if value::is_proxy(target) {
+        let handle = value::decode_proxy_handle(target) as usize;
+        let entry = {
+            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            table.get(handle).cloned()
+        };
+        if let Some(entry) = entry {
+            if entry.revoked {
+                set_runtime_error(
+                    caller.data(),
+                    "TypeError: Cannot perform 'getOwnPropertyDescriptor' on a proxy that has been revoked".to_string(),
+                );
+                return value::encode_undefined();
+            }
+            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
+                let trap = read_object_property_by_name(caller, handler_ptr, "getOwnPropertyDescriptor")
+                    .unwrap_or_else(value::encode_undefined);
+                if !value::is_undefined(trap) && !value::is_null(trap) {
+                    let descriptor = match call_wasm_callback_async(
+                        caller,
+                        trap,
+                        entry.handler,
+                        &[entry.target, prop],
+                    )
+                    .await
+                    {
+                        Ok(desc) => desc,
+                        Err(e) => {
+                            set_runtime_error(
+                                caller.data(),
+                                format!("TypeError: getOwnPropertyDescriptor trap failed: {}", e),
+                            );
+                            return value::encode_undefined();
+                        }
+                    };
+                    let prop_name = render_value(caller, prop).ok();
+                    let name_id = prop_name
+                        .as_deref()
+                        .and_then(|name| find_memory_c_string(caller, name));
+                    if let Err(error) = validate_proxy_get_own_property_descriptor_result(
+                        caller,
+                        entry.target,
+                        name_id,
+                        descriptor,
+                    ) {
+                        set_runtime_error(caller.data(), error);
+                        return value::encode_undefined();
+                    }
+                    return descriptor;
+                }
+            }
+            return reflect_get_own_property_descriptor_impl(caller, entry.target, prop);
+        }
+        return value::encode_undefined();
+    }
+    reflect_get_own_property_descriptor_impl(caller, target, prop)
+}
+
+/// Object.keys：proxy 走 ownKeys 陷阱后按 enumerable 过滤字符串键。
+pub(crate) async fn object_enumerable_own_keys_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+) -> i64 {
+    if !value::is_js_object(obj) {
+        return alloc_array(caller, 0);
+    }
+    if value::is_proxy(obj) {
+        let keys_arr = proxy_own_keys_trap_async(caller, obj).await;
+        if value::is_undefined(keys_arr) {
+            return alloc_array(caller, 0);
+        }
+        let keys = match extract_array_like_elements(caller, keys_arr) {
+            Ok(k) => k,
+            Err(_) => return alloc_array(caller, 0),
+        };
+        let mut out = Vec::new();
+        for key in keys {
+            if value::is_symbol(key) {
+                continue;
+            }
+            if descriptor_enumerable_on_proxy_async(caller, obj, key).await {
+                out.push(key);
+            }
+        }
+        let len = out.len() as u32;
+        let arr = alloc_array(caller, len);
+        for (i, key) in out.into_iter().enumerate() {
+            set_array_elem(caller, arr, i as i32, key);
+        }
+        if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+            write_array_length(caller, arr_ptr, len);
+        }
+        return arr;
+    }
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return alloc_array(caller, 0);
+    };
+    let names = collect_own_property_names(caller, ptr, true);
+    let len = names.len() as u32;
+    let arr = alloc_array(caller, len);
+    for (i, name) in names.into_iter().enumerate() {
+        let name_val = store_runtime_string(caller, name);
+        set_array_elem(caller, arr, i as i32, name_val);
+    }
+    if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+        write_array_length(caller, arr_ptr, len);
+    }
+    arr
+}
+
+/// Object.getOwnPropertyNames：proxy 走 ownKeys 陷阱，仅保留字符串键。
+pub(crate) async fn object_get_own_property_names_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+) -> i64 {
+    if !value::is_js_object(obj) {
+        return alloc_array(caller, 0);
+    }
+    if value::is_proxy(obj) {
+        let keys_arr = proxy_own_keys_trap_async(caller, obj).await;
+        if value::is_undefined(keys_arr) {
+            return alloc_array(caller, 0);
+        }
+        let keys = match extract_array_like_elements(caller, keys_arr) {
+            Ok(k) => k,
+            Err(_) => return alloc_array(caller, 0),
+        };
+        let mut out = Vec::new();
+        for key in keys {
+            if !value::is_symbol(key) {
+                out.push(key);
+            }
+        }
+        let len = out.len() as u32;
+        let arr = alloc_array(caller, len);
+        for (i, key) in out.into_iter().enumerate() {
+            set_array_elem(caller, arr, i as i32, key);
+        }
+        if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+            write_array_length(caller, arr_ptr, len);
+        }
+        return arr;
+    }
+    let Some(ptr) = resolve_handle(caller, obj) else {
+        return alloc_array(caller, 0);
+    };
+    let names = collect_own_property_names(caller, ptr, false);
+    let len = names.len() as u32;
+    let arr = alloc_array(caller, len);
+    for (i, name) in names.into_iter().enumerate() {
+        let name_val = store_runtime_string(caller, name);
+        set_array_elem(caller, arr, i as i32, name_val);
+    }
+    if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+        write_array_length(caller, arr_ptr, len);
+    }
+    arr
+}
+
+/// Object.entries：enumerable 字符串键 + Reflect.get 取值。
+pub(crate) async fn object_entries_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+) -> i64 {
+    if !value::is_js_object(obj) {
+        return alloc_array(caller, 0);
+    }
+    let keys_arr = object_enumerable_own_keys_async(caller, obj).await;
+    let keys = match extract_array_like_elements(caller, keys_arr) {
+        Ok(k) => k,
+        Err(_) => return alloc_array(caller, 0),
+    };
+    let arr = alloc_array(caller, keys.len() as u32);
+    for (i, key) in keys.iter().enumerate() {
+        let val = reflect_get_impl_with_receiver_async(caller, obj, *key, obj).await;
+        let pair = alloc_array(caller, 2);
+        set_array_elem(caller, pair, 0, *key);
+        set_array_elem(caller, pair, 1, val);
+        set_array_elem(caller, arr, i as i32, pair);
+    }
+    if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+        write_array_length(caller, arr_ptr, keys.len() as u32);
     }
     arr
 }

@@ -25,45 +25,72 @@ pub(crate) fn insert_promise_entry(
     table[handle] = entry;
 }
 
-pub(crate) fn advance_object_iterator_from_caller(
+
+pub(crate) async fn call_iterable_method_async(
     caller: &mut Caller<'_, RuntimeState>,
-    func_table: &Table,
-    next: i64,
-) -> (i64, i64, bool, bool) {
-    let result =
-        call_host_function_from_caller(caller, func_table, next, value::encode_undefined())
-            .unwrap_or_else(value::encode_undefined);
-    if is_promise_value(caller.data(), result) {
-        return (result, value::encode_undefined(), false, false);
+    method: i64,
+    receiver: i64,
+) -> i64 {
+    if value::is_native_callable(method) {
+        return call_native_callable_with_args_from_caller_async(
+            caller,
+            method,
+            receiver,
+            vec![],
+        )
+        .await
+        .unwrap_or_else(value::encode_undefined);
     }
-    if (value::is_object(result) || value::is_function(result) || value::is_array(result))
-        && let Some(ptr) = resolve_handle(caller, result)
-    {
-        let done = read_object_property_by_name(caller, ptr, "done")
-            .map(nanbox_to_bool)
-            .unwrap_or(false);
-        let current_value = read_object_property_by_name(caller, ptr, "value")
-            .unwrap_or_else(value::encode_undefined);
-        return (result, current_value, done, true);
-    }
-    if !value::is_undefined(result) {
-        set_runtime_error(
-            caller.data(),
-            "TypeError: iterator next must return an object".to_string(),
-        );
-    }
-    (result, value::encode_undefined(), true, true)
+    call_wasm_callback_async(caller, method, receiver, &[])
+        .await
+        .unwrap_or_else(|_| value::encode_undefined())
 }
+
+
+pub(crate) async fn call_iterator_method_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    method: i64,
+    iterator: i64,
+    argument: i64,
+) -> i64 {
+    if value::is_native_callable(method) {
+        return call_native_callable_with_args_from_caller_async(
+            caller,
+            method,
+            iterator,
+            if value::is_undefined(argument) {
+                vec![]
+            } else {
+                vec![argument]
+            },
+        )
+        .await
+        .unwrap_or_else(|| value::encode_undefined());
+    }
+    let args = if value::is_undefined(argument) {
+        &[][..]
+    } else {
+        std::slice::from_ref(&argument)
+    };
+    call_wasm_callback_async(caller, method, iterator, args)
+        .await
+        .unwrap_or_else(|_| value::encode_undefined())
+}
+
 
 pub(crate) async fn advance_object_iterator_from_caller_async(
     caller: &mut Caller<'_, RuntimeState>,
-    func_table: &Table,
+    _func_table: &Table,
+    iterator: i64,
     next: i64,
 ) -> (i64, i64, bool, bool) {
-    let result =
-        call_host_function_from_caller_async(caller, func_table, next, value::encode_undefined())
-            .await
-            .unwrap_or_else(value::encode_undefined);
+    let result = call_iterator_method_async(
+        caller,
+        next,
+        iterator,
+        value::encode_undefined(),
+    )
+    .await;
     if is_promise_value(caller.data(), result) {
         return (result, value::encode_undefined(), false, false);
     }
@@ -1376,19 +1403,54 @@ fn invoke_number_primitive_method(
             store_runtime_string(caller, format_radix(int_part, radix as u32))
         }
         1 => this_val,
-        2 | 3 | 4 => {
-            // toFixed / toExponential / toPrecision：返回字符串，简化走 format_number_js + digits
+        2 => {
             let x = f64::from_bits(this_val as u64);
-            if x.is_nan() {
-                store_runtime_string(caller, "NaN".to_string())
-            } else if x.is_infinite() {
-                store_runtime_string(
-                    caller,
-                    if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string(),
-                )
+            let digits = if value::is_undefined(radix_or_digits) || value::is_null(radix_or_digits)
+            {
+                0
+            } else if value::is_f64(radix_or_digits) {
+                f64::from_bits(radix_or_digits as u64) as i32
             } else {
-                store_runtime_string(caller, format_number_js(x))
+                0
+            };
+            if !(0..=100).contains(&digits) {
+                return store_runtime_string(
+                    caller,
+                    "RangeError: toFixed() digits argument must be between 0 and 100".to_string(),
+                );
             }
+            store_runtime_string(caller, format_number_to_fixed_js(x, digits))
+        }
+        3 => {
+            let x = f64::from_bits(this_val as u64);
+            let digits = if value::is_undefined(radix_or_digits) || value::is_null(radix_or_digits)
+            {
+                None
+            } else if value::is_f64(radix_or_digits) {
+                Some(f64::from_bits(radix_or_digits as u64) as i32)
+            } else {
+                None
+            };
+            store_runtime_string(caller, format_number_to_exponential_js(x, digits))
+        }
+        4 => {
+            let x = f64::from_bits(this_val as u64);
+            let precision = if value::is_undefined(radix_or_digits) {
+                None
+            } else if value::is_f64(radix_or_digits) {
+                Some(f64::from_bits(radix_or_digits as u64) as i32)
+            } else {
+                Some(-1)
+            };
+            if let Some(precision) = precision
+                && !(1..=21).contains(&precision)
+            {
+                return store_runtime_string(
+                    caller,
+                    "RangeError: toPrecision() argument must be between 1 and 21".to_string(),
+                );
+            }
+            store_runtime_string(caller, format_number_to_precision_js(x, precision))
         }
         _ => value::encode_undefined(),
     }
@@ -2101,6 +2163,7 @@ pub(crate) fn create_async_from_sync_iterator(
     let mut iters = caller.data().iterators.lock().expect("iterators mutex");
     let iter_handle = iters.len() as u32;
     iters.push(IteratorState::ObjectIter {
+        iterator: sync_iter_handle,
         next: next_callable,
         return_method: Some(return_callable),
         current_value: value::encode_undefined(),
@@ -2119,24 +2182,22 @@ fn call_sync_iter_and_wrap(
 ) -> i64 {
     let sync_handle_idx = value::decode_handle(sync_iter_handle) as usize;
 
-    let table = caller.get_export("__table").and_then(|e| e.into_table());
-    let Some(func_table) = table else {
-        return value::encode_undefined();
-    };
 
-    let method_to_call = {
+    let (iterator, method_to_call) = {
         let iters = caller.data().iterators.lock().expect("iterators mutex");
         match iters.get(sync_handle_idx) {
             Some(IteratorState::ObjectIter {
+                iterator,
                 next,
                 return_method,
                 ..
             }) => {
-                if arg_if_return.is_some() {
+                let method = if arg_if_return.is_some() {
                     return_method.unwrap_or(*next)
                 } else {
                     *next
-                }
+                };
+                (*iterator, method)
             }
             _ => return value::encode_undefined(),
         }
@@ -2153,8 +2214,11 @@ fn call_sync_iter_and_wrap(
     }
 
     let call_arg = arg_if_return.unwrap_or(value::encode_undefined());
-    let raw_result = call_host_function_from_caller(caller, &func_table, method_to_call, call_arg)
-        .unwrap_or(value::encode_undefined());
+    let raw_result = tokio::task::block_in_place(|| {
+        tokio::runtime::Handle::current().block_on(async {
+            call_iterator_method_async(caller, method_to_call, iterator, call_arg).await
+        })
+    });
 
     let (done, current_value) = if (value::is_object(raw_result)
         || value::is_function(raw_result)

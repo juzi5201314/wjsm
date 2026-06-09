@@ -3,6 +3,9 @@
 use anyhow::Result;
 use wasmtime::{Caller, Linker};
 
+use super::proxy_reflect::{
+    object_enumerable_own_keys_async, object_entries_async, object_get_own_property_names_async,
+};
 use crate::*;
 
 pub(crate) fn define_object_builtins_async(
@@ -62,6 +65,30 @@ pub(crate) fn define_object_builtins_async(
                 }
                 obj
             })
+        },
+    )?;
+
+    linker.func_wrap_async(
+        "env",
+        "obj_keys",
+        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
+            Box::new(async move { object_enumerable_own_keys_async(&mut caller, obj).await })
+        },
+    )?;
+
+    linker.func_wrap_async(
+        "env",
+        "obj_entries",
+        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
+            Box::new(async move { object_entries_async(&mut caller, obj).await })
+        },
+    )?;
+
+    linker.func_wrap_async(
+        "env",
+        "obj_get_own_prop_names",
+        |mut caller: Caller<'_, RuntimeState>, (obj,): (i64,)| {
+            Box::new(async move { object_get_own_property_names_async(&mut caller, obj).await })
         },
     )?;
 
