@@ -201,7 +201,15 @@ impl Compiler {
 
         while idx < blocks.len() {
             while let Some(top) = self.loop_stack.last() {
-                if idx >= top.exit_idx {
+                // 循环出口检测：idx 必须在循环外（无法通过 CFG 到达循环头）
+                let is_outside_loop = if idx >= top.exit_idx {
+                    // idx >= exit_idx，但需确认是否真的在循环外
+                    // 如果 idx 可达 loop header，则仍在循环体内
+                    !self.can_reach_loop_header(blocks, idx, top.header_idx)
+                } else {
+                    false
+                };
+                if is_outside_loop {
                     self.emit(WasmInstruction::End);
                     self.emit(WasmInstruction::End);
                     self.loop_stack.pop();
@@ -512,69 +520,43 @@ impl Compiler {
 
                     self.emit(WasmInstruction::End);
 
-                    // 当 exit == default 时，exit block 的内容已在 default case 位置编译过，
-                    // 但 break 会跳过那个位置，直接到 switch 之后。
-                    // 所以需要在 switch 结束后再次编译 exit block，让 break 能继续执行。
+                    // 当 exit == default 时，exit block 的内容已在 default case 位置编译过
                     if exit_idx == default_target_idx {
-                        // exit == default: 在 switch 之后重新编译 exit block
-                        if let Some(exit_block_ir) = blocks.get(exit_idx) {
-                            for instruction in exit_block_ir.instructions() {
-                                if self.compile_instruction(module, instruction)? {
-                                    break;
+                        // 检查exit是否在循环内（会回到loop header）
+                        let exit_in_loop = self.loop_stack.last().is_some()
+                            && self.can_reach_loop_header(blocks, exit_idx, self.loop_stack.last().unwrap().header_idx);
+                        
+                        if exit_in_loop {
+                            // exit在循环内，已完整编译，跳过重新发射
+                            // 继续到循环出口或结束
+                            if let Some(loop_info) = self.loop_stack.last() {
+                                if !self.compiled_blocks.contains(&loop_info.exit_idx) {
+                                    idx = loop_info.exit_idx;
+                                    continue;
                                 }
                             }
-                            match exit_block_ir.terminator() {
-                                Terminator::Return { value } => {
-                                    self.emit_return(value);
-                                    idx = blocks.len(); // 终止主循环
-                                }
-                                Terminator::Jump { target } => {
-                                    // exit block 可能跳到其他地方
-                                    let target_idx = target.0 as usize;
-                                    if let Some(continuation) =
-                                        self.branch_continuation_target(blocks, target_idx)
-                                    {
-                                        idx = self
-                                            .loop_exit_for_header(continuation)
-                                            .unwrap_or(continuation);
-                                    } else {
-                                        idx = target_idx;
-                                    }
-                                }
-                                _ => {
-                                    idx = exit_idx + 1;
-                                }
-                            }
+                            idx = blocks.len();
                         } else {
-                            idx = exit_idx;
+                            // exit不在循环内，跳过重新发射（exit已在default case完整编译）
+                            // switch break会跳到switch End，续编exit之后的block
+                            idx = exit_idx + 1;
                         }
-                    } else if let Some(exit_block_ir) = blocks.get(exit_idx)
-                        && self.compiled_blocks.contains(&exit_idx)
-                    {
-                        // exit != default 且 exit 已被编译：重新发射（适用于共享 exit 的情况）
-                        for instruction in exit_block_ir.instructions() {
-                            if self.compile_instruction(module, instruction)? {
-                                break;
-                            }
-                        }
-                        if let Terminator::Return { value } = exit_block_ir.terminator() {
-                            self.emit_return(value);
-                        }
-                        if self.compiled_blocks.contains(&exit_idx) {
-                            if let Some(continuation) =
-                                self.branch_continuation_target(blocks, exit_idx)
+                    } else if self.compiled_blocks.contains(&exit_idx) {
+                        // exit != default 但已被编译（所有case都continue/break跳过了exit）
+                        // 检查是否有循环出口需要续编
+                        if let Some(loop_info) = self.loop_stack.last() {
+                            if loop_info.exit_idx != exit_idx
+                                && !self.compiled_blocks.contains(&loop_info.exit_idx)
                             {
-                                idx = self
-                                    .loop_exit_for_header(continuation)
-                                    .unwrap_or(continuation);
-                            } else {
-                                idx = exit_idx;
+                                // 循环出口未编译，续编它
+                                idx = loop_info.exit_idx;
+                                continue;
                             }
-                        } else {
-                            idx = exit_idx;
                         }
+                        // exit已编译且无其他出口，结束
+                        idx = blocks.len();
                     } else {
-                        // exit 未被编译：正常继续
+                        // exit未编译，正常续编
                         idx = exit_idx;
                     }
                 }
@@ -1432,6 +1414,31 @@ impl Compiler {
             next += 1;
         }
         next
+    }
+
+    /// 检查 block_idx 是否能通过 CFG 到达 header_idx（判断是否在循环体内）
+    fn can_reach_loop_header(&self, blocks: &[BasicBlock], block_idx: usize, header_idx: usize) -> bool {
+        let mut visited = std::collections::HashSet::new();
+        let mut stack = vec![block_idx];
+        while let Some(current) = stack.pop() {
+            if current == header_idx {
+                return true;
+            }
+            if !visited.insert(current) {
+                continue;
+            }
+            if let Some(block) = blocks.get(current) {
+                match block.terminator() {
+                    Terminator::Jump { target } => stack.push(target.0 as usize),
+                    Terminator::Branch { true_block, false_block, .. } => {
+                        stack.push(true_block.0 as usize);
+                        stack.push(false_block.0 as usize);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        false
     }
 
     pub(crate) fn emit_return(&mut self, value: &Option<ValueId>) {
