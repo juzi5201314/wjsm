@@ -1,7 +1,7 @@
 # Implementation Plan: Fix 9 Failing Fixtures
 
 **Date:** 2026-06-10  
-**Status:** Ready for execution  
+**Status:** Revised after review
 **Parent Specs:** 
 - `docs/aegis/specs/2026-06-10-fixture-failures-analysis.md`
 - `docs/aegis/specs/2026-06-10-fixture-failures-approaches.md`
@@ -78,18 +78,18 @@ cargo nextest run --workspace
 
 - **Owner / contract / retirement:** Internal bug fixes, no new owners, no retirement needed
 - **Verification scope:** Per-fix fixture + category + full suite
-- **Task executability:** Each task is 2-5 min with exact commands and complete code
-- **Pressure result:** proceed
+- **Task executability:** Validation/runtime tasks are directly executable; control-flow and iterator tasks require IR/WAT/runtime trace before editing
+- **Pressure result:** proceed after correcting per-task investigation steps below
 
 ---
 
 ## Plan-Time Complexity Check
 
-- **Target files:** `lowerer_branching.rs` (778 lines), `lowerer_stmt.rs` (1067 lines), `compiler_control.rs`, `runtime_eval.rs`
-- **Existing size / shape signals:** Large files but modular (submodules per feature)
-- **Owner fit:** Each fix targets existing owner (loops → lowerer_stmt, eval → runtime_eval)
-- **Add-in-place risk:** Low — fixes are corrections, not additions
-- **Better file boundary:** None — existing boundaries are correct
+- **Target files:** `compiler_control.rs`, `lowerer_stmt.rs` (1067 lines), `lowerer_branching.rs` (778 lines), `compiler_instructions.rs`, `lowerer_calls_eval.rs`, `runtime_eval.rs`, `proxy_reflect.rs`, `proxy_traps.rs`, `reentrant_async.rs`
+- **Existing size / shape signals:** Large files but modular (submodules per feature); loop/iterator failures cross semantic lowering, backend structured codegen, and runtime iterator state
+- **Owner fit:** Each fix targets existing owner after root cause confirmation; do not assume semantic changes when IR is already correct
+- **Add-in-place risk:** Moderate for CFG/iterator/eval fixes, low for isolated validation fixes
+- **Better file boundary:** None known yet; confirm with local trace before adding new abstraction
 - **Recommendation:** edit-in-place
 
 ---
@@ -100,17 +100,17 @@ cargo nextest run --workspace
 - Modify: `crates/wjsm-backend-wasm/src/compiler_control.rs` (loop codegen)
 
 ### Phase 2: For-Of Iterator Cleanup
-- Modify: `crates/wjsm-semantic/src/lowerer_stmt.rs` (for-of lowering)
-- Modify: `crates/wjsm-semantic/src/lowerer_branching.rs` (continue target)
+- Investigate: `crates/wjsm-semantic/src/lowerer_stmt.rs` (for-of lowering), `crates/wjsm-semantic/src/lowerer_branching.rs` (abrupt completion cleanup), `crates/wjsm-backend-wasm/src/compiler_control.rs` (structured loop/codegen), iterator runtime implementation
+- Modify only the layer proven by IR/WAT/runtime trace; current `lower_for_of` already has a `next_block` continue target
 
 ### Phase 3: Eval Exception Propagation
-- Modify: `crates/wjsm-backend-wasm/src/compiler_instructions.rs` (eval call)
+- Modify after confirmation: `crates/wjsm-backend-wasm/src/compiler_instructions.rs` or `crates/wjsm-semantic/src/lowerer_calls_eval.rs` (eval exception path)
 
 ### Phase 4: Proxy Invariants
-- Modify: `crates/wjsm-runtime/src/runtime_builtins.rs` (Proxy validation)
+- Modify: `crates/wjsm-runtime/src/host_imports/proxy_reflect.rs`, `crates/wjsm-runtime/src/host_imports/proxy_traps.rs`, and related async proxy path if used
 
 ### Phase 5: Timer Validation
-- Modify: `crates/wjsm-runtime/src/host_imports/timers.rs` (setTimeout check)
+- Modify: `crates/wjsm-runtime/src/host_imports/reentrant_async.rs` (setTimeout registration)
 
 ### Phase 6: Eval TDZ
 - Modify: `crates/wjsm-runtime/src/runtime_eval.rs` (TDZ check)
@@ -130,9 +130,9 @@ cargo nextest run --workspace
 - Modify: `crates/wjsm-backend-wasm/src/compiler_control.rs`
 - Test: `fixtures/happy/labeled.js`, `fixtures/happy/labeled_break_continue.js`
 
-**Why:** Labeled break/continue output 0 instead of 2 because loop increment executes before first iteration body.
+**Why:** Labeled break/continue output 0 instead of 2 even though the current IR shows `init → condition → body → update → condition`. This points to backend structured-loop codegen or loop detection, not semantic for-loop lowering.
 
-**Impact/Compatibility:** Backend-only change. IR unchanged. Affects only for-loop block ordering.
+**Impact/Compatibility:** Backend-only likely change. IR should remain unchanged. Affects structured compilation of for-loop branches, labeled continue, and labeled break.
 
 **Verification:**
 ```bash
@@ -156,17 +156,14 @@ cargo nextest run --workspace
 
 - [ ] **Investigate IR and WASM**
   ```bash
-  cargo run -- dump-ir fixtures/happy/labeled.js > /tmp/labeled.ir
-  cargo run -- dump-wat fixtures/happy/labeled.js > /tmp/labeled.wat
-  # Review bb0 → bb1 → bb2 → bb3 ordering
-  # Identify: bb3 (increment) executes before bb2 (body) on first iteration
+  cargo run -- dump-ir fixtures/happy/labeled.js
+  cargo run -- dump-wat fixtures/happy/labeled.js
+  # IR should show: bb0 init → bb1 condition → bb2 body, bb3 update → bb1.
+  # If IR differs, fix semantic lowering first. If IR matches, trace backend structured codegen.
   ```
 
-- [ ] **Minimal code** — Find for-loop codegen in `compiler_control.rs`
-  ```bash
-  rg "fn.*compile.*for" crates/wjsm-backend-wasm/src/compiler_control.rs
-  ```
-  Read the function, identify where loop entry point is set. Ensure first jump goes to condition check (bb1), not increment (bb3). The fix is changing the jump target in the initialization block terminator.
+- [ ] **Minimal code** — Trace backend loop compilation in `compiler_control.rs`
+  Read `compile_structured`, `compile_branch_body`, `detect_loops`, `loop_continue_depth`, and `loop_break_depth`. Do not assume the init terminator is wrong: current IR already jumps from init to the condition block. Fix the confirmed backend path that skips or misorders the body/update blocks.
 
 - [ ] **Verify GREEN**
   ```bash
@@ -179,11 +176,11 @@ cargo nextest run --workspace
 - [ ] **Commit**
   ```bash
   git add crates/wjsm-backend-wasm/src/compiler_control.rs
-  git commit -m "fix(backend): correct for loop initialization order for labeled loops
+  git commit -m "fix(backend): correct labeled for-loop control flow
 
-Labeled break/continue were outputting 0 instead of 2 because the loop
-increment block was executing before the first iteration body. Fixed by
-ensuring the entry point jumps to the condition check, not the update block.
+Labeled break/continue were outputting 0 instead of 2 even though the IR
+orders init, condition, body, and update correctly. Fixed the backend
+structured loop codegen path that miscompiled labeled for-loop control flow.
 
 Fixes: labeled.js, labeled_break_continue.js"
   ```
@@ -193,13 +190,14 @@ Fixes: labeled.js, labeled_break_continue.js"
 ### Task 2: Fix For-Of Continue (Iterator Re-entry)
 
 **Files:**
-- Read: `crates/wjsm-semantic/src/lowerer_stmt.rs:561-680`
-- Modify: `crates/wjsm-semantic/src/lowerer_stmt.rs`
+- Read: `crates/wjsm-semantic/src/lowerer_stmt.rs:600-718`
+- Read: `crates/wjsm-semantic/src/lowerer_branching.rs:30-63`
+- Modify after confirmation: likely `crates/wjsm-backend-wasm/src/compiler_control.rs` or iterator runtime; only modify `lowerer_stmt.rs` if IR disproves the current lowering
 - Test: `fixtures/happy/for_of_nested_break_continue.js`
 
-**Why:** `continue` in for-of exits loop early instead of re-entering iterator.
+**Why:** `continue` in for-of exits after two iterations (`b\n2`) instead of completing all iterator steps (`b\nc\n3`). Current lowering already sets `continue_target: Some(next_block)`, and `next_block` calls `IteratorNext`, so the old "wrong continue_target" diagnosis is not valid.
 
-**Impact/Compatibility:** Semantic layer change. Affects for-of continue_target wiring.
+**Impact/Compatibility:** Root cause unconfirmed. Candidate layers are backend structured loop codegen and runtime iterator state; semantic lowering must be changed only if IR proves it is wrong.
 
 **Verification:**
 ```bash
@@ -221,20 +219,20 @@ cargo nextest run --workspace
 
 - [ ] **Read for-of lowering**
   ```bash
-  cat crates/wjsm-semantic/src/lowerer_stmt.rs | sed -n '561,680p'
-  # Find where LabelContext.continue_target is set
-  # Currently: probably points to loop increment (wrong)
-  # Should: point to block that calls IteratorNext, checks done, branches to body or exit
+  # Inspect lower_for_of and lower_continue.
+  # Current code should show continue_target: Some(next_block), and next_block should call IteratorNext then jump to header.
   ```
 
-- [ ] **Minimal code** — Fix continue_target
-  In `lower_for_of`, the continue_target should point to a new block that:
-  1. Calls `builtin.IteratorNext(iterator)`
-  2. Checks done flag
-  3. Branches: if done → exit, else → body
-  
-  Currently it probably reuses the update block. Create a new `iter_next` block between body and exit, and set `continue_target: Some(iter_next)`.
+- [ ] **Investigate IR/WAT/runtime state**
+  ```bash
+  cargo run -- dump-ir fixtures/happy/for_of_nested_break_continue.js
+  cargo run -- dump-wat fixtures/happy/for_of_nested_break_continue.js
+  # Confirm whether continue jumps to next_block and whether next_block advances exactly once per iteration.
+  # If IR is correct, trace IteratorNext/IteratorDone state for string iterators and backend handling of next_block → header.
+  ```
 
+- [ ] **Minimal code** — Fix the confirmed layer
+  Do not create a duplicate `iter_next` block unless the IR proves the current `next_block` wiring is absent or wrong. Current source already has the intended shape: `continue_target` points to `next_block`, `next_block` calls `IteratorNext`, and then jumps to `header`. Fix the actual cause of the premature done state or miscompiled jump.
 - [ ] **Verify GREEN**
   ```bash
   cargo run -- run fixtures/happy/for_of_nested_break_continue.js  # output: b\nc\n3
@@ -244,12 +242,12 @@ cargo nextest run --workspace
 
 - [ ] **Commit**
   ```bash
-  git add crates/wjsm-semantic/src/lowerer_stmt.rs
-  git commit -m "fix(semantic): for-of continue now properly re-enters iterator
+  git add crates/wjsm-backend-wasm/src/compiler_control.rs crates/wjsm-semantic/src/lowerer_stmt.rs crates/wjsm-semantic/src/lowerer_branching.rs crates/wjsm-runtime/src/lib.rs crates/wjsm-runtime/src/host_imports/core.rs
+  git commit -m "fix(iterator): for-of continue completes iterator iteration
 
-continue in for-of was exiting early instead of calling IteratorNext.
-Fixed by pointing continue_target to a block that calls IteratorNext,
-checks done flag, and branches to body or exit.
+continue in for-of was exiting early after two iterations. Fixed the
+confirmed iterator re-entry bug without duplicating the existing next_block
+lowering, which already calls IteratorNext before returning to the header.
 
 Per ES §14.7.5.6 ForIn/OfBodyEvaluation.
 
@@ -261,8 +259,9 @@ Fixes: for_of_nested_break_continue.js"
 ### Task 3: Fix For-Of Throw (Iterator Cleanup)
 
 **Files:**
-- Read: `crates/wjsm-semantic/src/lowerer_branching.rs:147-158`
-- Modify: `crates/wjsm-semantic/src/lowerer_stmt.rs` (for-of exception path)
+- Read: `crates/wjsm-semantic/src/lowerer_branching.rs:472-503`
+- Read: `crates/wjsm-semantic/src/lowerer_stmt.rs:600-718`
+- Modify after confirmation: backend exception/codegen path, iterator runtime, or `lowerer_branching.rs` only if IR lacks cleanup
 - Test: `fixtures/happy/for_of_throw_close.js`
 
 **Why:** Exception in for-of body crashes instead of calling `iterator.return()`.
@@ -287,19 +286,15 @@ cargo nextest run --workspace
 
 - [ ] **Verify RED** — Confirmed crash
 
-- [ ] **Read iterator cleanup logic**
+- [ ] **Read iterator cleanup logic and fixture IR**
   ```bash
-  cat crates/wjsm-semantic/src/lowerer_branching.rs | sed -n '147,158p'
-  # emit_iterator_closes calls builtin.IteratorClose for each iterator
-  # Check: is this called on exception path?
+  cargo run -- dump-ir fixtures/happy/for_of_throw_close.js
+  # Current IR should contain call builtin.iterator.close(...) in the exception path before jumping to catch.
+  # If the close call is present, do not add duplicate cleanup in lower_for_of; trace why runtime/codegen still traps.
   ```
 
-- [ ] **Minimal code** — Ensure exception path calls IteratorClose
-  In `lower_for_of`, when setting up the for-of body, ensure the exception handler:
-  1. Calls `emit_iterator_closes(exception_block, &[iterator])`
-  2. Then re-throws the exception
-  
-  This is likely already wired for `break` (checked at lowerer_branching.rs:17), but not for throw. Add the cleanup before exception propagation.
+- [ ] **Minimal code** — Fix confirmed exception/cleanup layer
+  If IR lacks `IteratorClose`, fix `emit_throw_value` / cleanup depth. If IR already emits `IteratorClose`, inspect backend handling of the exception branch and runtime `IteratorClose`/object-iterator behavior. Preserve existing try-catch behavior and rethrow/catch ordering.
 
 - [ ] **Verify GREEN**
   ```bash
@@ -310,12 +305,12 @@ cargo nextest run --workspace
 
 - [ ] **Commit**
   ```bash
-  git add crates/wjsm-semantic/src/lowerer_stmt.rs
-  git commit -m "fix(semantic): for-of now calls iterator.return() on exception
+  git add crates/wjsm-semantic/src/lowerer_branching.rs crates/wjsm-semantic/src/lowerer_stmt.rs crates/wjsm-backend-wasm/src/compiler_control.rs crates/wjsm-runtime/src/lib.rs crates/wjsm-runtime/src/host_imports/core.rs
+  git commit -m "fix(iterator): close for-of iterators on thrown completion
 
-Exceptions thrown in for-of body were crashing instead of calling
-iterator.return() for cleanup. Fixed by emitting IteratorClose in the
-exception handler before re-throwing.
+for-of throw handling was trapping instead of reaching the catch block after
+iterator cleanup. Fixed the confirmed cleanup/codegen/runtime path so
+IteratorClose runs before propagating the thrown value.
 
 Per ES §7.4.6 IteratorClose.
 
@@ -327,13 +322,14 @@ Fixes: for_of_throw_close.js"
 ### Task 4: Fix Eval Exception Propagation
 
 **Files:**
+- Read: `crates/wjsm-semantic/src/lowerer_calls_eval.rs`
 - Read: `crates/wjsm-backend-wasm/src/compiler_instructions.rs`
-- Modify: `crates/wjsm-backend-wasm/src/compiler_instructions.rs`
+- Modify after confirmation: semantic eval lowering if IR lacks an exception branch, or backend eval codegen if IR is correct but WAT/runtime traps
 - Test: `fixtures/happy/eval_exception_expression_contexts.js`
 
-**Why:** `eval()` in expression position crashes instead of propagating exceptions.
+**Why:** `eval()` in expression position crashes instead of propagating exceptions. Direct eval has custom lowering, so first verify whether the IR emits an `IsException` branch before assuming the backend is missing the check.
 
-**Impact/Compatibility:** Backend change. Must preserve existing exception handling.
+**Impact/Compatibility:** Eval exception path change. Must preserve existing exception handling and direct-eval scope behavior.
 
 **Verification:**
 ```bash
@@ -353,23 +349,16 @@ cargo nextest run --workspace
 
 - [ ] **Verify RED** — Confirmed crash
 
-- [ ] **Find eval call codegen**
+- [ ] **Find eval exception path**
   ```bash
-  rg "CallBuiltin.*Eval" crates/wjsm-backend-wasm/src/compiler_instructions.rs
-  # Find where Builtin::Eval is compiled
-  # Check if exception flag is checked after call
+  cargo run -- dump-ir fixtures/happy/eval_exception_expression_contexts.js
+  # Inspect lowerer_calls_eval.rs and compiler_instructions.rs.
+  # If eval expression IR lacks an IsException branch, fix semantic lowering.
+  # If IR is correct but WAT traps, fix backend eval codegen.
   ```
 
-- [ ] **Minimal code** — Add exception check after eval
-  After `call builtin.eval(...)`, emit:
-  ```wasm
-  local.get $result
-  call $is_exception
-  if
-    br $exception_handler
-  end
-  ```
-  Match the pattern used for other throwable builtins.
+- [ ] **Minimal code** — Add the missing exception branch in the confirmed layer
+  If the semantic IR lacks a branch after direct eval, lower eval like other throwable calls: check `IsException`, unwrap with `ExceptionValue`, and route through `emit_throw_value`. If IR already contains that branch, make backend codegen preserve the check and branch to the active exception handler.
 
 - [ ] **Verify GREEN**
   ```bash
@@ -381,12 +370,12 @@ cargo nextest run --workspace
 
 - [ ] **Commit**
   ```bash
-  git add crates/wjsm-backend-wasm/src/compiler_instructions.rs
-  git commit -m "fix(backend): propagate exceptions from eval in expression contexts
+  git add crates/wjsm-semantic/src/lowerer_calls_eval.rs crates/wjsm-backend-wasm/src/compiler_instructions.rs
+  git commit -m "fix(eval): propagate exceptions from eval expression contexts
 
 eval() calls in expression position (e.g. if (eval(...))) were not
-checking the exception flag after return, causing crashes. Now properly
-branches to the exception handler if eval throws.
+reaching the active exception path, causing crashes. Now direct eval
+routes thrown completions through the same exception propagation path.
 
 Per ES §19.2.1.1 eval(x).
 
@@ -398,8 +387,10 @@ Fixes: eval_exception_expression_contexts.js"
 ### Task 5: Fix Proxy Invariants
 
 **Files:**
-- Find Proxy implementation: `rg "Proxy" crates/wjsm-runtime/src/`
-- Modify: `crates/wjsm-runtime/src/runtime_builtins.rs` or `crates/wjsm-runtime/src/host_imports/proxy.rs`
+- Read: `crates/wjsm-runtime/src/host_imports/proxy_reflect.rs`
+- Read: `crates/wjsm-runtime/src/host_imports/proxy_traps.rs`
+- Read if needed: `crates/wjsm-runtime/src/host_imports/proxy_reflect_async.rs`
+- Modify: proxy constructor/trap implementation files confirmed by local search
 - Test: `fixtures/happy/proxy_invariants.js`
 
 **Why:** Proxy constructor and traps don't validate invariants.
@@ -426,8 +417,8 @@ cargo nextest run --workspace
 
 - [ ] **Find Proxy implementation**
   ```bash
-  rg -l "fn.*proxy" crates/wjsm-runtime/src/
-  # Identify file with Proxy constructor
+  # Inspect proxy_reflect.rs, proxy_traps.rs, and proxy_reflect_async.rs.
+  # Identify constructor, revocation, get/set/has, apply, and construct paths before editing.
   ```
 
 - [ ] **Minimal code** — Add three validations
@@ -474,7 +465,7 @@ cargo nextest run --workspace
 
 - [ ] **Commit**
   ```bash
-  git add crates/wjsm-runtime/src/runtime_builtins.rs  # or proxy.rs
+  git add crates/wjsm-runtime/src/host_imports/proxy_reflect.rs crates/wjsm-runtime/src/host_imports/proxy_traps.rs crates/wjsm-runtime/src/host_imports/proxy_reflect_async.rs
   git commit -m "fix(runtime): enforce Proxy invariants per ES spec
 
 - Proxy constructor now validates target and handler are objects
@@ -491,8 +482,8 @@ Fixes: proxy_invariants.js"
 ### Task 6: Fix Timer Validation
 
 **Files:**
-- Read: `crates/wjsm-runtime/src/host_imports/timers.rs`
-- Modify: `crates/wjsm-runtime/src/host_imports/timers.rs`
+- Read: `crates/wjsm-runtime/src/host_imports/reentrant_async.rs:235-260`
+- Modify: `crates/wjsm-runtime/src/host_imports/reentrant_async.rs`
 - Test: `fixtures/errors/timer_non_function.js`
 
 **Why:** `setTimeout` with non-function callback crashes.
@@ -519,21 +510,19 @@ cargo nextest run --workspace
 
 - [ ] **Find setTimeout**
   ```bash
-  rg "fn.*set_timeout" crates/wjsm-runtime/src/host_imports/
+  # Inspect define_timers_arrays_async in reentrant_async.rs.
+  # Current code schedules callback without checking value::is_callable(callback).
   ```
 
-- [ ] **Minimal code** — Add callable check
+- [ ] **Minimal code** — Add callable check before scheduling
   ```rust
-  fn is_callable(value: i64) -> bool {
-      let tag = (value >> 32) & 0x1F;
-      tag == TAG_FUNCTION || tag == TAG_CLOSURE || tag == TAG_NATIVE_CALLABLE
-  }
-  
-  // In setTimeout:
-  if !is_callable(callback) {
-      return encode_undefined();  // silently ignore per HTML spec
+  if !value::is_callable(callback) {
+      *caller.data().runtime_error.lock().expect("runtime error mutex") =
+          Some("TypeError: setTimeout callback must be callable".to_string());
+      return value::encode_undefined();
   }
   ```
+  Follow existing runtime convention for non-callable callbacks: set a runtime error and return `undefined`; do not enqueue a timer entry. Verify whether the fixture expectation must stay as the current synchronous catch output or be blessed to the newly chosen spec/host behavior.
 
 - [ ] **Verify GREEN**
   ```bash
@@ -545,7 +534,7 @@ cargo nextest run --workspace
 
 - [ ] **Commit**
   ```bash
-  git add crates/wjsm-runtime/src/host_imports/timers.rs
+  git add crates/wjsm-runtime/src/host_imports/reentrant_async.rs
   git commit -m "fix(runtime): validate setTimeout callback is callable
 
 setTimeout with non-function callback was causing crash when scheduler tried
@@ -702,14 +691,10 @@ Per ES §13.3.1.1 Static Semantics: Early Errors.
 Fixes: class_private_method.js"
   ```
   
-  **OR** document limitation if not feasible:
+  **OR** defer explicitly if parser/semantic support is insufficient:
   ```bash
-  # Update fixture comment and .expected to document current behavior
-  git add fixtures/happy/class_private_method.js fixtures/happy/class_private_method.expected
-  git commit -m "docs: document class private method external access limitation
-
-Parser (swc_core) allows external private access syntax. Deferring fix
-until parser-level validation is available."
+  # Do not bless the current non-compliant output in this plan.
+  # Leave the fixture failing and record the parser/semantic blocker for a separate task.
   ```
 
 ---

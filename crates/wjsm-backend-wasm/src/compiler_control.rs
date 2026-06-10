@@ -1069,6 +1069,37 @@ impl Compiler {
                         case_start,
                         extra_depth,
                     )
+                } else if target_idx < idx
+                    && matches!(blocks[target_idx].terminator(), Terminator::Jump { .. })
+                    && self.loop_stack.iter().rev().any(|loop_info| {
+                        target_idx > loop_info.header_idx
+                            && self.can_reach_loop_header(blocks, target_idx, loop_info.header_idx)
+                    })
+                {
+                    // 分支内跳回 loop update 块：内联发射目标块的指令，然后 br 到循环头。
+                    // 不能递归调用 compile_branch_body_with_context，因为当前 if_depth
+                    // 会导致 update 块的 continue br 深度偏移错误。
+                    self.emit_phi_moves(blocks, idx, target_idx);
+                    let target_block = &blocks[target_idx];
+                    for instruction in target_block.instructions() {
+                        self.compile_instruction(module, instruction)?;
+                    }
+                    if let Some(depth) = self.loop_continue_depth(
+                        match target_block.terminator() {
+                            Terminator::Jump { target } => target.0 as usize,
+                            _ => target_idx,
+                        },
+                    ) {
+                        let adj = if extra_depth > 0 && target_idx < case_start {
+                            depth + extra_depth
+                        } else {
+                            depth
+                        };
+                        self.emit(WasmInstruction::Br(adj));
+                        Ok(true)
+                    } else {
+                        Ok(true)
+                    }
                 } else if self.if_depth > 0
                     && target_idx < idx
                     && !self.compiled_blocks.contains(&target_idx)
