@@ -363,6 +363,16 @@ impl Lowerer {
             },
         );
 
+        // Invariant: default_block and exit_block must always be distinct BasicBlockIds.
+        // Explicit default → points to case_blocks[default_pos] (allocated before exit).
+        // No default → points to synthetic block (allocated before exit, sole terminator Jump { target: exit }).
+        // This assertion catches any future regressions where these blocks are aliased.
+        debug_assert_ne!(
+            default_target, exit,
+            "Switch default_block and exit_block must be distinct (default={:?}, exit={:?})",
+            default_target, exit
+        );
+
         // Lower case bodies
         self.label_stack.push(LabelContext {
             label: None,
