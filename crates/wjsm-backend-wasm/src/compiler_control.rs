@@ -354,6 +354,7 @@ impl Compiler {
                         continue;
                     }
 
+
                     // 普通 if/else
                     self.emit_to_bool_i32(condition.0);
                     self.if_depth += 1;
@@ -382,7 +383,26 @@ impl Compiler {
                     self.emit(WasmInstruction::End);
                     self.if_depth -= 1;
 
-                    if true_terminates && false_terminates {
+                    // 检测两分支都Jump到同一外部块（try-catch的catch入口）
+                    let both_jump_same = {
+                        let tb = blocks.get(true_idx);
+                        let fb = blocks.get(false_idx);
+                        if let (Some(t), Some(f)) = (tb, fb) {
+                            if let (Terminator::Jump { target: tt }, Terminator::Jump { target: ft }) = (t.terminator(), f.terminator()) {
+                                tt.0 == ft.0
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    };
+
+                    if both_jump_same && !true_terminates && !false_terminates {
+                        // 两分支都以Jump到common target结束，但compile_branch_body返回false
+                        // 说明Jump被当作fall-through，实际应该br到合并点
+                        // 这里不插入unreachable
+                    } else if true_terminates && false_terminates {
                         self.emit(WasmInstruction::Unreachable);
                     }
 
@@ -1117,6 +1137,11 @@ impl Compiler {
                         case_start,
                         extra_depth,
                     )
+                } else if self.if_depth > 0 && target_idx > idx {
+                    // Jump到后面的块（如try-catch的catch入口）：在if/else内需要br跳出
+                    self.emit_phi_moves(blocks, idx, target_idx);
+                    self.emit(WasmInstruction::Br(self.if_depth));
+                    Ok(true)  // 标记为终止，避免主循环插入unreachable
                 } else {
                     self.emit_phi_moves(blocks, idx, target_idx);
                     Ok(false)

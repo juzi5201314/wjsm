@@ -1263,10 +1263,12 @@ pub(crate) fn eval_expr(
     match expr {
         swc_ast::Expr::Lit(lit) => eval_lit(caller, lit),
         swc_ast::Expr::Ident(ident) => {
-            Ok(
-                eval_read_binding(caller, scope_env, eval_locals, ident.sym.as_ref())
-                    .unwrap_or_else(value::encode_undefined),
-            )
+            let val = eval_read_binding(caller, scope_env, eval_locals, ident.sym.as_ref())
+                .unwrap_or_else(value::encode_undefined);
+            if value::is_exception(val) {
+                return Err("ReferenceError".to_string());
+            }
+            Ok(val)
         }
         swc_ast::Expr::Paren(paren) => eval_expr(caller, &paren.expr, scope_env, eval_locals),
         swc_ast::Expr::Seq(seq) => {
@@ -1573,16 +1575,8 @@ pub(crate) fn eval_read_binding(
         let name_val = store_runtime_string(caller, name.to_string());
         let got = eval_get_binding(caller, env, name_val);
         if value::is_exception(got) {
-            let idx = value::decode_handle(got) as u32;
-            let msg = caller
-                .data()
-                .error_table
-                .lock()
-                .ok()
-                .and_then(|e| e.get(idx as usize).map(|x| x.message.clone()))
-                .unwrap_or_else(|| "ReferenceError".to_string());
-            set_runtime_error(caller.data(), msg);
-            return None;
+            // TDZ 或其他错误：直接抛出而非返回 None
+            return Some(got);
         }
         return Some(got);
     }
