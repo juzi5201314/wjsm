@@ -34,6 +34,19 @@ async fn push_iterator_values_async(
     loop {
         let result =
             call_iterator_method_async(caller, next, iterator, value::encode_undefined()).await;
+
+        // A4: 若 next() 同步抛出（返回 TAG_EXCEPTION），用真实错误消息替换误导的 "not iterable"。
+        // 注：表达式位 spread 无 IsException 分叉，无法做到可捕获；仅改进延迟错误消息的准确性。
+        if value::is_exception(result) {
+            let reason = exception_reason(caller, result);
+            let msg = render_value(caller, reason).unwrap_or_else(|_| "unknown error".to_string());
+            set_runtime_error(
+                caller.data(),
+                format!("TypeError: iterator.next() threw: {}", msg),
+            );
+            return false;
+        }
+
         let Some(result_ptr) = resolve_handle(caller, result) else {
             return false;
         };

@@ -23,40 +23,34 @@ module {
     c20 = undefined
     c21 = number(42)
     c22 = number(0)
-    c23 = undefined
+    c23 = functionref(@0)
     c24 = functionref(@0)
-    c25 = functionref(@0)
-    c26 = undefined
-    c27 = number(1)
-    c28 = undefined
-    c29 = functionref(@1)
-    c30 = functionref(@1)
+    c25 = undefined
+    c26 = number(1)
+    c27 = functionref(@1)
+    c28 = functionref(@1)
+    c29 = undefined
+    c30 = undefined
     c31 = undefined
-    c32 = undefined
-    c33 = undefined
-    c34 = string("err")
-    c35 = number(0)
+    c32 = string("err")
+    c33 = number(0)
+    c34 = functionref(@2)
+    c35 = functionref(@2)
     c36 = undefined
-    c37 = functionref(@2)
-    c38 = functionref(@2)
-    c39 = undefined
-    c40 = number(1)
-    c41 = undefined
-    c42 = functionref(@3)
-    c43 = functionref(@3)
+    c37 = number(1)
+    c38 = functionref(@3)
+    c39 = functionref(@3)
+    c40 = undefined
+    c41 = number(1)
+    c42 = functionref(@4)
+    c43 = functionref(@4)
     c44 = undefined
-    c45 = number(1)
-    c46 = undefined
-    c47 = functionref(@4)
-    c48 = functionref(@4)
-    c49 = undefined
 
   fn @anon_0 [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
       %1 = const c22
       %3 = const c23
-      %3 = const c24
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $1.arguments, %2
       return
@@ -64,9 +58,8 @@ module {
   fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c27
-      %3 = const c28
-      %3 = const c29
+      %1 = const c26
+      %3 = const c27
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $2.arguments, %2
       %4 = load var $2.v
@@ -82,9 +75,8 @@ module {
   fn @anon_2 [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c35
-      %3 = const c36
-      %3 = const c37
+      %1 = const c33
+      %3 = const c34
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $3.arguments, %2
       return
@@ -92,9 +84,8 @@ module {
   fn @anon_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c40
-      %3 = const c41
-      %3 = const c42
+      %1 = const c37
+      %3 = const c38
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $4.arguments, %2
       %4 = load var $4.v
@@ -110,9 +101,8 @@ module {
   fn @anon_4 [params: $5.$env, $5.$this, $5.e] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c45
-      %3 = const c46
-      %3 = const c47
+      %1 = const c41
+      %3 = const c42
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $5.arguments, %2
       %4 = load var $5.e
@@ -172,30 +162,30 @@ module {
       %21 = const c20
       %22 = const c21
       %23 = call builtin.promise.resolve_static(%21, %22)
-      %24 = const c25
-      %25 = const c26
+      %24 = const c24
+      %25 = const c25
       %26 = call builtin.create_closure(%24, %25)
       %27 = call builtin.promise.finally(%23, %26)
-      %28 = const c30
-      %29 = const c31
+      %28 = const c28
+      %29 = const c29
       %30 = call builtin.create_closure(%28, %29)
-      %31 = const c32
+      %31 = const c30
       %32 = call builtin.promise.then(%27, %30, %31)
       %33 = is_exception %32
       branch %33, bb2, bb1
     bb1:
-      %35 = const c33
-      %36 = const c34
+      %35 = const c31
+      %36 = const c32
       %37 = call builtin.promise.reject_static(%35, %36)
-      %38 = const c38
-      %39 = const c39
+      %38 = const c35
+      %39 = const c36
       %40 = call builtin.create_closure(%38, %39)
       %41 = call builtin.promise.finally(%37, %40)
-      %42 = const c43
-      %43 = const c44
+      %42 = const c39
+      %43 = const c40
       %44 = call builtin.create_closure(%42, %43)
-      %45 = const c48
-      %46 = const c49
+      %45 = const c43
+      %46 = const c44
       %47 = call builtin.create_closure(%45, %46)
       %48 = call builtin.promise.then(%41, %44, %47)
       %49 = is_exception %48

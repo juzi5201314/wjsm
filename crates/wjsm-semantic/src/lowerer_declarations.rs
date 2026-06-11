@@ -441,15 +441,7 @@ impl Lowerer {
 
         let arguments_obj = self.alloc_value();
         let needs_mapped = !self.strict_mode && !self.is_arrow && !self.is_method;
-        let undef_const = self.module.add_constant(Constant::Undefined);
-        let func_ref_val = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::Const {
-                dest: func_ref_val,
-                constant: undef_const,
-            },
-        );
+
         let fn_name = self.current_function.name().to_string();
         let mapped_self_binding = if needs_mapped {
             self.scopes
@@ -459,19 +451,45 @@ impl Lowerer {
         } else {
             None
         };
-        if !needs_mapped {
-            // func_ref_val already undefined for unmapped / strict paths
-        } else if mapped_self_binding.is_none() {
-            let function_id = wjsm_ir::FunctionId(self.module.functions().len() as u32);
-            let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
+
+        // D5: 精确发 Const — mapped && 无 binding → FunctionRef；mapped && 有 binding → undefined；unmapped → 不发
+        let func_ref_val = if needs_mapped {
+            let val = self.alloc_value();
+            if mapped_self_binding.is_none() {
+                let function_id = wjsm_ir::FunctionId(self.module.functions().len() as u32);
+                let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: val,
+                        constant: func_ref_const,
+                    },
+                );
+            } else {
+                let undef_const = self.module.add_constant(Constant::Undefined);
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: val,
+                        constant: undef_const,
+                    },
+                );
+            }
+            val
+        } else {
+            // unmapped 不吃 func_ref_val，但为保持签名一致仍传 undefined（IR 层不会读）
+            let val = self.alloc_value();
+            let undef_const = self.module.add_constant(Constant::Undefined);
             self.current_function.append_instruction(
                 block,
                 Instruction::Const {
-                    dest: func_ref_val,
-                    constant: func_ref_const,
+                    dest: val,
+                    constant: undef_const,
                 },
             );
-        }
+            val
+        };
+
         if needs_mapped {
             self.current_function.append_instruction(
                 block,

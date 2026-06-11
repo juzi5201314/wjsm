@@ -78,6 +78,12 @@ pub(crate) async fn advance_object_iterator_from_caller_async(
 ) -> (i64, i64, bool, bool) {
     let result =
         call_iterator_method_async(caller, next, iterator, value::encode_undefined()).await;
+
+    // A3: 若 next() 同步抛出（TAG_EXCEPTION），原样回传让上游处理（转 rejected promise）。
+    if value::is_exception(result) {
+        return (result, value::encode_undefined(), false, true);
+    }
+
     if is_promise_value(caller.data(), result) {
         return (result, value::encode_undefined(), false, false);
     }
@@ -91,13 +97,10 @@ pub(crate) async fn advance_object_iterator_from_caller_async(
             .unwrap_or_else(value::encode_undefined);
         return (result, current_value, done, true);
     }
-    if !value::is_undefined(result) {
-        set_runtime_error(
-            caller.data(),
-            "TypeError: iterator next must return an object".to_string(),
-        );
-    }
-    (result, value::encode_undefined(), true, true)
+
+    // 非对象非异常 → 构造可捕获 TypeError
+    let type_error = make_type_error_exception(caller, "iterator next must return an object");
+    (type_error, value::encode_undefined(), false, true)
 }
 
 pub(crate) fn create_async_generator_identity(state: &RuntimeState, generator: i64) -> i64 {
@@ -1443,19 +1446,6 @@ fn invoke_number_primitive_method(
     }
 }
 
-fn native_type_error_exception(caller: &mut Caller<'_, RuntimeState>, msg: &'static str) -> i64 {
-    let msg_val = store_runtime_string(caller, msg.to_string());
-    let error_obj = create_error_object(caller, "TypeError", msg_val);
-    let mut errors = caller.data().error_table.lock().expect("error table mutex");
-    let idx = errors.len() as u32;
-    errors.push(crate::ErrorEntry {
-        name: "TypeError".to_string(),
-        message: msg.to_string(),
-        value: error_obj,
-    });
-    value::encode_handle(value::TAG_EXCEPTION, idx)
-}
-
 pub(crate) fn call_native_callable_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     callable: i64,
@@ -1804,9 +1794,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 .unwrap_or_else(value::encode_undefined);
             let handler = args.get(1).copied().unwrap_or_else(value::encode_undefined);
             if !value::is_js_object(target) {
-                native_type_error_exception(caller, "TypeError: Proxy target must be an object")
+                make_type_error_exception(caller, "TypeError: Proxy target must be an object")
             } else if !value::is_js_object(handler) {
-                native_type_error_exception(caller, "TypeError: Proxy handler must be an object")
+                make_type_error_exception(caller, "TypeError: Proxy handler must be an object")
             } else {
                 let handle = {
                     let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");

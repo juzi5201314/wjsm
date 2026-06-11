@@ -26,38 +26,37 @@ module {
     c23 = number(2)
     c24 = number(3)
     c25 = number(0)
-    c26 = undefined
-    c27 = functionref(@0)
-    c28 = undefined
-    c29 = number(10)
-    c30 = undefined
-    c31 = number(5)
-    c32 = string("big")
-    c33 = string("small")
-    c34 = undefined
-    c35 = number(3)
-    c36 = undefined
-    c37 = number(5)
-    c38 = string("big")
-    c39 = string("small")
-    c40 = undefined
-    c41 = number(0)
-    c42 = number(1)
-    c43 = number(2)
-    c44 = number(0)
-    c45 = undefined
-    c46 = string("$0.demo")
-    c47 = string("callee")
-    c48 = functionref(@0)
-    c49 = number(4)
-    c50 = number(2)
-    c51 = number(3)
-    c52 = undefined
-    c53 = number(0)
-    c54 = undefined
-    c55 = bool(false)
-    c56 = functionref(@1)
-    c57 = undefined
+    c26 = functionref(@0)
+    c27 = undefined
+    c28 = number(10)
+    c29 = undefined
+    c30 = number(5)
+    c31 = string("big")
+    c32 = string("small")
+    c33 = undefined
+    c34 = number(3)
+    c35 = undefined
+    c36 = number(5)
+    c37 = string("big")
+    c38 = string("small")
+    c39 = undefined
+    c40 = number(0)
+    c41 = number(1)
+    c42 = number(2)
+    c43 = number(0)
+    c44 = undefined
+    c45 = string("$0.demo")
+    c46 = string("callee")
+    c47 = functionref(@0)
+    c48 = number(4)
+    c49 = number(2)
+    c50 = number(3)
+    c51 = undefined
+    c52 = number(0)
+    c53 = undefined
+    c54 = bool(false)
+    c55 = functionref(@1)
+    c56 = undefined
 
   fn @demo$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -82,18 +81,17 @@ module {
       %11 = collect_rest_args skip=0
       %12 = const c25
       %14 = const c26
-      %14 = const c27
       %13 = call builtin.create_mapped_arguments_object(%11, %12, %14)
       store var $1.arguments, %13
       jump bb1
     bb1:
       %61 = load var $1.$state
-      switch %61 [case c41 -> bb2, case c42 -> bb3, case c43 -> bb13], default bb23, exit bb24
+      switch %61 [case c40 -> bb2, case c41 -> bb3, case c42 -> bb13], default bb23, exit bb24
     bb2:
-      %15 = const c28
-      %16 = const c29
+      %15 = const c27
+      %16 = const c28
       %17 = call builtin.promise.resolve_static(%15, %16)
-      %19 = const c30
+      %19 = const c29
       %18 = call builtin.promise.resolve_static(%19, %17)
       suspend %18, state=1
       jump bb5
@@ -109,16 +107,16 @@ module {
       %23 = load var $1.$resume_val
       store var $1.a, %23
       %24 = load var $1.a
-      %25 = const c31
+      %25 = const c30
       %26 = call builtin.abstract_compare(%25, %24)
       branch %26, bb6, bb7
     bb6:
-      %27 = const c32
+      %27 = const c31
       %28 = call builtin.console.log(%27)
       %29 = is_exception %28
       branch %29, bb9, bb8
     bb7:
-      %32 = const c33
+      %32 = const c32
       %33 = call builtin.console.log(%32)
       %34 = is_exception %33
       branch %34, bb11, bb10
@@ -137,10 +135,10 @@ module {
       promise_reject %36, %35
       return
     bb12:
-      %37 = const c34
-      %38 = const c35
+      %37 = const c33
+      %38 = const c34
       %39 = call builtin.promise.resolve_static(%37, %38)
-      %41 = const c36
+      %41 = const c35
       %40 = call builtin.promise.resolve_static(%41, %39)
       suspend %40, state=2
       jump bb15
@@ -156,16 +154,16 @@ module {
       %45 = load var $1.$resume_val
       store var $1.b, %45
       %46 = load var $1.b
-      %47 = const c37
+      %47 = const c36
       %48 = call builtin.abstract_compare(%47, %46)
       branch %48, bb16, bb17
     bb16:
-      %49 = const c38
+      %49 = const c37
       %50 = call builtin.console.log(%49)
       %51 = is_exception %50
       branch %51, bb19, bb18
     bb17:
-      %54 = const c39
+      %54 = const c38
       %55 = call builtin.console.log(%54)
       %56 = is_exception %55
       branch %56, bb21, bb20
@@ -184,7 +182,7 @@ module {
       promise_reject %58, %57
       return
     bb22:
-      %59 = const c40
+      %59 = const c39
       %60 = load var $1.$promise
       promise_resolve %60, %59
       return
@@ -196,27 +194,27 @@ module {
   fn @demo [params: $6.$env, $6.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c44
-      %3 = const c45
+      %1 = const c43
+      %3 = const c44
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $6.arguments, %2
       %4 = load var $env
-      %5 = const c46
+      %5 = const c45
       %6 = get_prop %4, %5
-      %7 = const c47
+      %7 = const c46
       set_prop %2, %7, %6
       %8 = new_promise
-      %9 = const c48
-      %10 = const c49
+      %9 = const c47
+      %10 = const c48
       %11 = call builtin.continuation.create(%9, %8, %10)
-      %12 = const c50
+      %12 = const c49
       call builtin.continuation.save_var(%11, %12, %8)
-      %13 = const c51
-      %14 = const c52
+      %13 = const c50
+      %14 = const c51
       call builtin.continuation.save_var(%11, %13, %14)
-      %15 = const c53
-      %16 = const c54
-      %17 = const c55
+      %15 = const c52
+      %16 = const c53
+      %17 = const c54
       call builtin.async_function.resume(%9, %11, %15, %16, %17)
       return %8
 
@@ -264,9 +262,9 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c56
+      %21 = const c55
       store var $0.demo, %21
-      %22 = const c57
+      %22 = const c56
       %23 = load var $0.demo
       %24 = call %23, this=%22
       %25 = is_exception %24

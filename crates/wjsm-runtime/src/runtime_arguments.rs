@@ -4,17 +4,10 @@ pub(crate) fn arguments_strict_callee_getter(
     caller: &mut Caller<'_, RuntimeState>,
     _this: i64,
 ) -> i64 {
-    let msg = "TypeError: 'callee' and 'caller' properties are not defined";
-    let msg_val = store_runtime_string(caller, msg.to_string());
-    let error_obj = create_error_object(caller, "TypeError", msg_val);
-    let mut errors = caller.data().error_table.lock().expect("error table mutex");
-    let idx = errors.len() as u32;
-    errors.push(crate::ErrorEntry {
-        name: "TypeError".to_string(),
-        message: msg.to_string(),
-        value: error_obj,
-    });
-    value::encode_handle(value::TAG_EXCEPTION, idx)
+    make_type_error_exception(
+        caller,
+        "TypeError: 'callee' and 'caller' properties are not defined",
+    )
 }
 
 const ARGUMENTS_DATA_FLAGS: i32 = constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE;

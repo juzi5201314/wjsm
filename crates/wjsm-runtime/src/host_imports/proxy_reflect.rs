@@ -4,6 +4,18 @@ use wasmtime::{Caller, Extern, Func, Linker, Val};
 
 use crate::*;
 
+/// D4: 检查 proxy 是否已撤销，返回 Some(exception) 如果已撤销，否则 None。
+pub(crate) fn check_proxy_revoked(caller: &mut Caller<'_, RuntimeState>, entry: &ProxyEntry, op: &str) -> Option<i64> {
+    if entry.revoked {
+        Some(make_type_error_exception(
+            caller,
+            &format!("Cannot perform '{}' on a proxy that has been revoked", op),
+        ))
+    } else {
+        None
+    }
+}
+
 pub(crate) fn reflect_set_impl(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
@@ -272,11 +284,8 @@ pub(crate) fn reflect_get_prototype_of_impl(
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
-            if entry.revoked {
-                return make_type_error_exception(
-                    caller,
-                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked",
-                );
+            if let Some(exc) = check_proxy_revoked(caller, &entry, "getPrototypeOf") {
+                return exc;
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
@@ -525,11 +534,8 @@ pub(crate) async fn proxy_own_keys_trap_async(
     let Some(entry) = entry else {
         return value::encode_undefined();
     };
-    if entry.revoked {
-        return make_type_error_exception(
-            caller,
-            "TypeError: Cannot perform 'ownKeys' on a proxy that has been revoked",
-        );
+    if let Some(exc) = check_proxy_revoked(caller, &entry, "ownKeys") {
+        return exc;
     }
     let Some(handler_ptr) = resolve_handle(caller, entry.handler) else {
         return reflect_own_keys_impl(caller, entry.target);
@@ -543,18 +549,16 @@ pub(crate) async fn proxy_own_keys_trap_async(
     let keys_val = match trap_res {
         Ok(res) => res,
         Err(e) => {
-            set_runtime_error(
-                caller.data(),
-                format!("TypeError: Proxy ownKeys trap failed: {}", e),
+            return make_type_error_exception(
+                caller,
+                &format!("Proxy ownKeys trap failed: {}", e),
             );
-            return value::encode_undefined();
         }
     };
     let keys = match extract_array_like_elements(caller, keys_val) {
         Ok(arr) => arr,
         Err(err) => {
-            set_runtime_error(caller.data(), err);
-            return value::encode_undefined();
+            return make_type_error_exception(caller, &err);
         }
     };
     let ext = is_extensible_impl(caller, entry.target);
@@ -580,11 +584,10 @@ pub(crate) async fn proxy_own_keys_trap_async(
             }
         }
         if !match_all || trap_keys_str.len() != target_keys.len() {
-            set_runtime_error(
-                caller.data(),
-                "TypeError: Proxy ownKeys invariant violated: target is non-extensible and keys do not match target keys".to_string(),
+            return make_type_error_exception(
+                caller,
+                "Proxy ownKeys invariant violated: target is non-extensible and keys do not match target keys",
             );
-            return value::encode_undefined();
         }
     } else {
         for tk in &target_keys {
@@ -592,14 +595,13 @@ pub(crate) async fn proxy_own_keys_trap_async(
                 if let Some((_, flags, _)) = find_property_slot_by_name_id(caller, t_ptr, tk_c) {
                     let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
                     if !configurable && !trap_keys_str.contains(tk) {
-                        set_runtime_error(
-                            caller.data(),
-                            format!(
-                                "TypeError: Proxy ownKeys invariant violated: non-configurable property '{}' is missing in trap result",
+                        return make_type_error_exception(
+                            caller,
+                            &format!(
+                                "Proxy ownKeys invariant violated: non-configurable property '{}' is missing in trap result",
                                 tk
                             ),
                         );
-                        return value::encode_undefined();
                     }
                 }
             }
@@ -664,11 +666,8 @@ async fn reflect_get_own_property_descriptor_on_object_async(
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
-            if entry.revoked {
-                return make_type_error_exception(
-                    caller,
-                    "TypeError: Cannot perform 'getOwnPropertyDescriptor' on a proxy that has been revoked",
-                );
+            if let Some(exc) = check_proxy_revoked(caller, &entry, "getOwnPropertyDescriptor") {
+                return exc;
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap =

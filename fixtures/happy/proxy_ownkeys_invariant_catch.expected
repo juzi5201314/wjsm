@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+PASS: caught TypeError
+PASS: caught non-configurable invariant TypeError
+--- stderr ---
