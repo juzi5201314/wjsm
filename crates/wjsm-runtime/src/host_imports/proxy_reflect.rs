@@ -273,12 +273,10 @@ pub(crate) fn reflect_get_prototype_of_impl(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked"
-                        .to_string(),
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
@@ -528,11 +526,10 @@ pub(crate) async fn proxy_own_keys_trap_async(
         return value::encode_undefined();
     };
     if entry.revoked {
-        set_runtime_error(
-            caller.data(),
-            "TypeError: Cannot perform 'ownKeys' on a proxy that has been revoked".to_string(),
+        return make_type_error_exception(
+            caller,
+            "TypeError: Cannot perform 'ownKeys' on a proxy that has been revoked",
         );
-        return value::encode_undefined();
     }
     let Some(handler_ptr) = resolve_handle(caller, entry.handler) else {
         return reflect_own_keys_impl(caller, entry.target);
@@ -668,11 +665,10 @@ async fn reflect_get_own_property_descriptor_on_object_async(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'getOwnPropertyDescriptor' on a proxy that has been revoked".to_string(),
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Cannot perform 'getOwnPropertyDescriptor' on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap =
@@ -729,6 +725,9 @@ pub(crate) async fn object_enumerable_own_keys_async(
     }
     if value::is_proxy(obj) {
         let keys_arr = proxy_own_keys_trap_async(caller, obj).await;
+        if value::is_exception(keys_arr) {
+            return keys_arr;
+        }
         if value::is_undefined(keys_arr) {
             return alloc_array(caller, 0);
         }
@@ -781,6 +780,9 @@ pub(crate) async fn object_get_own_property_names_async(
     }
     if value::is_proxy(obj) {
         let keys_arr = proxy_own_keys_trap_async(caller, obj).await;
+        if value::is_exception(keys_arr) {
+            return keys_arr;
+        }
         if value::is_undefined(keys_arr) {
             return alloc_array(caller, 0);
         }

@@ -44,6 +44,13 @@ impl Lowerer {
             if let Some(init) = &declarator.init {
                 let value = self.lower_expr(init, block)?;
                 block = self.resolve_store_block(block);
+                // 初始化器位于声明语句的顶层表达式位置：若它可能返回 TAG_EXCEPTION
+                // （调用 / 成员读取 / new / `in` 等），插入异常检查分叉，使
+                // `let x = throws()` 之类在 try/catch 中可被捕获，而非令 TAG_EXCEPTION
+                // 流入 StoreVar 后触发 WASM unreachable。
+                if self.expr_can_throw(init) && self.expr_exception_fork_allowed() {
+                    block = self.lower_value_exception_branch(block, value)?;
+                }
                 block = self.lower_destructure_pattern(&declarator.name, value, block, kind)?;
                 // 若为简单 ident = new TypedArrayConstructor(...)，记录绑定类型
                 if let swc_ast::Pat::Ident(binding) = &declarator.name {

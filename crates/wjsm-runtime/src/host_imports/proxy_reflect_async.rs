@@ -9,6 +9,7 @@ use super::proxy_reflect::{
     reflect_get_own_property_descriptor_impl, reflect_get_prototype_of_async, reflect_has_impl,
     reflect_own_keys_impl, reflect_set_impl, reflect_set_prototype_of_fn_impl,
 };
+use super::proxy_traps::proxy_is_revoked;
 use crate::*;
 
 pub(crate) fn define_proxy_reflect_async(
@@ -39,12 +40,7 @@ pub(crate) fn define_proxy_reflect_async(
                     };
                     if let Some(entry) = entry {
                         if entry.revoked {
-                            set_runtime_error(
-                                caller.data(),
-                                "TypeError: Cannot perform 'set' on a proxy that has been revoked"
-                                    .to_string(),
-                            );
-                            return value::encode_bool(false);
+                            return make_type_error_exception(&mut caller, "TypeError: Cannot perform 'set' on a proxy that has been revoked");
                         }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
                             let trap =
@@ -84,12 +80,7 @@ pub(crate) fn define_proxy_reflect_async(
                     };
                     if let Some(entry) = entry {
                         if entry.revoked {
-                            set_runtime_error(
-                                caller.data(),
-                                "TypeError: Cannot perform 'has' on a proxy that has been revoked"
-                                    .to_string(),
-                            );
-                            return value::encode_bool(false);
+                            return make_type_error_exception(&mut caller, "TypeError: Cannot perform 'has' on a proxy that has been revoked");
                         }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
                             let trap =
@@ -126,8 +117,7 @@ pub(crate) fn define_proxy_reflect_async(
                     let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
                     if let Some(entry) = entry {
                         if entry.revoked {
-                            set_runtime_error(caller.data(), "TypeError: Cannot perform 'deleteProperty' on a proxy that has been revoked".to_string());
-                            return value::encode_bool(false);
+                            return make_type_error_exception(&mut caller, "TypeError: Cannot perform 'deleteProperty' on a proxy that has been revoked");
                         }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
                             let trap = read_object_property_by_name(&mut caller, handler_ptr, "deleteProperty").unwrap_or_else(value::encode_undefined);
@@ -152,8 +142,7 @@ pub(crate) fn define_proxy_reflect_async(
         |mut caller: Caller<'_, RuntimeState>, (target, this_arg, args_array): (i64, i64, i64)| {
             Box::new(async move {
                 if !is_callable_in_runtime(&mut caller, target) {
-                    set_runtime_error(caller.data(), "TypeError: Reflect.apply target must be callable".to_string());
-                    return value::encode_undefined();
+                    return make_type_error_exception(&mut caller, "TypeError: Reflect.apply target must be callable");
                 }
                 let args = match extract_array_like_elements(&mut caller, args_array) {
                     Ok(arr) => arr,
@@ -164,8 +153,7 @@ pub(crate) fn define_proxy_reflect_async(
                     let entry = { let table = caller.data().proxy_table.lock().unwrap(); table.get(handle).cloned() };
                     if let Some(entry) = entry {
                         if entry.revoked {
-                            set_runtime_error(caller.data(), "TypeError: Cannot perform 'apply' on a proxy that has been revoked".to_string());
-                            return value::encode_undefined();
+                            return make_type_error_exception(&mut caller, "TypeError: Cannot perform 'apply' on a proxy that has been revoked");
                         }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
                             let trap = read_object_property_by_name(&mut caller, handler_ptr, "apply").unwrap_or_else(value::encode_undefined);
@@ -193,8 +181,7 @@ pub(crate) fn define_proxy_reflect_async(
             Box::new(async move {
                 let n_target = if value::is_undefined(new_target) { target } else { new_target };
                 if !is_constructor_in_runtime(&mut caller, target) || !is_constructor_in_runtime(&mut caller, n_target) {
-                    set_runtime_error(caller.data(), "TypeError: Reflect.construct target and newTarget must be constructors".to_string());
-                    return value::encode_undefined();
+                    return make_type_error_exception(&mut caller, "TypeError: Reflect.construct target and newTarget must be constructors");
                 }
                 let args = match extract_array_like_elements(&mut caller, args_array) {
                     Ok(arr) => arr,
@@ -205,8 +192,7 @@ pub(crate) fn define_proxy_reflect_async(
                     let entry = { let table = caller.data().proxy_table.lock().unwrap(); table.get(handle).cloned() };
                     if let Some(entry) = entry {
                         if entry.revoked {
-                            set_runtime_error(caller.data(), "TypeError: Cannot perform 'construct' on a proxy that has been revoked".to_string());
-                            return value::encode_undefined();
+                            return make_type_error_exception(&mut caller, "TypeError: Cannot perform 'construct' on a proxy that has been revoked");
                         }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
                             let trap = read_object_property_by_name(&mut caller, handler_ptr, "construct").unwrap_or_else(value::encode_undefined);
@@ -216,8 +202,7 @@ pub(crate) fn define_proxy_reflect_async(
                                 return match call_wasm_callback_async(&mut caller, trap, entry.handler, &[entry.target, arr, n_target]).await {
                                     Ok(res) => {
                                         if !value::is_js_object(res) {
-                                            set_runtime_error(caller.data(), "TypeError: Proxy construct trap returned non-object".to_string());
-                                            value::encode_undefined()
+                                            make_type_error_exception(&mut caller, "TypeError: Proxy construct trap returned non-object")
                                         } else { res }
                                     }
                                     Err(e) => { set_runtime_error(caller.data(), format!("TypeError: Proxy construct trap failed: {}", e)); value::encode_undefined() }
@@ -268,8 +253,7 @@ pub(crate) fn define_proxy_reflect_async(
                 let entry = { let table = caller.data().proxy_table.lock().unwrap(); table.get(handle).cloned() };
                 if let Some(entry) = entry {
                     if entry.revoked {
-                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'setPrototypeOf' on a proxy that has been revoked".to_string());
-                        return value::encode_bool(false);
+                        return make_type_error_exception(&mut caller, "TypeError: Cannot perform 'setPrototypeOf' on a proxy that has been revoked");
                     }
                     if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
                         let trap = read_object_property_by_name(&mut caller, handler_ptr, "setPrototypeOf").unwrap_or_else(value::encode_undefined);
@@ -318,6 +302,9 @@ pub(crate) fn define_proxy_reflect_async(
                     );
                     return value::encode_bool(false);
                 }
+                if proxy_is_revoked(&mut caller, target) {
+                    return make_type_error_exception(&mut caller, "TypeError: Cannot perform 'isExtensible' on a proxy that has been revoked");
+                }
                 value::encode_bool(
                     proxy_or_target_is_extensible_impl_async(&mut caller, target).await,
                 )
@@ -341,6 +328,9 @@ pub(crate) fn define_proxy_reflect_async(
                     );
                     return value::encode_bool(false);
                 }
+                if proxy_is_revoked(&mut caller, target) {
+                    return make_type_error_exception(&mut caller, "TypeError: Cannot perform 'preventExtensions' on a proxy that has been revoked");
+                }
                 value::encode_bool(
                     proxy_or_target_prevent_extensions_impl_async(&mut caller, target).await,
                 )
@@ -355,8 +345,7 @@ pub(crate) fn define_proxy_reflect_async(
                 let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
                 if let Some(entry) = entry {
                     if entry.revoked {
-                        set_runtime_error(caller.data(), "TypeError: Cannot perform 'getOwnPropertyDescriptor' on a proxy that has been revoked".to_string());
-                        return value::encode_undefined();
+                        return make_type_error_exception(&mut caller, "TypeError: Cannot perform 'getOwnPropertyDescriptor' on a proxy that has been revoked");
                     }
                     if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
                         let trap = read_object_property_by_name(&mut caller, handler_ptr, "getOwnPropertyDescriptor").unwrap_or_else(value::encode_undefined);
@@ -390,6 +379,9 @@ pub(crate) fn define_proxy_reflect_async(
         "reflect_define_property",
         |mut caller: Caller<'_, RuntimeState>, (target, prop, descriptor): (i64, i64, i64)| {
             Box::new(async move {
+                if proxy_is_revoked(&mut caller, target) {
+                    return make_type_error_exception(&mut caller, "TypeError: Cannot perform 'defineProperty' on a proxy that has been revoked");
+                }
                 match define_property_internal_async(&mut caller, target, prop, descriptor).await {
                     Ok(success) => value::encode_bool(success),
                     Err(e) => {

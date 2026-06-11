@@ -1,6 +1,43 @@
 use super::*;
 
 impl Lowerer {
+    /// 判断表达式在其自身求值时是否可能直接返回 TAG_EXCEPTION，从而需要异常检查分叉。
+    /// 仅涵盖“自身可抛”的种类（调用、成员读取、new、`in`/`instanceof`、标签模板）；其子
+    /// 表达式的异常由各自经 `lower_expr_then_continue` 的求值负责传播。
+    /// 刻意排除 Await/Yield（异步状态机自有续延处理）与 Assign（其值为右值；赋值语句右值
+    /// 抛出的传播尚未覆盖，且 eval 右值自带异常分叉，额外分叉会破坏其块结构）。
+    pub(crate) fn expr_can_throw(&self, expr: &swc_ast::Expr) -> bool {
+        match expr {
+            swc_ast::Expr::Call(_)
+            | swc_ast::Expr::New(_)
+            | swc_ast::Expr::Member(_)
+            | swc_ast::Expr::OptChain(_)
+            | swc_ast::Expr::TaggedTpl(_) => true,
+            swc_ast::Expr::Bin(bin) => {
+                matches!(bin.op, swc_ast::BinaryOp::In | swc_ast::BinaryOp::InstanceOf)
+            }
+            swc_ast::Expr::Paren(p) => self.expr_can_throw(&p.expr),
+            swc_ast::Expr::TsAs(e) => self.expr_can_throw(&e.expr),
+            swc_ast::Expr::TsNonNull(e) => self.expr_can_throw(&e.expr),
+            swc_ast::Expr::TsConstAssertion(e) => self.expr_can_throw(&e.expr),
+            swc_ast::Expr::TsTypeAssertion(e) => self.expr_can_throw(&e.expr),
+            swc_ast::Expr::TsSatisfies(e) => self.expr_can_throw(&e.expr),
+            swc_ast::Expr::TsInstantiation(e) => self.expr_can_throw(&e.expr),
+            _ => false,
+        }
+    }
+
+    /// 表达式位置的异常检查分叉在 async / async-generator 函数体内会破坏其状态机的
+    /// 基本块枚举与续延结构，故此类分叉仅在普通（非状态机）函数体及顶层代码中插入。
+    /// async 函数体内的同步抛出沿用原有 promise rejection 路径（不在此处理）。
+    pub(crate) fn expr_exception_fork_allowed(&self) -> bool {
+        !self.is_async_fn && !self.is_async_generator_fn
+    }
+}
+
+
+
+impl Lowerer {
     pub(crate) fn lower_expr_then_continue(
         &mut self,
         expr: &swc_ast::Expr,

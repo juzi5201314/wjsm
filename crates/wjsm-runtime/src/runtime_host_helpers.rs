@@ -2,6 +2,24 @@ use super::*;
 use crate::wasm_env::WasmEnv;
 use std::sync::atomic::Ordering;
 
+/// 构造一个 TAG_EXCEPTION 值（携带 TypeError 对象），供属性/调用等返回路径
+/// 直接返回给被编译代码，从而经语义层插入的 IsException 分叉被 try/catch 捕获。
+/// 这与延迟、不可捕获的 `set_runtime_error` 不同：后者只在程序结束时作为顶层
+/// "Runtime error:" 暴露。Proxy 不变量违反 / 撤销代理访问 / private 品牌检查失败
+/// 等规范要求“同步抛出 TypeError”的场景应使用本函数。
+pub(crate) fn make_type_error_exception(caller: &mut Caller<'_, RuntimeState>, msg: &str) -> i64 {
+    let msg_val = store_runtime_string(caller, msg.to_string());
+    let error_obj = create_error_object(caller, "TypeError", msg_val);
+    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let idx = errors.len() as u32;
+    errors.push(crate::ErrorEntry {
+        name: "TypeError".to_string(),
+        message: msg.to_string(),
+        value: error_obj,
+    });
+    value::encode_handle(value::TAG_EXCEPTION, idx)
+}
+
 pub(crate) fn read_shadow_arg_with_env<C: AsContext>(
     ctx: &C,
     env: &WasmEnv,
@@ -1001,12 +1019,10 @@ pub(crate) fn proxy_or_target_get_prototype_of_impl(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked"
-                        .to_string(),
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
@@ -1582,12 +1598,10 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked"
-                        .to_string(),
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
@@ -1957,11 +1971,10 @@ pub(crate) fn reflect_get_impl_with_receiver(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'get' on a proxy that has been revoked".to_string(),
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Cannot perform 'get' on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "get")
@@ -2068,11 +2081,10 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'get' on a proxy that has been revoked".to_string(),
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Cannot perform 'get' on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "get")

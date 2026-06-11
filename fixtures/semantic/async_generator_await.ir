@@ -263,32 +263,38 @@ module {
       %23 = load var $0.gen
       %24 = const c53
       %25 = call %23, this=%22, args=[%24]
-      store var $0.g, %25
-      %26 = load var $0.g
-      %27 = const c54
-      %28 = get_prop %26, %27
-      %29 = call %28, this=%26
-      %30 = const c56
-      %31 = const c57
-      %32 = call builtin.promise.then(%29, %30, %31)
-      %33 = is_exception %32
-      branch %33, bb2, bb1
+      %26 = is_exception %25
+      branch %26, bb2, bb1
     bb1:
-      %35 = load var $0.g
-      %36 = const c58
-      %37 = get_prop %35, %36
-      %38 = call %37, this=%35
-      %39 = const c60
-      %40 = const c61
-      %41 = call builtin.promise.then(%38, %39, %40)
-      %42 = is_exception %41
-      branch %42, bb4, bb3
+      store var $0.g, %25
+      %28 = load var $0.g
+      %29 = const c54
+      %30 = get_prop %28, %29
+      %31 = call %30, this=%28
+      %32 = const c56
+      %33 = const c57
+      %34 = call builtin.promise.then(%31, %32, %33)
+      %35 = is_exception %34
+      branch %35, bb4, bb3
     bb2:
-      %34 = call builtin.exception_value(%32)
-      throw %34
+      %27 = call builtin.exception_value(%25)
+      throw %27
     bb3:
-      return
+      %37 = load var $0.g
+      %38 = const c58
+      %39 = get_prop %37, %38
+      %40 = call %39, this=%37
+      %41 = const c60
+      %42 = const c61
+      %43 = call builtin.promise.then(%40, %41, %42)
+      %44 = is_exception %43
+      branch %44, bb6, bb5
     bb4:
-      %43 = call builtin.exception_value(%41)
-      throw %43
+      %36 = call builtin.exception_value(%34)
+      throw %36
+    bb5:
+      return
+    bb6:
+      %45 = call builtin.exception_value(%43)
+      throw %45
 }

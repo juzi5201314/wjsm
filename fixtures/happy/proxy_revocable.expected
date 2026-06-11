@@ -1,6 +1,5 @@
-exit_code: 2
+exit_code: 0
 --- stdout ---
 10
-undefined
+revoked-get-throws
 --- stderr ---
-Runtime error: TypeError: Cannot perform 'get' on a proxy that has been revoked

@@ -121,14 +121,20 @@ module {
       %42 = call builtin.exception_value(%40)
       throw %42
     bb3:
-      store var $0.x, %40
-      %45 = load var $0.x
-      %46 = call builtin.console.log(%45)
-      %47 = is_exception %46
-      branch %47, bb5, bb4
+      %45 = is_exception %40
+      branch %45, bb5, bb4
     bb4:
-      return
+      store var $0.x, %40
+      %47 = load var $0.x
+      %48 = call builtin.console.log(%47)
+      %49 = is_exception %48
+      branch %49, bb7, bb6
     bb5:
-      %48 = call builtin.exception_value(%46)
-      throw %48
+      %46 = call builtin.exception_value(%40)
+      throw %46
+    bb6:
+      return
+    bb7:
+      %50 = call builtin.exception_value(%48)
+      throw %50
 }

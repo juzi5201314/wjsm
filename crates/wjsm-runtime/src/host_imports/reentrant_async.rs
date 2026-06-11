@@ -14,16 +14,8 @@ fn type_error_exception_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     msg: &'static str,
 ) -> i64 {
-    let msg_val = store_runtime_string(caller, msg.to_string());
-    let error_obj = create_error_object(caller, "TypeError", msg_val);
-    let mut errors = caller.data().error_table.lock().expect("error table mutex");
-    let idx = errors.len() as u32;
-    errors.push(crate::ErrorEntry {
-        name: "TypeError".to_string(),
-        message: msg.to_string(),
-        value: error_obj,
-    });
-    value::encode_handle(value::TAG_EXCEPTION, idx)
+    // 统一委托给共享实现，保持 TAG_EXCEPTION 构造逻辑单一来源。
+    make_type_error_exception(caller, msg)
 }
 
 pub(crate) async fn native_call_from_caller_async(
@@ -1015,8 +1007,9 @@ pub(crate) async fn proxy_trap_internal_get_async(
     proxy: i64,
     name_id: i32,
 ) -> i64 {
-    let Some((target, handler)) = proxy_trap_proxy_entry(caller, proxy, "get") else {
-        return value::encode_undefined();
+    let (target, handler) = match proxy_trap_proxy_entry(caller, proxy, "get") {
+        Ok(pair) => pair,
+        Err(exc) => return exc,
     };
     if let Some(trap) = proxy_trap_handler_trap(caller, handler, "get") {
         let prop = proxy_trap_property_key_value(caller, name_id);
@@ -1035,8 +1028,18 @@ pub(crate) async fn proxy_trap_internal_set_async(
     name_id: i32,
     val: i64,
 ) {
-    let Some((target, handler)) = proxy_trap_proxy_entry(caller, proxy, "set") else {
-        return;
+    // 注意：set 内部方法返回 void（$obj_set 为 Type 9 `(i64,i32,i64)->()`），无法回传
+    // TAG_EXCEPTION，故撤销代理上的 `proxy.x = v` 维持延迟（不可捕获）报错。规范要求的
+    // 可捕获 [[Set]] 抛出经 Reflect.set（返回 i64，见 proxy_reflect_async）覆盖。
+    let (target, handler) = match proxy_trap_proxy_entry(caller, proxy, "set") {
+        Ok(pair) => pair,
+        Err(_exc) => {
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Cannot perform 'set' on a proxy that has been revoked".to_string(),
+            );
+            return;
+        }
     };
     if let Some(trap) = proxy_trap_handler_trap(caller, handler, "set") {
         let prop = proxy_trap_property_key_value(caller, name_id);
@@ -1066,8 +1069,9 @@ pub(crate) async fn proxy_trap_internal_delete_async(
     proxy: i64,
     name_id: i32,
 ) -> i64 {
-    let Some((target, handler)) = proxy_trap_proxy_entry(caller, proxy, "deleteProperty") else {
-        return value::encode_bool(false);
+    let (target, handler) = match proxy_trap_proxy_entry(caller, proxy, "deleteProperty") {
+        Ok(pair) => pair,
+        Err(exc) => return exc,
     };
     if let Some(trap) = proxy_trap_handler_trap(caller, handler, "deleteProperty") {
         let prop = proxy_trap_property_key_value(caller, name_id);
