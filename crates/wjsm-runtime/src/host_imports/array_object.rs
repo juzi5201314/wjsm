@@ -17,8 +17,6 @@ fn push_array_value(caller: &mut Caller<'_, RuntimeState>, arr: i64, val: i64) -
     Some(())
 }
 
-
-
 async fn push_iterator_values_async(
     caller: &mut Caller<'_, RuntimeState>,
     arr: i64,
@@ -34,8 +32,8 @@ async fn push_iterator_values_async(
         return false;
     }
     loop {
-        let result = call_iterator_method_async(caller, next, iterator, value::encode_undefined())
-            .await;
+        let result =
+            call_iterator_method_async(caller, next, iterator, value::encode_undefined()).await;
         let Some(result_ptr) = resolve_handle(caller, result) else {
             return false;
         };
@@ -91,7 +89,6 @@ pub(crate) async fn array_push_spread_impl_async(
     value::encode_undefined()
 }
 
-
 pub(crate) fn define_array_object(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -129,7 +126,6 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "arr_proto_push", arr_proto_push_fn)?;
-
 
     // ── arr_proto_pop (#50) ───────────────────────────────────────────
     let arr_proto_pop_fn = Func::wrap(

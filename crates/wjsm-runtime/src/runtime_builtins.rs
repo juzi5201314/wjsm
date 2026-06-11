@@ -25,27 +25,20 @@ pub(crate) fn insert_promise_entry(
     table[handle] = entry;
 }
 
-
 pub(crate) async fn call_iterable_method_async(
     caller: &mut Caller<'_, RuntimeState>,
     method: i64,
     receiver: i64,
 ) -> i64 {
     if value::is_native_callable(method) {
-        return call_native_callable_with_args_from_caller_async(
-            caller,
-            method,
-            receiver,
-            vec![],
-        )
-        .await
-        .unwrap_or_else(value::encode_undefined);
+        return call_native_callable_with_args_from_caller_async(caller, method, receiver, vec![])
+            .await
+            .unwrap_or_else(value::encode_undefined);
     }
     call_wasm_callback_async(caller, method, receiver, &[])
         .await
         .unwrap_or_else(|_| value::encode_undefined())
 }
-
 
 pub(crate) async fn call_iterator_method_async(
     caller: &mut Caller<'_, RuntimeState>,
@@ -77,20 +70,14 @@ pub(crate) async fn call_iterator_method_async(
         .unwrap_or_else(|_| value::encode_undefined())
 }
 
-
 pub(crate) async fn advance_object_iterator_from_caller_async(
     caller: &mut Caller<'_, RuntimeState>,
     _func_table: &Table,
     iterator: i64,
     next: i64,
 ) -> (i64, i64, bool, bool) {
-    let result = call_iterator_method_async(
-        caller,
-        next,
-        iterator,
-        value::encode_undefined(),
-    )
-    .await;
+    let result =
+        call_iterator_method_async(caller, next, iterator, value::encode_undefined()).await;
     if is_promise_value(caller.data(), result) {
         return (result, value::encode_undefined(), false, false);
     }
@@ -1456,6 +1443,19 @@ fn invoke_number_primitive_method(
     }
 }
 
+fn native_type_error_exception(caller: &mut Caller<'_, RuntimeState>, msg: &'static str) -> i64 {
+    let msg_val = store_runtime_string(caller, msg.to_string());
+    let error_obj = create_error_object(caller, "TypeError", msg_val);
+    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let idx = errors.len() as u32;
+    errors.push(crate::ErrorEntry {
+        name: "TypeError".to_string(),
+        message: msg.to_string(),
+        value: error_obj,
+    });
+    value::encode_handle(value::TAG_EXCEPTION, idx)
+}
+
 pub(crate) fn call_native_callable_from_caller(
     caller: &mut Caller<'_, RuntimeState>,
     callable: i64,
@@ -1798,8 +1798,28 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             Some(this_val),
         )),
         NativeCallable::ProxyConstructor => Some({
-            let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
-            alloc_host_object(caller, &_wjsm_env, 4)
+            let target = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            let handler = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            if !value::is_js_object(target) {
+                native_type_error_exception(caller, "TypeError: Proxy target must be an object")
+            } else if !value::is_js_object(handler) {
+                native_type_error_exception(caller, "TypeError: Proxy handler must be an object")
+            } else {
+                let handle = {
+                    let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                    let handle = table.len() as u32;
+                    table.push(ProxyEntry {
+                        target,
+                        handler,
+                        revoked: false,
+                    });
+                    handle
+                };
+                value::encode_proxy_handle(handle)
+            }
         }),
         NativeCallable::ProxyRevoker { proxy_handle } => {
             let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
@@ -2181,7 +2201,6 @@ fn call_sync_iter_and_wrap(
     is_throw: bool,
 ) -> i64 {
     let sync_handle_idx = value::decode_handle(sync_iter_handle) as usize;
-
 
     let (iterator, method_to_call) = {
         let iters = caller.data().iterators.lock().expect("iterators mutex");

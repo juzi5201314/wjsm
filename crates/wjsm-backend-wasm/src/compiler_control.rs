@@ -354,6 +354,51 @@ impl Compiler {
                         continue;
                     }
 
+                    let common_direct_jump = match (blocks.get(true_idx), blocks.get(false_idx)) {
+                        (Some(true_block), Some(false_block)) => {
+                            match (true_block.terminator(), false_block.terminator()) {
+                                (
+                                    Terminator::Jump {
+                                        target: true_target,
+                                    },
+                                    Terminator::Jump {
+                                        target: false_target,
+                                    },
+                                ) if true_target == false_target => Some(true_target.0 as usize),
+                                _ => None,
+                            }
+                        }
+                        _ => None,
+                    };
+                    if let Some(common_idx) = common_direct_jump {
+                        if self.loop_continue_depth(common_idx).is_none()
+                            && self.loop_break_depth(common_idx).is_none()
+                            && !block_has_suspend(&blocks[true_idx])
+                            && !block_has_suspend(&blocks[false_idx])
+                        {
+                            self.emit_to_bool_i32(condition.0);
+                            self.if_depth += 1;
+                            self.emit(WasmInstruction::If(BlockType::Empty));
+
+                            self.compiled_blocks.insert(true_idx);
+                            for instruction in blocks[true_idx].instructions() {
+                                self.compile_instruction(module, instruction)?;
+                            }
+                            self.emit_phi_moves(blocks, true_idx, common_idx);
+
+                            self.emit(WasmInstruction::Else);
+                            self.compiled_blocks.insert(false_idx);
+                            for instruction in blocks[false_idx].instructions() {
+                                self.compile_instruction(module, instruction)?;
+                            }
+                            self.emit_phi_moves(blocks, false_idx, common_idx);
+
+                            self.emit(WasmInstruction::End);
+                            self.if_depth -= 1;
+                            idx = common_idx;
+                            continue;
+                        }
+                    }
 
                     // 普通 if/else
                     self.emit_to_bool_i32(condition.0);
@@ -388,7 +433,11 @@ impl Compiler {
                         let tb = blocks.get(true_idx);
                         let fb = blocks.get(false_idx);
                         if let (Some(t), Some(f)) = (tb, fb) {
-                            if let (Terminator::Jump { target: tt }, Terminator::Jump { target: ft }) = (t.terminator(), f.terminator()) {
+                            if let (
+                                Terminator::Jump { target: tt },
+                                Terminator::Jump { target: ft },
+                            ) = (t.terminator(), f.terminator())
+                            {
                                 tt.0 == ft.0
                             } else {
                                 false
@@ -411,6 +460,12 @@ impl Compiler {
                         false_idx
                     } else if true_is_merge {
                         true_idx
+                    } else if true_terminates && !false_terminates {
+                        self.branch_continuation_target(blocks, false_idx)
+                            .unwrap_or_else(|| self.find_merge(blocks, true_idx, false_idx))
+                    } else if false_terminates && !true_terminates {
+                        self.branch_continuation_target(blocks, true_idx)
+                            .unwrap_or_else(|| self.find_merge(blocks, true_idx, false_idx))
                     } else {
                         self.find_merge(blocks, true_idx, false_idx)
                     };
@@ -544,8 +599,12 @@ impl Compiler {
                     if exit_idx == default_target_idx {
                         // 检查exit是否在循环内（会回到loop header）
                         let exit_in_loop = self.loop_stack.last().is_some()
-                            && self.can_reach_loop_header(blocks, exit_idx, self.loop_stack.last().unwrap().header_idx);
-                        
+                            && self.can_reach_loop_header(
+                                blocks,
+                                exit_idx,
+                                self.loop_stack.last().unwrap().header_idx,
+                            );
+
                         if exit_in_loop {
                             // exit在循环内，已完整编译，跳过重新发射
                             // 继续到循环出口或结束
@@ -1104,12 +1163,10 @@ impl Compiler {
                     for instruction in target_block.instructions() {
                         self.compile_instruction(module, instruction)?;
                     }
-                    if let Some(depth) = self.loop_continue_depth(
-                        match target_block.terminator() {
-                            Terminator::Jump { target } => target.0 as usize,
-                            _ => target_idx,
-                        },
-                    ) {
+                    if let Some(depth) = self.loop_continue_depth(match target_block.terminator() {
+                        Terminator::Jump { target } => target.0 as usize,
+                        _ => target_idx,
+                    }) {
                         let adj = if extra_depth > 0 && target_idx < case_start {
                             depth + extra_depth
                         } else {
@@ -1122,11 +1179,26 @@ impl Compiler {
                     }
                 } else if self.if_depth > 0
                     && target_idx < idx
-                    && !self.compiled_blocks.contains(&target_idx)
-                    && !matches!(
+                    && matches!(
                         blocks.get(target_idx).map(|b| b.terminator()),
-                        Some(Terminator::Return { .. })
+                        Some(
+                            Terminator::Return { .. }
+                                | Terminator::Throw { .. }
+                                | Terminator::Unreachable
+                        )
                     )
+                {
+                    self.emit_phi_moves(blocks, idx, target_idx);
+                    self.compile_branch_body_with_context(
+                        module,
+                        blocks,
+                        target_idx,
+                        case_start,
+                        extra_depth,
+                    )
+                } else if self.if_depth > 0
+                    && target_idx < idx
+                    && !self.compiled_blocks.contains(&target_idx)
                 {
                     self.emit_phi_moves(blocks, idx, target_idx);
                     self.compiled_blocks.insert(target_idx);
@@ -1138,10 +1210,10 @@ impl Compiler {
                         extra_depth,
                     )
                 } else if self.if_depth > 0 && target_idx > idx {
-                    // Jump到后面的块（如try-catch的catch入口）：在if/else内需要br跳出
+                    // if/else 内的前向 Jump 由外层分支编译器在 if 之后继续编译目标块。
+                    // 这里不能 br 到函数隐式标签；当前函数有返回值时会破坏 WASM 栈类型。
                     self.emit_phi_moves(blocks, idx, target_idx);
-                    self.emit(WasmInstruction::Br(self.if_depth));
-                    Ok(true)  // 标记为终止，避免主循环插入unreachable
+                    Ok(false)
                 } else {
                     self.emit_phi_moves(blocks, idx, target_idx);
                     Ok(false)
@@ -1257,6 +1329,57 @@ impl Compiler {
                 let true_idx = true_block.0 as usize;
                 let false_idx = false_block.0 as usize;
 
+                let common_direct_jump = match (blocks.get(true_idx), blocks.get(false_idx)) {
+                    (Some(true_block), Some(false_block)) => {
+                        match (true_block.terminator(), false_block.terminator()) {
+                            (
+                                Terminator::Jump {
+                                    target: true_target,
+                                },
+                                Terminator::Jump {
+                                    target: false_target,
+                                },
+                            ) if true_target == false_target => Some(true_target.0 as usize),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(common_idx) = common_direct_jump {
+                    if self.loop_continue_depth(common_idx).is_none()
+                        && self.loop_break_depth(common_idx).is_none()
+                        && !block_has_suspend(&blocks[true_idx])
+                        && !block_has_suspend(&blocks[false_idx])
+                    {
+                        self.emit_to_bool_i32(condition.0);
+                        self.if_depth += 1;
+                        self.emit(WasmInstruction::If(BlockType::Empty));
+
+                        self.compiled_blocks.insert(true_idx);
+                        for instruction in blocks[true_idx].instructions() {
+                            self.compile_instruction(module, instruction)?;
+                        }
+                        self.emit_phi_moves(blocks, true_idx, common_idx);
+
+                        self.emit(WasmInstruction::Else);
+                        self.compiled_blocks.insert(false_idx);
+                        for instruction in blocks[false_idx].instructions() {
+                            self.compile_instruction(module, instruction)?;
+                        }
+                        self.emit_phi_moves(blocks, false_idx, common_idx);
+
+                        self.emit(WasmInstruction::End);
+                        self.if_depth -= 1;
+                        return self.compile_branch_body_with_context(
+                            module,
+                            blocks,
+                            common_idx,
+                            case_start,
+                            extra_depth,
+                        );
+                    }
+                }
+
                 self.emit_to_bool_i32(condition.0);
                 self.if_depth += 1;
                 self.emit(WasmInstruction::If(BlockType::Empty));
@@ -1309,6 +1432,12 @@ impl Compiler {
                         false_idx
                     } else if true_is_merge {
                         true_idx
+                    } else if true_terminates && !false_terminates {
+                        self.branch_continuation_target(blocks, false_idx)
+                            .unwrap_or_else(|| self.find_merge(blocks, true_idx, false_idx))
+                    } else if false_terminates && !true_terminates {
+                        self.branch_continuation_target(blocks, true_idx)
+                            .unwrap_or_else(|| self.find_merge(blocks, true_idx, false_idx))
                     } else {
                         self.find_merge(blocks, true_idx, false_idx)
                     };
@@ -1500,7 +1629,12 @@ impl Compiler {
     }
 
     /// 检查 block_idx 是否能通过 CFG 到达 header_idx（判断是否在循环体内）
-    fn can_reach_loop_header(&self, blocks: &[BasicBlock], block_idx: usize, header_idx: usize) -> bool {
+    fn can_reach_loop_header(
+        &self,
+        blocks: &[BasicBlock],
+        block_idx: usize,
+        header_idx: usize,
+    ) -> bool {
         let mut visited = std::collections::HashSet::new();
         let mut stack = vec![block_idx];
         while let Some(current) = stack.pop() {
@@ -1513,7 +1647,11 @@ impl Compiler {
             if let Some(block) = blocks.get(current) {
                 match block.terminator() {
                     Terminator::Jump { target } => stack.push(target.0 as usize),
-                    Terminator::Branch { true_block, false_block, .. } => {
+                    Terminator::Branch {
+                        true_block,
+                        false_block,
+                        ..
+                    } => {
                         stack.push(true_block.0 as usize);
                         stack.push(false_block.0 as usize);
                     }

@@ -10,6 +10,22 @@ use super::proxy_traps::{
     proxy_trap_handler_trap, proxy_trap_property_key_value, proxy_trap_proxy_entry,
 };
 
+fn type_error_exception_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    msg: &'static str,
+) -> i64 {
+    let msg_val = store_runtime_string(caller, msg.to_string());
+    let error_obj = create_error_object(caller, "TypeError", msg_val);
+    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let idx = errors.len() as u32;
+    errors.push(crate::ErrorEntry {
+        name: "TypeError".to_string(),
+        message: msg.to_string(),
+        value: error_obj,
+    });
+    value::encode_handle(value::TAG_EXCEPTION, idx)
+}
+
 pub(crate) async fn native_call_from_caller_async(
     caller: &mut Caller<'_, RuntimeState>,
     callable: i64,
@@ -31,20 +47,18 @@ pub(crate) async fn native_call_from_caller_async(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform call on a proxy that has been revoked".to_string(),
+                return type_error_exception_from_caller(
+                    caller,
+                    "TypeError: Cannot perform call on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
 
             if !value::is_undefined(new_target_val) {
                 if !is_constructor_in_runtime(caller, entry.target) {
-                    set_runtime_error(
-                        caller.data(),
-                        "TypeError: Proxy target must be a constructor".to_string(),
+                    return type_error_exception_from_caller(
+                        caller,
+                        "TypeError: Proxy target must be a constructor",
                     );
-                    return value::encode_undefined();
                 }
                 if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                     let trap = read_object_property_by_name(caller, handler_ptr, "construct")
@@ -65,23 +79,18 @@ pub(crate) async fn native_call_from_caller_async(
                         return match trap_res {
                             Ok(res) => {
                                 if !value::is_js_object(res) {
-                                    set_runtime_error(
-                                        caller.data(),
-                                        "TypeError: Proxy construct trap returned non-object"
-                                            .to_string(),
-                                    );
-                                    value::encode_undefined()
+                                    type_error_exception_from_caller(
+                                        caller,
+                                        "TypeError: Proxy construct trap returned non-object",
+                                    )
                                 } else {
                                     res
                                 }
                             }
-                            Err(e) => {
-                                set_runtime_error(
-                                    caller.data(),
-                                    format!("TypeError: Proxy construct trap failed: {}", e),
-                                );
-                                value::encode_undefined()
-                            }
+                            Err(_) => type_error_exception_from_caller(
+                                caller,
+                                "TypeError: Proxy construct trap failed",
+                            ),
                         };
                     }
                 }
@@ -100,11 +109,10 @@ pub(crate) async fn native_call_from_caller_async(
             }
 
             if !is_callable_in_runtime(caller, entry.target) {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Proxy target must be callable".to_string(),
+                return type_error_exception_from_caller(
+                    caller,
+                    "TypeError: Proxy target must be callable",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "apply")
@@ -232,11 +240,27 @@ pub(crate) fn define_timers_arrays_async(
         }
     }
 
+    fn timer_callback_type_error(caller: &mut Caller<'_, RuntimeState>) -> i64 {
+        let msg = "TypeError: timer callback must be callable";
+        let msg_val = store_runtime_string(caller, msg.to_string());
+        let error_obj = create_error_object(caller, "TypeError", msg_val);
+        let mut errors = caller.data().error_table.lock().expect("error table mutex");
+        let idx = errors.len() as u32;
+        errors.push(crate::ErrorEntry {
+            name: "TypeError".to_string(),
+            message: msg.to_string(),
+            value: error_obj,
+        });
+        value::encode_handle(value::TAG_EXCEPTION, idx)
+    }
     linker.func_wrap_async(
         "env",
         "set_timeout",
-        |caller: Caller<'_, RuntimeState>, (callback, delay): (i64, i64)| {
+        |mut caller: Caller<'_, RuntimeState>, (callback, delay): (i64, i64)| {
             Box::new(async move {
+                if !is_callable_in_runtime(&mut caller, callback) {
+                    return timer_callback_type_error(&mut caller);
+                }
                 let delay_ms = delay_ms_from(delay);
                 let id = {
                     let mut next_id = caller
@@ -283,8 +307,11 @@ pub(crate) fn define_timers_arrays_async(
     linker.func_wrap_async(
         "env",
         "set_interval",
-        |caller: Caller<'_, RuntimeState>, (callback, delay): (i64, i64)| {
+        |mut caller: Caller<'_, RuntimeState>, (callback, delay): (i64, i64)| {
             Box::new(async move {
+                if !is_callable_in_runtime(&mut caller, callback) {
+                    return timer_callback_type_error(&mut caller);
+                }
                 let delay_ms = delay_ms_from(delay);
                 let id = {
                     let mut next_id = caller

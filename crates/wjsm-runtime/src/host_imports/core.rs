@@ -272,8 +272,6 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "throw", f)?;
 
-
-
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {

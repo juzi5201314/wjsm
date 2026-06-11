@@ -675,8 +675,9 @@ async fn reflect_get_own_property_descriptor_on_object_async(
                 return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-                let trap = read_object_property_by_name(caller, handler_ptr, "getOwnPropertyDescriptor")
-                    .unwrap_or_else(value::encode_undefined);
+                let trap =
+                    read_object_property_by_name(caller, handler_ptr, "getOwnPropertyDescriptor")
+                        .unwrap_or_else(value::encode_undefined);
                 if !value::is_undefined(trap) && !value::is_null(trap) {
                     let descriptor = match call_wasm_callback_async(
                         caller,
@@ -820,10 +821,7 @@ pub(crate) async fn object_get_own_property_names_async(
 }
 
 /// Object.entries：enumerable 字符串键 + Reflect.get 取值。
-pub(crate) async fn object_entries_async(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-) -> i64 {
+pub(crate) async fn object_entries_async(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> i64 {
     if !value::is_js_object(obj) {
         return alloc_array(caller, 0);
     }
@@ -846,22 +844,31 @@ pub(crate) async fn object_entries_async(
     arr
 }
 
+fn proxy_type_error(caller: &mut Caller<'_, RuntimeState>, msg: &'static str) -> i64 {
+    let msg_val = store_runtime_string(caller, msg.to_string());
+    let error_obj = create_error_object(caller, "TypeError", msg_val);
+    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let idx = errors.len() as u32;
+    errors.push(crate::ErrorEntry {
+        name: "TypeError".to_string(),
+        message: msg.to_string(),
+        value: error_obj,
+    });
+    value::encode_handle(value::TAG_EXCEPTION, idx)
+}
+
 pub(crate) fn define_proxy_reflect(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
     let proxy_create_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
             if !value::is_js_object(target) {
-                *caller.data().runtime_error.lock().expect("error mutex") =
-                    Some("TypeError: Proxy target must be an object".to_string());
-                return value::encode_undefined();
+                return proxy_type_error(&mut caller, "TypeError: Proxy target must be an object");
             }
             if !value::is_js_object(handler) {
-                *caller.data().runtime_error.lock().expect("error mutex") =
-                    Some("TypeError: Proxy handler must be an object".to_string());
-                return value::encode_undefined();
+                return proxy_type_error(&mut caller, "TypeError: Proxy handler must be an object");
             }
             let handle;
             {
@@ -882,14 +889,10 @@ pub(crate) fn define_proxy_reflect(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, target: i64, handler: i64| -> i64 {
             if !value::is_js_object(target) {
-                *caller.data().runtime_error.lock().expect("error mutex") =
-                    Some("TypeError: Proxy target must be an object".to_string());
-                return value::encode_undefined();
+                return proxy_type_error(&mut caller, "TypeError: Proxy target must be an object");
             }
             if !value::is_js_object(handler) {
-                *caller.data().runtime_error.lock().expect("error mutex") =
-                    Some("TypeError: Proxy handler must be an object".to_string());
-                return value::encode_undefined();
+                return proxy_type_error(&mut caller, "TypeError: Proxy handler must be an object");
             }
             let handle = {
                 let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");

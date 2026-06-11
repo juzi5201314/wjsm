@@ -401,32 +401,42 @@ pub(crate) fn define_proxy_reflect_async(
         },
     )?;
 
-    linker.func_wrap_async("env", "reflect_own_keys", |mut caller: Caller<'_, RuntimeState>, (target,): (i64,)| {
-        Box::new(async move {
-            if value::is_proxy(target) {
-                let res = proxy_own_keys_trap_async(&mut caller, target).await;
-                if !value::is_undefined(res) {
-                    return res;
-                }
-                if caller.data().runtime_error.lock().expect("runtime error mutex").is_some() {
+    linker.func_wrap_async(
+        "env",
+        "reflect_own_keys",
+        |mut caller: Caller<'_, RuntimeState>, (target,): (i64,)| {
+            Box::new(async move {
+                if value::is_proxy(target) {
+                    let res = proxy_own_keys_trap_async(&mut caller, target).await;
+                    if !value::is_undefined(res) {
+                        return res;
+                    }
+                    if caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex")
+                        .is_some()
+                    {
+                        return value::encode_undefined();
+                    }
+                    let handle = value::decode_proxy_handle(target) as usize;
+                    let entry = caller
+                        .data()
+                        .proxy_table
+                        .lock()
+                        .expect("proxy_table mutex")
+                        .get(handle)
+                        .cloned();
+                    if let Some(entry) = entry {
+                        return reflect_own_keys_impl(&mut caller, entry.target);
+                    }
                     return value::encode_undefined();
                 }
-                let handle = value::decode_proxy_handle(target) as usize;
-                let entry = caller
-                    .data()
-                    .proxy_table
-                    .lock()
-                    .expect("proxy_table mutex")
-                    .get(handle)
-                    .cloned();
-                if let Some(entry) = entry {
-                    return reflect_own_keys_impl(&mut caller, entry.target);
-                }
-                return value::encode_undefined();
-            }
-            reflect_own_keys_impl(&mut caller, target)
-        })
-    })?;
+                reflect_own_keys_impl(&mut caller, target)
+            })
+        },
+    )?;
 
     linker.func_wrap_async(
         "env",
