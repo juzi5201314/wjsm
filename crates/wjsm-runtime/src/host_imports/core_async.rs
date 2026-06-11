@@ -23,12 +23,10 @@ pub(crate) fn define_core_async(
                     };
                     if let Some(entry) = entry {
                         if entry.revoked {
-                            set_runtime_error(
-                                caller.data(),
-                                "TypeError: Cannot perform 'has' on a proxy that has been revoked"
-                                    .to_string(),
+                            return make_type_error_exception(
+                                &mut caller,
+                                "TypeError: Cannot perform 'has' on a proxy that has been revoked",
                             );
-                            return value::encode_bool(false);
                         }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
                             let trap =
@@ -66,12 +64,10 @@ pub(crate) fn define_core_async(
             };
             if let Some(entry) = entry {
                 if entry.revoked {
-                    set_runtime_error(
-                        caller.data(),
-                        "TypeError: Cannot perform 'has' on a proxy that has been revoked"
-                            .to_string(),
+                    return make_type_error_exception(
+                        caller,
+                        "TypeError: Cannot perform 'has' on a proxy that has been revoked",
                     );
-                    return value::encode_bool(false);
                 }
                 if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                     let trap = read_object_property_by_name(caller, handler_ptr, "has")

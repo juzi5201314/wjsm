@@ -4,31 +4,61 @@ use wasmtime::{Caller, Linker};
 
 use crate::*;
 
+/// 是否为已撤销的代理。供返回 bool/Result（无法回传 TAG_EXCEPTION）的内部方法在其
+/// Reflect 入口处提前判定，从而返回可捕获的 TypeError。
+pub(crate) fn proxy_is_revoked(caller: &mut Caller<'_, RuntimeState>, value: i64) -> bool {
+    if !value::is_proxy(value) {
+        return false;
+    }
+    let handle = value::decode_proxy_handle(value) as usize;
+    caller
+        .data()
+        .proxy_table
+        .lock()
+        .expect("proxy_table mutex")
+        .get(handle)
+        .map(|entry| entry.revoked)
+        .unwrap_or(false)
+}
+
+/// 解析 proxy 的 (target, handler)。撤销代理或非代理 → 返回 `Err(TAG_EXCEPTION)`，
+/// 调用方（返回 i64 的 get/delete 等）应直接返回该异常值，从而经语义层 IsException
+/// 分叉被 try/catch 同步捕获。返回 void 的 set 路径无法回传异常值，由其自行降级处理。
 pub(crate) fn proxy_trap_proxy_entry(
     caller: &mut Caller<'_, RuntimeState>,
     proxy: i64,
     op: &str,
-) -> Option<(i64, i64)> {
+) -> Result<(i64, i64), i64> {
     if !value::is_proxy(proxy) {
-        set_runtime_error(
-            caller.data(),
-            format!("TypeError: Proxy internal method {op} called on non-proxy"),
+        let exc = make_type_error_exception(
+            caller,
+            &format!("TypeError: Proxy internal method {op} called on non-proxy"),
         );
-        return None;
+        return Err(exc);
     }
     let handle = value::decode_proxy_handle(proxy) as usize;
     let entry = {
         let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
         table.get(handle).cloned()
-    }?;
+    };
+    let entry = match entry {
+        Some(entry) => entry,
+        None => {
+            let exc = make_type_error_exception(
+                caller,
+                &format!("TypeError: Proxy internal method {op} called on non-proxy"),
+            );
+            return Err(exc);
+        }
+    };
     if entry.revoked {
-        set_runtime_error(
-            caller.data(),
-            format!("TypeError: Cannot perform '{op}' on a proxy that has been revoked"),
+        let exc = make_type_error_exception(
+            caller,
+            &format!("TypeError: Cannot perform '{op}' on a proxy that has been revoked"),
         );
-        return None;
+        return Err(exc);
     }
-    Some((entry.target, entry.handler))
+    Ok((entry.target, entry.handler))
 }
 
 pub(crate) fn proxy_trap_handler_trap(

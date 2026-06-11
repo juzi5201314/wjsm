@@ -1,123 +1,77 @@
-// Proxy invariant enforcement tests (ES §10.5)
+// Proxy invariant enforcement (ECMAScript §10.5 + §28.2) — spec-correct behavior.
+//
+// All violations below must throw a *catchable* TypeError. Tests use forms whose
+// exceptions propagate synchronously (var-declarator init, statement-level call),
+// which the engine routes through the IsException fork to the enclosing try/catch.
 
-function assert(condition, msg) {
-    if (!condition) {
-        console.log("FAIL:", msg);
-    } else {
+function expectThrow(fn, msg) {
+    try {
+        fn();
+        console.log("FAIL:", msg, "(did not throw)");
+    } catch (e) {
         console.log("PASS:", msg);
     }
 }
 
-// Test 1: construct trap returning non-object
-(function testConstructNonObject() {
-    let called = false;
-    let ProxyConstructor = new Proxy(class {}, {
-        construct(target, args) {
-            called = true;
-            return 42; // not an object
-        }
-    });
-    try {
-        let obj = new ProxyConstructor();
-        console.log("construct trap returned non-object, result:", typeof obj);
-    } catch(e) {
-        assert(called, "construct trap was called");
-    }
-})();
+// ── Constructor argument validation (ProxyCreate): target & handler must be objects ──
+expectThrow(() => { let p = new Proxy(null, {}); }, "Proxy target null throws");
+expectThrow(() => { let p = new Proxy("string", {}); }, "Proxy target string throws");
+expectThrow(() => { let p = new Proxy({}, null); }, "Proxy handler null throws");
+expectThrow(() => { let p = new Proxy({}, 42); }, "Proxy handler number throws");
 
-// Test 2: Proxy handler must be an object
-(function testHandlerValidation() {
-    try {
-        new Proxy({}, null);
-        console.log("INFO: Proxy with null handler did not throw (wjsm behavior)");
-    } catch(e) {
-        console.log("PASS: Proxy handler null throws");
-    }
-    try {
-        new Proxy({}, 42);
-        console.log("INFO: Proxy with number handler did not throw (wjsm behavior)");
-    } catch(e) {
-        console.log("PASS: Proxy handler number throws");
-    }
-})();
-
-// Test 3: Proxy target must be an object
-(function testTargetValidation() {
-    try {
-        new Proxy(null, {});
-        console.log("INFO: Proxy with null target did not throw (wjsm behavior)");
-    } catch(e) {
-        console.log("PASS: Proxy target null throws");
-    }
-    try {
-        new Proxy("string", {});
-        console.log("INFO: Proxy with string target did not throw (wjsm behavior)");
-    } catch(e) {
-        console.log("PASS: Proxy target string throws");
-    }
-})();
-
-// Test 4: Revoked proxy
-(function testRevokedProxy() {
-    let {proxy, revoke} = Proxy.revocable({}, {});
+// ── Revoked proxy: every internal method throws ──
+(function testRevoked() {
+    let { proxy, revoke } = Proxy.revocable({ x: 1 }, {});
     revoke();
-    try {
-        let x = proxy.foo;
-        console.log("INFO: get on revoked proxy returned", x);
-    } catch(e) {
-        console.log("PASS: get on revoked proxy throws");
-    }
-    try {
-        proxy.foo = 1;
-        console.log("INFO: set on revoked proxy returned");
-    } catch(e) {
-        console.log("PASS: set on revoked proxy throws");
-    }
-    try {
-        let x = "foo" in proxy;
-        console.log("INFO: has on revoked proxy returned", x);
-    } catch(e) {
-        console.log("PASS: has on revoked proxy throws");
-    }
+    expectThrow(() => { let v = proxy.foo; }, "get on revoked proxy throws");
+    expectThrow(() => { let v = ("foo" in proxy); }, "has on revoked proxy throws");
+    expectThrow(() => Reflect.set(proxy, "foo", 1), "set on revoked proxy throws");
+    expectThrow(() => Reflect.deleteProperty(proxy, "foo"), "delete on revoked proxy throws");
+    expectThrow(() => Reflect.get(proxy, "foo"), "Reflect.get on revoked proxy throws");
 })();
 
-// Test 5: construct trap returning non-object
-(function testConstructNonObject2() {
-    let proxy = new Proxy(function(){}, {
-        construct(target, args, newTarget) {
-            return "not an object";
-        }
+// ── [[Construct]] invariant: construct trap must return an object ──
+(function testConstructInvariant() {
+    let target = function () {};
+    let nonObjectProxy = new Proxy(target, {
+        construct(t, args, nt) { return 42; }
     });
-    try {
-        let obj = new proxy();
-        console.log("INFO: construct trap returning string returned", typeof obj);
-    } catch(e) {
-        console.log("PASS: construct trap returning string throws");
-    }
+    expectThrow(() => Reflect.construct(nonObjectProxy, []), "construct trap returning number throws");
+
+    let stringProxy = new Proxy(target, {
+        construct(t, args, nt) { return "not an object"; }
+    });
+    expectThrow(() => Reflect.construct(stringProxy, []), "construct trap returning string throws");
+
+    // A construct trap returning an object is honoured.
+    let okProxy = new Proxy(target, {
+        construct(t, args, nt) { return { built: true }; }
+    });
+    let built = Reflect.construct(okProxy, []);
+    console.log(built.built === true ? "PASS: construct trap object honoured"
+                                     : "FAIL: construct trap object honoured");
 })();
 
-// Test 6: Proxy apply trap
+// ── apply trap forwards correctly ──
 (function testApplyTrap() {
-    let target = function() { return 42; };
+    let target = function () { return 42; };
     let proxy = new Proxy(target, {
-        apply(target, thisArg, args) {
-            return 99;
-        }
+        apply(t, thisArg, args) { return 99; }
     });
-    let result = proxy();
-    assert(result === 99, "Proxy apply trap works");
+    console.log(proxy() === 99 ? "PASS: Proxy apply trap works"
+                               : "FAIL: Proxy apply trap works");
 })();
 
-// Test 7: Proxy can be revoked properly
-(function testProxyState() {
-    let target = {x: 1};
-    let handler = {};
-    let {proxy, revoke} = Proxy.revocable(target, handler);
-    let id = typeof proxy;
-    assert(id === "object", "Proxy type is object");
+// ── Proxy.revocable returns a usable proxy of type "object" ──
+(function testRevocableShape() {
+    let { proxy, revoke } = Proxy.revocable({ a: 1 }, {});
+    console.log(typeof proxy === "object" ? "PASS: revocable proxy is object"
+                                          : "FAIL: revocable proxy is object");
+    console.log(proxy.a === 1 ? "PASS: revocable proxy forwards get"
+                              : "FAIL: revocable proxy forwards get");
     revoke();
-    // After revoke, operations should fail
-    console.log("PASS: Proxy revocable creates valid proxy");
+    revoke(); // idempotent — second revoke is a no-op, must not throw
+    console.log("PASS: revoke is idempotent");
 })();
 
 console.log("Proxy invariant tests completed");

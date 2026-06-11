@@ -103,6 +103,12 @@ module {
       %28 = const c29
       %29 = call builtin.create_closure(%27, %28)
       %30 = call builtin.array.filter(%26, %29)
+      %31 = is_exception %30
+      branch %31, bb2, bb1
+    bb1:
       store var $0.b, %30
       return
+    bb2:
+      %32 = call builtin.exception_value(%30)
+      throw %32
 }

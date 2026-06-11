@@ -1,5 +1,7 @@
 exit_code: 0
 --- stdout ---
 secret
-function() { [native code] }
+42
+42
+brand-check-error
 --- stderr ---

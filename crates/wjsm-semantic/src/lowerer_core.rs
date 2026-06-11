@@ -473,6 +473,9 @@ impl Lowerer {
         mut self,
         module: &swc_ast::Module,
     ) -> Result<Program, LoweringError> {
+        // 早错误：私有名词法有效性（AllPrivateIdentifiersValid）+ 类体私有名重复校验。
+        // 必须先于降级执行；覆盖单模块、eval（均经此方法）路径。
+        crate::lowerer_classes_ts::validate_private_names(module)?;
         // main 函数也需要 shared_env_stack 条目（顶层闭包需要在 main 中创建 env 对象）
         self.shared_env_stack.push(None);
         self.strict_mode = module_has_use_strict_directive(module);

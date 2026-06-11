@@ -1,17 +1,20 @@
-exit_code: 2
+exit_code: 0
 --- stdout ---
-construct trap returned non-object, result: object
-INFO: Proxy with null handler did not throw (wjsm behavior)
-INFO: Proxy with number handler did not throw (wjsm behavior)
-INFO: Proxy with null target did not throw (wjsm behavior)
-INFO: Proxy with string target did not throw (wjsm behavior)
-INFO: get on revoked proxy returned undefined
-INFO: set on revoked proxy returned
-INFO: has on revoked proxy returned false
-INFO: construct trap returning string returned object
+PASS: Proxy target null throws
+PASS: Proxy target string throws
+PASS: Proxy handler null throws
+PASS: Proxy handler number throws
+PASS: get on revoked proxy throws
+PASS: has on revoked proxy throws
+PASS: set on revoked proxy throws
+PASS: delete on revoked proxy throws
+PASS: Reflect.get on revoked proxy throws
+PASS: construct trap returning number throws
+PASS: construct trap returning string throws
+PASS: construct trap object honoured
 PASS: Proxy apply trap works
-PASS: Proxy type is object
-PASS: Proxy revocable creates valid proxy
+PASS: revocable proxy is object
+PASS: revocable proxy forwards get
+PASS: revoke is idempotent
 Proxy invariant tests completed
 --- stderr ---
-Runtime error: TypeError: Proxy construct trap returned non-object

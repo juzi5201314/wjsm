@@ -653,6 +653,10 @@ pub fn lower_modules(
     }
 
     // 多模块编译路径
+    // 早错误：对每个模块运行私有名静态校验（与单模块路径一致）。
+    for (_, module_ast) in &modules {
+        lowerer_classes_ts::validate_private_names(module_ast)?;
+    }
     let mut lowerer = Lowerer::new();
     lowerer.import_bindings = import_map.clone();
     lowerer.dynamic_import_targets = dynamic_import_targets.clone();

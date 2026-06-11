@@ -148,50 +148,68 @@ module {
       %22 = const c21
       %23 = const c22
       %24 = call builtin.promise.resolve_static(%22, %23)
-      store var $0.p, %24
-      %25 = const c23
-      %26 = load var $0.p
-      %27 = call builtin.promise.resolve_static(%25, %26)
-      store var $0.p2, %27
-      %28 = load var $0.p
-      %29 = load var $0.p2
-      %30 = stricteq %28, %29
-      %31 = call builtin.console.log(%30)
-      %32 = is_exception %31
-      branch %32, bb2, bb1
+      %25 = is_exception %24
+      branch %25, bb2, bb1
     bb1:
-      %34 = load var $0.p2
-      %35 = const c27
-      %36 = const c28
-      %37 = call builtin.create_closure(%35, %36)
-      %38 = const c29
-      %39 = call builtin.promise.then(%34, %37, %38)
-      %40 = is_exception %39
-      branch %40, bb4, bb3
+      store var $0.p, %24
+      %27 = const c23
+      %28 = load var $0.p
+      %29 = call builtin.promise.resolve_static(%27, %28)
+      %30 = is_exception %29
+      branch %30, bb4, bb3
     bb2:
-      %33 = call builtin.exception_value(%31)
-      throw %33
+      %26 = call builtin.exception_value(%24)
+      throw %26
     bb3:
-      %42 = const c30
-      %43 = const c31
-      %44 = call builtin.promise.reject_static(%42, %43)
-      store var $0.p3, %44
-      %45 = load var $0.p3
-      %46 = const c35
-      %47 = const c36
-      %48 = call builtin.create_closure(%46, %47)
-      %49 = const c40
-      %50 = const c41
-      %51 = call builtin.create_closure(%49, %50)
-      %52 = call builtin.promise.then(%45, %48, %51)
-      %53 = is_exception %52
-      branch %53, bb6, bb5
+      store var $0.p2, %29
+      %32 = load var $0.p
+      %33 = load var $0.p2
+      %34 = stricteq %32, %33
+      %35 = call builtin.console.log(%34)
+      %36 = is_exception %35
+      branch %36, bb6, bb5
     bb4:
-      %41 = call builtin.exception_value(%39)
-      throw %41
+      %31 = call builtin.exception_value(%29)
+      throw %31
     bb5:
-      return
+      %38 = load var $0.p2
+      %39 = const c27
+      %40 = const c28
+      %41 = call builtin.create_closure(%39, %40)
+      %42 = const c29
+      %43 = call builtin.promise.then(%38, %41, %42)
+      %44 = is_exception %43
+      branch %44, bb8, bb7
     bb6:
-      %54 = call builtin.exception_value(%52)
-      throw %54
+      %37 = call builtin.exception_value(%35)
+      throw %37
+    bb7:
+      %46 = const c30
+      %47 = const c31
+      %48 = call builtin.promise.reject_static(%46, %47)
+      %49 = is_exception %48
+      branch %49, bb10, bb9
+    bb8:
+      %45 = call builtin.exception_value(%43)
+      throw %45
+    bb9:
+      store var $0.p3, %48
+      %51 = load var $0.p3
+      %52 = const c35
+      %53 = const c36
+      %54 = call builtin.create_closure(%52, %53)
+      %55 = const c40
+      %56 = const c41
+      %57 = call builtin.create_closure(%55, %56)
+      %58 = call builtin.promise.then(%51, %54, %57)
+      %59 = is_exception %58
+      branch %59, bb12, bb11
+    bb10:
+      %50 = call builtin.exception_value(%48)
+      throw %50
+    bb11:
+      return
+    bb12:
+      %60 = call builtin.exception_value(%58)
+      throw %60
 }
