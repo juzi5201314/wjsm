@@ -4,7 +4,7 @@ use anyhow::Result;
 use wasmtime::{Caller, Linker};
 
 use super::proxy_reflect::{
-    object_enumerable_own_keys_async, object_entries_async, object_get_own_property_names_async,
+    object_entries_async, object_enumerable_own_keys_async, object_get_own_property_names_async,
 };
 use crate::*;
 

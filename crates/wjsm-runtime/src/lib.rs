@@ -489,7 +489,8 @@ fn register_complex_bridges(
                         });
                 if let Some(method) = async_iterator_method {
                     if value::is_callable(method) {
-                        let iterator = call_iterable_method_async(&mut caller, method, iterable).await;
+                        let iterator =
+                            call_iterable_method_async(&mut caller, method, iterable).await;
                         if value::is_object(iterator) {
                             if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
                                 let next =
@@ -531,7 +532,8 @@ fn register_complex_bridges(
                     read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
                 {
                     if value::is_callable(method) {
-                        let sync_iter = call_iterable_method_async(&mut caller, method, iterable).await;
+                        let sync_iter =
+                            call_iterable_method_async(&mut caller, method, iterable).await;
                         if value::is_object(sync_iter) {
                             if let Some(sync_ptr) = resolve_handle(&mut caller, sync_iter) {
                                 let next_fn =

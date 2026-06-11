@@ -346,10 +346,8 @@ impl Lowerer {
             case_blocks[p]
         } else {
             let synthetic_default = self.current_function.new_block();
-            self.current_function.set_terminator(
-                synthetic_default,
-                Terminator::Jump { target: exit },
-            );
+            self.current_function
+                .set_terminator(synthetic_default, Terminator::Jump { target: exit });
             synthetic_default
         };
 

@@ -952,13 +952,10 @@ impl Lowerer {
         mut block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let mut last = self.alloc_value();
-        let last_index = seq.exprs.len().saturating_sub(1);
-        for (index, expr) in seq.exprs.iter().enumerate() {
-            last = self.lower_expr(expr, block)?;
-            if index != last_index {
-                block = self.resolve_store_block(block);
-            }
+        for expr in &seq.exprs {
+            last = self.lower_expr_then_continue(expr, &mut block)?;
         }
+        self.expr_merge_block = Some(block);
         Ok(last)
     }
 

@@ -268,7 +268,21 @@ impl Compiler {
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
-                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                    let local = self.local_idx(d.0);
+                    self.emit(WasmInstruction::LocalSet(local));
+                    if self.mode == CompileMode::Eval {
+                        self.emit(WasmInstruction::LocalGet(local));
+                        self.emit(WasmInstruction::I64Const(32));
+                        self.emit(WasmInstruction::I64ShrU);
+                        self.emit(WasmInstruction::I32WrapI64);
+                        self.emit(WasmInstruction::I32Const(value::TAG_EXCEPTION as i32));
+                        self.emit(WasmInstruction::I32Eq);
+                        self.emit(WasmInstruction::If(BlockType::Empty));
+                        self.emit(WasmInstruction::LocalGet(local));
+                        self.emit_eval_var_frame_exit();
+                        self.emit(WasmInstruction::Return);
+                        self.emit(WasmInstruction::End);
+                    }
                 } else {
                     self.emit(WasmInstruction::Drop);
                 }

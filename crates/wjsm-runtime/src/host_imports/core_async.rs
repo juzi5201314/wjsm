@@ -251,13 +251,9 @@ pub(crate) fn define_core_async(
         let Some(return_method) = return_method else {
             return;
         };
-        let result = call_iterator_method_async(
-            caller,
-            return_method,
-            iterator,
-            value::encode_undefined(),
-        )
-        .await;
+        let result =
+            call_iterator_method_async(caller, return_method, iterator, value::encode_undefined())
+                .await;
         if !(value::is_object(result) || value::is_function(result) || value::is_array(result))
             && !value::is_undefined(result)
         {
@@ -281,9 +277,7 @@ pub(crate) fn define_core_async(
         "env",
         "iterator_from",
         |mut caller: Caller<'_, RuntimeState>, (val,): (i64,)| {
-            Box::new(async move {
-                super::core::iterator_from_impl_async(&mut caller, val).await
-            })
+            Box::new(async move { super::core::iterator_from_impl_async(&mut caller, val).await })
         },
     )?;
 

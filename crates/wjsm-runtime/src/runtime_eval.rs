@@ -2009,8 +2009,8 @@ pub(crate) fn scope_record_add_binding(
     if name_str.is_empty() {
         return 0i64;
     }
-    let initialized = !value::decode_bool(is_tdz);
-    let constant = value::decode_bool(is_const);
+    let initialized = !decode_scope_record_meta_bool(is_tdz);
+    let constant = decode_scope_record_meta_bool(is_const);
     if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
         rec.bindings.push((name_str, val, initialized, constant));
     }

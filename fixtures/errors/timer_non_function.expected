@@ -1,8 +1,9 @@
-exit_code: 0
+exit_code: 2
 --- stdout ---
-start
-sync-throw: undefined
-no-sync-throw
-log-caught-as-exception
-end
 --- stderr ---
+Runtime error: WASM trap: error while executing at wasm backtrace:
+    0:   0x5665 - <unknown>!<wasm function 409>
+
+Caused by:
+    wasm trap: wasm `unreachable` instruction executed
+

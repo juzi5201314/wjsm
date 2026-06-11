@@ -1,6 +1,7 @@
 exit_code: 0
 --- stdout ---
 PASS keys
+PASS keys
 PASS even
 PASS odd
 PASS even[0]
