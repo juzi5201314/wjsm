@@ -137,6 +137,20 @@ pub(crate) fn define_core_async(
         };
         let (result, current_value, done, has_current) =
             advance_object_iterator_from_caller_async(caller, &func_table, iterator, next).await;
+
+        // A3: 若 advance 回传异常（同步 throw），返回 rejected promise。
+        // await 此 rejected promise 后会走 is_rejected → emit_throw_value（可捕获）。
+        if value::is_exception(result) {
+            let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+            let reason = exception_reason(caller, result);
+            settle_promise(
+                caller.data(),
+                promise,
+                PromiseSettlement::Reject(reason),
+            );
+            return promise;
+        }
+
         if let Some(IteratorState::ObjectIter {
             current_value: stored_value,
             done: stored_done,

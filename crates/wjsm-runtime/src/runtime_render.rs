@@ -74,25 +74,19 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
         let ptr = value::decode_object_handle(val);
         let obj_ptr = resolve_handle_idx(caller, ptr as usize);
         if let Some(op) = obj_ptr {
-            if let Some(name_val) = read_object_property_by_name(caller, op, "name") {
-                let name = render_value(caller, name_val).unwrap_or_default();
-                if matches!(
-                    name.as_str(),
-                    "Error"
-                        | "TypeError"
-                        | "RangeError"
-                        | "SyntaxError"
-                        | "ReferenceError"
-                        | "URIError"
-                        | "EvalError"
-                ) {
-                    let message = read_object_property_by_name(caller, op, "message")
-                        .map(|message_val| render_value(caller, message_val).unwrap_or_default())
-                        .unwrap_or_default();
-                    if message.is_empty() {
-                        return Ok(name);
+            // C2: 先检查 __error_brand__，仅真实 Error 对象才渲染为 "Name: message"。
+            if let Some(brand_val) = read_object_property_by_name(caller, op, "__error_brand__") {
+                if value::is_bool(brand_val) && value::decode_bool(brand_val) {
+                    if let Some(name_val) = read_object_property_by_name(caller, op, "name") {
+                        let name = render_value(caller, name_val).unwrap_or_default();
+                        let message = read_object_property_by_name(caller, op, "message")
+                            .map(|message_val| render_value(caller, message_val).unwrap_or_default())
+                            .unwrap_or_default();
+                        if message.is_empty() {
+                            return Ok(name);
+                        }
+                        return Ok(format!("{name}: {message}"));
                     }
-                    return Ok(format!("{name}: {message}"));
                 }
             }
 

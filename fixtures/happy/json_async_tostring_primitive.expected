@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+result: {"data":{}}
+PASS: async toJSON chain with primitive works
+--- stderr ---

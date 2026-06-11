@@ -20,6 +20,17 @@ pub(crate) fn make_type_error_exception(caller: &mut Caller<'_, RuntimeState>, m
     value::encode_handle(value::TAG_EXCEPTION, idx)
 }
 
+/// 从 TAG_EXCEPTION 中提取 error_table 里的真实错误对象值。
+/// 用于需要 reject promise 或传播真实错误值的场景（如 async 迭代器异常、array spread）。
+pub(crate) fn exception_reason(caller: &mut Caller<'_, RuntimeState>, exception: i64) -> i64 {
+    let idx = value::decode_handle(exception) as usize;
+    let errors = caller.data().error_table.lock().expect("error table mutex");
+    errors
+        .get(idx)
+        .map(|entry| entry.value)
+        .unwrap_or_else(value::encode_undefined)
+}
+
 pub(crate) fn read_shadow_arg_with_env<C: AsContext>(
     ctx: &C,
     env: &WasmEnv,
