@@ -250,6 +250,9 @@ impl Lowerer {
                     && !eval_code_has_use_strict_directive(&code)
                 {
                     for name in eval_literal_binding_names(&code) {
+                        if name == "arguments" && self.scopes.lookup("arguments").is_ok() {
+                            continue;
+                        }
                         let scope_id = self
                             .scopes
                             .declare(&name, VarKind::Var, true)

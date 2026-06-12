@@ -1,0 +1,5 @@
+exit_code: 0
+--- stdout ---
+PASS: isExtensible caught TypeError
+PASS: preventExtensions caught TypeError
+--- stderr ---

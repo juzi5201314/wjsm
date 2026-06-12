@@ -1,6 +1,7 @@
 exit_code: 0
 --- stdout ---
 secret
-function() { [native code] }
-direct-private-access-error
+42
+42
+brand-check-error
 --- stderr ---

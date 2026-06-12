@@ -18,8 +18,7 @@ pub(crate) fn define_atomics(
         if !value::is_object(this_val) {
             return None;
         }
-        let obj_ptr =
-            resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize)?;
+        let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize)?;
         let h = read_object_property_by_name(caller, obj_ptr, "__typedarray_handle__")?;
         let handle = value::decode_f64(h) as usize;
         let table = caller.data().typedarray_table.lock().ok()?;
@@ -29,7 +28,12 @@ pub(crate) fn define_atomics(
         }
         let sab_handle = entry.buffer_handle as usize;
         let byte_offset = entry.byte_offset as usize;
-        Some((byte_offset, entry.element_size, entry.element_kind, sab_handle))
+        Some((
+            byte_offset,
+            entry.element_size,
+            entry.element_kind,
+            sab_handle,
+        ))
     }
 
     /// 验证 TypedArray 对 wait/waitAsync/notify 可用（仅 Int32 或 BigInt64）。
@@ -39,8 +43,8 @@ pub(crate) fn define_atomics(
     ) -> Option<(usize, u8, u8, usize)> {
         let (byte_offset, elem_size, element_kind, sab_handle) =
             validate_ta_for_atomics(caller, this_val)?;
-        let waitable = (elem_size == 4 && element_kind == 0)
-            || (elem_size == 8 && element_kind == 4);
+        let waitable =
+            (elem_size == 4 && element_kind == 0) || (elem_size == 8 && element_kind == 4);
         if !waitable {
             return None;
         }
@@ -57,26 +61,33 @@ pub(crate) fn define_atomics(
         let entry = match typedarray_entry_from_value(caller, this_val) {
             Some(e) if e.element_kind != 2 && e.element_kind != 3 => e,
             _ => {
-                set_typedarray_runtime_error(caller, "TypeError: Typed array is not an integer type for Atomics");
+                set_typedarray_runtime_error(
+                    caller,
+                    "TypeError: Typed array is not an integer type for Atomics",
+                );
                 return None;
             }
         };
-        let index = match typedarray_to_index(
-            caller,
-            index_val,
-            "RangeError: Invalid typed array index",
-        ) {
-            Some(i) => i,
-            None => return None,
-        };
+        let index =
+            match typedarray_to_index(caller, index_val, "RangeError: Invalid typed array index") {
+                Some(i) => i,
+                None => return None,
+            };
         if (index as u32) >= entry.length {
             set_typedarray_runtime_error(caller, "RangeError: Invalid typed array index");
             return None;
         }
-        let byte_offset = entry.byte_offset as usize + (index as usize) * (entry.element_size as usize);
+        let byte_offset =
+            entry.byte_offset as usize + (index as usize) * (entry.element_size as usize);
         let is_shared = entry.is_shared;
         let buf_handle = entry.buffer_handle as usize;
-        Some((byte_offset, entry.element_size, entry.element_kind, buf_handle, is_shared))
+        Some((
+            byte_offset,
+            entry.element_size,
+            entry.element_kind,
+            buf_handle,
+            is_shared,
+        ))
     }
     /// wait/waitAsync/notify 必须在 shared TA 上；否则 TypeError。
     fn prepare_waitable_access(
@@ -90,7 +101,10 @@ pub(crate) fn define_atomics(
                 None => return None,
             };
         if !is_shared {
-            set_runtime_error(caller.data(), "TypeError: wait/notify/waitAsync called on non-shared TypedArray".to_string());
+            set_runtime_error(
+                caller.data(),
+                "TypeError: wait/notify/waitAsync called on non-shared TypedArray".to_string(),
+            );
             return None;
         }
         Some((byte_offset, elem_size, element_kind, buf_handle))
@@ -148,7 +162,10 @@ pub(crate) fn define_atomics(
                 (4, 0) => {
                     let v = (value::decode_f64(value_raw) as i32) as i64;
                     let o = i32::from_le_bytes([
-                        data[off], data[off + 1], data[off + 2], data[off + 3],
+                        data[off],
+                        data[off + 1],
+                        data[off + 2],
+                        data[off + 3],
                     ]) as i64;
                     let r = op(o, v);
                     let bytes = (r as i32).to_le_bytes();
@@ -158,7 +175,10 @@ pub(crate) fn define_atomics(
                 (4, 1) => {
                     let v = (value::decode_f64(value_raw) as u32) as i64;
                     let o = u32::from_le_bytes([
-                        data[off], data[off + 1], data[off + 2], data[off + 3],
+                        data[off],
+                        data[off + 1],
+                        data[off + 2],
+                        data[off + 3],
                     ]) as i64;
                     let r = op(o, v);
                     let bytes = (r as u32).to_le_bytes();
@@ -172,8 +192,14 @@ pub(crate) fn define_atomics(
                     let v_bytes = bigint_low_64_bytes(&v_bi);
                     let v64 = i64::from_le_bytes(v_bytes);
                     let o64 = i64::from_le_bytes([
-                        data[off], data[off + 1], data[off + 2], data[off + 3],
-                        data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                        data[off],
+                        data[off + 1],
+                        data[off + 2],
+                        data[off + 3],
+                        data[off + 4],
+                        data[off + 5],
+                        data[off + 6],
+                        data[off + 7],
                     ]);
                     let r64 = op(o64, v64);
                     drop(bigint_table);
@@ -191,8 +217,14 @@ pub(crate) fn define_atomics(
                     let v_bytes = bigint_low_64_bytes(&v_bi);
                     let v64 = u64::from_le_bytes(v_bytes) as i64;
                     let o_bytes: [u8; 8] = [
-                        data[off], data[off + 1], data[off + 2], data[off + 3],
-                        data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                        data[off],
+                        data[off + 1],
+                        data[off + 2],
+                        data[off + 3],
+                        data[off + 4],
+                        data[off + 5],
+                        data[off + 6],
+                        data[off + 7],
                     ];
                     let o64 = u64::from_le_bytes(o_bytes) as i64;
                     let r64 = op(o64, v64);
@@ -246,7 +278,10 @@ pub(crate) fn define_atomics(
                 (4, 0) => {
                     let v = (value::decode_f64(value_raw) as i32) as i64;
                     let o = i32::from_le_bytes([
-                        data[off], data[off + 1], data[off + 2], data[off + 3],
+                        data[off],
+                        data[off + 1],
+                        data[off + 2],
+                        data[off + 3],
                     ]) as i64;
                     let r = op(o, v);
                     let bytes = (r as i32).to_le_bytes();
@@ -256,7 +291,10 @@ pub(crate) fn define_atomics(
                 (4, 1) => {
                     let v = (value::decode_f64(value_raw) as u32) as i64;
                     let o = u32::from_le_bytes([
-                        data[off], data[off + 1], data[off + 2], data[off + 3],
+                        data[off],
+                        data[off + 1],
+                        data[off + 2],
+                        data[off + 3],
                     ]) as i64;
                     let r = op(o, v);
                     let bytes = (r as u32).to_le_bytes();
@@ -270,8 +308,14 @@ pub(crate) fn define_atomics(
                     let v_bytes = bigint_low_64_bytes(&v_bi);
                     let v64 = i64::from_le_bytes(v_bytes);
                     let o64 = i64::from_le_bytes([
-                        data[off], data[off + 1], data[off + 2], data[off + 3],
-                        data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                        data[off],
+                        data[off + 1],
+                        data[off + 2],
+                        data[off + 3],
+                        data[off + 4],
+                        data[off + 5],
+                        data[off + 6],
+                        data[off + 7],
                     ]);
                     let r64 = op(o64, v64);
                     drop(bigint_table);
@@ -289,8 +333,14 @@ pub(crate) fn define_atomics(
                     let v_bytes = bigint_low_64_bytes(&v_bi);
                     let v64 = u64::from_le_bytes(v_bytes) as i64;
                     let o_bytes: [u8; 8] = [
-                        data[off], data[off + 1], data[off + 2], data[off + 3],
-                        data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                        data[off],
+                        data[off + 1],
+                        data[off + 2],
+                        data[off + 3],
+                        data[off + 4],
+                        data[off + 5],
+                        data[off + 6],
+                        data[off + 7],
                     ];
                     let o64 = u64::from_le_bytes(o_bytes) as i64;
                     let r64 = op(o64, v64);
@@ -325,30 +375,34 @@ pub(crate) fn define_atomics(
         match (elem_size, element_kind) {
             (1, 0) => Some(value::encode_f64(data[off] as i8 as f64)),
             (1, 1) => Some(value::encode_f64(data[off] as f64)),
-            (2, 0) => {
-                Some(value::encode_f64(
-                    i16::from_le_bytes([data[off], data[off + 1]]) as f64,
-                ))
-            }
-            (2, 1) => {
-                Some(value::encode_f64(
-                    u16::from_le_bytes([data[off], data[off + 1]]) as f64,
-                ))
-            }
-            (4, 0) => Some(value::encode_f64(
-                i32::from_le_bytes([
-                    data[off], data[off + 1], data[off + 2], data[off + 3],
-                ]) as f64,
+            (2, 0) => Some(value::encode_f64(
+                i16::from_le_bytes([data[off], data[off + 1]]) as f64,
             )),
-            (4, 1) => Some(value::encode_f64(
-                u32::from_le_bytes([
-                    data[off], data[off + 1], data[off + 2], data[off + 3],
-                ]) as f64,
+            (2, 1) => Some(value::encode_f64(
+                u16::from_le_bytes([data[off], data[off + 1]]) as f64,
             )),
+            (4, 0) => Some(value::encode_f64(i32::from_le_bytes([
+                data[off],
+                data[off + 1],
+                data[off + 2],
+                data[off + 3],
+            ]) as f64)),
+            (4, 1) => Some(value::encode_f64(u32::from_le_bytes([
+                data[off],
+                data[off + 1],
+                data[off + 2],
+                data[off + 3],
+            ]) as f64)),
             (8, 4) => {
                 let v = i64::from_le_bytes([
-                    data[off], data[off + 1], data[off + 2], data[off + 3],
-                    data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                    data[off],
+                    data[off + 1],
+                    data[off + 2],
+                    data[off + 3],
+                    data[off + 4],
+                    data[off + 5],
+                    data[off + 6],
+                    data[off + 7],
                 ]);
                 let mut table = caller.data().bigint_table.lock().ok()?;
                 let handle = table.len() as u32;
@@ -357,8 +411,14 @@ pub(crate) fn define_atomics(
             }
             (8, 5) => {
                 let v = u64::from_le_bytes([
-                    data[off], data[off + 1], data[off + 2], data[off + 3],
-                    data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                    data[off],
+                    data[off + 1],
+                    data[off + 2],
+                    data[off + 3],
+                    data[off + 4],
+                    data[off + 5],
+                    data[off + 6],
+                    data[off + 7],
                 ]);
                 let mut table = caller.data().bigint_table.lock().ok()?;
                 let handle = table.len() as u32;
@@ -441,7 +501,10 @@ pub(crate) fn define_atomics(
             let entry = match typedarray_entry_from_value(&mut caller, this_val) {
                 Some(e) if e.element_kind != 2 && e.element_kind != 3 => e,
                 _ => {
-                    set_typedarray_runtime_error(&mut caller, "TypeError: Typed array is not an integer type for Atomics");
+                    set_typedarray_runtime_error(
+                        &mut caller,
+                        "TypeError: Typed array is not an integer type for Atomics",
+                    );
                     return value::encode_undefined();
                 }
             };
@@ -474,7 +537,10 @@ pub(crate) fn define_atomics(
             let entry = match typedarray_entry_from_value(&mut caller, this_val) {
                 Some(e) if e.element_kind != 2 && e.element_kind != 3 => e,
                 _ => {
-                    set_typedarray_runtime_error(&mut caller, "TypeError: Typed array is not an integer type for Atomics");
+                    set_typedarray_runtime_error(
+                        &mut caller,
+                        "TypeError: Typed array is not an integer type for Atomics",
+                    );
                     return value::encode_undefined();
                 }
             };
@@ -560,8 +626,16 @@ pub(crate) fn define_atomics(
                     None => return value::encode_undefined(),
                 };
             let off = byte_offset;
-            match atomic_rmw(&mut caller, buf_handle, off, elem_size, element_kind, value_val, is_shared, |_o, v| v)
-            {
+            match atomic_rmw(
+                &mut caller,
+                buf_handle,
+                off,
+                elem_size,
+                element_kind,
+                value_val,
+                is_shared,
+                |_o, v| v,
+            ) {
                 Some(v) => v,
                 None => value::encode_undefined(),
             }
@@ -645,7 +719,10 @@ pub(crate) fn define_atomics(
                         let expected = value::decode_f64(expected_val) as i32;
                         let replacement = value::decode_f64(replacement_val) as i32;
                         let o = i32::from_le_bytes([
-                            data[off], data[off + 1], data[off + 2], data[off + 3],
+                            data[off],
+                            data[off + 1],
+                            data[off + 2],
+                            data[off + 3],
                         ]);
                         if o == expected {
                             data[off..off + 4].copy_from_slice(&replacement.to_le_bytes());
@@ -656,7 +733,10 @@ pub(crate) fn define_atomics(
                         let expected = value::decode_f64(expected_val) as u32;
                         let replacement = value::decode_f64(replacement_val) as u32;
                         let o = u32::from_le_bytes([
-                            data[off], data[off + 1], data[off + 2], data[off + 3],
+                            data[off],
+                            data[off + 1],
+                            data[off + 2],
+                            data[off + 3],
                         ]);
                         if o == expected {
                             data[off..off + 4].copy_from_slice(&replacement.to_le_bytes());
@@ -666,7 +746,8 @@ pub(crate) fn define_atomics(
                     (8, 4) => {
                         // BigInt value compare (not handle); alloc return handle after data scope
                         let expected_handle = value::decode_bigint_handle(expected_val) as usize;
-                        let replacement_handle = value::decode_bigint_handle(replacement_val) as usize;
+                        let replacement_handle =
+                            value::decode_bigint_handle(replacement_val) as usize;
                         let bigint_table = match caller.data().bigint_table.lock() {
                             Ok(t) => t,
                             Err(_) => return value::encode_undefined(),
@@ -684,8 +765,14 @@ pub(crate) fn define_atomics(
                         let expected64 = i64::from_le_bytes(expected_bytes);
                         drop(bigint_table);
                         let o64 = i64::from_le_bytes([
-                            data[off], data[off + 1], data[off + 2], data[off + 3],
-                            data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                            data[off],
+                            data[off + 1],
+                            data[off + 2],
+                            data[off + 3],
+                            data[off + 4],
+                            data[off + 5],
+                            data[off + 6],
+                            data[off + 7],
                         ]);
                         if o64 == expected64 {
                             data[off..off + 8].copy_from_slice(&replacement_bytes);
@@ -702,7 +789,8 @@ pub(crate) fn define_atomics(
                     }
                     (8, 5) => {
                         let expected_handle = value::decode_bigint_handle(expected_val) as usize;
-                        let replacement_handle = value::decode_bigint_handle(replacement_val) as usize;
+                        let replacement_handle =
+                            value::decode_bigint_handle(replacement_val) as usize;
                         let bigint_table = match caller.data().bigint_table.lock() {
                             Ok(t) => t,
                             Err(_) => return value::encode_undefined(),
@@ -720,8 +808,14 @@ pub(crate) fn define_atomics(
                         let expected64 = u64::from_le_bytes(expected_bytes);
                         drop(bigint_table);
                         let o64 = u64::from_le_bytes([
-                            data[off], data[off + 1], data[off + 2], data[off + 3],
-                            data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                            data[off],
+                            data[off + 1],
+                            data[off + 2],
+                            data[off + 3],
+                            data[off + 4],
+                            data[off + 5],
+                            data[off + 6],
+                            data[off + 7],
                         ]);
                         if o64 == expected64 {
                             data[off..off + 8].copy_from_slice(&replacement_bytes);
@@ -792,7 +886,10 @@ pub(crate) fn define_atomics(
                         let expected = value::decode_f64(expected_val) as i32;
                         let replacement = value::decode_f64(replacement_val) as i32;
                         let o = i32::from_le_bytes([
-                            data[off], data[off + 1], data[off + 2], data[off + 3],
+                            data[off],
+                            data[off + 1],
+                            data[off + 2],
+                            data[off + 3],
                         ]);
                         if o == expected {
                             data[off..off + 4].copy_from_slice(&replacement.to_le_bytes());
@@ -803,7 +900,10 @@ pub(crate) fn define_atomics(
                         let expected = value::decode_f64(expected_val) as u32;
                         let replacement = value::decode_f64(replacement_val) as u32;
                         let o = u32::from_le_bytes([
-                            data[off], data[off + 1], data[off + 2], data[off + 3],
+                            data[off],
+                            data[off + 1],
+                            data[off + 2],
+                            data[off + 3],
                         ]);
                         if o == expected {
                             data[off..off + 4].copy_from_slice(&replacement.to_le_bytes());
@@ -812,7 +912,8 @@ pub(crate) fn define_atomics(
                     }
                     (8, 4) => {
                         let expected_handle = value::decode_bigint_handle(expected_val) as usize;
-                        let replacement_handle = value::decode_bigint_handle(replacement_val) as usize;
+                        let replacement_handle =
+                            value::decode_bigint_handle(replacement_val) as usize;
                         let bigint_table = match caller.data().bigint_table.lock() {
                             Ok(t) => t,
                             Err(_) => return value::encode_undefined(),
@@ -830,8 +931,14 @@ pub(crate) fn define_atomics(
                         let expected64 = i64::from_le_bytes(expected_bytes);
                         drop(bigint_table);
                         let o64 = i64::from_le_bytes([
-                            data[off], data[off + 1], data[off + 2], data[off + 3],
-                            data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                            data[off],
+                            data[off + 1],
+                            data[off + 2],
+                            data[off + 3],
+                            data[off + 4],
+                            data[off + 5],
+                            data[off + 6],
+                            data[off + 7],
                         ]);
                         if o64 == expected64 {
                             data[off..off + 8].copy_from_slice(&replacement_bytes);
@@ -847,7 +954,8 @@ pub(crate) fn define_atomics(
                     }
                     (8, 5) => {
                         let expected_handle = value::decode_bigint_handle(expected_val) as usize;
-                        let replacement_handle = value::decode_bigint_handle(replacement_val) as usize;
+                        let replacement_handle =
+                            value::decode_bigint_handle(replacement_val) as usize;
                         let bigint_table = match caller.data().bigint_table.lock() {
                             Ok(t) => t,
                             Err(_) => return value::encode_undefined(),
@@ -865,8 +973,14 @@ pub(crate) fn define_atomics(
                         let expected64 = u64::from_le_bytes(expected_bytes);
                         drop(bigint_table);
                         let o64 = u64::from_le_bytes([
-                            data[off], data[off + 1], data[off + 2], data[off + 3],
-                            data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                            data[off],
+                            data[off + 1],
+                            data[off + 2],
+                            data[off + 3],
+                            data[off + 4],
+                            data[off + 5],
+                            data[off + 6],
+                            data[off + 7],
                         ]);
                         if o64 == expected64 {
                             data[off..off + 8].copy_from_slice(&replacement_bytes);
@@ -916,12 +1030,9 @@ pub(crate) fn define_atomics(
         atomics_is_lock_free_fn,
     )?;
 
-    let atomics_pause_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>| -> i64 {
-            crate::shared_buffer::atomics_pause(&mut caller)
-        },
-    );
+    let atomics_pause_fn = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| -> i64 {
+        crate::shared_buffer::atomics_pause(&mut caller)
+    });
     linker.define(&mut store, "env", "atomics_pause", atomics_pause_fn)?;
 
     // ── Atomics.wait(typedArray, index, expected, timeout) → string ──
@@ -1039,7 +1150,12 @@ pub(crate) fn define_atomics(
                 Some(s) => s,
                 None => return value::encode_f64(0.0),
             };
-            let (woken, promises) = crate::shared_buffer::notify_waiters_with_promises(&shared, sab_handle as u32, byte_offset as u32, count);
+            let (woken, promises) = crate::shared_buffer::notify_waiters_with_promises(
+                &shared,
+                sab_handle as u32,
+                byte_offset as u32,
+                count,
+            );
             for pr in promises {
                 let ok_str = store_runtime_string(&mut caller, "ok".to_string());
                 settle_promise(caller.data_mut(), pr, PromiseSettlement::Fulfill(ok_str));
@@ -1077,8 +1193,12 @@ pub(crate) fn define_atomics(
                         let b1 = table.get(h1);
                         let b2 = table.get(h2);
                         b1 == b2 || (b1.is_some() && b2.is_some() && b1.unwrap() == b2.unwrap())
-                    } else { false }
-                } else { false }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
             } else {
                 current == value_val
             };
@@ -1100,11 +1220,7 @@ pub(crate) fn define_atomics(
                     "async",
                     value::encode_bool(false),
                 );
-                let status = if !equal {
-                    "not-equal"
-                } else {
-                    "timed-out"
-                };
+                let status = if !equal { "not-equal" } else { "timed-out" };
                 let status_str = store_runtime_string(&mut caller, status.to_string());
                 let _ =
                     define_host_data_property_from_caller(&mut caller, result, "value", status_str);
@@ -1114,7 +1230,10 @@ pub(crate) fn define_atomics(
             let dl = if tmo.is_infinite() {
                 None
             } else {
-                Some(::tokio::time::Instant::now() + ::std::time::Duration::from_millis(tmo.max(0.0) as u64))
+                Some(
+                    ::tokio::time::Instant::now()
+                        + ::std::time::Duration::from_millis(tmo.max(0.0) as u64),
+                )
             };
             let promise = alloc_promise_from_caller(&mut caller, PromiseEntry::pending());
             let shared = match caller.data().shared_state.clone() {
@@ -1130,11 +1249,22 @@ pub(crate) fn define_atomics(
                         "async",
                         value::encode_bool(true),
                     );
-                    let _ = define_host_data_property_from_caller(&mut caller, result, "value", promise);
+                    let _ = define_host_data_property_from_caller(
+                        &mut caller,
+                        result,
+                        "value",
+                        promise,
+                    );
                     return result;
                 }
             };
-            let notified = crate::shared_buffer::enter_waiter(&shared, buf_handle as u32, off as u32, dl, Some(promise));
+            let notified = crate::shared_buffer::enter_waiter(
+                &shared,
+                buf_handle as u32,
+                off as u32,
+                dl,
+                Some(promise),
+            );
             if let Some(d) = dl {
                 if let Some(tx) = caller.data().host_completion_tx.clone() {
                     let sh = shared.clone();
@@ -1171,7 +1301,7 @@ pub(crate) fn define_atomics(
             );
             let _ = define_host_data_property_from_caller(&mut caller, result, "value", promise);
             result
-        }
+        },
     );
     linker.define(
         &mut store,

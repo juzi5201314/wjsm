@@ -2,6 +2,35 @@ use super::*;
 use crate::wasm_env::WasmEnv;
 use std::sync::atomic::Ordering;
 
+/// 构造一个 TAG_EXCEPTION 值（携带 TypeError 对象），供属性/调用等返回路径
+/// 直接返回给被编译代码，从而经语义层插入的 IsException 分叉被 try/catch 捕获。
+/// 这与延迟、不可捕获的 `set_runtime_error` 不同：后者只在程序结束时作为顶层
+/// "Runtime error:" 暴露。Proxy 不变量违反 / 撤销代理访问 / private 品牌检查失败
+/// 等规范要求“同步抛出 TypeError”的场景应使用本函数。
+pub(crate) fn make_type_error_exception(caller: &mut Caller<'_, RuntimeState>, msg: &str) -> i64 {
+    let msg_val = store_runtime_string(caller, msg.to_string());
+    let error_obj = create_error_object(caller, "TypeError", msg_val);
+    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let idx = errors.len() as u32;
+    errors.push(crate::ErrorEntry {
+        name: "TypeError".to_string(),
+        message: msg.to_string(),
+        value: error_obj,
+    });
+    value::encode_handle(value::TAG_EXCEPTION, idx)
+}
+
+/// 从 TAG_EXCEPTION 中提取 error_table 里的真实错误对象值。
+/// 用于需要 reject promise 或传播真实错误值的场景（如 async 迭代器异常、array spread）。
+pub(crate) fn exception_reason(caller: &mut Caller<'_, RuntimeState>, exception: i64) -> i64 {
+    let idx = value::decode_handle(exception) as usize;
+    let errors = caller.data().error_table.lock().expect("error table mutex");
+    errors
+        .get(idx)
+        .map(|entry| entry.value)
+        .unwrap_or_else(value::encode_undefined)
+}
+
 pub(crate) fn read_shadow_arg_with_env<C: AsContext>(
     ctx: &C,
     env: &WasmEnv,
@@ -496,6 +525,26 @@ pub(crate) fn define_host_data_property_with_env<C: AsContextMut<Data = RuntimeS
 ) -> Option<()> {
     let name_id = find_memory_c_string_with_env(ctx, env, name)
         .or_else(|| alloc_heap_c_string_with_env(ctx, env, name))?;
+    define_host_data_property_by_name_id_with_env(
+        ctx,
+        env,
+        obj,
+        encode_string_name_id(name_id),
+        val,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE,
+    )
+}
+
+pub(crate) fn define_host_data_property_by_name_id_with_env<
+    C: AsContextMut<Data = RuntimeState>,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    obj: i64,
+    name_id: u32,
+    val: i64,
+    flags: i32,
+) -> Option<()> {
     let obj_ptr = resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize)?;
     let (capacity, num_props) = {
         let data = env.memory.data(&*ctx);
@@ -519,21 +568,18 @@ pub(crate) fn define_host_data_property_with_env<C: AsContextMut<Data = RuntimeS
     if num_props >= capacity {
         return None;
     }
-    let actual_ptr = obj_ptr;
     let data = env.memory.data_mut(&mut *ctx);
-    let slot_offset = actual_ptr + 16 + num_props as usize * 32;
+    let slot_offset = obj_ptr + 16 + num_props as usize * 32;
     if slot_offset + 32 > data.len() {
         return None;
     }
-    let flags =
-        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
     let undef = value::encode_undefined();
     data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
     data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
     data[slot_offset + 8..slot_offset + 16].copy_from_slice(&val.to_le_bytes());
     data[slot_offset + 16..slot_offset + 24].copy_from_slice(&undef.to_le_bytes());
     data[slot_offset + 24..slot_offset + 32].copy_from_slice(&undef.to_le_bytes());
-    data[actual_ptr + 12..actual_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
+    data[obj_ptr + 12..obj_ptr + 16].copy_from_slice(&(num_props + 1).to_le_bytes());
     Some(())
 }
 
@@ -678,6 +724,9 @@ pub(crate) fn collect_own_property_names(
             data[slot_offset + 2],
             data[slot_offset + 3],
         ]);
+        if is_symbol_name_id(name_id) {
+            continue;
+        }
         name_ids.push(name_id);
     }
     let _ = data;
@@ -743,6 +792,15 @@ pub(crate) fn collect_own_property_values(
         if enumerable_only && (flags & 2) == 0 {
             continue;
         }
+        let name_id = u32::from_le_bytes([
+            data[slot_offset],
+            data[slot_offset + 1],
+            data[slot_offset + 2],
+            data[slot_offset + 3],
+        ]);
+        if is_symbol_name_id(name_id) {
+            continue;
+        }
         let value = i64::from_le_bytes([
             data[slot_offset + 8],
             data[slot_offset + 9],
@@ -756,6 +814,77 @@ pub(crate) fn collect_own_property_values(
         values.push(value);
     }
     values
+}
+
+pub(crate) fn collect_own_property_key_values(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_ptr: usize,
+    symbols_only: bool,
+) -> Vec<i64> {
+    let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
+        return vec![];
+    };
+    let data = mem.data(&*caller);
+    if obj_ptr + 16 > data.len() {
+        return vec![];
+    }
+    if data[obj_ptr + 4] == wjsm_ir::HEAP_TYPE_ARRAY {
+        if symbols_only {
+            return vec![];
+        }
+        let len = u32::from_le_bytes([
+            data[obj_ptr + 8],
+            data[obj_ptr + 9],
+            data[obj_ptr + 10],
+            data[obj_ptr + 11],
+        ]);
+        let _ = data;
+        let _ = mem;
+        let mut keys = Vec::new();
+        for i in 0..len {
+            if array_elem_present(caller, obj_ptr, i) {
+                keys.push(store_runtime_string(caller, i.to_string()));
+            }
+        }
+        keys.push(store_runtime_string(caller, "length".to_string()));
+        return keys;
+    }
+
+    let num_props = u32::from_le_bytes([
+        data[obj_ptr + 12],
+        data[obj_ptr + 13],
+        data[obj_ptr + 14],
+        data[obj_ptr + 15],
+    ]) as usize;
+    let mut name_ids = Vec::new();
+    for i in 0..num_props {
+        let slot_offset = obj_ptr + 16 + i * 32;
+        if slot_offset + 32 > data.len() {
+            break;
+        }
+        name_ids.push(u32::from_le_bytes([
+            data[slot_offset],
+            data[slot_offset + 1],
+            data[slot_offset + 2],
+            data[slot_offset + 3],
+        ]));
+    }
+    let _ = data;
+    let _ = mem;
+
+    let mut keys = Vec::new();
+    for name_id in name_ids {
+        if let Some(symbol_key) = name_id_to_property_key_value(name_id) {
+            keys.push(symbol_key);
+        } else if !symbols_only {
+            let name_bytes = read_string_bytes(caller, name_id);
+            keys.push(store_runtime_string(
+                caller,
+                String::from_utf8_lossy(&name_bytes).to_string(),
+            ));
+        }
+    }
+    keys
 }
 
 pub(crate) fn value_to_number(arg: i64) -> f64 {
@@ -901,12 +1030,10 @@ pub(crate) fn proxy_or_target_get_prototype_of_impl(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked"
-                        .to_string(),
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
@@ -1482,12 +1609,10 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked"
-                        .to_string(),
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
@@ -1857,11 +1982,10 @@ pub(crate) fn reflect_get_impl_with_receiver(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'get' on a proxy that has been revoked".to_string(),
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Cannot perform 'get' on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "get")
@@ -1968,11 +2092,10 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform 'get' on a proxy that has been revoked".to_string(),
+                return make_type_error_exception(
+                    caller,
+                    "TypeError: Cannot perform 'get' on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "get")
@@ -2154,6 +2277,42 @@ pub(crate) fn define_host_data_property(
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let name_id = find_memory_c_string_with_env(caller, &env, name)
         .or_else(|| alloc_heap_c_string_with_env(caller, &env, name))?;
+    define_host_data_property_by_name_id(caller, obj, encode_string_name_id(name_id), val)
+}
+
+pub(crate) fn define_host_data_property_symbol(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    symbol_val: i64,
+    val: i64,
+) -> Option<()> {
+    let name_id = symbol_value_to_name_id(symbol_val)?;
+    define_host_data_property_by_name_id(caller, obj, name_id, val)
+}
+
+pub(crate) fn define_host_data_property_by_name_id(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name_id: u32,
+    val: i64,
+) -> Option<()> {
+    define_host_data_property_by_name_id_with_flags(
+        caller,
+        obj,
+        name_id,
+        val,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE,
+    )
+}
+
+pub(crate) fn define_host_data_property_by_name_id_with_flags(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name_id: u32,
+    val: i64,
+    flags: i32,
+) -> Option<()> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj_ptr =
         resolve_handle_idx_with_env(caller, &env, value::decode_object_handle(obj) as usize)?;
     let (capacity, num_props) = {
@@ -2186,8 +2345,6 @@ pub(crate) fn define_host_data_property(
     if slot_offset + 32 > data.len() {
         return None;
     }
-    let flags =
-        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
     let undef = value::encode_undefined();
     data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
     data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());
@@ -2209,9 +2366,65 @@ pub(crate) fn define_host_accessor_property(
     getter: i64,
     setter: i64,
 ) -> Option<()> {
+    define_host_accessor_property_with_flags(
+        caller,
+        obj,
+        name,
+        getter,
+        setter,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE,
+    )
+}
+
+pub(crate) fn define_host_accessor_property_symbol(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    symbol_val: i64,
+    getter: i64,
+    setter: i64,
+) -> Option<()> {
+    let name_id = symbol_value_to_name_id(symbol_val)?;
+    define_host_accessor_property_by_name_id_with_flags(
+        caller,
+        obj,
+        name_id,
+        getter,
+        setter,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE,
+    )
+}
+
+/// 定义可配置属性位的访问器属性。
+pub(crate) fn define_host_accessor_property_with_flags(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name: &str,
+    getter: i64,
+    setter: i64,
+    attribute_flags: i32,
+) -> Option<()> {
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let name_id = find_memory_c_string_with_env(caller, &env, name)
         .or_else(|| alloc_heap_c_string_with_env(caller, &env, name))?;
+    define_host_accessor_property_by_name_id_with_flags(
+        caller,
+        obj,
+        encode_string_name_id(name_id),
+        getter,
+        setter,
+        attribute_flags,
+    )
+}
+
+pub(crate) fn define_host_accessor_property_by_name_id_with_flags(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj: i64,
+    name_id: u32,
+    getter: i64,
+    setter: i64,
+    attribute_flags: i32,
+) -> Option<()> {
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj_ptr =
         resolve_handle_idx_with_env(caller, &env, value::decode_object_handle(obj) as usize)?;
     let (capacity, num_props) = {
@@ -2244,9 +2457,7 @@ pub(crate) fn define_host_accessor_property(
     if slot_offset + 32 > data.len() {
         return None;
     }
-    // 访问器属性：CONFIGURABLE | ENUMERABLE | IS_ACCESSOR（不含 WRITABLE）
-    let flags =
-        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_IS_ACCESSOR;
+    let flags = (attribute_flags & !constants::FLAG_WRITABLE) | constants::FLAG_IS_ACCESSOR;
     let undef = value::encode_undefined();
     data[slot_offset..slot_offset + 4].copy_from_slice(&name_id.to_le_bytes());
     data[slot_offset + 4..slot_offset + 8].copy_from_slice(&flags.to_le_bytes());

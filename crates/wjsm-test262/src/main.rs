@@ -10,8 +10,9 @@ mod exec;
 mod read;
 
 use config::should_run_test;
-use exec::{SuiteResults, TestResult};
+use exec::{RunLimits, SuiteResults, TestResult};
 use read::{read_harness, read_suite, read_test};
+use std::time::Duration;
 
 const TEST262_DIRECTORY: &str = "test262";
 
@@ -42,9 +43,21 @@ enum Commands {
         #[arg(long)]
         plain: bool,
 
-        /// 串行执行测试。
+        /// 串行执行测试（推荐 WSL / 低内存环境）。
         #[arg(long)]
         no_parallel: bool,
+
+        /// 单条用例超时（秒）；超时 kill 子进程并记为失败。
+        #[arg(long, default_value_t = 15)]
+        timeout_secs: u64,
+
+        /// Linux：单条用例虚拟内存上限（MiB）；0 表示不限制。
+        #[arg(long, default_value_t = 512)]
+        memory_limit_mib: u64,
+
+        /// 并行 worker 数（默认 2；WSL 建议 1）。
+        #[arg(long, default_value_t = 2)]
+        jobs: usize,
 
         /// 显示详细输出。
         #[arg(short, long, action = clap::ArgAction::Count)]
@@ -54,7 +67,6 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-
     match cli.command {
         Commands::Run {
             suite,
@@ -62,8 +74,23 @@ fn main() -> Result<()> {
             json,
             plain,
             no_parallel,
+            timeout_secs,
+            memory_limit_mib,
+            jobs,
             verbose,
-        } => run_test262(suite, all, json, plain, !no_parallel, verbose),
+        } => run_test262(
+            suite,
+            all,
+            json,
+            plain,
+            !no_parallel,
+            RunLimits {
+                timeout: Duration::from_secs(timeout_secs),
+                memory_limit_mib,
+                jobs: if no_parallel { 1 } else { jobs.max(1) },
+            },
+            verbose,
+        ),
     }
 }
 
@@ -73,6 +100,7 @@ fn run_test262(
     json_output: Option<PathBuf>,
     plain: bool,
     parallel: bool,
+    limits: RunLimits,
     verbose: u8,
 ) -> Result<()> {
     let test262_path = Path::new(TEST262_DIRECTORY);
@@ -104,7 +132,7 @@ fn run_test262(
             println!("Running single test: {}", suite_path.display());
         }
 
-        let result = exec::run_test(&test, &harness);
+        let result = exec::run_test(&test, &harness, limits);
         print_single_result(&test, &result);
         return Ok(());
     }
@@ -120,7 +148,16 @@ fn run_test262(
         println!("Running tests...");
     }
 
-    let results = exec::run_suite(&suite, &harness, parallel, &|test| {
+    if verbose > 0 {
+        println!(
+            "Limits: timeout={}s, memory_limit_mib={}, jobs={}",
+            limits.timeout.as_secs(),
+            limits.memory_limit_mib,
+            limits.jobs
+        );
+    }
+
+    let results = exec::run_suite(&suite, &harness, parallel, limits, &|test| {
         should_run_test(test, all)
     });
 

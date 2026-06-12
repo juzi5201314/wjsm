@@ -15,6 +15,7 @@ impl Lowerer {
         let name = format!("arrow_{}", self.module.functions().len());
         self.push_function_context(&name, BasicBlockId(0));
         // 标记当前为箭头函数；箭头函数继承外层 super 绑定。
+        self.is_arrow = true;
         *self.is_arrow_fn_stack.last_mut().unwrap() = true;
         self.super_allowed = outer_super_allowed;
         self.super_call_allowed = outer_super_call_allowed;
@@ -151,6 +152,7 @@ impl Lowerer {
         self.async_state_counter = 1;
         self.captured_var_slots.clear();
         self.async_resume_blocks.clear();
+        self.is_arrow = true;
         *self.is_arrow_fn_stack.last_mut().unwrap() = true;
         self.super_allowed = outer_super_allowed;
         self.super_call_allowed = outer_super_call_allowed;

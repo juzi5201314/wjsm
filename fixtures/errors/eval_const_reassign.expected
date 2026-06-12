@@ -1,4 +1,5 @@
 exit_code: 2
 --- stdout ---
+Uncaught exception: TypeError: assignment to constant `x`
 --- stderr ---
-Runtime error: TypeError: assignment to constant `x`
+Runtime error: Uncaught exception: TypeError: assignment to constant `x`

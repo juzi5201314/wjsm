@@ -10,7 +10,10 @@ use wjsm_ir::{constants, value};
 use crate::runtime_heap::alloc_host_object;
 use crate::runtime_heap::define_host_data_property_from_caller;
 use crate::runtime_promises::set_runtime_error;
-use crate::runtime_values::{find_property_slot_by_name_id, read_object_property_by_name, resolve_handle, resolve_handle_idx, write_object_property_by_name_id};
+use crate::runtime_values::{
+    find_property_slot_by_name_id, read_object_property_by_name, resolve_handle,
+    resolve_handle_idx, write_object_property_by_name_id,
+};
 use crate::{RuntimeState, WasmEnv};
 
 #[derive(Clone, Debug)]
@@ -174,9 +177,8 @@ fn set_sab_host_data_property(
         let _ = define_host_data_property_from_caller(caller, obj, name, val);
         return;
     };
-    let flags = constants::FLAG_CONFIGURABLE
-        | constants::FLAG_ENUMERABLE
-        | constants::FLAG_WRITABLE;
+    let flags =
+        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE | constants::FLAG_WRITABLE;
     if find_property_slot_by_name_id(caller, obj_ptr, name_id).is_some() {
         write_object_property_by_name_id(caller, obj_ptr, obj, name_id, val, flags);
     } else {
@@ -192,7 +194,12 @@ fn define_sab_data_properties(
     growable: bool,
     max_byte_length: u64,
 ) {
-    set_sab_host_data_property(caller, obj, SAB_HANDLE_PROP, value::encode_f64(handle as f64));
+    set_sab_host_data_property(
+        caller,
+        obj,
+        SAB_HANDLE_PROP,
+        value::encode_f64(handle as f64),
+    );
     set_sab_host_data_property(
         caller,
         obj,
@@ -207,7 +214,6 @@ fn define_sab_data_properties(
         value::encode_f64(max_byte_length as f64),
     );
 }
-
 
 /// 将已有 `sab_table` 条目包装为 JS 可见的 SharedArrayBuffer 对象（不新建 backing）。
 pub(crate) fn materialize_shared_array_buffer_by_handle(
@@ -225,14 +231,7 @@ pub(crate) fn materialize_shared_array_buffer_by_handle(
     let max_observable = entry.max_byte_length();
     drop(table);
     let obj = alloc_host_object(caller, env, 4);
-    define_sab_data_properties(
-        caller,
-        obj,
-        handle,
-        byte_length,
-        growable,
-        max_observable,
-    );
+    define_sab_data_properties(caller, obj, handle, byte_length, growable, max_observable);
     obj
 }
 
@@ -242,14 +241,11 @@ pub(crate) fn construct_shared_array_buffer(
     options: i64,
     target_obj: i64,
 ) -> i64 {
-    let byte_length = match to_index_from_value(
-        caller,
-        length,
-        "RangeError: Invalid array buffer length",
-    ) {
-        Some(v) => v,
-        None => return value::encode_undefined(),
-    };
+    let byte_length =
+        match to_index_from_value(caller, length, "RangeError: Invalid array buffer length") {
+            Some(v) => v,
+            None => return value::encode_undefined(),
+        };
 
     let mut max_byte_length: Option<u64> = None;
     if !value::is_undefined(options) && !value::is_null(options) {
@@ -260,20 +256,17 @@ pub(crate) fn construct_shared_array_buffer(
             );
             return value::encode_undefined();
         }
-        let opt_ptr = match resolve_handle_idx(caller, value::decode_object_handle(options) as usize)
-        {
-            Some(p) => p,
-            None => return value::encode_undefined(),
-        };
-        if let Some(mbl_raw) = read_object_property_by_name(caller, opt_ptr, "maxByteLength") {
-            let mbl = match to_index_from_value(
-                caller,
-                mbl_raw,
-                "RangeError: Invalid maxByteLength",
-            ) {
-                Some(v) => v,
+        let opt_ptr =
+            match resolve_handle_idx(caller, value::decode_object_handle(options) as usize) {
+                Some(p) => p,
                 None => return value::encode_undefined(),
             };
+        if let Some(mbl_raw) = read_object_property_by_name(caller, opt_ptr, "maxByteLength") {
+            let mbl =
+                match to_index_from_value(caller, mbl_raw, "RangeError: Invalid maxByteLength") {
+                    Some(v) => v,
+                    None => return value::encode_undefined(),
+                };
             if mbl < byte_length {
                 set_runtime_error(
                     caller.data(),
@@ -311,14 +304,7 @@ pub(crate) fn construct_shared_array_buffer(
         alloc_host_object(caller, &env, 4)
     };
 
-    define_sab_data_properties(
-        caller,
-        obj,
-        handle,
-        byte_length,
-        growable,
-        max_observable,
-    );
+    define_sab_data_properties(caller, obj, handle, byte_length, growable, max_observable);
     obj
 }
 
@@ -518,7 +504,9 @@ pub(crate) fn enter_waiter(
     let mut lists = shared.waiter_lists.lock().expect("waiter_lists lock");
     let list = lists
         .entry((sab_handle, byte_offset))
-        .or_insert_with(|| WaiterList { waiters: VecDeque::new() });
+        .or_insert_with(|| WaiterList {
+            waiters: VecDeque::new(),
+        });
     list.waiters.push_back(rec);
     WaiterHandle { notified, signal }
 }
@@ -536,7 +524,8 @@ pub(crate) fn notify_waiters_with_promises(
         let mut ps = Vec::new();
         for _ in 0..count {
             if let Some(rec) = list.waiters.pop_front() {
-                rec.notified.store(true, std::sync::atomic::Ordering::SeqCst);
+                rec.notified
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
                 rec.condvar.notify_one();
                 rec.signal.notify_one();
                 if let Some(p) = rec.promise {
@@ -577,7 +566,13 @@ pub(crate) fn resolve_buffer_backing(
     let sab_h = read_object_property_by_name(caller, ptr, "__sharedarraybuffer_handle__");
     let ab_h = read_object_property_by_name(caller, ptr, "__arraybuffer_handle__");
     let bl = read_object_property_by_name(caller, ptr, "byteLength")
-        .and_then(|v| if value::is_f64(v) { Some(value::decode_f64(v) as u32) } else { None })
+        .and_then(|v| {
+            if value::is_f64(v) {
+                Some(value::decode_f64(v) as u32)
+            } else {
+                None
+            }
+        })
         .unwrap_or(0);
     if let Some(hv) = sab_h {
         if value::is_f64(hv) {

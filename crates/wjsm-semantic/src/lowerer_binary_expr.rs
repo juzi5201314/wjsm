@@ -1,6 +1,43 @@
 use super::*;
 
 impl Lowerer {
+    /// 判断表达式在其自身求值时是否可能直接返回 TAG_EXCEPTION，从而需要异常检查分叉。
+    /// 仅涵盖“自身可抛”的种类（调用、成员读取、new、`in`/`instanceof`、标签模板）；其子
+    /// 表达式的异常由各自经 `lower_expr_then_continue` 的求值负责传播。
+    /// 刻意排除 Await/Yield（异步状态机自有续延处理）与 Assign（其值为右值；赋值语句右值
+    /// 抛出的传播尚未覆盖，且 eval 右值自带异常分叉，额外分叉会破坏其块结构）。
+    pub(crate) fn expr_can_throw(&self, expr: &swc_ast::Expr) -> bool {
+        match expr {
+            swc_ast::Expr::Call(_)
+            | swc_ast::Expr::New(_)
+            | swc_ast::Expr::Member(_)
+            | swc_ast::Expr::OptChain(_)
+            | swc_ast::Expr::TaggedTpl(_) => true,
+            swc_ast::Expr::Bin(bin) => {
+                matches!(bin.op, swc_ast::BinaryOp::In | swc_ast::BinaryOp::InstanceOf)
+            }
+            swc_ast::Expr::Paren(p) => self.expr_can_throw(&p.expr),
+            swc_ast::Expr::TsAs(e) => self.expr_can_throw(&e.expr),
+            swc_ast::Expr::TsNonNull(e) => self.expr_can_throw(&e.expr),
+            swc_ast::Expr::TsConstAssertion(e) => self.expr_can_throw(&e.expr),
+            swc_ast::Expr::TsTypeAssertion(e) => self.expr_can_throw(&e.expr),
+            swc_ast::Expr::TsSatisfies(e) => self.expr_can_throw(&e.expr),
+            swc_ast::Expr::TsInstantiation(e) => self.expr_can_throw(&e.expr),
+            _ => false,
+        }
+    }
+
+    /// 表达式位置的异常检查分叉在 async / async-generator 函数体内会破坏其状态机的
+    /// 基本块枚举与续延结构，故此类分叉仅在普通（非状态机）函数体及顶层代码中插入。
+    /// async 函数体内的同步抛出沿用原有 promise rejection 路径（不在此处理）。
+    pub(crate) fn expr_exception_fork_allowed(&self) -> bool {
+        !self.is_async_fn && !self.is_async_generator_fn
+    }
+}
+
+
+
+impl Lowerer {
     pub(crate) fn lower_expr_then_continue(
         &mut self,
         expr: &swc_ast::Expr,
@@ -508,15 +545,22 @@ impl Lowerer {
 
         // ── Step 1: 确定存储目标类型并加载当前值 ──
         enum Target {
-            Var(String),
+            Var {
+                ir_name: String,
+                name: String,
+                kind: VarKind,
+            },
             Captured(ValueId, ValueId), // env_val, key_val
-            Member { obj: ValueId, key: ValueId },
+            Member {
+                obj: ValueId,
+                key: ValueId,
+            },
         }
 
         let target = match update.arg.as_ref() {
             swc_ast::Expr::Ident(ident) => {
                 let name = ident.sym.to_string();
-                let (scope_id, _kind) = self
+                let (scope_id, kind) = self
                     .scopes
                     .lookup_for_assign(&name)
                     .map_err(|msg| self.error(update.span(), msg))?;
@@ -539,7 +583,11 @@ impl Lowerer {
                     let key_val = self.append_env_key_const(block, &binding);
                     Target::Captured(env_val, key_val)
                 } else {
-                    Target::Var(format!("${scope_id}.{name}"))
+                    Target::Var {
+                        ir_name: format!("${scope_id}.{name}"),
+                        name,
+                        kind,
+                    }
                 }
             }
             swc_ast::Expr::Member(member) => {
@@ -584,7 +632,7 @@ impl Lowerer {
         // 1. 读取当前值
         let old_val = self.alloc_value();
         match &target {
-            Target::Var(ir_name) => {
+            Target::Var { ir_name, .. } => {
                 self.current_function.append_instruction(
                     block,
                     Instruction::LoadVar {
@@ -655,7 +703,11 @@ impl Lowerer {
 
         // 5. 写回 (StoreVar / SetProp / SetProp for captured)
         match target {
-            Target::Var(ir_name) => {
+            Target::Var {
+                ir_name,
+                name,
+                kind,
+            } => {
                 self.current_function.append_instruction(
                     block,
                     Instruction::StoreVar {
@@ -663,6 +715,11 @@ impl Lowerer {
                         value: new_val,
                     },
                 );
+                let after_write_block =
+                    self.append_eval_var_leak_if_needed(&name, kind, new_val, block)?;
+                if after_write_block != block {
+                    self.expr_merge_block = Some(after_write_block);
+                }
             }
             Target::Captured(env_val, key_val) => {
                 self.current_function.append_instruction(
@@ -932,13 +989,10 @@ impl Lowerer {
         mut block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
         let mut last = self.alloc_value();
-        let last_index = seq.exprs.len().saturating_sub(1);
-        for (index, expr) in seq.exprs.iter().enumerate() {
-            last = self.lower_expr(expr, block)?;
-            if index != last_index {
-                block = self.resolve_store_block(block);
-            }
+        for expr in &seq.exprs {
+            last = self.lower_expr_then_continue(expr, &mut block)?;
         }
+        self.expr_merge_block = Some(block);
         Ok(last)
     }
 

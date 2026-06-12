@@ -268,7 +268,21 @@ impl Compiler {
                     .with_context(|| format!("no WASM func index for {builtin}"))?;
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
-                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                    let local = self.local_idx(d.0);
+                    self.emit(WasmInstruction::LocalSet(local));
+                    if self.mode == CompileMode::Eval {
+                        self.emit(WasmInstruction::LocalGet(local));
+                        self.emit(WasmInstruction::I64Const(32));
+                        self.emit(WasmInstruction::I64ShrU);
+                        self.emit(WasmInstruction::I32WrapI64);
+                        self.emit(WasmInstruction::I32Const(value::TAG_EXCEPTION as i32));
+                        self.emit(WasmInstruction::I32Eq);
+                        self.emit(WasmInstruction::If(BlockType::Empty));
+                        self.emit(WasmInstruction::LocalGet(local));
+                        self.emit_eval_var_frame_exit();
+                        self.emit(WasmInstruction::Return);
+                        self.emit(WasmInstruction::End);
+                    }
                 } else {
                     self.emit(WasmInstruction::Drop);
                 }
@@ -552,7 +566,9 @@ impl Compiler {
                 let desc_arg = args.get(2).context("DefineProperty expects 3 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
-                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::Call(
+                    self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+                ));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(desc_arg.0)));
                 let func_idx = self
                     .builtin_func_indices
@@ -572,7 +588,9 @@ impl Compiler {
                 let key_arg = args.get(1).context("GetOwnPropDesc expects 2 args")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(obj_arg.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(key_arg.0)));
-                self.emit(WasmInstruction::I32WrapI64);
+                self.emit(WasmInstruction::Call(
+                    self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+                ));
                 let func_idx = self
                     .builtin_func_indices
                     .get(builtin)
@@ -586,6 +604,7 @@ impl Compiler {
             }
             // ── Array method builtins ─────────────────────────────────────
             Builtin::ArrayPush
+            | Builtin::ArrayPushSpread
             | Builtin::ArrayPop
             | Builtin::ArrayIncludes
             | Builtin::ArrayJoin
@@ -747,6 +766,14 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
                 if let Some(second) = args.get(1) {
                     self.emit(WasmInstruction::LocalGet(self.local_idx(second.0)));
+                } else if matches!(
+                    builtin,
+                    Builtin::NumberProtoToString
+                        | Builtin::NumberProtoToFixed
+                        | Builtin::NumberProtoToExponential
+                        | Builtin::NumberProtoToPrecision
+                ) {
+                    self.emit(WasmInstruction::I64Const(value::encode_undefined()));
                 }
                 let func_idx = self
                     .builtin_func_indices
@@ -1199,6 +1226,7 @@ impl Compiler {
             | Builtin::ObjectEntries
             | Builtin::ObjectGetPrototypeOf
             | Builtin::ObjectGetOwnPropertyNames
+            | Builtin::ObjectGetOwnPropertySymbols
             | Builtin::ObjectIsExtensible
             | Builtin::ObjectPreventExtensions
             | Builtin::ObjectProtoToString

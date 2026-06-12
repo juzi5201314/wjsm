@@ -24,7 +24,7 @@ module {
     c21 = number(2)
     c22 = number(3)
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

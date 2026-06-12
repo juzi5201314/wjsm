@@ -1,0 +1,4 @@
+exit_code: 1
+--- stdout ---
+--- stderr ---
+Error: semantic lowering error [334..341]: Private field '#hidden' must be declared in an enclosing class

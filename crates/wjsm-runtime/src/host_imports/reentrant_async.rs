@@ -10,6 +10,14 @@ use super::proxy_traps::{
     proxy_trap_handler_trap, proxy_trap_property_key_value, proxy_trap_proxy_entry,
 };
 
+fn type_error_exception_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    msg: &'static str,
+) -> i64 {
+    // 统一委托给共享实现，保持 TAG_EXCEPTION 构造逻辑单一来源。
+    make_type_error_exception(caller, msg)
+}
+
 pub(crate) async fn native_call_from_caller_async(
     caller: &mut Caller<'_, RuntimeState>,
     callable: i64,
@@ -31,20 +39,18 @@ pub(crate) async fn native_call_from_caller_async(
         };
         if let Some(entry) = entry {
             if entry.revoked {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Cannot perform call on a proxy that has been revoked".to_string(),
+                return type_error_exception_from_caller(
+                    caller,
+                    "TypeError: Cannot perform call on a proxy that has been revoked",
                 );
-                return value::encode_undefined();
             }
 
             if !value::is_undefined(new_target_val) {
                 if !is_constructor_in_runtime(caller, entry.target) {
-                    set_runtime_error(
-                        caller.data(),
-                        "TypeError: Proxy target must be a constructor".to_string(),
+                    return type_error_exception_from_caller(
+                        caller,
+                        "TypeError: Proxy target must be a constructor",
                     );
-                    return value::encode_undefined();
                 }
                 if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                     let trap = read_object_property_by_name(caller, handler_ptr, "construct")
@@ -65,23 +71,18 @@ pub(crate) async fn native_call_from_caller_async(
                         return match trap_res {
                             Ok(res) => {
                                 if !value::is_js_object(res) {
-                                    set_runtime_error(
-                                        caller.data(),
-                                        "TypeError: Proxy construct trap returned non-object"
-                                            .to_string(),
-                                    );
-                                    value::encode_undefined()
+                                    type_error_exception_from_caller(
+                                        caller,
+                                        "TypeError: Proxy construct trap returned non-object",
+                                    )
                                 } else {
                                     res
                                 }
                             }
-                            Err(e) => {
-                                set_runtime_error(
-                                    caller.data(),
-                                    format!("TypeError: Proxy construct trap failed: {}", e),
-                                );
-                                value::encode_undefined()
-                            }
+                            Err(_) => type_error_exception_from_caller(
+                                caller,
+                                "TypeError: Proxy construct trap failed",
+                            ),
                         };
                     }
                 }
@@ -100,11 +101,10 @@ pub(crate) async fn native_call_from_caller_async(
             }
 
             if !is_callable_in_runtime(caller, entry.target) {
-                set_runtime_error(
-                    caller.data(),
-                    "TypeError: Proxy target must be callable".to_string(),
+                return type_error_exception_from_caller(
+                    caller,
+                    "TypeError: Proxy target must be callable",
                 );
-                return value::encode_undefined();
             }
             if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
                 let trap = read_object_property_by_name(caller, handler_ptr, "apply")
@@ -232,11 +232,27 @@ pub(crate) fn define_timers_arrays_async(
         }
     }
 
+    fn timer_callback_type_error(caller: &mut Caller<'_, RuntimeState>) -> i64 {
+        let msg = "TypeError: timer callback must be callable";
+        let msg_val = store_runtime_string(caller, msg.to_string());
+        let error_obj = create_error_object(caller, "TypeError", msg_val);
+        let mut errors = caller.data().error_table.lock().expect("error table mutex");
+        let idx = errors.len() as u32;
+        errors.push(crate::ErrorEntry {
+            name: "TypeError".to_string(),
+            message: msg.to_string(),
+            value: error_obj,
+        });
+        value::encode_handle(value::TAG_EXCEPTION, idx)
+    }
     linker.func_wrap_async(
         "env",
         "set_timeout",
-        |caller: Caller<'_, RuntimeState>, (callback, delay): (i64, i64)| {
+        |mut caller: Caller<'_, RuntimeState>, (callback, delay): (i64, i64)| {
             Box::new(async move {
+                if !is_callable_in_runtime(&mut caller, callback) {
+                    return timer_callback_type_error(&mut caller);
+                }
                 let delay_ms = delay_ms_from(delay);
                 let id = {
                     let mut next_id = caller
@@ -283,8 +299,11 @@ pub(crate) fn define_timers_arrays_async(
     linker.func_wrap_async(
         "env",
         "set_interval",
-        |caller: Caller<'_, RuntimeState>, (callback, delay): (i64, i64)| {
+        |mut caller: Caller<'_, RuntimeState>, (callback, delay): (i64, i64)| {
             Box::new(async move {
+                if !is_callable_in_runtime(&mut caller, callback) {
+                    return timer_callback_type_error(&mut caller);
+                }
                 let delay_ms = delay_ms_from(delay);
                 let id = {
                     let mut next_id = caller
@@ -460,6 +479,16 @@ pub(crate) fn define_array_object_async(
     wrap_array_callback_async!(linker, "arr_proto_some", arr_proto_some_async);
     wrap_array_callback_async!(linker, "arr_proto_every", arr_proto_every_async);
     wrap_array_callback_async!(linker, "arr_proto_flat_map", arr_proto_flat_map_async);
+
+    linker.func_wrap_async(
+        "env",
+        "array_push_spread",
+        |mut caller: Caller<'_, RuntimeState>, (arr, iterable): (i64, i64)| {
+            Box::new(async move {
+                super::array_object::array_push_spread_impl_async(&mut caller, arr, iterable).await
+            })
+        },
+    )?;
 
     linker.func_wrap_async(
         "env",
@@ -978,8 +1007,9 @@ pub(crate) async fn proxy_trap_internal_get_async(
     proxy: i64,
     name_id: i32,
 ) -> i64 {
-    let Some((target, handler)) = proxy_trap_proxy_entry(caller, proxy, "get") else {
-        return value::encode_undefined();
+    let (target, handler) = match proxy_trap_proxy_entry(caller, proxy, "get") {
+        Ok(pair) => pair,
+        Err(exc) => return exc,
     };
     if let Some(trap) = proxy_trap_handler_trap(caller, handler, "get") {
         let prop = proxy_trap_property_key_value(caller, name_id);
@@ -998,8 +1028,18 @@ pub(crate) async fn proxy_trap_internal_set_async(
     name_id: i32,
     val: i64,
 ) {
-    let Some((target, handler)) = proxy_trap_proxy_entry(caller, proxy, "set") else {
-        return;
+    // 注意：set 内部方法返回 void（$obj_set 为 Type 9 `(i64,i32,i64)->()`），无法回传
+    // TAG_EXCEPTION，故撤销代理上的 `proxy.x = v` 维持延迟（不可捕获）报错。规范要求的
+    // 可捕获 [[Set]] 抛出经 Reflect.set（返回 i64，见 proxy_reflect_async）覆盖。
+    let (target, handler) = match proxy_trap_proxy_entry(caller, proxy, "set") {
+        Ok(pair) => pair,
+        Err(_exc) => {
+            set_runtime_error(
+                caller.data(),
+                "TypeError: Cannot perform 'set' on a proxy that has been revoked".to_string(),
+            );
+            return;
+        }
     };
     if let Some(trap) = proxy_trap_handler_trap(caller, handler, "set") {
         let prop = proxy_trap_property_key_value(caller, name_id);
@@ -1029,8 +1069,9 @@ pub(crate) async fn proxy_trap_internal_delete_async(
     proxy: i64,
     name_id: i32,
 ) -> i64 {
-    let Some((target, handler)) = proxy_trap_proxy_entry(caller, proxy, "deleteProperty") else {
-        return value::encode_bool(false);
+    let (target, handler) = match proxy_trap_proxy_entry(caller, proxy, "deleteProperty") {
+        Ok(pair) => pair,
+        Err(exc) => return exc,
     };
     if let Some(trap) = proxy_trap_handler_trap(caller, handler, "deleteProperty") {
         let prop = proxy_trap_property_key_value(caller, name_id);
@@ -1794,7 +1835,17 @@ fn process_replacement_from_captures(
     result
 }
 
-/// Async version of call_replace_func — uses resolve_and_call_async instead of resolve_and_call
+fn replace_callback_result_to_string(caller: &mut Caller<'_, RuntimeState>, result: i64) -> String {
+    if value::is_undefined(result) {
+        return String::new();
+    }
+    if value::is_runtime_string_handle(result) || value::is_string(result) {
+        return get_string_value(caller, result);
+    }
+    eval_to_string(caller, result)
+}
+
+/// Async version of call_replace_func — uses shared Wasm callback shadow-stack handling.
 async fn call_replace_func_async(
     caller: &mut Caller<'_, RuntimeState>,
     func: i64,
@@ -1804,95 +1855,29 @@ async fn call_replace_func_async(
     captures: &[Option<std::ops::Range<usize>>],
     named_groups_obj: i64,
 ) -> String {
-    // 参数数量：matched + captures + offset + string + groups
-    let capture_count = captures.len().saturating_sub(1); // 不包括 group 0（完整匹配）
-    let args_count = 1 + capture_count + 1 + 1 + 1; // matched + captures + offset + string + groups
+    let capture_count = captures.len().saturating_sub(1);
+    let mut args = Vec::with_capacity(1 + capture_count + 3);
 
-    // 获取 shadow_sp 和 memory
-    let shadow_sp_global = caller
-        .get_export("__shadow_sp")
-        .and_then(|e| e.into_global())
-        .unwrap();
-    let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap();
-    let memory = caller
-        .get_export("memory")
-        .and_then(|e| e.into_memory())
-        .unwrap();
-
-    // 写入参数到 shadow stack
-    let mut arg_idx = 0;
-
-    // 1. matched substring
-    let matched_val = store_runtime_string(&*caller, s[match_start..match_end].to_string());
-    memory
-        .write(
-            &mut *caller,
-            (shadow_sp + arg_idx * 8) as usize,
-            &matched_val.to_le_bytes(),
-        )
-        .unwrap();
-    arg_idx += 1;
-
-    // 2. capture groups (从 group 1 开始)
+    args.push(store_runtime_string(
+        &*caller,
+        s[match_start..match_end].to_string(),
+    ));
     for i in 1..=capture_count {
         let capture_val = if let Some(Some(range)) = captures.get(i) {
             store_runtime_string(&*caller, s[range.clone()].to_string())
         } else {
             value::encode_undefined()
         };
-        memory
-            .write(
-                &mut *caller,
-                (shadow_sp + arg_idx * 8) as usize,
-                &capture_val.to_le_bytes(),
-            )
-            .unwrap();
-        arg_idx += 1;
+        args.push(capture_val);
     }
+    args.push(value::encode_f64(match_start as f64));
+    args.push(store_runtime_string(&*caller, s.to_string()));
+    args.push(named_groups_obj);
 
-    // 3. offset
-    let offset_val = value::encode_f64(match_start as f64);
-    memory
-        .write(
-            &mut *caller,
-            (shadow_sp + arg_idx * 8) as usize,
-            &offset_val.to_le_bytes(),
-        )
-        .unwrap();
-    arg_idx += 1;
-
-    // 4. original string
-    let string_val = store_runtime_string(&*caller, s.to_string());
-    memory
-        .write(
-            &mut *caller,
-            (shadow_sp + arg_idx * 8) as usize,
-            &string_val.to_le_bytes(),
-        )
-        .unwrap();
-    arg_idx += 1;
-
-    // 5. named groups object
-    memory
-        .write(
-            &mut *caller,
-            (shadow_sp + arg_idx * 8) as usize,
-            &named_groups_obj.to_le_bytes(),
-        )
-        .unwrap();
-
-    // 调用函数（async）
-    let result = resolve_and_call_async(
-        caller,
-        func,
-        value::encode_undefined(),
-        0,
-        args_count as i32,
-    )
-    .await;
-
-    // 将返回值转换为字符串
-    get_string_value(caller, result)
+    let result = call_wasm_callback_async(caller, func, value::encode_undefined(), &args)
+        .await
+        .unwrap_or_else(|_| value::encode_undefined());
+    replace_callback_result_to_string(caller, result)
 }
 
 async fn string_replace_async_body(

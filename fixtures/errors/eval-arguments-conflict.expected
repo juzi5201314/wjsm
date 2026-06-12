@@ -1,4 +1,0 @@
-exit_code: 1
---- stdout ---
---- stderr ---
-Error: semantic lowering error [26..57]: cannot redeclare identifier `arguments` in the same scope

@@ -515,6 +515,31 @@ impl Lowerer {
                             "SyntaxError: new.target is not valid in arrow function eval",
                         ));
                     }
+                    if self.eval_scope_record {
+                        let env = self.load_eval_scope_env(block);
+                        let name_const = self
+                            .module
+                            .add_constant(Constant::String("__wjsm_new_target".to_string()));
+                        let name_val = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::Const {
+                                dest: name_val,
+                                constant: name_const,
+                            },
+                        );
+                        let dest = self.alloc_value();
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: Some(dest),
+                                builtin: Builtin::EvalGetBinding,
+                                args: vec![env, name_val],
+                            },
+                        );
+                        return Ok(dest);
+                    }
+
                     let dest = self.alloc_value();
                     // dummy 参数是 NewTarget host builtin 的签名要求（expects 1 dummy arg），移除会导致 runtime error。
                     // 真正的 '0' / mismatch 问题在 Construct/Call 时的 NewTargetSet 动态状态或 initial value，需在 compiler_instructions 修复。
@@ -1077,6 +1102,7 @@ impl Lowerer {
         self.emit_hoisted_var_initializers(m_entry);
 
         let m_entry = self.emit_arguments_init(m_entry)?;
+        self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 
         // 降低方法体
         let mut m_flow = StmtFlow::Open(m_entry);
@@ -1196,6 +1222,7 @@ impl Lowerer {
         let body_entry = self.emit_param_inits(&function.params, &param_ir_names, entry)?;
 
         let body_entry = self.emit_arguments_init(body_entry)?;
+        self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 
         let mut inner_flow = StmtFlow::Open(body_entry);
         if let Some(body) = &function.body {
@@ -1392,30 +1419,41 @@ impl Lowerer {
             },
         );
 
-        // 遍历元素：对每个元素 push 到数组
+        // 遍历元素：普通元素 push；spread 元素按 iterator 协议展开。
         for elem in &arr.elems {
-            let val = match elem {
-                Some(elem) => self.lower_expr(&elem.expr, block)?,
-                None => {
-                    // 稀疏数组的空位 → undefined
-                    let undef_const = self.module.add_constant(Constant::Undefined);
-                    let val_dest = self.alloc_value();
-                    self.current_function.append_instruction(
-                        block,
-                        Instruction::Const {
-                            dest: val_dest,
-                            constant: undef_const,
-                        },
-                    );
-                    val_dest
-                }
+            let Some(elem) = elem else {
+                // 稀疏数组的空位 → undefined
+                let undef_const = self.module.add_constant(Constant::Undefined);
+                let val_dest = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: val_dest,
+                        constant: undef_const,
+                    },
+                );
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CallBuiltin {
+                        dest: None,
+                        builtin: Builtin::ArrayPush,
+                        args: vec![arr_dest, val_dest],
+                    },
+                );
+                continue;
             };
-            // 使用 CallBuiltin(ArrayPush) 添加元素（同时自动更新 length）
+
+            let val = self.lower_expr(&elem.expr, block)?;
+            let builtin = if elem.spread.is_some() {
+                Builtin::ArrayPushSpread
+            } else {
+                Builtin::ArrayPush
+            };
             self.current_function.append_instruction(
                 block,
                 Instruction::CallBuiltin {
                     dest: None,
-                    builtin: Builtin::ArrayPush,
+                    builtin,
                     args: vec![arr_dest, val],
                 },
             );
