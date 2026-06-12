@@ -1,9 +1,9 @@
 # Known Bugs
 
-## A2: call_sync_iter_and_wrap exception handling causes hang
+## A2: call_sync_iter_and_wrap exception handling
 
-**Status**: Unresolved  
-**Severity**: P1 (blocking)  
+**Status**: Partially fixed (no hang; sync `for await` on custom `@@iterator` still incorrect)  
+**Severity**: P1  
 **Date**: 2026-06-12
 
 ### Description
