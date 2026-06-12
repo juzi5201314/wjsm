@@ -5,7 +5,7 @@ module {
     c2 = number(inf)
     c3 = bigint(123)
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

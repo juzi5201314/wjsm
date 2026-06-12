@@ -6,7 +6,7 @@ use thiserror::Error;
 use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, ConstantId, Function,
     FunctionId, HomeObject, Instruction, Module, PhiSource, Program, SwitchCaseTarget, Terminator,
-    UnaryOp, ValueId,
+    UnaryOp, ValueId, MODULE_ENTRY_IR_NAME,
 };
 
 const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
@@ -1202,7 +1202,7 @@ pub fn lower_modules(
     } else {
         let has_eval = lowerer.current_function.has_eval();
         let blocks = lowerer.current_function.into_blocks();
-        let mut function = Function::new("main", BasicBlockId(0));
+        let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
         function.set_has_eval(has_eval);
         for block in blocks {
             function.push_block(block);

@@ -907,6 +907,14 @@ impl fmt::Display for ModuleId {
         write!(f, "mod{}", self.0)
     }
 }
+/// 合成模块顶层入口的 IR 函数名（与用户声明的 `main` 区分，避免 wasm 入口约定冲突）。
+pub const MODULE_ENTRY_IR_NAME: &str = "$module_main";
+
+/// 是否为编译器合成的模块入口函数（非用户 `function main()`）。
+pub fn is_module_entry_ir_function(name: &str) -> bool {
+    name == MODULE_ENTRY_IR_NAME
+}
+
 
 /// Import 绑定信息（用于模块系统）
 #[derive(Debug, Clone, PartialEq, Eq)]

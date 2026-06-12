@@ -148,7 +148,7 @@ module {
       %15 = call builtin.exception_value(%13)
       throw %15
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

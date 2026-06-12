@@ -101,7 +101,7 @@ impl Compiler {
             self.function_param_counts.push(declared_param_count);
             self.function_names.push(function.name().to_string());
 
-            if function.name() == "main" {
+            if is_module_entry_ir_function(function.name()) {
                 if self.mode == CompileMode::Eval {
                     // eval entry: Type 3 = (scope_env: i64) -> i64 completion value
                     self.functions.function(3);
@@ -121,7 +121,7 @@ impl Compiler {
         }
 
         // Add main export (must be known now).
-        let main_idx = main_wasm_idx.context("backend-wasm expects lowered `main` function")?;
+        let main_idx = main_wasm_idx.context("backend-wasm expects lowered module entry function")?;
         if self.mode == CompileMode::Eval {
             self.exports
                 .export("__eval_entry", ExportKind::Func, main_idx);
@@ -285,7 +285,7 @@ impl Compiler {
         // Record user function base index (after all imports + helpers)
         self.user_func_base_idx = self._next_import_func;
         for (function_id, function) in module.functions().iter().enumerate() {
-            if function.name() == "main" {
+            if is_module_entry_ir_function(function.name()) {
                 self.compile_function(module, function)?;
             } else {
                 self.compile_js_function(
@@ -531,7 +531,7 @@ impl Compiler {
         module: &IrModule,
         function: &IrFunction,
     ) -> Result<()> {
-        self.current_func_is_main = function.name() == "main";
+        self.current_func_is_main = is_module_entry_ir_function(function.name());
         self.current_func_returns_value =
             self.mode == CompileMode::Eval || self.current_func_is_main;
         self.ssa_local_base = if self.mode == CompileMode::Eval {
@@ -573,7 +573,7 @@ impl Compiler {
         // 预分配函数属性对象：为每个 IR 函数调用 $obj_new(8)，将返回的 handle_idx
         // 对应 obj_table[0..num_functions-1]，存储函数属性对象的 ptr。
         // 这样后续 GetProp/SetProp 可以通过 obj_table 统一查找。
-        if function.name() == "main" {
+        if is_module_entry_ir_function(function.name()) {
             let length_name_id = self.intern_data_string("length");
             let name_name_id = self.intern_data_string("name");
             let box_base = value::BOX_BASE as i64;

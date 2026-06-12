@@ -42,7 +42,7 @@ module {
       %6 = call builtin.abstract_compare(%5, %4)
       return %6
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

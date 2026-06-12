@@ -61,7 +61,7 @@ path for for-await, not in an IR fork.
 
 ## C1: user-defined `main` collides with synthesized module entry → wasm validation fail
 
-**Status**: OPEN (pre-existing; root-caused 2026-06-12 while fixing A2 — unrelated to A2)
+**Status**: ✅ RESOLVED (2026-06-12)
 **Severity**: P1
 
 ### Symptom
@@ -86,12 +86,9 @@ as `"main"`/`"__eval_entry"`. A user-declared `main` produces a second IR functi
 same name, so the backend treats it as the entry (i32 signature) while its JS call sites use
 the normal i64 calling convention → signature/type mismatch.
 
-### Fix direction
+### Fix (2026-06-12)
 
-Give the synthesized entry a name that cannot collide with a user identifier (e.g.
-`$module_main` / a reserved sigil) and update the backend's `name() == "main"` checks +
-export name accordingly; or rename user `main` declarations during lowering. Verify with
-`async function main(){await Promise.resolve(1)} main();` and full
-`cargo test --release --workspace`.
+Synthesized module entry IR name is `$module_main` (`MODULE_ENTRY_IR_NAME` / `is_module_entry_ir_function()`). Wasm export remains `main` / `__eval_entry`. Fixtures: `fixtures/happy/user_main_async.js`, `user_main_sync.js`.
+
 
 

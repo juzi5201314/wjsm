@@ -1,4 +1,4 @@
-use wjsm_ir::{
+use wjsm_ir::{MODULE_ENTRY_IR_NAME, 
     BasicBlock, BasicBlockId, BinaryOp, Builtin, Constant, Function, Instruction, Module,
     PhiSource, SwitchCaseTarget, Terminator, ValueId,
 };
@@ -9,7 +9,7 @@ fn textual_dump_includes_constants_blocks_and_builtin_calls() {
     let left = module.add_constant(Constant::Number(1.0));
     let right = module.add_constant(Constant::String("hello".to_string()));
 
-    let mut function = Function::new("main", BasicBlockId(0));
+    let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
     let mut entry = BasicBlock::new(BasicBlockId(0));
     entry.set_terminator(Terminator::Return { value: None });
     entry.push_instruction(Instruction::Const {
@@ -40,7 +40,7 @@ module {
     c0 = number(1)
     c1 = string(\"hello\")
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       %1 = const c1
@@ -59,7 +59,7 @@ fn textual_dump_includes_load_store_undefined() {
     let undef = module.add_constant(Constant::Undefined);
     let one = module.add_constant(Constant::Number(1.0));
 
-    let mut function = Function::new("main", BasicBlockId(0));
+    let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
     let mut entry = BasicBlock::new(BasicBlockId(0));
     entry.set_terminator(Terminator::Return { value: None });
     // let x; (implicit undefined)
@@ -108,7 +108,7 @@ module {
     c0 = undefined
     c1 = number(1)
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       store var x, %0
@@ -131,7 +131,7 @@ fn textual_dump_includes_multi_block_cfg() {
     let cond = module.add_constant(Constant::Bool(true));
     let one = module.add_constant(Constant::Number(1.0));
 
-    let mut function = Function::new("main", BasicBlockId(0));
+    let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
     let mut entry = BasicBlock::new(BasicBlockId(0));
     entry.push_instruction(Instruction::Const {
         dest: ValueId(0),
@@ -172,7 +172,7 @@ module {
     c0 = bool(true)
     c1 = number(1)
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       branch %0, bb1, bb2
@@ -195,7 +195,7 @@ fn textual_dump_includes_phi_sources() {
     let left = module.add_constant(Constant::Number(1.0));
     let right = module.add_constant(Constant::Number(2.0));
 
-    let mut function = Function::new("main", BasicBlockId(0));
+    let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
     let mut left_block = BasicBlock::new(BasicBlockId(0));
     left_block.push_instruction(Instruction::Const {
         dest: ValueId(0),
@@ -243,7 +243,7 @@ module {
     c0 = number(1)
     c1 = number(2)
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       jump bb2
@@ -266,7 +266,7 @@ fn textual_dump_includes_switch_terminator() {
     let one = module.add_constant(Constant::Number(1.0));
     let two = module.add_constant(Constant::Number(2.0));
 
-    let mut function = Function::new("main", BasicBlockId(0));
+    let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
     let mut entry = BasicBlock::new(BasicBlockId(0));
     entry.push_instruction(Instruction::Const {
         dest: ValueId(0),
@@ -317,7 +317,7 @@ module {
     c1 = number(1)
     c2 = number(2)
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       switch %0 [case c1 -> bb1, case c2 -> bb2], default bb3, exit bb4
@@ -340,7 +340,7 @@ fn textual_dump_includes_throw_terminator() {
     let mut module = Module::new();
     let message = module.add_constant(Constant::String("boom".to_string()));
 
-    let mut function = Function::new("main", BasicBlockId(0));
+    let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
     let mut entry = BasicBlock::new(BasicBlockId(0));
     entry.push_instruction(Instruction::Const {
         dest: ValueId(0),
@@ -355,7 +355,7 @@ module {
   constants:
     c0 = string(\"boom\")
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       throw %0
