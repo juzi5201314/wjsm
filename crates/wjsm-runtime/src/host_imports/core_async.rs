@@ -225,6 +225,20 @@ pub(crate) fn define_core_async(
     }
 
     async fn iterator_next_async(caller: &mut Caller<'_, RuntimeState>, handle: i64) -> i64 {
+        // for-await 的迭代器句柄可能是 GetIterator(obj, async) 同步抛出的 TAG_EXCEPTION
+        // （@@asyncIterator / @@iterator 非可调用、async-from-sync 构造失败等）。将其转为
+        // rejected promise：await 该 promise 时走 is_rejected → emit_throw_value，可被
+        // for-await 外层 try/catch 捕获，否则 reject 当前 async 函数 promise。这复用了
+        // 循环既有的 suspend/resume 拒绝路径（与下方 A3 同步抛出处理一致），避免在异步函数
+        // 体内插入 IsException 控制流分叉——那会产生跨状态机段的 catch 入边，被 relooper
+        // 误编译。同步 for-of 永不会把 TAG_EXCEPTION 传入此处（IteratorFrom 总返回
+        // TAG_ITERATOR/Error），故此保护不影响同步迭代。
+        if value::is_exception(handle) {
+            let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
+            let reason = exception_reason(caller, handle);
+            settle_promise(caller.data(), promise, PromiseSettlement::Reject(reason));
+            return promise;
+        }
         let handle_idx = value::decode_handle(handle) as usize;
         if let Some(afs_handle) = {
             let table = caller

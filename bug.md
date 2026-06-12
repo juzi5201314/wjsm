@@ -1,61 +1,97 @@
 # Known Bugs
 
-## A2: call_sync_iter_and_wrap exception handling
+## A2: for-await GetIterator exceptions not catchable
 
-**Status**: Partially fixed (no hang; sync `for await` on custom `@@iterator` still incorrect)  
-**Severity**: P1  
-**Date**: 2026-06-12
+**Status**: ✅ RESOLVED (2026-06-12)
+**Severity**: P1
 
-### Description
+### Symptom (before fix)
 
-Attempting to fix `call_sync_iter_and_wrap` (async-from-sync iterator adapter) to properly reject promises when the underlying sync iterator's `next()` throws synchronously causes the test to hang indefinitely.
+`for await...of` over an iterable whose async/sync iterator acquisition throws
+synchronously (`@@asyncIterator`/`@@iterator` non-callable, or the iterator method
+returns a non-object / object without callable `next`) printed an unbounded run of
+`undefined` and never ran the surrounding `try/catch` or the function's
+`.then`/`.catch`. Failing fixtures: `errors/for_await_non_callable_sync_iterator`,
+`errors/for_await_non_callable_async_iterator`.
 
-### Location
+### Root cause
 
-`crates/wjsm-runtime/src/runtime_builtins.rs:2197-2261`
+Two layers, both off-spec:
 
-### Attempted Fix
+1. **`async_iterator_from` fallthrough** (`crates/wjsm-runtime/src/lib.rs`) returned a
+   *bare* `create_error_object(...)` (a normal `TAG_OBJECT` handle) instead of a
+   catchable `TAG_EXCEPTION` when GetIterator(obj, async) failed.
+2. **`iterator_next_async`** (`crates/wjsm-runtime/src/host_imports/core_async.rs`)
+   did not recognise a `TAG_EXCEPTION` iterator handle: `decode_handle` indexed the
+   iterator table with the error-table index, missed, and returned `undefined` — so
+   the for-await loop spun on `{value: undefined, done: undefined}` and its
+   continuation never completed.
 
-```rust
-let raw_result = tokio::task::block_in_place(|| {
-    tokio::runtime::Handle::current().block_on(async {
-        call_iterator_method_async(caller, method_to_call, iterator, call_arg).await
-    })
-});
+The runtime's `GetMethod` (added in 096155f) *did* correctly return `TAG_EXCEPTION`
+for the non-callable cases; the "symbol key reading" suspicion in that commit was a
+misdiagnosis — the exception was produced but then silently consumed downstream.
 
-// Check if next()/return() threw synchronously (TAG_EXCEPTION)
-if value::is_exception(raw_result) {
-    let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
-    let reason = exception_reason(caller, raw_result);
-    settle_promise(
-        caller.data(),
-        promise,
-        PromiseSettlement::Reject(reason),
-    );
-    return promise;
-}
-```
+### Fix
+
+Route the `TAG_EXCEPTION` iterator handle through the for-await loop's **existing
+suspend/resume rejection path** rather than inventing a new control-flow path:
+
+- `async_iterator_from` fallthrough now returns `make_type_error_exception(...)`.
+- `iterator_next_async` converts a `TAG_EXCEPTION` handle into a **rejected promise**
+  at entry (same shape as the A3 sync-throw path). `await` of that promise hits
+  `is_rejected` → `emit_throw_value`, which the loop's `try/catch` catches (else it
+  rejects the async function's own promise — so `.then`/`.catch` chains complete).
+
+Safe for sync `for...of`: sync `IteratorFrom` never yields `TAG_EXCEPTION` (always a
+`TAG_ITERATOR`/`Error` handle), so the new guard never fires there.
+
+### Rejected approach (important)
+
+Adding a semantic-layer `IsException` fork after `AsyncIteratorFrom` in
+`lower_for_await_of` (via `lower_value_exception_branch`) **regresses**
+`for_await_sync_iter_throw` / `for_await_next_throws`. The fork's exception arm jumps
+to the shared `catch_entry` from the **entry state-machine segment**, while the
+in-loop rejection path reaches the same `catch_entry` from a **resume segment**; the
+wasm relooper miscompiles this cross-segment edge (the catch body becomes unreachable
+from the resume path). This is the hazard behind `expr_exception_fork_allowed()`
+returning `false` inside async bodies — keep exception handling in the runtime/resume
+path for for-await, not in an IR fork.
+
+---
+
+## C1: user-defined `main` collides with synthesized module entry → wasm validation fail
+
+**Status**: OPEN (pre-existing; root-caused 2026-06-12 while fixing A2 — unrelated to A2)
+**Severity**: P1
 
 ### Symptom
 
-- Test hangs indefinitely (requires timeout to kill)
-- Likely caused by async-from-sync iterator state machine entering infinite loop
-- May be related to `advance_async_from_sync` done flag handling or promise chain recursion
+A function **declaration** named `main` (async or sync) miscompiles:
+```js
+async function main(){ await Promise.resolve(1); } main();   // WASM-FAIL
+function main(){ console.log("hi"); } main();                // WASM-FAIL
+```
+`run` reports `WASM validation failed ... type mismatch: expected i32, found i64`.
+Renaming to anything else works (`notmain`, `run`, …); `const main = async()=>{}` also
+works (only `function`-declaration `main` collides). Deterministic; identical wasm bytes.
+Note `build` emits the (invalid) wasm without complaint — only `run`/`validate` catches it.
 
-### Investigation Required
+### Root cause
 
-1. Trace async-from-sync iterator state machine flow when exception is converted to rejected promise
-2. Check if `advance_async_from_sync` correctly handles rejected promises in the iterator result chain
-3. Verify promise settlement doesn't cause re-entry into the same code path
-4. Consider if sync exception → rejected promise → await → throw path creates cycle
+The module top-level entry is synthesized as an IR function literally named `"main"`
+(`lowerer_core.rs:17,796`, `lib.rs:1205`, async wrapper `lowerer_async_eval.rs:962`). The
+wasm backend identifies the entry purely by `function.name() == "main"`
+(`compiler_module.rs:104,288,534,576`) to apply the entry calling-convention and export it
+as `"main"`/`"__eval_entry"`. A user-declared `main` produces a second IR function with the
+same name, so the backend treats it as the entry (i32 signature) while its JS call sites use
+the normal i64 calling convention → signature/type mismatch.
 
-### Original Report Context
+### Fix direction
 
-From `report.md` (now deleted):
-- Report claimed: sync `next()` returning `TAG_EXCEPTION` is wrapped as `{done: true, value}` and resolved instead of rejected
-- Expected: exception should be catchable in `for await...of` try/catch
-- The fix logic appears correct but triggers a runtime hang
+Give the synthesized entry a name that cannot collide with a user identifier (e.g.
+`$module_main` / a reserved sigil) and update the backend's `name() == "main"` checks +
+export name accordingly; or rename user `main` declarations during lowering. Verify with
+`async function main(){await Promise.resolve(1)} main();` and full
+`cargo test --release --workspace`.
 
-### Workaround
 
-Currently skipped. Other async iterator exception paths (A3: async iterator next() throws, A4: spread iterator throws) have been fixed successfully using similar patterns.
