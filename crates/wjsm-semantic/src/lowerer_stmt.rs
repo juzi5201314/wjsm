@@ -17,7 +17,7 @@ impl Lowerer {
                 swc_ast::Decl::TsEnum(ts_enum) => self.lower_ts_enum(ts_enum, flow),
                 swc_ast::Decl::TsModule(ts_module) => self.lower_ts_module(ts_module, flow),
                 swc_ast::Decl::Using(using_decl) => self.lower_using_decl(using_decl, flow),
-                #[allow(unreachable_patterns)]
+                
                 _ => Err(self.error(
                     stmt.span(),
                     format!("unsupported declaration kind `{}`", decl_kind(decl)),
@@ -268,7 +268,7 @@ impl Lowerer {
         Ok(has_else)
     }
 
-    #[allow(clippy::too_many_arguments)]
+    
     pub(crate) fn merge_eval_completion_after_if(
         &mut self,
         merge: BasicBlockId,

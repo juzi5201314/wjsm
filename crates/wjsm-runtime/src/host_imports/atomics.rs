@@ -69,10 +69,7 @@ pub(crate) fn define_atomics(
             }
         };
         let index =
-            match typedarray_to_index(caller, index_val, "RangeError: Invalid typed array index") {
-                Some(i) => i,
-                None => return None,
-            };
+            typedarray_to_index(caller, index_val, "RangeError: Invalid typed array index")?;
         if (index as u32) >= entry.length {
             set_typedarray_runtime_error(caller, "RangeError: Invalid typed array index");
             return None;
@@ -96,10 +93,7 @@ pub(crate) fn define_atomics(
         index_val: i64,
     ) -> Option<(usize, u8, u8, usize)> {
         let (byte_offset, elem_size, element_kind, buf_handle, is_shared) =
-            match prepare_atomics_access(caller, this_val, index_val) {
-                Some(v) => v,
-                None => return None,
-            };
+            prepare_atomics_access(caller, this_val, index_val)?;
         if !is_shared {
             set_runtime_error(
                 caller.data(),
@@ -1068,7 +1062,7 @@ pub(crate) fn define_atomics(
                 current == expected_val
             };
             if !equal {
-                let s = store_runtime_string(&mut caller, "not-equal".to_string());
+                let s = store_runtime_string(&caller, "not-equal".to_string());
                 return Box::new(async move { s });
             }
             let tmo = if value::is_undefined(timeout_val) {
@@ -1079,14 +1073,14 @@ pub(crate) fn define_atomics(
                 0.0
             };
             if tmo <= 0.0 {
-                let s = store_runtime_string(&mut caller, "timed-out".to_string());
+                let s = store_runtime_string(&caller, "timed-out".to_string());
                 return Box::new(async move { s });
             }
             // enqueue for blocking wait (promise=None for sync wait path)
             let shared = match caller.data().shared_state.clone() {
                 Some(s) => s,
                 None => {
-                    let s = store_runtime_string(&mut caller, "timed-out".to_string());
+                    let s = store_runtime_string(&caller, "timed-out".to_string());
                     return Box::new(async move { s });
                 }
             };
@@ -1157,7 +1151,7 @@ pub(crate) fn define_atomics(
                 count,
             );
             for pr in promises {
-                let ok_str = store_runtime_string(&mut caller, "ok".to_string());
+                let ok_str = store_runtime_string(&caller, "ok".to_string());
                 settle_promise(caller.data_mut(), pr, PromiseSettlement::Fulfill(ok_str));
             }
             value::encode_f64(woken as f64)
@@ -1221,7 +1215,7 @@ pub(crate) fn define_atomics(
                     value::encode_bool(false),
                 );
                 let status = if !equal { "not-equal" } else { "timed-out" };
-                let status_str = store_runtime_string(&mut caller, status.to_string());
+                let status_str = store_runtime_string(&caller, status.to_string());
                 let _ =
                     define_host_data_property_from_caller(&mut caller, result, "value", status_str);
                 return result;

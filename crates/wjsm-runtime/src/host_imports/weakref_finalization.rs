@@ -50,7 +50,7 @@ pub(crate) fn define_weakref_finalization(
          -> i64 {
             if args_count < 1 {
                 let msg_val = store_runtime_string(
-                    &mut caller,
+                    &caller,
                     "TypeError: WeakRef constructor requires a target argument".to_string(),
                 );
                 let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
@@ -60,7 +60,7 @@ pub(crate) fn define_weakref_finalization(
             // Validate: target must be a JS object (per spec, Type(target) must be Object)
             if !value::is_js_object(target) {
                 let msg_val = store_runtime_string(
-                    &mut caller,
+                    &caller,
                     "TypeError: WeakRef: target must be an object".to_string(),
                 );
                 let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
@@ -72,7 +72,7 @@ pub(crate) fn define_weakref_finalization(
                 None => {
                     // If handle resolution fails, target is not a heap-allocated object
                     let msg_val = store_runtime_string(
-                        &mut caller,
+                        &caller,
                         "TypeError: WeakRef: cannot resolve target handle".to_string(),
                     );
                     let error_obj = create_error_object(&mut caller, "TypeError", msg_val);

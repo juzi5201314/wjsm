@@ -230,7 +230,7 @@ enum Commands {
 // ============================================================================
 
 struct PipelineResult {
-    #[allow(dead_code)]
+    
     source: Option<String>,
     ast: Option<swc_core::ecma::ast::Module>,
     program: Option<Program>,

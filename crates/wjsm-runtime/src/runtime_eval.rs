@@ -195,7 +195,7 @@ pub(crate) fn reserve_eval_data_segment(
         if need_end <= mem_len {
             break;
         }
-        let grow_pages = ((need_end - mem_len + page_size - 1) / page_size).max(1) as u64;
+        let grow_pages = (need_end - mem_len).div_ceil(page_size).max(1) as u64;
         memory
             .grow(&mut *caller, grow_pages)
             .map_err(|e| anyhow::anyhow!("eval memory grow failed: {e}"))?;

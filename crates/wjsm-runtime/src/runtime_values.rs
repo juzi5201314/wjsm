@@ -667,7 +667,7 @@ pub(crate) fn enumerate_object_keys(
 
 /// 分配描述符对象，用于 Object.getOwnPropertyDescriptor 返回值
 /// 对象格式：header(16 bytes) + 4 slots * 32 bytes = 144 bytes
-#[allow(clippy::too_many_arguments)]
+
 pub(crate) fn allocate_descriptor_object(
     caller: &mut Caller<'_, RuntimeState>,
     is_accessor: bool,

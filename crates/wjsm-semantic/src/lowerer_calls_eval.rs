@@ -271,8 +271,8 @@ impl Lowerer {
                         {
                             // 特殊优化: Object.prototype.toString.call(obj) → CallBuiltin(ObjectProtoToString, obj)
                             // 跳过运行时原型链查找
-                            if matches!(func_builtin, Builtin::FuncCall) {
-                                if let Some(object_proto_builtin) =
+                            if matches!(func_builtin, Builtin::FuncCall)
+                                && let Some(object_proto_builtin) =
                                     self.is_object_proto_method_access(&member_expr.obj)
                                 {
                                     // Object.prototype.toString.call(thisArg) → ObjectProtoToString(thisArg)
@@ -302,7 +302,6 @@ impl Lowerer {
                                     );
                                     return Ok(dest);
                                 }
-                            }
 
                             let func_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![func_val];
@@ -1077,13 +1076,13 @@ impl Lowerer {
     /// 用于优化 Function.prototype.call 调用模式
     fn is_object_proto_method_access(&self, expr: &swc_ast::Expr) -> Option<Builtin> {
         // 检测模式: Object.prototype.toString 或 Object.prototype.valueOf
-        if let swc_ast::Expr::Member(outer_member) = expr {
-            if let swc_ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
-                if let swc_ast::Expr::Ident(obj_ident) = inner_member.obj.as_ref() {
-                    if obj_ident.sym.as_ref() == "Object" {
-                        if let swc_ast::MemberProp::Ident(proto_prop) = &inner_member.prop {
-                            if proto_prop.sym.as_ref() == "prototype" {
-                                if let swc_ast::MemberProp::Ident(method_prop) = &outer_member.prop
+        if let swc_ast::Expr::Member(outer_member) = expr
+            && let swc_ast::Expr::Member(inner_member) = outer_member.obj.as_ref()
+                && let swc_ast::Expr::Ident(obj_ident) = inner_member.obj.as_ref()
+                    && obj_ident.sym.as_ref() == "Object"
+                        && let swc_ast::MemberProp::Ident(proto_prop) = &inner_member.prop
+                            && proto_prop.sym.as_ref() == "prototype"
+                                && let swc_ast::MemberProp::Ident(method_prop) = &outer_member.prop
                                 {
                                     return match method_prop.sym.as_str() {
                                         "toString" => Some(Builtin::ObjectProtoToString),
@@ -1091,12 +1090,6 @@ impl Lowerer {
                                         _ => None,
                                     };
                                 }
-                            }
-                        }
-                    }
-                }
-            }
-        }
         None
     }
 }

@@ -791,43 +791,32 @@ fn require_in_fn_expr_body_is_transformed() {
     let fn_body_ok = transformed.body.iter().any(|item| {
         if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Var(var))) = item {
             for decl in &var.decls {
-                if let ast::Pat::Ident(binding) = &decl.name {
-                    if binding.id.sym == "fn" {
-                        if let Some(ast::Expr::Fn(f)) = decl.init.as_deref() {
-                            if let Some(body) = &f.function.body {
+                if let ast::Pat::Ident(binding) = &decl.name
+                    && binding.id.sym == "fn"
+                        && let Some(ast::Expr::Fn(f)) = decl.init.as_deref()
+                            && let Some(body) = &f.function.body {
                                 // 检查函数体内是否有 var decl
                                 for stmt in &body.stmts {
                                     if let ast::Stmt::Decl(ast::Decl::Var(v)) = stmt {
                                         for d in &v.decls {
-                                            if let ast::Pat::Ident(b) = &d.name {
-                                                if b.id.sym == "x" {
+                                            if let ast::Pat::Ident(b) = &d.name
+                                                && b.id.sym == "x" {
                                                     // 如果有 const x = ...，检查初始化器不是 require()
-                                                    if let Some(init) = &d.init {
-                                                        if let ast::Expr::Call(call) = init.as_ref()
-                                                        {
-                                                            if let ast::Callee::Expr(callee) =
+                                                    if let Some(init) = &d.init
+                                                        && let ast::Expr::Call(call) = init.as_ref()
+                                                            && let ast::Callee::Expr(callee) =
                                                                 &call.callee
-                                                            {
-                                                                if let ast::Expr::Ident(id) =
+                                                                && let ast::Expr::Ident(id) =
                                                                     callee.as_ref()
-                                                                {
-                                                                    if id.sym == "require" {
+                                                                    && id.sym == "require" {
                                                                         return false; // require() 未被转换
                                                                     }
-                                                                }
-                                                            }
-                                                        }
-                                                    }
                                                 }
-                                            }
                                         }
                                     }
                                 }
                                 return true; // 没有 require() 调用
                             }
-                        }
-                    }
-                }
             }
         }
         false
@@ -858,34 +847,26 @@ fn require_in_fn_decl_body_is_transformed() {
 
     // 验证函数声明体内没有 require() 调用
     let fn_body_ok = transformed.body.iter().any(|item| {
-        if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(fn_decl))) = item {
-            if fn_decl.ident.sym == "fn" {
-                if let Some(body) = &fn_decl.function.body {
+        if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Fn(fn_decl))) = item
+            && fn_decl.ident.sym == "fn"
+                && let Some(body) = &fn_decl.function.body {
                     for stmt in &body.stmts {
                         if let ast::Stmt::Decl(ast::Decl::Var(v)) = stmt {
                             for d in &v.decls {
-                                if let ast::Pat::Ident(b) = &d.name {
-                                    if b.id.sym == "x" {
-                                        if let Some(init) = &d.init {
-                                            if let ast::Expr::Call(call) = init.as_ref() {
-                                                if let ast::Callee::Expr(callee) = &call.callee {
-                                                    if let ast::Expr::Ident(id) = callee.as_ref() {
-                                                        if id.sym == "require" {
+                                if let ast::Pat::Ident(b) = &d.name
+                                    && b.id.sym == "x"
+                                        && let Some(init) = &d.init
+                                            && let ast::Expr::Call(call) = init.as_ref()
+                                                && let ast::Callee::Expr(callee) = &call.callee
+                                                    && let ast::Expr::Ident(id) = callee.as_ref()
+                                                        && id.sym == "require" {
                                                             return false;
                                                         }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
                             }
                         }
                     }
                     return true;
                 }
-            }
-        }
         false
     });
     assert!(
@@ -916,42 +897,32 @@ fn require_in_class_method_body_is_transformed() {
 
     // 验证类方法体内没有 require() 调用
     let method_body_ok = transformed.body.iter().any(|item| {
-        if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(class_decl))) = item {
-            if class_decl.ident.sym == "MyClass" {
+        if let ast::ModuleItem::Stmt(ast::Stmt::Decl(ast::Decl::Class(class_decl))) = item
+            && class_decl.ident.sym == "MyClass" {
                 for member in &class_decl.class.body {
-                    if let ast::ClassMember::Method(method) = member {
-                        if let Some(body) = &method.function.body {
+                    if let ast::ClassMember::Method(method) = member
+                        && let Some(body) = &method.function.body {
                             for stmt in &body.stmts {
                                 if let ast::Stmt::Decl(ast::Decl::Var(v)) = stmt {
                                     for d in &v.decls {
-                                        if let ast::Pat::Ident(b) = &d.name {
-                                            if b.id.sym == "x" {
-                                                if let Some(init) = &d.init {
-                                                    if let ast::Expr::Call(call) = init.as_ref() {
-                                                        if let ast::Callee::Expr(callee) =
+                                        if let ast::Pat::Ident(b) = &d.name
+                                            && b.id.sym == "x"
+                                                && let Some(init) = &d.init
+                                                    && let ast::Expr::Call(call) = init.as_ref()
+                                                        && let ast::Callee::Expr(callee) =
                                                             &call.callee
-                                                        {
-                                                            if let ast::Expr::Ident(id) =
+                                                            && let ast::Expr::Ident(id) =
                                                                 callee.as_ref()
-                                                            {
-                                                                if id.sym == "require" {
+                                                                && id.sym == "require" {
                                                                     return false;
                                                                 }
-                                                            }
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
                                     }
                                 }
                             }
                             return true;
                         }
-                    }
                 }
             }
-        }
         false
     });
     assert!(

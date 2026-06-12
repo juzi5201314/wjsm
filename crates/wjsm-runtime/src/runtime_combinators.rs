@@ -195,10 +195,11 @@ pub(crate) fn handle_combinator_reaction<
     handler: i64,
     argument: i64,
 ) -> bool {
-    let (context, index, kind) = match {
+    let reaction = {
         let state = ctx.state_mut();
         combinator_reaction_record(state, handler)
-    } {
+    };
+    let (context, index, kind) = match reaction {
         Some(record) => record,
         None => return false,
     };
@@ -221,11 +222,11 @@ pub(crate) fn handle_combinator_reaction<
         finish_combinator_reaction(ctx, context);
         return true;
     }
-
-    let (_, result_array) = match {
+    let opened = {
         let state = ctx.state_mut();
         open_combinator_context(state, context)
-    } {
+    };
+    let (_, result_array) = match opened {
         Some(record) => record,
         None => {
             finish_combinator_reaction(ctx, context);

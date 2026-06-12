@@ -26,9 +26,9 @@ use crate::runtime_builtins::PromiseSettlement;
 use crate::runtime_microtask::{call_host_function_with_args_async, drain_microtasks_async};
 use crate::value;
 use crate::{RuntimeState, TimerEntry, WasmEnv};
-/// - SettleValue：简单值 settle（worker 可 Send 的数据）
-/// - Materialize：闭包仅在 scheduler owner 执行（&mut Store + &WasmEnv），可分配 runtime string/object；worker 永远不触碰 Store/heap
-/// AsyncOpCounter/Guard：Arc<AtomicUsize> + SeqCst，drop 时 underflow panic 防 leak。
+/// Async host completion sent on the scheduler channel.
+/// - SettleValue: simple value settle (worker can Send data)
+/// - Materialize: closure runs only on scheduler owner (&mut Store + &WasmEnv)
 pub(crate) enum AsyncHostCompletion {
     SettleValue {
         promise: i64,

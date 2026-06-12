@@ -66,7 +66,7 @@ pub(crate) async fn call_iterator_method_async(
             },
         ))
         .await
-        .unwrap_or_else(|| value::encode_undefined());
+        .unwrap_or_else(value::encode_undefined);
     }
     let args = if value::is_undefined(argument) {
         &[][..]

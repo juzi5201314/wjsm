@@ -1770,13 +1770,12 @@ fn process_replacement_from_captures(
                     i += 2;
                 }
                 '<' => {
-                    // $<name> → named capture group
                     if let Some(close_pos) = chars[i + 2..].iter().position(|&c| c == '>') {
                         let name: String = chars[i + 2..i + 2 + close_pos].iter().collect();
-                        if let Some((_, range)) = named.iter().find(|(n, _)| n == &name) {
-                            if let Some(r) = range {
-                                result.push_str(&s[r.clone()]);
-                            }
+                        if let Some((_, range)) = named.iter().find(|(n, _)| n == &name)
+                            && let Some(r) = range
+                        {
+                            result.push_str(&s[r.clone()]);
                         }
                         // 命名组不存在或未匹配 → 空字符串（ES 规范）
                         i += 3 + close_pos; // skip past $<name>
@@ -2049,7 +2048,7 @@ pub(crate) fn define_primitive_core_async(
     linker.func_wrap_async(
         "env",
         "string_replace",
-        |mut caller: Caller<'_, RuntimeState>, (receiver, search, replace): (i64, i64, i64)| {
+        |caller: Caller<'_, RuntimeState>, (receiver, search, replace): (i64, i64, i64)| {
             Box::new(
                 async move { string_replace_async_body(caller, receiver, search, replace).await },
             )

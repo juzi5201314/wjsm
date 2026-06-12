@@ -259,7 +259,7 @@ impl ScopeTree {
     /// Check that this variable is not `const` before reassignment.
     /// 注意：`lower_assign` 现在使用 `lookup_for_assign` 在一次遍历中同时完成
     /// const 检查和 scope 解析，此方法保留以供未来使用。
-    #[allow(dead_code)]
+    
     fn check_mutable(&self, name: &str) -> Result<(), String> {
         let mut cursor = self.current;
         loop {
@@ -410,7 +410,7 @@ impl FunctionBuilder {
         }
     }
 
-    #[allow(dead_code)]
+    
     fn finish(self) -> Function {
         let entry = self._entry;
         let mut function = Function::new(self._name, entry);
@@ -1484,8 +1484,8 @@ pub use eval_scan::eval_literal_binding_names;
 use eval_scan::*;
 /// 判断表达式是否为 TypedArray 构造函数调用（`new Int8Array(...)` 等形式）。
 fn is_typedarray_constructor_expr(expr: &swc_ast::Expr) -> bool {
-    if let swc_ast::Expr::New(new_expr) = expr {
-        if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+    if let swc_ast::Expr::New(new_expr) = expr
+        && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
             return matches!(
                 ident.sym.as_ref(),
                 "Int8Array"
@@ -1501,24 +1501,21 @@ fn is_typedarray_constructor_expr(expr: &swc_ast::Expr) -> bool {
                     | "BigUint64Array"
             );
         }
-    }
     false
 }
 /// 判断表达式是否为 SharedArrayBuffer 构造函数调用（`new SharedArrayBuffer(...)` 形式）。
 fn is_sharedarraybuffer_constructor_expr(expr: &swc_ast::Expr) -> bool {
-    if let swc_ast::Expr::New(new_expr) = expr {
-        if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+    if let swc_ast::Expr::New(new_expr) = expr
+        && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
             return ident.sym.as_ref() == "SharedArrayBuffer";
         }
-    }
     false
 }
 /// 判断表达式是否为 DataView 构造函数调用（`new DataView(...)` 形式）。
 fn is_dataview_constructor_expr(expr: &swc_ast::Expr) -> bool {
-    if let swc_ast::Expr::New(new_expr) = expr {
-        if let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
+    if let swc_ast::Expr::New(new_expr) = expr
+        && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
             return ident.sym.as_ref() == "DataView";
         }
-    }
     false
 }
