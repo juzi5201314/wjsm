@@ -1609,7 +1609,6 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                     settle_promise(caller.data(), promise, PromiseSettlement::Reject(argument));
                 }
             }
-            recycle_native_callable(caller.data(), callable);
             Some(value::encode_undefined())
         }
         NativeCallable::PromiseCombinatorReaction { .. } => Some(value::encode_undefined()),
@@ -2554,6 +2553,296 @@ pub(crate) fn fr_register_impl_with_args(
     }
     value::encode_undefined()
 }
+
+fn gc_mark_bit_set(mark_bits: &[u64], handle_idx: usize) -> bool {
+    let word_idx = handle_idx / 64;
+    let bit_idx = handle_idx % 64;
+    word_idx < mark_bits.len() && (mark_bits[word_idx] & (1u64 << bit_idx)) != 0
+}
+
+fn trace_continuation_entry(
+    caller: &mut Caller<'_, RuntimeState>,
+    cont_idx: usize,
+    obj_table_ptr: usize,
+    obj_table_count: usize,
+    num_ir_functions: usize,
+) {
+    let snapshot = {
+        let table = caller.data().continuation_table.lock().expect("continuation table mutex");
+        table.get(cont_idx).cloned()
+    };
+    let Some(entry) = snapshot else { return };
+    crate::runtime_heap::mark_runtime_value_recursive(
+        caller,
+        entry.outer_promise,
+        obj_table_ptr,
+        obj_table_count,
+        num_ir_functions,
+    );
+    for &v in &entry.captured_vars {
+        crate::runtime_heap::mark_runtime_value_recursive(
+            caller,
+            v,
+            obj_table_ptr,
+            obj_table_count,
+            num_ir_functions,
+        );
+    }
+}
+
+pub(crate) fn trace_runtime_side_table_roots_fixed_point(
+    caller: &mut Caller<'_, RuntimeState>,
+    obj_table_ptr: usize,
+    obj_table_count: usize,
+    num_ir_functions: usize,
+) {
+    loop {
+        let before: Vec<u64> = {
+            let mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits");
+            mark_bits.clone()
+        };
+
+        let microtasks = caller
+            .data()
+            .microtask_queue
+            .lock()
+            .expect("microtask queue mutex")
+            .clone();
+        for task in microtasks {
+            match task {
+                Microtask::PromiseReaction {
+                    promise,
+                    handler,
+                    argument,
+                    ..
+                } => {
+                    crate::runtime_heap::mark_runtime_value_recursive(
+                        caller,
+                        promise,
+                        obj_table_ptr,
+                        obj_table_count,
+                        num_ir_functions,
+                    );
+                    crate::runtime_heap::mark_runtime_value_recursive(
+                        caller,
+                        handler,
+                        obj_table_ptr,
+                        obj_table_count,
+                        num_ir_functions,
+                    );
+                    crate::runtime_heap::mark_runtime_value_recursive(
+                        caller,
+                        argument,
+                        obj_table_ptr,
+                        obj_table_count,
+                        num_ir_functions,
+                    );
+                }
+                Microtask::PromiseResolveThenable {
+                    promise,
+                    thenable,
+                    then,
+                } => {
+                    for v in [promise, thenable, then] {
+                        crate::runtime_heap::mark_runtime_value_recursive(
+                            caller,
+                            v,
+                            obj_table_ptr,
+                            obj_table_count,
+                            num_ir_functions,
+                        );
+                    }
+                }
+                Microtask::MicrotaskCallback { callback } => {
+                    crate::runtime_heap::mark_runtime_value_recursive(
+                        caller,
+                        callback,
+                        obj_table_ptr,
+                        obj_table_count,
+                        num_ir_functions,
+                    );
+                }
+                Microtask::TransformStreamTransform {
+                    callback,
+                    this_val,
+                    chunk,
+                    controller,
+                    write_promise,
+                } => {
+                    for v in [callback, this_val, chunk, controller, write_promise] {
+                        crate::runtime_heap::mark_runtime_value_recursive(
+                            caller,
+                            v,
+                            obj_table_ptr,
+                            obj_table_count,
+                            num_ir_functions,
+                        );
+                    }
+                }
+                Microtask::TransformStreamFlush {
+                    callback,
+                    this_val,
+                    controller,
+                    close_promise,
+                    ..
+                } => {
+                    if let Some(callback) = callback {
+                        crate::runtime_heap::mark_runtime_value_recursive(
+                            caller,
+                            callback,
+                            obj_table_ptr,
+                            obj_table_count,
+                            num_ir_functions,
+                        );
+                    }
+                    for v in [this_val, controller, close_promise] {
+                        crate::runtime_heap::mark_runtime_value_recursive(
+                            caller,
+                            v,
+                            obj_table_ptr,
+                            obj_table_count,
+                            num_ir_functions,
+                        );
+                    }
+                }
+                Microtask::AsyncResume {
+                    continuation,
+                    resume_val,
+                    ..
+                } => {
+                    crate::runtime_heap::mark_runtime_value_recursive(
+                        caller,
+                        continuation,
+                        obj_table_ptr,
+                        obj_table_count,
+                        num_ir_functions,
+                    );
+                    crate::runtime_heap::mark_runtime_value_recursive(
+                        caller,
+                        resume_val,
+                        obj_table_ptr,
+                        obj_table_count,
+                        num_ir_functions,
+                    );
+                    if value::is_object(continuation) {
+                        trace_continuation_entry(
+                            caller,
+                            value::decode_object_handle(continuation) as usize,
+                            obj_table_ptr,
+                            obj_table_count,
+                            num_ir_functions,
+                        );
+                    }
+                }
+                Microtask::CleanupFinalizationRegistry {
+                    callback,
+                    held_value,
+                } => {
+                    crate::runtime_heap::mark_runtime_value_recursive(
+                        caller,
+                        callback,
+                        obj_table_ptr,
+                        obj_table_count,
+                        num_ir_functions,
+                    );
+                    crate::runtime_heap::mark_runtime_value_recursive(
+                        caller,
+                        held_value,
+                        obj_table_ptr,
+                        obj_table_count,
+                        num_ir_functions,
+                    );
+                }
+            }
+        }
+
+        let promise_snapshot: Vec<(usize, PromiseEntry)> = {
+            let table = caller.data().promise_table.lock().expect("promise table mutex");
+            table
+                .iter()
+                .enumerate()
+                .filter(|(idx, e)| e.is_promise && gc_mark_bit_set(&before, *idx))
+                .map(|(idx, e)| (idx, e.clone()))
+                .collect()
+        };
+        for (handle_idx, entry) in promise_snapshot {
+            let _ = handle_idx;
+            match &entry.state {
+                PromiseState::Fulfilled(v) | PromiseState::Rejected(v) => {
+                    crate::runtime_heap::mark_runtime_value_recursive(
+                        caller,
+                        *v,
+                        obj_table_ptr,
+                        obj_table_count,
+                        num_ir_functions,
+                    );
+                }
+                PromiseState::Pending => {}
+            }
+            for reaction in entry
+                .fulfill_reactions
+                .iter()
+                .chain(entry.reject_reactions.iter())
+            {
+                match &reaction.kind {
+                    PromiseReactionKind::Normal { handler } => {
+                        crate::runtime_heap::mark_runtime_value_recursive(
+                            caller,
+                            reaction.target_promise,
+                            obj_table_ptr,
+                            obj_table_count,
+                            num_ir_functions,
+                        );
+                        crate::runtime_heap::mark_runtime_value_recursive(
+                            caller,
+                            *handler,
+                            obj_table_ptr,
+                            obj_table_count,
+                            num_ir_functions,
+                        );
+                    }
+                    PromiseReactionKind::AsyncResume { .. } => {
+                        if value::is_object(reaction.target_promise) {
+                            trace_continuation_entry(
+                                caller,
+                                value::decode_object_handle(reaction.target_promise) as usize,
+                                obj_table_ptr,
+                                obj_table_count,
+                                num_ir_functions,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        let after: Vec<u64> = {
+            let mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits");
+            mark_bits.clone()
+        };
+        if after == before {
+            break;
+        }
+    }
+}
+
+pub(crate) fn sweep_dead_promise_slots(
+    caller: &mut Caller<'_, RuntimeState>,
+    mark_snapshot: &[u64],
+    obj_table_count: usize,
+) {
+    let mut table = caller.data().promise_table.lock().expect("promise table mutex");
+    for handle_idx in 0..obj_table_count.min(table.len()) {
+        if !table[handle_idx].is_promise {
+            continue;
+        }
+        if gc_mark_bit_set(mark_snapshot, handle_idx) {
+            continue;
+        }
+        table[handle_idx] = PromiseEntry::empty();
+    }
+}
+
 /// Trigger a mark-sweep GC cycle.
 pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
     // Helper: read an i32 WASM global by name
@@ -2721,6 +3010,13 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
         );
     }
 
+    trace_runtime_side_table_roots_fixed_point(
+        caller,
+        opt_usize,
+        obj_table_count as usize,
+        num_ir_functions as usize,
+    );
+
     // Phase 2: Sweep + Compact
     let mark_snapshot: Vec<u64> = {
         let mark_bits = caller.data().gc_mark_bits.lock().expect("gc_mark_bits");
@@ -2827,6 +3123,8 @@ pub(crate) fn trigger_gc(caller: &mut Caller<'_, RuntimeState>) {
     if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
         g.set(&mut *caller, Val::I32(new_heap_end as i32)).ok();
     }
+
+    sweep_dead_promise_slots(caller, &mark_snapshot, obj_table_count as usize);
 
     // Reset alloc counter
     *caller.data().alloc_counter.lock().expect("alloc_counter") = 0;

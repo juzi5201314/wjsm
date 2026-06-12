@@ -73,19 +73,25 @@ pub(crate) fn define_promise_combinators(
                             PromiseState::Rejected(reason) => rejected_elem = Some(reason),
                             PromiseState::Pending => {
                                 pending = true;
-                                let handler = create_combinator_reaction_handler(
+                                let fulfill_handler = create_combinator_reaction_handler(
                                     caller.data(),
                                     context,
                                     index,
                                     PromiseCombinatorReactionKind::AllFulfill,
                                 );
+                                let reject_handler = create_combinator_reaction_handler(
+                                    caller.data(),
+                                    context,
+                                    index,
+                                    PromiseCombinatorReactionKind::AllReject,
+                                );
                                 entry.fulfill_reactions.push(PromiseReaction::new(
-                                    handler,
+                                    fulfill_handler,
                                     result_handle,
                                     ReactionType::Fulfill,
                                 ));
                                 entry.reject_reactions.push(PromiseReaction::new(
-                                    value::encode_undefined(),
+                                    reject_handler,
                                     result_handle,
                                     ReactionType::Reject,
                                 ));
@@ -96,6 +102,7 @@ pub(crate) fn define_promise_combinators(
 
                 if pending {
                     remaining += 1;
+                    increment_combinator_outstanding_settlements(caller.data(), context);
                 } else if let Some(reason) = rejected_elem {
                     rejected.get_or_insert(reason);
                 } else {
@@ -115,6 +122,7 @@ pub(crate) fn define_promise_combinators(
                     result_promise,
                     PromiseSettlement::Reject(reason),
                 );
+                try_recycle_combinator_context(caller.data(), context);
             } else if remaining == 0 {
                 mark_combinator_settled(caller.data(), context);
                 settle_promise(
@@ -122,6 +130,7 @@ pub(crate) fn define_promise_combinators(
                     result_promise,
                     PromiseSettlement::Fulfill(result_array),
                 );
+                try_recycle_combinator_context(caller.data(), context);
             }
 
             result_promise
@@ -284,6 +293,7 @@ pub(crate) fn define_promise_combinators(
 
                 if pending {
                     remaining += 1;
+                    increment_combinator_outstanding_settlements(caller.data(), context);
                     continue;
                 }
 
@@ -304,6 +314,7 @@ pub(crate) fn define_promise_combinators(
                     result_promise,
                     PromiseSettlement::Fulfill(result_array),
                 );
+                try_recycle_combinator_context(caller.data(), context);
             }
             result_promise
         },
@@ -377,6 +388,12 @@ pub(crate) fn define_promise_combinators(
                             PromiseState::Rejected(reason) => rejected_reason = Some(reason),
                             PromiseState::Pending => {
                                 pending = true;
+                                let fulfill_handler = create_combinator_reaction_handler(
+                                    caller.data(),
+                                    context,
+                                    index,
+                                    PromiseCombinatorReactionKind::AnyFulfill,
+                                );
                                 let reject_handler = create_combinator_reaction_handler(
                                     caller.data(),
                                     context,
@@ -384,7 +401,7 @@ pub(crate) fn define_promise_combinators(
                                     PromiseCombinatorReactionKind::AnyReject,
                                 );
                                 entry.fulfill_reactions.push(PromiseReaction::new(
-                                    value::encode_undefined(),
+                                    fulfill_handler,
                                     result_handle,
                                     ReactionType::Fulfill,
                                 ));
@@ -402,6 +419,7 @@ pub(crate) fn define_promise_combinators(
                     break;
                 }
                 if pending {
+                    increment_combinator_outstanding_settlements(caller.data(), context);
                     continue;
                 }
                 if let Some(reason) = rejected_reason {
@@ -423,6 +441,7 @@ pub(crate) fn define_promise_combinators(
                     result_promise,
                     PromiseSettlement::Fulfill(value),
                 );
+                try_recycle_combinator_context(caller.data(), context);
             } else if remaining == 0 {
                 mark_combinator_settled(caller.data(), context);
                 let aggregate = alloc_aggregate_error(&mut caller, errors_array);
@@ -431,6 +450,7 @@ pub(crate) fn define_promise_combinators(
                     result_promise,
                     PromiseSettlement::Reject(aggregate),
                 );
+                try_recycle_combinator_context(caller.data(), context);
             }
             result_promise
         },

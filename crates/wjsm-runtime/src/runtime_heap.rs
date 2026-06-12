@@ -293,6 +293,287 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
     obj
 }
 
+
+fn mark_promise_handle(
+    caller: &mut Caller<'_, RuntimeState>,
+    promise: i64,
+    obj_table_ptr: usize,
+    obj_table_count: usize,
+) {
+    if !value::is_object(promise) {
+        return;
+    }
+    let handle_idx = raw_promise_handle(promise);
+    if handle_idx >= obj_table_count {
+        return;
+    }
+    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+        return;
+    };
+    let data = memory.data(&*caller);
+    let slot_addr = obj_table_ptr + handle_idx * 4;
+    if slot_addr + 4 > data.len() {
+        return;
+    }
+    let obj_ptr = u32::from_le_bytes([
+        data[slot_addr],
+        data[slot_addr + 1],
+        data[slot_addr + 2],
+        data[slot_addr + 3],
+    ]) as usize;
+    if obj_ptr != 0 {
+        mark_object_recursive(caller, handle_idx, obj_ptr, obj_table_ptr, obj_table_count);
+    }
+}
+
+pub(crate) fn trace_native_callable_record(
+    caller: &mut Caller<'_, RuntimeState>,
+    record: &NativeCallable,
+    obj_table_ptr: usize,
+    obj_table_count: usize,
+    num_ir_functions: usize,
+) {
+    match record {
+        NativeCallable::PromiseResolvingFunction { promise, .. } => {
+            mark_promise_handle(caller, *promise, obj_table_ptr, obj_table_count);
+        }
+        NativeCallable::PromiseCombinatorReaction { context, .. } => {
+            let (rp, ra) = {
+                let state = caller.data();
+                let contexts = state.combinator_contexts.lock().expect("combinator context mutex");
+                contexts
+                    .get(*context)
+                    .map(|e| (e.result_promise, e.result_array))
+                    .unwrap_or((value::encode_undefined(), value::encode_undefined()))
+            };
+            mark_runtime_value_recursive(
+                caller,
+                rp,
+                obj_table_ptr,
+                obj_table_count,
+                num_ir_functions,
+            );
+            mark_runtime_value_recursive(
+                caller,
+                ra,
+                obj_table_ptr,
+                obj_table_count,
+                num_ir_functions,
+            );
+        }
+        NativeCallable::AsyncGeneratorMethod { generator, .. }
+        | NativeCallable::AsyncGeneratorIdentity { generator } => {
+            mark_runtime_value_recursive(
+                caller,
+                *generator,
+                obj_table_ptr,
+                obj_table_count,
+                num_ir_functions,
+            );
+        }
+        NativeCallable::EvalFunction(function) => {
+            if let Some(env) = function.scope_env {
+                mark_runtime_value_recursive(
+                    caller,
+                    env,
+                    obj_table_ptr,
+                    obj_table_count,
+                    num_ir_functions,
+                );
+            }
+        }
+        NativeCallable::ProxyRevoker { proxy_handle } => {
+            let _ = proxy_handle;
+        }
+        NativeCallable::HeadersMethod { .. }
+        | NativeCallable::ResponseMethod { .. }
+        | NativeCallable::RequestMethod { .. }
+        | NativeCallable::StreamMethod { .. }
+        | NativeCallable::ReaderMethod { .. }
+        | NativeCallable::ReadableStreamMethod { .. }
+        | NativeCallable::ReadableStreamDefaultReaderMethod { .. }
+        | NativeCallable::ReadableStreamDefaultControllerMethod { .. }
+        | NativeCallable::ReadableStreamAsyncIteratorNext { .. }
+        | NativeCallable::ReadableStreamAsyncIteratorReturn { .. }
+        | NativeCallable::WritableStreamMethod { .. }
+        | NativeCallable::WritableStreamDefaultWriterMethod { .. }
+        | NativeCallable::WritableStreamDefaultControllerMethod { .. }
+        | NativeCallable::TransformStreamMethod { .. }
+        | NativeCallable::AbortControllerAbort { .. }
+        | NativeCallable::AsyncFromSyncNext { .. }
+        | NativeCallable::AsyncFromSyncReturn { .. }
+        | NativeCallable::AsyncFromSyncThrow { .. } => {}
+        _ => {}
+    }
+}
+
+pub(crate) fn mark_runtime_value_recursive(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+    obj_table_ptr: usize,
+    obj_table_count: usize,
+    num_ir_functions: usize,
+) {
+    if value::is_object(val) || value::is_array(val) {
+        let handle_idx = value::decode_object_handle(val) as usize;
+        if handle_idx < obj_table_count {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return;
+            };
+            let data = memory.data(&*caller);
+            let slot_addr = obj_table_ptr + handle_idx * 4;
+            if slot_addr + 4 <= data.len() {
+                let obj_ptr = u32::from_le_bytes([
+                    data[slot_addr],
+                    data[slot_addr + 1],
+                    data[slot_addr + 2],
+                    data[slot_addr + 3],
+                ]) as usize;
+                if obj_ptr != 0 {
+                    mark_object_recursive(
+                        caller,
+                        handle_idx,
+                        obj_ptr,
+                        obj_table_ptr,
+                        obj_table_count,
+                    );
+                }
+            }
+        }
+        return;
+    }
+    if value::is_function(val) {
+        let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+        if func_idx < num_ir_functions {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return;
+            };
+            let data = memory.data(&*caller);
+            let slot_addr = obj_table_ptr + func_idx * 4;
+            if slot_addr + 4 <= data.len() {
+                let obj_ptr = u32::from_le_bytes([
+                    data[slot_addr],
+                    data[slot_addr + 1],
+                    data[slot_addr + 2],
+                    data[slot_addr + 3],
+                ]) as usize;
+                if obj_ptr != 0 {
+                    mark_object_recursive(
+                        caller,
+                        func_idx,
+                        obj_ptr,
+                        obj_table_ptr,
+                        obj_table_count,
+                    );
+                }
+            }
+        }
+        return;
+    }
+    if value::is_closure(val) {
+        let closure_idx = value::decode_closure_idx(val) as usize;
+        let env = caller
+            .data()
+            .closures
+            .lock()
+            .expect("closures")
+            .get(closure_idx)
+            .map(|e| e.env_obj);
+        if let Some(env) = env {
+            mark_runtime_value_recursive(
+                caller,
+                env,
+                obj_table_ptr,
+                obj_table_count,
+                num_ir_functions,
+            );
+        }
+        return;
+    }
+    if value::is_native_callable(val) {
+        let idx = value::decode_native_callable_idx(val) as usize;
+        let record = caller
+            .data()
+            .native_callables
+            .lock()
+            .expect("native callable table mutex")
+            .get(idx)
+            .cloned();
+        if let Some(record) = record {
+            trace_native_callable_record(
+                caller,
+                &record,
+                obj_table_ptr,
+                obj_table_count,
+                num_ir_functions,
+            );
+        }
+    }
+}
+
+fn collect_child_from_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    val: i64,
+    obj_table_ptr: usize,
+    obj_table_count: usize,
+    num_ir_functions: usize,
+    children: &mut Vec<(usize, usize)>,
+) {
+    if value::is_object(val) || value::is_array(val) {
+        let child_handle_idx = value::decode_object_handle(val) as usize;
+        if child_handle_idx < obj_table_count {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return;
+            };
+            let data = memory.data(&*caller);
+            let child_slot_addr = obj_table_ptr + child_handle_idx * 4;
+            if child_slot_addr + 4 <= data.len() {
+                let child_ptr = u32::from_le_bytes([
+                    data[child_slot_addr],
+                    data[child_slot_addr + 1],
+                    data[child_slot_addr + 2],
+                    data[child_slot_addr + 3],
+                ]) as usize;
+                if child_ptr != 0 {
+                    children.push((child_handle_idx, child_ptr));
+                }
+            }
+        }
+        return;
+    }
+    if value::is_function(val) {
+        let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+        if func_idx < num_ir_functions {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return;
+            };
+            let data = memory.data(&*caller);
+            let child_slot_addr = obj_table_ptr + func_idx * 4;
+            if child_slot_addr + 4 <= data.len() {
+                let child_ptr = u32::from_le_bytes([
+                    data[child_slot_addr],
+                    data[child_slot_addr + 1],
+                    data[child_slot_addr + 2],
+                    data[child_slot_addr + 3],
+                ]) as usize;
+                if child_ptr != 0 {
+                    children.push((func_idx, child_ptr));
+                }
+            }
+        }
+        return;
+    }
+    if value::is_closure(val) || value::is_native_callable(val) {
+        mark_runtime_value_recursive(
+            caller,
+            val,
+            obj_table_ptr,
+            obj_table_count,
+            num_ir_functions,
+        );
+    }
+}
+
 /// GC 标记阶段：递归标记对象及其所有可达对象。
 /// 使用标记位图避免重复标记和循环引用。
 pub(crate) fn mark_object_recursive(
@@ -301,6 +582,17 @@ pub(crate) fn mark_object_recursive(
     obj_ptr: usize,
     obj_table_ptr: usize,
     obj_table_count: usize,
+) {
+    mark_object_recursive_with_funcs(caller, handle_idx, obj_ptr, obj_table_ptr, obj_table_count, usize::MAX);
+}
+
+fn mark_object_recursive_with_funcs(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle_idx: usize,
+    obj_ptr: usize,
+    obj_table_ptr: usize,
+    obj_table_count: usize,
+    num_ir_functions: usize,
 ) {
     // 检查标记位图
     let word_idx = handle_idx / 64;
@@ -326,6 +618,7 @@ pub(crate) fn mark_object_recursive(
 
     // 收集需要递归标记的对象列表
     let mut children_to_mark: Vec<(usize, usize)> = Vec::new(); // (handle_idx, obj_ptr)
+    let mut pending_vals: Vec<i64> = Vec::new();
 
     // 获取内存并读取信息
     {
@@ -373,7 +666,6 @@ pub(crate) fn mark_object_recursive(
                 data[obj_ptr + 11],
             ]) as usize;
 
-            // 迭代 8 字节元素，收集对象/函数引用
             for i in 0..len {
                 let elem_offset = obj_ptr + 16 + i * 8;
                 if elem_offset + 8 > data.len() {
@@ -389,23 +681,7 @@ pub(crate) fn mark_object_recursive(
                     data[elem_offset + 6],
                     data[elem_offset + 7],
                 ]);
-                if value::is_object(elem) || value::is_function(elem) {
-                    let child_handle_idx = (elem as u64 & 0xFFFF_FFFF) as usize;
-                    if child_handle_idx < obj_table_count {
-                        let child_slot_addr = obj_table_ptr + child_handle_idx * 4;
-                        if child_slot_addr + 4 <= data.len() {
-                            let child_ptr = u32::from_le_bytes([
-                                data[child_slot_addr],
-                                data[child_slot_addr + 1],
-                                data[child_slot_addr + 2],
-                                data[child_slot_addr + 3],
-                            ]) as usize;
-                            if child_ptr != 0 {
-                                children_to_mark.push((child_handle_idx, child_ptr));
-                            }
-                        }
-                    }
-                }
+                pending_vals.push(elem);
             }
         } else {
             // ── 普通对象 ──
@@ -457,37 +733,31 @@ pub(crate) fn mark_object_recursive(
                     data[slot_offset + 31],
                 ]);
 
-                for val in [value, getter, setter] {
-                    if value::is_object(val) || value::is_function(val) {
-                        let child_handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
-                        if child_handle_idx < obj_table_count {
-                            let child_slot_addr = obj_table_ptr + child_handle_idx * 4;
-                            if child_slot_addr + 4 <= data.len() {
-                                let child_ptr = u32::from_le_bytes([
-                                    data[child_slot_addr],
-                                    data[child_slot_addr + 1],
-                                    data[child_slot_addr + 2],
-                                    data[child_slot_addr + 3],
-                                ]) as usize;
-                                if child_ptr != 0 {
-                                    children_to_mark.push((child_handle_idx, child_ptr));
-                                }
-                            }
-                        }
-                    }
-                }
+                pending_vals.extend([value, getter, setter]);
             }
         }
     } // data 借用在这里结束
 
+    for val in pending_vals {
+        collect_child_from_value(
+            caller,
+            val,
+            obj_table_ptr,
+            obj_table_count,
+            num_ir_functions,
+            &mut children_to_mark,
+        );
+    }
+
     // 递归标记收集到的对象
     for (child_handle_idx, child_ptr) in children_to_mark {
-        mark_object_recursive(
+        mark_object_recursive_with_funcs(
             caller,
             child_handle_idx,
             child_ptr,
             obj_table_ptr,
             obj_table_count,
+            num_ir_functions,
         );
     }
 }

@@ -259,7 +259,49 @@ fn snapshot_updates_enabled() -> bool {
 fn normalize_output(bytes: &[u8]) -> String {
     let text = String::from_utf8_lossy(bytes).replace("\r\n", "\n");
     let text = normalize_object_handles(&text);
-    normalize_paths(&text)
+    let text = normalize_paths(&text);
+    normalize_wasm_backtrace(&text)
+}
+
+/// 归一化 wasm trap 回溯中的不稳定地址/函数索引。
+fn normalize_wasm_backtrace(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '0' && chars.peek() == Some(&'x') {
+            chars.next();
+            let mut had_hex = false;
+            while let Some(&h) = chars.peek() {
+                if h.is_ascii_hexdigit() {
+                    had_hex = true;
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if had_hex {
+                out.push_str("<wasm-addr>");
+            } else {
+                out.push('0');
+                out.push('x');
+            }
+            continue;
+        }
+        out.push(c);
+    }
+    let mut s = out;
+    while let Some(idx) = s.find("wasm function ") {
+        let start = idx + "wasm function ".len();
+        let digit_len = s[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
+        if digit_len == 0 {
+            break;
+        }
+        s.replace_range(start..start + digit_len, "<idx>");
+    }
+    s
 }
 
 /// 归一化绝对路径为相对路径（去除 /fixtures/ 前缀）

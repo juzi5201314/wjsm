@@ -388,14 +388,7 @@ pub(crate) async fn drain_microtasks_async<
             None => break,
         }
     }
-    {
-        let mut c_table = ctx
-            .state_mut()
-            .continuation_table
-            .lock()
-            .expect("continuation table mutex");
-        c_table.retain(|entry| !entry.completed);
-    }
+    crate::runtime_async_fn::recycle_completed_continuations(ctx.state_mut());
     let unhandled: Vec<i64> = {
         let rejections = std::mem::take(
             &mut *ctx

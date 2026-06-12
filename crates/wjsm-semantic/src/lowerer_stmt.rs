@@ -713,7 +713,9 @@ impl Lowerer {
         );
         self.current_function
             .set_terminator(next_block, Terminator::Jump { target: header });
-        // break/continue 走 abrupt 路径关闭迭代器；正常完成与 break 后均落到 exit，由外层 seal return。
+        // break/continue/return/throw 走 abrupt 路径；正常完成与 break→close→exit 均以 Open(exit) 结束，
+        // 使 exit 块得到 Return 而非 Unreachable（for-of break 关闭迭代器场景）。
+        let _ = body_flow;
         Ok(StmtFlow::Open(exit))
     }
 

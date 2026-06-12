@@ -57,16 +57,29 @@ pub(crate) fn create_native_callable(state: &RuntimeState, callable: NativeCalla
     value::encode_native_callable_idx(handle)
 }
 
+/// 仅用于一次性内部 native handler 的槽位复用；JS 持有的 resolve/reject 槽位必须保持稳定。
 pub(crate) fn recycle_native_callable(state: &RuntimeState, callable: i64) {
     if !value::is_native_callable(callable) {
         return;
     }
-    let idx = value::decode_native_callable_idx(callable);
+    let idx = value::decode_native_callable_idx(callable) as usize;
+    let record = state
+        .native_callables
+        .lock()
+        .expect("native callable table mutex")
+        .get(idx)
+        .cloned();
+    if matches!(
+        record,
+        Some(NativeCallable::PromiseResolvingFunction { .. })
+    ) {
+        return;
+    }
     state
         .native_callable_free_slots
         .lock()
         .expect("native callable free slots mutex")
-        .push(idx);
+        .push(idx as u32);
 }
 
 pub(crate) fn create_promise_resolving_function(
@@ -358,5 +371,32 @@ pub(crate) fn nanbox_to_bool(val: i64) -> bool {
         value::decode_bool(val)
     } else {
         f64::from_bits(val as u64) != 0.0
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    /// 第二次 resolve 不得覆盖 PromiseResolvingFunction 槽位（recycle 已禁用）。
+    #[test]
+    fn resolver_double_call_keeps_slot_and_noops() {
+        let state = RuntimeState::new();
+        let p = value::encode_f64(99.0);
+        let (resolve, _reject) = create_promise_resolving_functions(&state, p);
+        let idx1 = value::decode_native_callable_idx(resolve);
+        recycle_native_callable(&state, resolve);
+        let idx2 = value::decode_native_callable_idx(resolve);
+        assert_eq!(idx1, idx2);
+        let record = state
+            .native_callables
+            .lock()
+            .expect("native callable table mutex")
+            .get(idx1 as usize)
+            .cloned();
+        assert!(matches!(
+            record,
+            Some(NativeCallable::PromiseResolvingFunction { .. })
+        ));
     }
 }
