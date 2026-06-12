@@ -146,11 +146,10 @@ pub fn run_test(test: &Test, harness: &Harness, limits: RunLimits) -> TestResult
         Err(e) => return TestResult::Error(format!("failed to spawn wjsm: {}", e)),
     };
 
-    if let Some(mut stdin) = child.stdin.take() {
-        if let Err(e) = stdin.write_all(source.as_bytes()) {
+    if let Some(mut stdin) = child.stdin.take()
+        && let Err(e) = stdin.write_all(source.as_bytes()) {
             return TestResult::Error(format!("failed to write to stdin: {}", e));
         }
-    }
 
     let status = match wait_child_timeout(&mut child, limits.timeout) {
         Ok(Some(s)) => s,

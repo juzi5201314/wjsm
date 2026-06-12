@@ -442,7 +442,7 @@ pub(crate) fn define_proxy_reflect_async(
                     table.get(handle).cloned()
                 };
                 if let Some(entry) = entry {
-                    if let Some(exc) = check_proxy_revoked(&mut caller, &entry, "call") {
+                    if let Some(_exc) = check_proxy_revoked(&mut caller, &entry, "call") {
                         set_runtime_error(
                             caller.data(),
                             "TypeError: Cannot perform call on a proxy that has been revoked".to_string(),
@@ -503,7 +503,7 @@ pub(crate) fn define_proxy_reflect_async(
                     table.get(handle).cloned()
                 };
                 if let Some(entry) = entry {
-                    if let Some(exc) = check_proxy_revoked(&mut caller, &entry, "construct") {
+                    if let Some(_exc) = check_proxy_revoked(&mut caller, &entry, "construct") {
                         set_runtime_error(
                             caller.data(),
                             "TypeError: Cannot perform construct on a proxy that has been revoked".to_string(),

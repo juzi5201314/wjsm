@@ -10,7 +10,7 @@ use crate::*;
 use std::collections::VecDeque;
 
 /// 创建 TypeError 异常值（NaN-boxed TAG_EXCEPTION）
-#[allow(dead_code)]
+
 fn type_error_exception(caller: &mut Caller<'_, RuntimeState>, message: &str) -> i64 {
     alloc_type_error_from_caller(caller, message)
 }

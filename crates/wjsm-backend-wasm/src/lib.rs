@@ -237,7 +237,7 @@ enum Region {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
+
 struct SwitchCaseRegion {
     _case_idx: usize,
     _target_idx: usize,

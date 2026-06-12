@@ -1,3 +1,4 @@
+
 use anyhow::{Context, Result, bail};
 use std::env;
 use std::ffi::OsStr;
@@ -145,13 +146,11 @@ impl FixtureRunner {
 
     fn run_fixture(&self, fixture: &FixtureCase) -> Result<()> {
         // 检查 KNOWN-NETWORK 注释
-        if let Ok(content) = fs::read_to_string(&fixture.input_path) {
-            if content.contains("KNOWN-NETWORK") {
-                if env::var("WJSM_SKIP_NETWORK").unwrap_or_default() == "1" {
+        if let Ok(content) = fs::read_to_string(&fixture.input_path)
+            && content.contains("KNOWN-NETWORK")
+                && env::var("WJSM_SKIP_NETWORK").unwrap_or_default() == "1" {
                     return Ok(());
                 }
-            }
-        }
         let output = Command::new(&self.binary_path)
             .env("TZ", "UTC")
             .arg("run")

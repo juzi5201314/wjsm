@@ -708,7 +708,7 @@ fn controller_error(
             entry.state = StreamState::Errored;
             // 尝试存储错误消息
             if value::is_string(error_val) {
-                entry.error = Some(format!("stream error"));
+                entry.error = Some("stream error".to_string());
             }
         }
     }

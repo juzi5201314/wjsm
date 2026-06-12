@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use swc_core::ecma::ast as swc_ast;
 use tokio::time::Instant;
@@ -48,7 +48,6 @@ use runtime_combinators::*;
 use runtime_eval::*;
 use runtime_heap::*;
 use runtime_host_helpers::*;
-use runtime_json::*;
 use runtime_json::*;
 use runtime_microtask::*;
 use runtime_promises::*;
@@ -457,7 +456,7 @@ fn register_complex_bridges(
                     return value::encode_handle(value::TAG_ITERATOR, handle);
                 }
 
-                let Some(ptr) = resolve_handle(&mut caller, iterable) else {
+                let Some(_ptr) = resolve_handle(&mut caller, iterable) else {
                     let mut iters = caller.data().iterators.lock().expect("iterators mutex");
                     let handle = iters.len() as u32;
                     iters.push(IteratorState::Error);
@@ -811,28 +810,27 @@ pub async fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Resu
     execute_with_writer_shared(wasm_bytes, writer, None).await
 }
 
-pub async fn execute_with_writer_shared_agent<W: Write>(
+pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
     wasm_bytes: &[u8],
     writer: W,
     shared_state: Arc<SharedRuntimeState>,
 ) -> Result<W> {
     execute_with_writer_shared_inner(wasm_bytes, writer, Some(shared_state), false).await
 }
-pub async fn execute_with_writer_shared<W: Write>(
+pub(crate) async fn execute_with_writer_shared<W: Write>(
     wasm_bytes: &[u8],
-    mut writer: W,
+    writer: W,
     shared_state: Option<Arc<SharedRuntimeState>>,
 ) -> Result<W> {
     execute_with_writer_shared_inner(wasm_bytes, writer, shared_state, true).await
 }
 async fn execute_with_writer_shared_inner<W: Write>(
     wasm_bytes: &[u8],
-    mut writer: W,
+    writer: W,
     shared_state: Option<Arc<SharedRuntimeState>>,
     use_epoch_async_yield: bool,
 ) -> Result<W> {
     let mut config = Config::new();
-    config.async_support(true);
     if use_epoch_async_yield {
         config.epoch_interruption(true);
     }
@@ -1049,7 +1047,7 @@ struct RuntimeState {
     /// 分配计数器：每次对象分配后递增，用于触发周期性 GC。
     alloc_counter: Arc<Mutex<u64>>,
     /// GC 触发阈值：当 alloc_counter 达到此值时触发 GC。
-    #[allow(dead_code)]
+    
     gc_threshold: u64,
     /// 定时器列表
     timers: Arc<Mutex<Vec<TimerEntry>>>,
@@ -1295,7 +1293,7 @@ struct SymbolEntry {
 }
 
 /// Error 条目：存储 error 对象的 name 和 message
-#[allow(dead_code)]
+
 struct ErrorEntry {
     name: String,
     message: String,
@@ -1354,7 +1352,7 @@ struct DataViewEntry {
 }
 
 #[derive(Clone, Debug)]
-#[allow(dead_code)]
+
 pub(crate) struct TypedArrayEntry {
     buffer_handle: u32,
     byte_offset: u32,
@@ -1566,15 +1564,15 @@ struct StreamControllerEntry {
     started: bool,
     close_requested: bool,
     // Phase 3-5 预留字段
-    #[allow(dead_code)]
+    
     byob_reader_handle: Option<u32>,
-    #[allow(dead_code)]
+    
     pull_requested: bool,
-    #[allow(dead_code)]
+    
     abort_requested: bool,
-    #[allow(dead_code)]
+    
     abort_reason: Option<i64>,
-    #[allow(dead_code)]
+    
     flush_requested: bool,
 }
 
@@ -1970,7 +1968,7 @@ pub(crate) fn typedarray_construct(
         }
         let remaining = byte_len - offset;
         let len = if value::is_undefined(length) {
-            if remaining % elem_size_u32 != 0 {
+            if !remaining.is_multiple_of(elem_size_u32) {
                 set_typedarray_runtime_error(caller, "RangeError: Invalid typed array length");
                 return value::encode_undefined();
             }
@@ -2702,7 +2700,7 @@ enum ReactionType {
 }
 
 #[derive(Clone)]
-#[allow(clippy::enum_variant_names, dead_code)]
+
 enum Microtask {
     PromiseReaction {
         promise: i64,
@@ -2747,7 +2745,7 @@ enum Microtask {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
+
 struct ContinuationEntry {
     fn_table_idx: u32,
     outer_promise: i64,
@@ -2755,7 +2753,7 @@ struct ContinuationEntry {
     completed: bool,
 }
 
-#[allow(dead_code)]
+
 struct AsyncGeneratorEntry {
     state: AsyncGeneratorState,
     continuation: i64,
@@ -2765,7 +2763,7 @@ struct AsyncGeneratorEntry {
 }
 
 #[derive(Clone)]
-#[allow(dead_code)]
+
 enum AsyncGeneratorState {
     SuspendedStart,
     SuspendedYield,
@@ -2773,7 +2771,7 @@ enum AsyncGeneratorState {
     Completed,
 }
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
+
 struct AsyncGeneratorRequest {
     completion_type: AsyncGeneratorCompletionType,
     value: i64,

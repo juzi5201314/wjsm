@@ -65,8 +65,9 @@ fn test_timer_zero_delay_order() {
     );
 }
 
+
 #[test]
-fn test_setInterval_clears_from_callback() {
+fn test_set_interval_clears_from_callback() {
     let code = r#"
         const state = { count: 0, id: null };
         state.id = setInterval(() => {

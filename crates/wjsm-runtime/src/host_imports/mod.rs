@@ -27,7 +27,7 @@ mod object_builtins_async;
 pub(crate) use object_builtins_async::define_object_builtins_async;
 mod core_async;
 mod get_method;
-pub(crate) use get_method::{get_method, get_method_by_name_id};
+pub(crate) use get_method::get_method_by_name_id;
 pub(crate) use core_async::define_core_async;
 
 // 原 include! 裸块文件 → 模块声明
@@ -79,7 +79,6 @@ pub(crate) use streams_readable::call_default_controller_method_from_caller;
 pub(crate) use streams_readable::call_default_reader_method_from_caller;
 pub(crate) use streams_readable::call_readable_stream_method_from_caller;
 pub(crate) use streams_readable::construct_readable_stream;
-pub(crate) use streams_readable::create_controller_object;
 pub(crate) use streams_transform::call_flush_from_writable_close;
 pub(crate) use streams_transform::call_transform_from_writable;
 pub(crate) use streams_transform::call_transform_stream_method_from_caller;
@@ -88,7 +87,6 @@ pub(crate) use streams_writable::call_default_writer_method_from_caller;
 pub(crate) use streams_writable::call_writable_controller_method_from_caller;
 pub(crate) use streams_writable::call_writable_stream_method_from_caller;
 pub(crate) use streams_writable::construct_writable_stream;
-pub(crate) use streams_writable::create_writable_stream_js_object;
 pub(crate) use string_methods::define_string_methods;
 pub(crate) use timers_arrays::define_timers_arrays;
 pub(crate) use typedarray_new_methods::define_typedarray_new_methods;

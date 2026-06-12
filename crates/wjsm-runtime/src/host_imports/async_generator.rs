@@ -210,7 +210,7 @@ pub(crate) fn define_async_generator(
     // ── Import 140: async_generator_throw(i64, i64) -> i64 ──────────────────
     let async_generator_throw_fn = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
+        |caller: Caller<'_, RuntimeState>, generator: i64, value: i64| -> i64 {
             let handle = value::decode_object_handle(generator) as usize;
             let action = {
                 let mut table = caller

@@ -86,7 +86,7 @@ pub(crate) fn define_object_builtins(
                 let names = collect_own_property_names(&mut caller, source_ptr, true);
                 for name in &names {
                     // Read property value from source
-                    let name_val = store_runtime_string(&mut caller, name.clone());
+                    let name_val = store_runtime_string(&caller, name.clone());
                     let prop_value = read_property_by_string_key(&mut caller, source, name_val);
                     // Define on target
                     let _ = define_host_data_property_from_caller(

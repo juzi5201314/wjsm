@@ -33,7 +33,7 @@ impl SharedArrayBufferEntry {
     }
 }
 
-pub(crate) struct SharedRuntimeState {
+pub struct SharedRuntimeState {
     pub(crate) sab_table: Arc<Mutex<Vec<SharedArrayBufferEntry>>>,
     pub(crate) waiter_lists: Arc<Mutex<HashMap<(u32, u32), WaiterList>>>,
     pub(crate) agent_state: Arc<AgentState>,
