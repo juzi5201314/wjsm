@@ -2,7 +2,7 @@ exit_code: 2
 --- stdout ---
 --- stderr ---
 Runtime error: WASM trap: error while executing at wasm backtrace:
-    0:   0x601e - <unknown>!<wasm function 411>
+    0:   <wasm-addr> - <unknown>!<wasm function <idx>>
 
 Caused by:
     wasm trap: wasm `unreachable` instruction executed

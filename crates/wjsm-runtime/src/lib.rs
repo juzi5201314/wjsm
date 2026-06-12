@@ -988,6 +988,8 @@ impl Clone for RuntimeState {
             bound_objects: self.bound_objects.clone(),
             native_callables: self.native_callables.clone(),
             native_callable_free_slots: self.native_callable_free_slots.clone(),
+            continuation_free_slots: self.continuation_free_slots.clone(),
+            combinator_context_free_slots: self.combinator_context_free_slots.clone(),
             eval_cache: self.eval_cache.clone(),
             bigint_table: self.bigint_table.clone(),
             symbol_table: self.symbol_table.clone(),
@@ -1063,6 +1065,10 @@ struct RuntimeState {
     native_callables: Arc<Mutex<Vec<NativeCallable>>>,
     /// native_callable 表空闲槽位，用于复用已释放条目。
     native_callable_free_slots: Arc<Mutex<Vec<u32>>>,
+    /// continuation 侧表空闲槽位（handle 下标稳定，禁止 Vec::retain）。
+    continuation_free_slots: Arc<Mutex<Vec<u32>>>,
+    /// combinator context 侧表空闲槽位。
+    combinator_context_free_slots: Arc<Mutex<Vec<usize>>>,
     /// eval 编译缓存：code string hash → eval 模式 WASM bytes。
     eval_cache: Arc<Mutex<HashMap<u64, Vec<u8>>>>,
     /// BigInt 侧表：存储任意精度 BigInt 值
@@ -1170,7 +1176,7 @@ impl RuntimeState {
     }
 
     /// 构造一个新的 RuntimeState，所有侧表初始化为空，well-known symbols 预分配。
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         const GC_THRESHOLD: u64 = 1000;
         RuntimeState {
             output: Arc::new(Mutex::new(Vec::new())),
@@ -1188,6 +1194,8 @@ impl RuntimeState {
             bound_objects: Arc::new(Mutex::new(Vec::new())),
             native_callables: Arc::new(Mutex::new(vec![NativeCallable::EvalIndirect])),
             native_callable_free_slots: Arc::new(Mutex::new(Vec::new())),
+            continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
+            combinator_context_free_slots: Arc::new(Mutex::new(Vec::new())),
             eval_cache: Arc::new(Mutex::new(HashMap::new())),
             bigint_table: Arc::new(Mutex::new(Vec::new())),
             symbol_table: Arc::new(Mutex::new(vec![
@@ -2483,8 +2491,10 @@ enum QueuingStrategySizeKind {
 #[derive(Clone, Copy)]
 enum PromiseCombinatorReactionKind {
     AllFulfill,
+    AllReject,
     AllSettledFulfill,
     AllSettledReject,
+    AnyFulfill,
     AnyReject,
 }
 struct CombinatorContext {
@@ -2492,6 +2502,8 @@ struct CombinatorContext {
     result_array: i64,
     remaining: usize,
     settled: bool,
+    /// 已挂接到输入 Promise、但尚未观察到 fulfill/reject 其中一个分支的 pending 输入数。
+    outstanding_settlements: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -2593,6 +2605,7 @@ enum PromiseState {
     Rejected(i64),
 }
 
+#[derive(Clone)]
 struct PromiseEntry {
     state: PromiseState,
     fulfill_reactions: Vec<PromiseReaction>,
@@ -2688,6 +2701,7 @@ enum ReactionType {
     FinallyReject,
 }
 
+#[derive(Clone)]
 #[allow(clippy::enum_variant_names, dead_code)]
 enum Microtask {
     PromiseReaction {
@@ -2732,6 +2746,7 @@ enum Microtask {
     },
 }
 
+#[derive(Clone)]
 #[allow(dead_code)]
 struct ContinuationEntry {
     fn_table_idx: u32,
