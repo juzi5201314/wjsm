@@ -481,16 +481,19 @@ fn register_complex_bridges(
                         return create_async_from_sync_iterator(&mut caller, sync_iter_handle);
                     }
                 }
-                // 尝试 @@asyncIterator
-                let async_iterator_method =
-                    read_object_property_by_name_id(&mut caller, ptr, encode_symbol_name_id(3))
-                        .or_else(|| {
-                            read_object_property_by_name(&mut caller, ptr, "Symbol.asyncIterator")
-                        });
-                if let Some(method) = async_iterator_method {
-                    if value::is_callable(method) {
+                // 尝试 @@asyncIterator（使用 GetMethod 规范实现）
+                match crate::host_imports::get_method_by_name_id(
+                    &mut caller,
+                    iterable,
+                    encode_symbol_name_id(3),
+                ) {
+                    Ok(Some(method)) => {
                         let iterator =
                             call_iterable_method_async(&mut caller, method, iterable).await;
+                        // 若 method 调用返回异常（如内部抛出 TypeError），直接返回
+                        if value::is_exception(iterator) {
+                            return iterator;
+                        }
                         if value::is_object(iterator) {
                             if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
                                 let next =
@@ -518,22 +521,24 @@ fn register_complex_bridges(
                                 }
                             }
                         }
-                    } else if !value::is_undefined(method) && !value::is_null(method) {
-                        return create_error_object(
-                            &mut caller,
-                            "TypeError",
-                            value::encode_undefined(),
-                        );
                     }
+                    Err(exc) => return exc,
+                    Ok(None) => {}
                 }
 
-                // 回退到 @@iterator
-                if let Some(method) =
-                    read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
-                {
-                    if value::is_callable(method) {
+                // 回退到 @@iterator（使用 GetMethod 规范实现）
+                match crate::host_imports::get_method_by_name_id(
+                    &mut caller,
+                    iterable,
+                    encode_symbol_name_id(0),
+                ) {
+                    Ok(Some(method)) => {
                         let sync_iter =
                             call_iterable_method_async(&mut caller, method, iterable).await;
+                        // 若 method 调用返回异常（如内部抛出 TypeError），直接返回
+                        if value::is_exception(sync_iter) {
+                            return sync_iter;
+                        }
                         if value::is_object(sync_iter) {
                             if let Some(sync_ptr) = resolve_handle(&mut caller, sync_iter) {
                                 let next_fn =
@@ -571,8 +576,9 @@ fn register_complex_bridges(
                             }
                         }
                     }
+                    Err(exc) => return exc,
+                    Ok(None) => {}
                 }
-
                 create_error_object(&mut caller, "TypeError", value::encode_undefined())
             })
         },
@@ -2774,6 +2780,10 @@ struct AsyncFromSyncIteratorEntry {
     sync_iterator: i64,
     /// 同步迭代器是否已完成
     sync_done: bool,
+    /// for-await 使用的 AsyncFromSync 外层 TAG_ITERATOR 句柄
+    outer_iter: i64,
+    /// 外层 ObjectIter 在 iterators 表中的索引
+    outer_handle_idx: u32,
 }
 
 #[cfg(test)]
