@@ -94,7 +94,7 @@ module {
       %5 = call %3, this=%0, args=[%4]
       return %5
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

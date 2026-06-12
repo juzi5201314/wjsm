@@ -959,7 +959,7 @@ impl Lowerer {
         );
         let wrapper_has_eval = wrapper_fn.has_eval();
         let wrapper_blocks = wrapper_fn.into_blocks();
-        let mut wrapper_ir = Function::new("main", BasicBlockId(0));
+        let mut wrapper_ir = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
         wrapper_ir.set_has_eval(wrapper_has_eval);
         wrapper_ir.set_params(self.async_main_param_ir_names.clone());
         for b in wrapper_blocks {

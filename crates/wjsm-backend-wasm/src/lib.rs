@@ -9,7 +9,7 @@ use wasm_encoder::{
 use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction,
     HomeObject, Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, constants,
-    value,
+    is_module_entry_ir_function, value,
 };
 
 pub mod host_import_registry;
@@ -1197,7 +1197,7 @@ mod tests {
         let source = "if (true) { console.log(\"yes\"); } else { console.log(\"no\"); }";
         let module = wjsm_parser::parse_module(source)?;
         let program = wjsm_semantic::lower_module(module, false)?;
-        assert!(program.dump_text().contains("fn @main"));
+        assert!(program.dump_text().contains("fn @$module_main"));
         Ok(())
     }
 }

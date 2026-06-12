@@ -32,7 +32,7 @@ module {
     c29 = string("outer finally")
     c30 = string("outer finally")
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.undefined, %0

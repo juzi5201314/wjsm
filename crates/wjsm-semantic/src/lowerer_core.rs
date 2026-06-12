@@ -14,7 +14,7 @@ impl Lowerer {
             scopes,
             hoisted_vars: Vec::new(),
             hoisted_vars_set: std::collections::HashSet::new(),
-            current_function: FunctionBuilder::new("main", BasicBlockId(0)),
+            current_function: FunctionBuilder::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0)),
             label_stack: Vec::new(),
             finally_stack: Vec::new(),
             try_contexts: Vec::new(),
@@ -793,7 +793,7 @@ impl Lowerer {
         } else {
             let has_eval = self.current_function.has_eval();
             let blocks = self.current_function.into_blocks();
-            let mut function = Function::new("main", BasicBlockId(0));
+            let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
             function.set_has_eval(has_eval);
             if self.eval_mode {
                 function.set_params(vec![EVAL_SCOPE_ENV_PARAM.to_string()]);

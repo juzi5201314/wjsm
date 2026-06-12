@@ -102,7 +102,7 @@ module {
     c1 = number(2)
     c2 = number(3)
 
-  fn @main [entry=bb0]:
+  fn @$module_main [entry=bb0]:
     bb0:
       %0 = const c0
       %1 = const c1

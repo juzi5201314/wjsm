@@ -39,7 +39,7 @@ module {
     c36 = undefined
     c37 = string("x")
 
-  fn @main [has_eval] [entry=bb0]:
+  fn @$module_main [has_eval] [entry=bb0]:
     bb0:
       %0 = const c0
       store var $0.x, %0
