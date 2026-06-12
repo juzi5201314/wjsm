@@ -194,9 +194,11 @@ WJSM_UPDATE_SNAPSHOTS=1 cargo nextest run -p wjsm-semantic
 # Regenerate generated test file (auto-triggered on fixture changes, or manually:)
 cargo build --package wjsm
 
-# ── Other ────────────────────────────────────────────────────────
-# Run test262 conformance suite
-cargo run -p wjsm-test262
+# Run test262 conformance suite (use release binary + limits on WSL)
+cargo build --release -p wjsm-cli
+cargo run -p wjsm-test262 -- run --plain --no-parallel --jobs 1 --timeout-secs 15 --memory-limit-mib 512 --suite test/built-ins/Array/prototype/at
+# Full filtered suite (long): prefer --no-parallel --jobs 1; each case is killed after --timeout-secs
+cargo run -p wjsm-test262 -- run --plain --json /tmp/test262.json --no-parallel --jobs 1 --timeout-secs 15 --memory-limit-mib 512
 
 # Watch for changes and re-run tests
 cargo watch -x test
