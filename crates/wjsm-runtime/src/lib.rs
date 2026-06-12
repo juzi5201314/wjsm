@@ -579,7 +579,12 @@ fn register_complex_bridges(
                     Err(exc) => return exc,
                     Ok(None) => {}
                 }
-                create_error_object(&mut caller, "TypeError", value::encode_undefined())
+                // GetIterator 收尾：@@asyncIterator / @@iterator 均不可用，或方法返回的
+                // 对象缺少可调用 next。规范要求抛出 TypeError。返回可捕获的 TAG_EXCEPTION
+                // （而非裸 error 对象）：该值作为迭代器句柄存入后，首次 iterator.next 会被
+                // iterator_next_async 转成 rejected promise，经 await 的 is_rejected 路径在
+                // for-await 外层 try/catch 捕获，避免把不可用对象当作迭代器句柄继续迭代。
+                make_type_error_exception(&mut caller, "value is not async iterable")
             })
         },
     )?;
