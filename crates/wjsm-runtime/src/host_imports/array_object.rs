@@ -4,6 +4,104 @@ use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
 
+fn push_array_value(caller: &mut Caller<'_, RuntimeState>, arr: i64, val: i64) -> Option<()> {
+    let mut ptr = resolve_array_ptr(caller, arr)?;
+    let len = read_array_length(caller, ptr).unwrap_or(0);
+    let cap = read_array_capacity(caller, ptr).unwrap_or(0);
+    if len >= cap {
+        let new_cap = cap.max(1) * 2;
+        ptr = grow_array(caller, ptr, arr, new_cap.max(len + 1))?;
+    }
+    write_array_elem(caller, ptr, len, val);
+    write_array_length(caller, ptr, len + 1);
+    Some(())
+}
+
+async fn push_iterator_values_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr: i64,
+    iterator: i64,
+) -> bool {
+    let Some(iter_ptr) = resolve_handle(caller, iterator) else {
+        return false;
+    };
+    let Some(next) = read_object_property_by_name(caller, iter_ptr, "next") else {
+        return false;
+    };
+    if !value::is_callable(next) {
+        return false;
+    }
+    loop {
+        let result =
+            call_iterator_method_async(caller, next, iterator, value::encode_undefined()).await;
+
+        // A4: 若 next() 同步抛出（返回 TAG_EXCEPTION），用真实错误消息替换误导的 "not iterable"。
+        // 注：表达式位 spread 无 IsException 分叉，无法做到可捕获；仅改进延迟错误消息的准确性。
+        if value::is_exception(result) {
+            let reason = exception_reason(caller, result);
+            let msg = render_value(caller, reason).unwrap_or_else(|_| "unknown error".to_string());
+            set_runtime_error(
+                caller.data(),
+                format!("TypeError: iterator.next() threw: {}", msg),
+            );
+            return false;
+        }
+
+        let Some(result_ptr) = resolve_handle(caller, result) else {
+            return false;
+        };
+        let done = read_object_property_by_name(caller, result_ptr, "done")
+            .map(nanbox_to_bool)
+            .unwrap_or(true);
+        if done {
+            return true;
+        }
+        let val = read_object_property_by_name(caller, result_ptr, "value")
+            .unwrap_or_else(value::encode_undefined);
+        let _ = push_array_value(caller, arr, val);
+    }
+}
+
+pub(crate) async fn array_push_spread_impl_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr: i64,
+    iterable: i64,
+) -> i64 {
+    if value::is_array(iterable)
+        && let Some(ptr) = resolve_array_ptr(caller, iterable)
+    {
+        let len = read_array_length(caller, ptr).unwrap_or(0);
+        for i in 0..len {
+            let val = read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
+            let _ = push_array_value(caller, arr, val);
+        }
+        return value::encode_undefined();
+    }
+
+    if let Some(bytes) = read_value_string_bytes(caller, iterable) {
+        for byte in bytes {
+            let val = store_runtime_string(caller, (byte as char).to_string());
+            let _ = push_array_value(caller, arr, val);
+        }
+        return value::encode_undefined();
+    }
+
+    if let Some(ptr) = resolve_handle(caller, iterable)
+        && let Some(method) = read_iterator_method(caller, ptr)
+    {
+        let iterator = call_iterable_method_async(caller, method, iterable).await;
+        if push_iterator_values_async(caller, arr, iterator).await {
+            return value::encode_undefined();
+        }
+    }
+
+    set_runtime_error(
+        caller.data(),
+        "TypeError: value is not iterable".to_string(),
+    );
+    value::encode_undefined()
+}
+
 pub(crate) fn define_array_object(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -781,27 +879,6 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "has_own_property", has_own_property_fn)?;
-    // ── Import 84: obj_keys(i64) -> i64 ───────────────────────────────────────
-    let obj_keys_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return value::encode_undefined();
-            };
-            let names = collect_own_property_names(&mut caller, ptr, true);
-            let arr = alloc_array(&mut caller, names.len() as u32);
-            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_undefined();
-            };
-            for (i, name) in names.iter().enumerate() {
-                let key_val = store_runtime_string(&caller, name.clone());
-                write_array_elem(&mut caller, arr_ptr, i as u32, key_val);
-            }
-            write_array_length(&mut caller, arr_ptr, names.len() as u32);
-            arr
-        },
-    );
-    linker.define(&mut store, "env", "obj_keys", obj_keys_fn)?;
     // ── Import 85: obj_values(i64) -> i64 ─────────────────────────────────────
     let obj_values_fn = Func::wrap(
         &mut store,
@@ -822,37 +899,6 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "obj_values", obj_values_fn)?;
-    // ── Import 86: obj_entries(i64) -> i64 ────────────────────────────────────
-    let obj_entries_fn = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
-            let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return value::encode_undefined();
-            };
-            let names = collect_own_property_names(&mut caller, ptr, true);
-            let values = collect_own_property_values(&mut caller, ptr, true);
-            let len = names.len().min(values.len());
-            let arr = alloc_array(&mut caller, len as u32);
-            let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_undefined();
-            };
-            for i in 0..len {
-                // 每个元素是一个 [key, value] 子数组
-                let sub_arr = alloc_array(&mut caller, 2);
-                let Some(sub_ptr) = resolve_array_ptr(&mut caller, sub_arr) else {
-                    continue;
-                };
-                let key_val = store_runtime_string(&caller, names[i].clone());
-                write_array_elem(&mut caller, sub_ptr, 0, key_val);
-                write_array_elem(&mut caller, sub_ptr, 1, values[i]);
-                write_array_length(&mut caller, sub_ptr, 2);
-                write_array_elem(&mut caller, arr_ptr, i as u32, sub_arr);
-            }
-            write_array_length(&mut caller, arr_ptr, len as u32);
-            arr
-        },
-    );
-    linker.define(&mut store, "env", "obj_entries", obj_entries_fn)?;
     // ── Import 87: obj_assign(i64, i64, i32, i32) -> i64 ──────────────────────
     let obj_assign_fn = Func::wrap(
         &mut store,
@@ -1130,31 +1176,31 @@ pub(crate) fn define_array_object(
         },
     );
     linker.define(&mut store, "env", "obj_set_proto_of", obj_set_proto_of_fn)?;
-    // ── Import 91: obj_get_own_prop_names(i64) -> i64 ─────────────────────────
-    let obj_get_own_prop_names_fn = Func::wrap(
+
+    // ── Import: obj_get_own_prop_symbols(i64) -> i64 ────────────────────────
+    let obj_get_own_prop_symbols_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
             let Some(ptr) = resolve_handle(&mut caller, obj) else {
                 return value::encode_undefined();
             };
-            let names = collect_own_property_names(&mut caller, ptr, false);
-            let arr = alloc_array(&mut caller, names.len() as u32);
+            let symbols = collect_own_property_key_values(&mut caller, ptr, true);
+            let arr = alloc_array(&mut caller, symbols.len() as u32);
             let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return value::encode_undefined();
             };
-            for (i, name) in names.iter().enumerate() {
-                let key_val = store_runtime_string(&caller, name.clone());
-                write_array_elem(&mut caller, arr_ptr, i as u32, key_val);
+            for (i, symbol) in symbols.iter().enumerate() {
+                write_array_elem(&mut caller, arr_ptr, i as u32, *symbol);
             }
-            write_array_length(&mut caller, arr_ptr, names.len() as u32);
+            write_array_length(&mut caller, arr_ptr, symbols.len() as u32);
             arr
         },
     );
     linker.define(
         &mut store,
         "env",
-        "obj_get_own_prop_names",
-        obj_get_own_prop_names_fn,
+        "obj_get_own_prop_symbols",
+        obj_get_own_prop_symbols_fn,
     )?;
     // ── Import 92: obj_is(i64, i64) -> i64 ────────────────────────────────────
     let obj_is_fn = Func::wrap(
@@ -1215,6 +1261,19 @@ pub(crate) fn define_array_object(
         "obj_proto_value_of",
         obj_proto_value_of_fn,
     )?;
+    let obj_proto_init_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, obj: i64| -> i64 {
+            let to_string =
+                create_native_callable(caller.data(), NativeCallable::ObjectProtoToString);
+            let value_of =
+                create_native_callable(caller.data(), NativeCallable::ObjectProtoValueOf);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "toString", to_string);
+            let _ = define_host_data_property_from_caller(&mut caller, obj, "valueOf", value_of);
+            value::encode_undefined()
+        },
+    );
+    linker.define(&mut store, "env", "obj_proto_init", obj_proto_init_fn)?;
 
     // ═══════════════════════════════════════════════════════════════════
     // ── BigInt host functions ──────────────────────────────────────────

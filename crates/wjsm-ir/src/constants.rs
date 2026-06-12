@@ -45,9 +45,13 @@ pub const PROMISE_STRINGS_END: u32 = 224;
 // ── 用户字符串起始位置 ──────────────────────────────────────────────────────
 pub const USER_STRING_START: u32 = PROMISE_STRINGS_END;
 
+// ── 属性键编码 ──────────────────────────────────────────────────────────────
+// name_id 的最高位区分字符串键和 Symbol 键；低 31 位是对应表下标。
+pub const NAME_ID_SYMBOL_FLAG: u32 = 0x8000_0000;
+pub const NAME_ID_INDEX_MASK: u32 = !NAME_ID_SYMBOL_FLAG;
 // ── 属性槽相关常量 ──────────────────────────────────────────────────────────
 // 属性槽格式（32 字节）：
-// Offset 0:  name_id (4 bytes)  - 属性名在字符串表中的 ID
+// Offset 0:  name_id (4 bytes)  - 字符串或 Symbol 属性键编码
 // Offset 4:  flags (4 bytes)    - 属性标志位
 // Offset 8:  value (8 bytes)    - 数据属性的值，访问器属性为 undefined
 // Offset 16: getter (8 bytes)   - 访问器属性的 getter，数据属性为 undefined

@@ -139,7 +139,8 @@ impl Lowerer {
                     // DataView.prototype get/set 方法使用非 Type 12 的专用宿主导入；
                     // 对静态已知 DataView receiver 直连 CallBuiltin，避免通用 call_indirect 调用约定不匹配。
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
-                        && let Some(dv_builtin) = builtin_from_dataview_proto_method(&prop_ident.sym)
+                        && let Some(dv_builtin) =
+                            builtin_from_dataview_proto_method(&prop_ident.sym)
                         && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
                         && self.is_dataview_binding(receiver_ident)
                     {
@@ -263,8 +264,6 @@ impl Lowerer {
                             );
                             return Ok(dest);
                         }
-
-
 
                         // Function.prototype.call/apply/bind: func.call(thisArg, ...args)
                         if let Some(func_builtin) =
@@ -432,6 +431,10 @@ impl Lowerer {
 
                         if let Some(number_proto_builtin) =
                             builtin_from_number_proto_method(&prop_ident.sym)
+                            && self.should_use_number_proto_call_fast_path(
+                                prop_ident.sym.as_ref(),
+                                member_expr.obj.as_ref(),
+                            )
                         {
                             this_val = self.lower_expr(&member_expr.obj, block)?;
                             let mut builtin_args = vec![this_val];
@@ -464,26 +467,6 @@ impl Lowerer {
                                 Instruction::CallBuiltin {
                                     dest: Some(dest),
                                     builtin: boolean_proto_builtin,
-                                    args: builtin_args,
-                                },
-                            );
-                            return Ok(dest);
-                        }
-
-                        if let Some(error_proto_builtin) =
-                            builtin_from_error_proto_method(&prop_ident.sym)
-                        {
-                            this_val = self.lower_expr(&member_expr.obj, block)?;
-                            let mut builtin_args = vec![this_val];
-                            for arg in &call.args {
-                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                            }
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
-                                block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: error_proto_builtin,
                                     args: builtin_args,
                                 },
                             );
@@ -734,6 +717,54 @@ impl Lowerer {
                 args: vec![scope_record, super_key, super_base],
             },
         );
+        // 7b. new.target (meta key=3). 箭头函数从词法环境捕获，普通函数读取当前调用上下文。
+        let nt_key = self.const_val_i64(eval_block, 3);
+        let new_target = if self.is_arrow {
+            let binding = CapturedBinding::lexical_new_target();
+            self.record_capture(binding.clone());
+            let env_val = self.load_env_object(eval_block);
+            let key_val = self.append_env_key_const(eval_block, &binding);
+            let new_target = self.alloc_value();
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::GetProp {
+                    dest: new_target,
+                    object: env_val,
+                    key: key_val,
+                },
+            );
+            new_target
+        } else {
+            let new_target = self.alloc_value();
+            let dummy_const = self.module.add_constant(Constant::Undefined);
+            let dummy_val = self.alloc_value();
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::Const {
+                    dest: dummy_val,
+                    constant: dummy_const,
+                },
+            );
+            self.current_function.append_instruction(
+                eval_block,
+                Instruction::CallBuiltin {
+                    dest: Some(new_target),
+                    builtin: Builtin::NewTarget,
+                    args: vec![dummy_val],
+                },
+            );
+            new_target
+        };
+        self.current_function.append_instruction(
+            eval_block,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ScopeRecordSetMeta,
+                args: vec![scope_record, nt_key, new_target],
+            },
+        );
+        // new.target for eval body: runtime reads scope meta first, then runtime global fallback.
+
         // 8. Call Eval(code, scope_record)
         let dest = self.alloc_value();
         self.current_function.append_instruction(
@@ -777,8 +808,8 @@ impl Lowerer {
         );
         self.emit_throw_value(exc_block, thrown_val)?;
 
-        // 10. Writeback: for each initialised binding, read from ScopeRecord
-        for (scope_id, name, _, _) in &all_bindings {
+        // 10. Writeback: read post-eval values for visible bindings (incl. TDZ let/const after assign)
+        for (scope_id, name, _, _is_initialised) in &all_bindings {
             let binding = CapturedBinding::new(name.clone(), *scope_id);
 
             let name_const = self.module.add_constant(Constant::String(name.clone()));
@@ -934,9 +965,9 @@ impl Lowerer {
         name: &str,
         value: ValueId,
         block: BasicBlockId,
-    ) {
+    ) -> Result<BasicBlockId, LoweringError> {
         if !self.eval_scope_bridge_active() {
-            return;
+            return Ok(block);
         }
         let env = self.load_eval_scope_env(block);
         if self.eval_scope_record {
@@ -949,25 +980,55 @@ impl Lowerer {
                     constant: name_const,
                 },
             );
+            let set_result = self.alloc_value();
             self.current_function.append_instruction(
                 block,
                 Instruction::CallBuiltin {
-                    dest: None,
+                    dest: Some(set_result),
                     builtin: Builtin::EvalSetBinding,
                     args: vec![env, name_val, value],
                 },
             );
-        } else {
-            let key = self.append_eval_env_key_const(block, name);
+            let is_exc = self.alloc_value();
             self.current_function.append_instruction(
                 block,
-                Instruction::SetProp {
-                    object: env,
-                    key,
-                    value,
+                Instruction::IsException {
+                    dest: is_exc,
+                    value: set_result,
                 },
             );
+            let ok_block = self.current_function.new_block();
+            let exc_block = self.current_function.new_block();
+            self.current_function.set_terminator(
+                block,
+                Terminator::Branch {
+                    condition: is_exc,
+                    true_block: exc_block,
+                    false_block: ok_block,
+                },
+            );
+            let thrown_val = self.alloc_value();
+            self.current_function.append_instruction(
+                exc_block,
+                Instruction::CallBuiltin {
+                    dest: Some(thrown_val),
+                    builtin: Builtin::ExceptionValue,
+                    args: vec![set_result],
+                },
+            );
+            self.emit_throw_value(exc_block, thrown_val)?;
+            return Ok(ok_block);
         }
+        let key = self.append_eval_env_key_const(block, name);
+        self.current_function.append_instruction(
+            block,
+            Instruction::SetProp {
+                object: env,
+                key,
+                value,
+            },
+        );
+        Ok(block)
     }
     fn const_val_i64(&mut self, block: BasicBlockId, value: i64) -> ValueId {
         let dest = self.alloc_value();
@@ -981,11 +1042,35 @@ impl Lowerer {
         dest
     }
 
-    fn const_val(&mut self, block: BasicBlockId, constant: ConstantId) -> ValueId {
-        let dest = self.alloc_value();
-        self.current_function
-            .append_instruction(block, Instruction::Const { dest, constant });
-        dest
+    fn expr_is_static_number_receiver(&self, expr: &swc_ast::Expr) -> bool {
+        let mut cur = expr;
+        loop {
+            match cur {
+                swc_ast::Expr::Paren(paren) => cur = paren.expr.as_ref(),
+                swc_ast::Expr::Lit(swc_ast::Lit::Num(_)) => return true,
+                swc_ast::Expr::Unary(unary) => {
+                    return matches!(unary.op, swc_ast::UnaryOp::Minus | swc_ast::UnaryOp::Plus)
+                        && matches!(unary.arg.as_ref(), swc_ast::Expr::Lit(swc_ast::Lit::Num(_)));
+                }
+                _ => return false,
+            }
+        }
+    }
+
+    /// `toString` / `valueOf` 对任意 `*.toString()` 误匹配会抢走 Error 等对象；仅数值字面量走快路径。
+    /// `toFixed` 等格式方法仍对数值字面量 `(42).toFixed(2)` 保持快路径。
+    fn should_use_number_proto_call_fast_path(
+        &self,
+        method: &str,
+        receiver: &swc_ast::Expr,
+    ) -> bool {
+        match method {
+            "toString" | "valueOf" => self.expr_is_static_number_receiver(receiver),
+            "toFixed" | "toExponential" | "toPrecision" => {
+                self.expr_is_static_number_receiver(receiver)
+            }
+            _ => false,
+        }
     }
 
     /// 检测表达式是否为 Object.prototype.toString 或 Object.prototype.valueOf

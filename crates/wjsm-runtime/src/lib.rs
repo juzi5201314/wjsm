@@ -17,6 +17,8 @@ use wasmtime::*;
 const SHADOW_STACK_SIZE: u32 = 65536;
 
 use wjsm_ir::{constants, value};
+mod agent_cluster;
+mod property_key;
 mod runtime_arguments;
 mod runtime_async_fn;
 mod runtime_builtins;
@@ -27,7 +29,6 @@ mod runtime_host_helpers;
 mod runtime_json;
 mod runtime_microtask;
 mod runtime_promises;
-mod agent_cluster;
 mod shared_buffer;
 pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;
@@ -37,6 +38,7 @@ mod runtime_render;
 mod runtime_values;
 mod wasm_env;
 use host_imports::*;
+use property_key::*;
 pub(crate) use wasm_env::WasmEnv;
 
 use runtime_arguments::*;
@@ -119,16 +121,16 @@ fn register_common_bridges(
     // eval_get_binding
     let f = Func::wrap(
         &mut *store,
-        |caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
-            eval_get_binding(caller, record, name)
+        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+            eval_get_binding(&mut caller, record, name)
         },
     );
     linker.define(&mut *store, "env", "eval_get_binding", f)?;
     // eval_set_binding
     let f = Func::wrap(
         &mut *store,
-        |caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64| -> i64 {
-            eval_set_binding(caller, record, name, val)
+        |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64| -> i64 {
+            eval_set_binding(&mut caller, record, name, val)
         },
     );
     linker.define(&mut *store, "env", "eval_set_binding", f)?;
@@ -163,29 +165,47 @@ fn register_common_bridges(
     // symbol_property_key
     let f = Func::wrap(
         &mut *store,
-        |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
-            if value::is_symbol(key) {
-                let handle = value::decode_handle(key) as usize;
-                let desc_str = {
-                    let table = caller.data().symbol_table.lock().expect("symbol table");
-                    table.get(handle).and_then(|e| e.description.clone())
-                };
-                if let Some(desc) = desc_str {
-                    let trimmed = desc
-                        .strip_prefix("Symbol(")
-                        .and_then(|s| s.strip_suffix(")"))
-                        .unwrap_or(&desc);
-                    let name_id = find_memory_c_string(&mut caller, trimmed)
-                        .or_else(|| alloc_heap_c_string(&mut caller, trimmed));
-                    if let Some(id) = name_id {
-                        return id as i32;
-                    }
-                }
+        |_caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+            if let Some(name_id) = symbol_value_to_name_id(key) {
+                return name_id as i32;
             }
             key as i32
         },
     );
     linker.define(&mut *store, "env", "symbol_property_key", f)?;
+    // native_callable_get_property
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, native: i64, name_id: i32| -> i64 {
+            let name_id = name_id as u32;
+            if is_symbol_name_id(name_id) || read_string_bytes(&mut caller, name_id) != b"prototype"
+            {
+                return value::encode_undefined();
+            }
+            let idx = value::decode_native_callable_idx(native) as usize;
+            let record = {
+                let table = caller
+                    .data()
+                    .native_callables
+                    .lock()
+                    .expect("native callable table mutex");
+                table.get(idx).cloned()
+            };
+            match record {
+                Some(NativeCallable::ArrayConstructor) => {
+                    let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
+                    let handle = env.array_proto_handle.get(&mut caller).i32().unwrap_or(-1);
+                    if handle >= 0 {
+                        value::encode_object_handle(handle as u32)
+                    } else {
+                        value::encode_undefined()
+                    }
+                }
+                _ => value::encode_undefined(),
+            }
+        },
+    );
+    linker.define(&mut *store, "env", "native_callable_get_property", f)?;
     // array.from
     let f = Func::wrap(
         &mut *store,
@@ -461,26 +481,19 @@ fn register_complex_bridges(
                         return create_async_from_sync_iterator(&mut caller, sync_iter_handle);
                     }
                 }
-                // 尝试 @@asyncIterator
-                if let Some(method) =
-                    read_object_property_by_name(&mut caller, ptr, "Symbol.asyncIterator")
-                {
-                    if value::is_callable(method) {
-                        let iterator = if value::is_native_callable(method) {
-                            call_native_callable_with_args_from_caller(
-                                &mut caller,
-                                method,
-                                iterable,
-                                vec![],
-                            )
-                            .unwrap_or_else(value::encode_undefined)
-                        } else if let Ok(result) =
-                            call_wasm_callback_async(&mut caller, method, iterable, &[]).await
-                        {
-                            result
-                        } else {
-                            value::encode_undefined()
-                        };
+                // 尝试 @@asyncIterator（使用 GetMethod 规范实现）
+                match crate::host_imports::get_method_by_name_id(
+                    &mut caller,
+                    iterable,
+                    encode_symbol_name_id(3),
+                ) {
+                    Ok(Some(method)) => {
+                        let iterator =
+                            call_iterable_method_async(&mut caller, method, iterable).await;
+                        // 若 method 调用返回异常（如内部抛出 TypeError），直接返回
+                        if value::is_exception(iterator) {
+                            return iterator;
+                        }
                         if value::is_object(iterator) {
                             if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
                                 let next =
@@ -497,6 +510,7 @@ fn register_complex_bridges(
                                         caller.data().iterators.lock().expect("iterators mutex");
                                     let handle = iters.len() as u32;
                                     iters.push(IteratorState::ObjectIter {
+                                        iterator,
                                         next: next_fn,
                                         return_method,
                                         current_value: value::encode_undefined(),
@@ -507,35 +521,24 @@ fn register_complex_bridges(
                                 }
                             }
                         }
-                    } else if !value::is_undefined(method) && !value::is_null(method) {
-                        return create_error_object(
-                            &mut caller,
-                            "TypeError",
-                            value::encode_undefined(),
-                        );
                     }
+                    Err(exc) => return exc,
+                    Ok(None) => {}
                 }
 
-                // 回退到 @@iterator
-                if let Some(method) =
-                    read_object_property_by_name(&mut caller, ptr, "Symbol.iterator")
-                {
-                    if value::is_callable(method) {
-                        let sync_iter = if value::is_native_callable(method) {
-                            call_native_callable_with_args_from_caller(
-                                &mut caller,
-                                method,
-                                iterable,
-                                vec![],
-                            )
-                            .unwrap_or_else(value::encode_undefined)
-                        } else if let Ok(result) =
-                            call_wasm_callback_async(&mut caller, method, iterable, &[]).await
-                        {
-                            result
-                        } else {
-                            value::encode_undefined()
-                        };
+                // 回退到 @@iterator（使用 GetMethod 规范实现）
+                match crate::host_imports::get_method_by_name_id(
+                    &mut caller,
+                    iterable,
+                    encode_symbol_name_id(0),
+                ) {
+                    Ok(Some(method)) => {
+                        let sync_iter =
+                            call_iterable_method_async(&mut caller, method, iterable).await;
+                        // 若 method 调用返回异常（如内部抛出 TypeError），直接返回
+                        if value::is_exception(sync_iter) {
+                            return sync_iter;
+                        }
                         if value::is_object(sync_iter) {
                             if let Some(sync_ptr) = resolve_handle(&mut caller, sync_iter) {
                                 let next_fn =
@@ -556,6 +559,7 @@ fn register_complex_bridges(
                                             .expect("iterators mutex");
                                         let sync_handle = iters.len() as u32;
                                         iters.push(IteratorState::ObjectIter {
+                                            iterator: sync_iter,
                                             next: next_fn,
                                             return_method,
                                             current_value: value::encode_undefined(),
@@ -572,9 +576,15 @@ fn register_complex_bridges(
                             }
                         }
                     }
+                    Err(exc) => return exc,
+                    Ok(None) => {}
                 }
-
-                create_error_object(&mut caller, "TypeError", value::encode_undefined())
+                // GetIterator 收尾：@@asyncIterator / @@iterator 均不可用，或方法返回的
+                // 对象缺少可调用 next。规范要求抛出 TypeError。返回可捕获的 TAG_EXCEPTION
+                // （而非裸 error 对象）：该值作为迭代器句柄存入后，首次 iterator.next 会被
+                // iterator_next_async 转成 rejected promise，经 await 的 is_rejected 路径在
+                // for-await 外层 try/catch 捕获，避免把不可用对象当作迭代器句柄继续迭代。
+                make_type_error_exception(&mut caller, "value is not async iterable")
             })
         },
     )?;
@@ -913,12 +923,13 @@ async fn execute_with_writer_shared_inner<W: Write>(
         table.push(NativeCallable::AsyncIteratorProtoSymbolAsyncIterator);
         value::encode_native_callable_idx(handle)
     };
-    let _ = define_host_data_property_with_env(
+    let _ = define_host_data_property_by_name_id_with_env(
         &mut store,
         &wasm_env,
         async_iterator_proto,
-        "Symbol.asyncIterator",
+        encode_symbol_name_id(3),
         async_iterator_symbol_async_iterator,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
     );
     let async_iterator_tag =
         store_runtime_string_in_state(store.data(), "AsyncIterator".to_string());
@@ -991,6 +1002,7 @@ impl Clone for RuntimeState {
             async_from_sync_iterators: self.async_from_sync_iterators.clone(),
             async_iterator_prototype: self.async_iterator_prototype,
             async_gen_prototype: self.async_gen_prototype,
+            array_proto_values: AtomicI64::new(self.array_proto_values.load(Ordering::Relaxed)),
             combinator_contexts: self.combinator_contexts.clone(),
             module_namespace_cache: self.module_namespace_cache.clone(),
             error_table: self.error_table.clone(),
@@ -1097,6 +1109,8 @@ struct RuntimeState {
     weakset_table: Arc<Mutex<Vec<WeakSetEntry>>>,
     /// WeakRef 侧表：存储 WeakRef 对象的 target handle
     weakref_table: Arc<Mutex<Vec<WeakRefEntry>>>,
+    /// Array.prototype.values 缓存，用于规范要求复用该函数对象的 @@iterator。
+    array_proto_values: AtomicI64,
     /// FinalizationRegistry 侧表：存储 registry 对象、callback 和注册信息
     finalization_registry_table: Arc<Mutex<Vec<FinalizationRegistryEntry>>>,
     /// GC 后待调度的清理回调
@@ -1246,6 +1260,7 @@ impl RuntimeState {
             dataview_table: Arc::new(Mutex::new(Vec::new())),
             typedarray_table: Arc::new(Mutex::new(Vec::new())),
             headers_table: Arc::new(Mutex::new(Vec::new())),
+            array_proto_values: AtomicI64::new(value::encode_undefined()),
             fetch_response_table: Arc::new(Mutex::new(Vec::new())),
             fetch_request_table: Arc::new(Mutex::new(Vec::new())),
             abort_signal_table: Arc::new(Mutex::new(Vec::new())),
@@ -1938,11 +1953,16 @@ pub(crate) fn typedarray_construct(
             return value::encode_undefined();
         };
         let byte_len = value::decode_f64(byte_len_val) as u32;
-        let (buf_handle, is_shared_from_backing) = match crate::shared_buffer::resolve_buffer_backing(caller, buffer) {
-            Some(crate::shared_buffer::BufferBacking::SharedArrayBuffer { handle, .. }) => (handle, true),
-            Some(crate::shared_buffer::BufferBacking::ArrayBuffer { handle, .. }) => (handle, false),
-            _ => return value::encode_undefined(),
-        };
+        let (buf_handle, is_shared_from_backing) =
+            match crate::shared_buffer::resolve_buffer_backing(caller, buffer) {
+                Some(crate::shared_buffer::BufferBacking::SharedArrayBuffer { handle, .. }) => {
+                    (handle, true)
+                }
+                Some(crate::shared_buffer::BufferBacking::ArrayBuffer { handle, .. }) => {
+                    (handle, false)
+                }
+                _ => return value::encode_undefined(),
+            };
         backing_is_shared = is_shared_from_backing;
         if offset > byte_len || offset % elem_size_u32 != 0 {
             set_typedarray_runtime_error(caller, "RangeError: Invalid typed array byteOffset");
@@ -1974,12 +1994,7 @@ pub(crate) fn typedarray_construct(
         let Some(view_byte_len) = typedarray_byte_len(caller, len, elem_size_u32) else {
             return value::encode_undefined();
         };
-        (
-            buf_handle,
-            offset,
-            len,
-            view_byte_len,
-        )
+        (buf_handle, offset, len, view_byte_len)
     } else {
         let Some(len) =
             typedarray_to_index(caller, buffer, "RangeError: Invalid typed array length")
@@ -2111,6 +2126,12 @@ struct ClosureEntry {
 #[derive(Clone)]
 enum NativeCallable {
     EvalIndirect,
+
+    /// raw f64 上 `n.toString()` 等；`method`: 0=toString, 1=valueOf, 2=toFixed, 3=toExponential, 4=toPrecision
+    NumberPrimitiveMethod {
+        method: u8,
+    },
+    ArgumentsStrictCalleeGetter,
     EvalFunction(EvalFunction),
     PromiseResolvingFunction {
         promise: i64,
@@ -2131,6 +2152,13 @@ enum NativeCallable {
     },
     /// %AsyncIteratorPrototype%[Symbol.asyncIterator]() → return this
     AsyncIteratorProtoSymbolAsyncIterator,
+    /// Array.prototype.values() / arguments @@iterator。
+    ArrayProtoValues,
+    ArrayLikeIteratorNext {
+        target: i64,
+        index: Arc<Mutex<u32>>,
+        length: u32,
+    },
     /// AsyncFromSyncIterator.prototype.next()
     AsyncFromSyncNext {
         handle: u32,
@@ -2160,6 +2188,8 @@ enum NativeCallable {
     FinalizationRegistryUnregisterMethod,
     ArrayConstructor,
     ObjectConstructor,
+    ObjectProtoToString,
+    ObjectProtoValueOf,
     FunctionConstructor,
     StringConstructor,
     BooleanConstructor,
@@ -2545,6 +2575,7 @@ enum IteratorState {
         length: u32,
     },
     ObjectIter {
+        iterator: i64,
         next: i64,
         return_method: Option<i64>,
         current_value: i64,
@@ -2769,6 +2800,10 @@ struct AsyncFromSyncIteratorEntry {
     sync_iterator: i64,
     /// 同步迭代器是否已完成
     sync_done: bool,
+    /// for-await 使用的 AsyncFromSync 外层 TAG_ITERATOR 句柄
+    outer_iter: i64,
+    /// 外层 ObjectIter 在 iterators 表中的索引
+    outer_handle_idx: u32,
 }
 
 #[cfg(test)]

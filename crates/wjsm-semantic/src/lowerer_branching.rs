@@ -341,8 +341,15 @@ impl Lowerer {
             }
         }
 
-        // 设置 switch terminator：default 指向 case_blocks[default_pos]，无 default 则指向 exit
-        let default_target = default_pos.map(|p| case_blocks[p]).unwrap_or(exit);
+        // 设置 switch terminator：default 指向 case_blocks[default_pos]，无 default 则分配合成块 jump 到 exit
+        let default_target = if let Some(p) = default_pos {
+            case_blocks[p]
+        } else {
+            let synthetic_default = self.current_function.new_block();
+            self.current_function
+                .set_terminator(synthetic_default, Terminator::Jump { target: exit });
+            synthetic_default
+        };
 
         self.current_function.set_terminator(
             block,
@@ -352,6 +359,16 @@ impl Lowerer {
                 default_block: default_target,
                 exit_block: exit,
             },
+        );
+
+        // Invariant: default_block and exit_block must always be distinct BasicBlockIds.
+        // Explicit default → points to case_blocks[default_pos] (allocated before exit).
+        // No default → points to synthetic block (allocated before exit, sole terminator Jump { target: exit }).
+        // This assertion catches any future regressions where these blocks are aliased.
+        debug_assert_ne!(
+            default_target, exit,
+            "Switch default_block and exit_block must be distinct (default={:?}, exit={:?})",
+            default_target, exit
         );
 
         // Lower case bodies

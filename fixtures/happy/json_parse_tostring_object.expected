@@ -1,5 +1,4 @@
-exit_code: 2
+exit_code: 0
 --- stdout ---
-Uncaught exception: [object Object]
+x: 1
 --- stderr ---
-Runtime error: Uncaught exception: [object Object]

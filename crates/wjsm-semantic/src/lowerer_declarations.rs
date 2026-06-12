@@ -44,6 +44,13 @@ impl Lowerer {
             if let Some(init) = &declarator.init {
                 let value = self.lower_expr(init, block)?;
                 block = self.resolve_store_block(block);
+                // 初始化器位于声明语句的顶层表达式位置：若它可能返回 TAG_EXCEPTION
+                // （调用 / 成员读取 / new / `in` 等），插入异常检查分叉，使
+                // `let x = throws()` 之类在 try/catch 中可被捕获，而非令 TAG_EXCEPTION
+                // 流入 StoreVar 后触发 WASM unreachable。
+                if self.expr_can_throw(init) && self.expr_exception_fork_allowed() {
+                    block = self.lower_value_exception_branch(block, value)?;
+                }
                 block = self.lower_destructure_pattern(&declarator.name, value, block, kind)?;
                 // 若为简单 ident = new TypedArrayConstructor(...)，记录绑定类型
                 if let swc_ast::Pat::Ident(binding) = &declarator.name {
@@ -392,17 +399,22 @@ impl Lowerer {
         &mut self,
         block: BasicBlockId,
     ) -> Result<BasicBlockId, LoweringError> {
-        // arguments may already be declared (var arguments in body or eval predeclare)
+        if self.scopes.current_function_has_param_arguments() {
+            return Ok(block);
+        }
         let scope_id = match self.scopes.declare("arguments", VarKind::Let, true) {
             Ok(id) => {
                 self.scopes
                     .set_implicit_arguments("arguments")
-                    .expect("arguments should have been declared");
+                    .map_err(|msg| LoweringError::Diagnostic(Diagnostic::new(0, 0, msg)))?;
                 id
             }
             Err(_) => {
-                // Already declared (var/let arguments in body or eval predeclare)
-                self.scopes.resolve_scope_id("arguments").unwrap_or(0)
+                if let Ok((sid, _)) = self.scopes.lookup("arguments") {
+                    sid
+                } else {
+                    return Ok(block);
+                }
             }
         };
         let ir_name = format!("${scope_id}.arguments");
@@ -417,8 +429,7 @@ impl Lowerer {
             },
         );
 
-        // 2) Build param_count constant (0 = unused for unmapped mode, needed for future mapped mode)
-        let param_count = 0.0;
+        let param_count = self.arguments_param_count as f64;
         let param_count_val = self.alloc_value();
         self.current_function.append_instruction(
             block,
@@ -428,18 +439,76 @@ impl Lowerer {
             },
         );
 
-        // 3) Call CreateUnmappedArgumentsObject (produces proper Arguments exotic object)
         let arguments_obj = self.alloc_value();
-        self.current_function.append_instruction(
-            block,
-            Instruction::CallBuiltin {
-                dest: Some(arguments_obj),
-                builtin: Builtin::CreateUnmappedArgumentsObject,
-                args: vec![args_array, param_count_val],
-            },
-        );
+        let needs_mapped = !self.strict_mode && !self.is_arrow && !self.is_method;
 
-        // 4) Store to arguments variable
+        let fn_name = self.current_function.name().to_string();
+        let mapped_self_binding = if needs_mapped {
+            self.scopes
+                .lookup(&fn_name)
+                .ok()
+                .map(|(scope_id, _)| CapturedBinding::new(&fn_name, scope_id))
+        } else {
+            None
+        };
+
+        // D5: 精确发 Const — mapped && 无 binding → FunctionRef；mapped && 有 binding → undefined；unmapped → 不发
+        let func_ref_val = if needs_mapped {
+            let val = self.alloc_value();
+            if mapped_self_binding.is_none() {
+                let function_id = wjsm_ir::FunctionId(self.module.functions().len() as u32);
+                let func_ref_const = self.module.add_constant(Constant::FunctionRef(function_id));
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: val,
+                        constant: func_ref_const,
+                    },
+                );
+            } else {
+                let undef_const = self.module.add_constant(Constant::Undefined);
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: val,
+                        constant: undef_const,
+                    },
+                );
+            }
+            val
+        } else {
+            // unmapped 不吃 func_ref_val，但为保持签名一致仍传 undefined（IR 层不会读）
+            let val = self.alloc_value();
+            let undef_const = self.module.add_constant(Constant::Undefined);
+            self.current_function.append_instruction(
+                block,
+                Instruction::Const {
+                    dest: val,
+                    constant: undef_const,
+                },
+            );
+            val
+        };
+
+        if needs_mapped {
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(arguments_obj),
+                    builtin: Builtin::CreateMappedArgumentsObject,
+                    args: vec![args_array, param_count_val, func_ref_val],
+                },
+            );
+        } else {
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: Some(arguments_obj),
+                    builtin: Builtin::CreateUnmappedArgumentsObject,
+                    args: vec![args_array, param_count_val],
+                },
+            );
+        }
         let store_block = self.resolve_store_block(block);
         self.current_function.append_instruction(
             store_block,
@@ -448,6 +517,40 @@ impl Lowerer {
                 value: arguments_obj,
             },
         );
+
+        if let Some(binding) = mapped_self_binding {
+            let patch_block = self.resolve_store_block(store_block);
+            let env_val = self.load_env_object(patch_block);
+            let env_key_val = self.append_env_key_const(patch_block, &binding);
+            let closure_val = self.alloc_value();
+            self.current_function.append_instruction(
+                patch_block,
+                Instruction::GetProp {
+                    dest: closure_val,
+                    object: env_val,
+                    key: env_key_val,
+                },
+            );
+            let callee_key = self.alloc_value();
+            self.current_function.append_instruction(
+                patch_block,
+                Instruction::Const {
+                    dest: callee_key,
+                    constant: self
+                        .module
+                        .add_constant(Constant::String("callee".to_string())),
+                },
+            );
+            self.current_function.append_instruction(
+                patch_block,
+                Instruction::SetProp {
+                    object: arguments_obj,
+                    key: callee_key,
+                    value: closure_val,
+                },
+            );
+            return Ok(self.resolve_store_block(patch_block));
+        }
 
         if self.scopes.mark_initialised("arguments").is_err() {
             // Already initialised, that's fine
@@ -584,7 +687,8 @@ impl Lowerer {
                         value: src_val,
                     },
                 );
-                self.append_eval_var_leak_if_needed(&name, kind, src_val, store_block);
+                let store_block =
+                    self.append_eval_var_leak_if_needed(&name, kind, src_val, store_block)?;
                 Ok(store_block)
             }
             swc_ast::Pat::Object(object_pat) => {
@@ -675,7 +779,8 @@ impl Lowerer {
                                 value: resolved,
                             },
                         );
-                        self.append_eval_var_leak_if_needed(&name, kind, resolved, block);
+                        block =
+                            self.append_eval_var_leak_if_needed(&name, kind, resolved, block)?;
                     } else {
                         block = self.lower_destructure_pattern(
                             &swc_ast::Pat::Ident(assign.key.clone()),

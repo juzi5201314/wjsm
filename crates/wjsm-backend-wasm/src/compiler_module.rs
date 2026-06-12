@@ -18,13 +18,17 @@ impl Compiler {
     }
     /// Nested JS functions may LoadVar `$0.$global` (builtin globals like `$262`); only `main` stores it at init.
     fn emit_init_module_global_for_js_function(&mut self, function: &IrFunction) {
-        let needs = function.blocks().iter().flat_map(|b| b.instructions()).any(|inst| {
-            matches!(
-                inst,
-                Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
-                    if name == "$0.$global"
-            )
-        });
+        let needs = function
+            .blocks()
+            .iter()
+            .flat_map(|b| b.instructions())
+            .any(|inst| {
+                matches!(
+                    inst,
+                    Instruction::LoadVar { name, .. } | Instruction::StoreVar { name, .. }
+                        if name == "$0.$global"
+                )
+            });
         if !needs {
             return;
         }
@@ -97,7 +101,7 @@ impl Compiler {
             self.function_param_counts.push(declared_param_count);
             self.function_names.push(function.name().to_string());
 
-            if function.name() == "main" {
+            if is_module_entry_ir_function(function.name()) {
                 if self.mode == CompileMode::Eval {
                     // eval entry: Type 3 = (scope_env: i64) -> i64 completion value
                     self.functions.function(3);
@@ -117,7 +121,7 @@ impl Compiler {
         }
 
         // Add main export (must be known now).
-        let main_idx = main_wasm_idx.context("backend-wasm expects lowered `main` function")?;
+        let main_idx = main_wasm_idx.context("backend-wasm expects lowered module entry function")?;
         if self.mode == CompileMode::Eval {
             self.exports
                 .export("__eval_entry", ExportKind::Func, main_idx);
@@ -281,7 +285,7 @@ impl Compiler {
         // Record user function base index (after all imports + helpers)
         self.user_func_base_idx = self._next_import_func;
         for (function_id, function) in module.functions().iter().enumerate() {
-            if function.name() == "main" {
+            if is_module_entry_ir_function(function.name()) {
                 self.compile_function(module, function)?;
             } else {
                 self.compile_js_function(
@@ -292,6 +296,7 @@ impl Compiler {
             }
         }
 
+        self.compile_number_proto_wrappers();
         // Pass 3: Compile object helper functions.
         self.compile_object_helpers();
         // 编译数组辅助函数
@@ -526,7 +531,7 @@ impl Compiler {
         module: &IrModule,
         function: &IrFunction,
     ) -> Result<()> {
-        self.current_func_is_main = function.name() == "main";
+        self.current_func_is_main = is_module_entry_ir_function(function.name());
         self.current_func_returns_value =
             self.mode == CompileMode::Eval || self.current_func_is_main;
         self.ssa_local_base = if self.mode == CompileMode::Eval {
@@ -568,7 +573,7 @@ impl Compiler {
         // 预分配函数属性对象：为每个 IR 函数调用 $obj_new(8)，将返回的 handle_idx
         // 对应 obj_table[0..num_functions-1]，存储函数属性对象的 ptr。
         // 这样后续 GetProp/SetProp 可以通过 obj_table 统一查找。
-        if function.name() == "main" {
+        if is_module_entry_ir_function(function.name()) {
             let length_name_id = self.intern_data_string("length");
             let name_name_id = self.intern_data_string("name");
             let box_base = value::BOX_BASE as i64;
@@ -658,12 +663,29 @@ impl Compiler {
             }
 
             // ── 初始化 Object.prototype ──
-            // 创建空对象（容量 64），存储 handle 到 Global 10
+            // main 开始前创建 Object.prototype，并安装 toString/valueOf 原生方法。
+            self.emit(WasmInstruction::GlobalGet(
+                self.object_proto_handle_global_idx,
+            ));
+            self.emit(WasmInstruction::I32Const(-1));
+            self.emit(WasmInstruction::I32Eq);
+            self.emit(WasmInstruction::If(BlockType::Empty));
             self.emit(WasmInstruction::I32Const(64));
             self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+            self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
             self.emit(WasmInstruction::GlobalSet(
                 self.object_proto_handle_global_idx,
             ));
+            self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+            self.emit(WasmInstruction::I64ExtendI32U);
+            let object_tag = value::BOX_BASE as i64 | ((value::TAG_OBJECT << 32) as i64);
+            self.emit(WasmInstruction::I64Const(object_tag));
+            self.emit(WasmInstruction::I64Or);
+            self.emit(WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::ObjectProtoInit],
+            ));
+            self.emit(WasmInstruction::Drop);
+            self.emit(WasmInstruction::End);
         }
 
         let cfg = Cfg::from_function(function);

@@ -961,11 +961,19 @@ pub(crate) fn define_collections_buffers(
          byte_offset: i64,
          byte_length: i64|
          -> i64 {
-            let (buf_handle, buf_byte_length, is_shared) = match crate::shared_buffer::resolve_buffer_backing(&mut caller, buffer) {
-                Some(crate::shared_buffer::BufferBacking::SharedArrayBuffer { handle, byte_length, .. }) => (handle, byte_length, true),
-                Some(crate::shared_buffer::BufferBacking::ArrayBuffer { handle, byte_length }) => (handle, byte_length, false),
-                None => return value::encode_undefined(),
-            };
+            let (buf_handle, buf_byte_length, is_shared) =
+                match crate::shared_buffer::resolve_buffer_backing(&mut caller, buffer) {
+                    Some(crate::shared_buffer::BufferBacking::SharedArrayBuffer {
+                        handle,
+                        byte_length,
+                        ..
+                    }) => (handle, byte_length, true),
+                    Some(crate::shared_buffer::BufferBacking::ArrayBuffer {
+                        handle,
+                        byte_length,
+                    }) => (handle, byte_length, false),
+                    None => return value::encode_undefined(),
+                };
             let offset = if value::is_undefined(byte_offset) {
                 0
             } else {
@@ -1064,8 +1072,7 @@ pub(crate) fn define_collections_buffers(
                         &mut bytes[..$size],
                     ) {
                         *caller.data().runtime_error.lock().expect("error mutex") = Some(
-                            "RangeError: Offset is outside the bounds of the DataView"
-                                .to_string(),
+                            "RangeError: Offset is outside the bounds of the DataView".to_string(),
                         );
                         return value::encode_undefined();
                     }
@@ -1190,8 +1197,7 @@ pub(crate) fn define_collections_buffers(
                         &bytes[..$size],
                     ) {
                         *caller.data().runtime_error.lock().expect("error mutex") = Some(
-                            "RangeError: Offset is outside the bounds of the DataView"
-                                .to_string(),
+                            "RangeError: Offset is outside the bounds of the DataView".to_string(),
                         );
                         return value::encode_undefined();
                     }
@@ -1891,7 +1897,8 @@ pub(crate) fn define_collections_buffers(
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
                 alloc_host_object(&mut caller, &_wjsm_env, 1)
             };
-            let _ = define_host_data_property_from_caller(&mut caller, harness_obj, "agent", agent_obj);
+            let _ =
+                define_host_data_property_from_caller(&mut caller, harness_obj, "agent", agent_obj);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "$262", harness_obj);
 
             obj
@@ -2380,24 +2387,26 @@ pub(crate) fn define_collections_buffers(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, obj: i64, key_name_id: i32| -> i64 {
             if !value::is_object(obj) && !value::is_function(obj) {
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
-                    Some("TypeError: cannot read private member from non-object".to_string());
-                return value::encode_undefined();
+                return make_type_error_exception(
+                    &mut caller,
+                    "TypeError: Cannot read private member from a non-object",
+                );
             }
             let Some(ptr) = resolve_handle(&mut caller, obj) else {
-                return value::encode_undefined();
+                return make_type_error_exception(
+                    &mut caller,
+                    "TypeError: Cannot read private member from a non-object",
+                );
             };
+            // 品牌检查（PrivateElementFind）：实例上不存在该私有槽 → 同步抛出可捕获
+            // TypeError，而非延迟报错/返回 undefined。私有字段以 "#name" 受控属性键存储，
+            // 槽缺失即表示该对象不是声明此私有名的类的实例。
             match read_object_property_by_name_id(&mut caller, ptr, key_name_id as u32) {
                 Some(val) => val,
-                None => {
-                    *caller.data().runtime_error.lock().expect("runtime error mutex") =
-                        Some("TypeError: cannot read private member from an object whose class did not declare it".to_string());
-                    value::encode_undefined()
-                }
+                None => make_type_error_exception(
+                    &mut caller,
+                    "TypeError: Cannot read private member from an object whose class did not declare it",
+                ),
             }
         },
     );

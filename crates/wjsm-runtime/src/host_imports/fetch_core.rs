@@ -591,7 +591,7 @@ pub(crate) fn call_response_method_from_caller(
             let parsed = json_parse_to_wasm(caller, text, value::encode_undefined());
             let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
             if value::is_exception(parsed) {
-                let reason = exception_value_from_table(caller, parsed);
+    let reason = exception_reason(caller, parsed);
                 settle_promise(caller.data_mut(), p, PromiseSettlement::Reject(reason));
             } else {
                 settle_promise(caller.data_mut(), p, PromiseSettlement::Fulfill(parsed));
@@ -1047,15 +1047,6 @@ pub(crate) fn alloc_type_error_from_caller(
     let _ = define_host_data_property_from_caller(caller, obj, "name", name_val);
     let _ = define_host_data_property_from_caller(caller, obj, "message", msg_val);
     obj
-}
-
-fn exception_value_from_table(caller: &mut Caller<'_, RuntimeState>, exception: i64) -> i64 {
-    let idx = value::decode_handle(exception) as usize;
-    let errors = caller.data().error_table.lock().expect("error table mutex");
-    errors
-        .get(idx)
-        .map(|entry| entry.value)
-        .unwrap_or_else(value::encode_undefined)
 }
 
 fn type_error_exception(caller: &mut Caller<'_, RuntimeState>, message: &str) -> i64 {

@@ -48,11 +48,12 @@ pub(crate) fn define_async_generator(
             let _ = define_host_data_property_from_caller(&mut caller, generator, "return", ret);
             let _ = define_host_data_property_from_caller(&mut caller, generator, "throw", throw);
             let async_iter = create_async_generator_identity(caller.data(), generator);
-            let _ = define_host_data_property_from_caller(
+            let _ = define_host_data_property_by_name_id_with_flags(
                 &mut caller,
                 generator,
-                "Symbol.asyncIterator",
+                encode_symbol_name_id(3),
                 async_iter,
+                constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
             );
 
             let handle = value::decode_object_handle(generator) as usize;

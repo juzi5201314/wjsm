@@ -6,7 +6,7 @@ use thiserror::Error;
 use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, ConstantId, Function,
     FunctionId, HomeObject, Instruction, Module, PhiSource, Program, SwitchCaseTarget, Terminator,
-    UnaryOp, ValueId,
+    UnaryOp, ValueId, MODULE_ENTRY_IR_NAME,
 };
 
 const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
@@ -190,27 +190,6 @@ impl ScopeTree {
         }
     }
 
-    /// 返回当前词法环境可见的绑定；同名绑定只保留最近的一层。
-    fn visible_bindings(&self) -> Vec<(usize, String, VarKind)> {
-        let mut result = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let mut cursor = Some(self.current);
-        while let Some(scope_id) = cursor {
-            let scope = &self.arenas[scope_id];
-            let mut names: Vec<_> = scope.variables.keys().cloned().collect();
-            names.sort();
-            for name in names {
-                if seen.insert(name.clone())
-                    && let Some(info) = scope.variables.get(&name)
-                    && info.initialised
-                {
-                    result.push((scope.id, name, info.kind));
-                }
-            }
-            cursor = scope.parent;
-        }
-        result
-    }
     /// Return all lexically visible bindings, including uninitialized (TDZ) ones.
     /// Returns (scope_id, name, kind, is_initialised).
     fn visible_bindings_all(&self) -> Vec<(usize, String, VarKind, bool)> {
@@ -311,6 +290,15 @@ impl ScopeTree {
                 .ok_or_else(|| "root must be function scope".to_string())?;
         }
     }
+
+    /// True when the current function scope already has a binding named `arguments` (e.g. parameter).
+    fn current_function_has_param_arguments(&self) -> bool {
+        let Ok(scope_id) = self.nearest_function_scope() else {
+            return false;
+        };
+        self.arenas[scope_id].variables.contains_key("arguments")
+    }
+
     /// Mark an existing variable as implicit `arguments`.
     pub(crate) fn set_implicit_arguments(&mut self, name: &str) -> Result<(), String> {
         let mut cursor = Some(self.current);
@@ -352,6 +340,10 @@ impl FunctionBuilder {
 
     fn has_eval(&self) -> bool {
         self.has_eval
+    }
+
+    fn name(&self) -> &str {
+        &self._name
     }
 
     fn new_block(&mut self) -> BasicBlockId {
@@ -632,6 +624,7 @@ pub fn lower_eval_module_with_scope(
     lowerer.eval_has_scope_bridge = has_scope_bridge;
     lowerer.eval_var_writes_to_scope = var_writes_to_scope;
     lowerer.eval_scope_record = true;
+    lowerer.strict_mode = module_has_use_strict_directive(&module);
     lowerer.lower_module(&module)
 }
 
@@ -660,6 +653,10 @@ pub fn lower_modules(
     }
 
     // 多模块编译路径
+    // 早错误：对每个模块运行私有名静态校验（与单模块路径一致）。
+    for (_, module_ast) in &modules {
+        lowerer_classes_ts::validate_private_names(module_ast)?;
+    }
     let mut lowerer = Lowerer::new();
     lowerer.import_bindings = import_map.clone();
     lowerer.dynamic_import_targets = dynamic_import_targets.clone();
@@ -1205,7 +1202,7 @@ pub fn lower_modules(
     } else {
         let has_eval = lowerer.current_function.has_eval();
         let blocks = lowerer.current_function.into_blocks();
-        let mut function = Function::new("main", BasicBlockId(0));
+        let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
         function.set_has_eval(has_eval);
         for block in blocks {
             function.push_block(block);
@@ -1258,6 +1255,8 @@ struct Lowerer {
     super_call_allowed: bool,
     function_super_allowed_stack: Vec<bool>,
     function_super_call_allowed_stack: Vec<bool>,
+    function_is_arrow_stack: Vec<bool>,
+    function_is_method_stack: Vec<bool>,
     /// 每层函数的共享 env 对象 (ValueId) + 已注册的捕获绑定集合。
     /// 同一外层函数中的多个闭包共享同一个 env 对象，确保可变捕获变量的修改对所有闭包可见。
     shared_env_stack: Vec<Option<(ValueId, std::collections::HashSet<CapturedBinding>)>>,
@@ -1301,6 +1300,10 @@ struct Lowerer {
     async_closure_env_ir_name: Option<String>,
     pending_suspends: Vec<lowerer_async_eval::PendingSuspend>,
     strict_mode: bool,
+    pub(crate) is_arrow: bool,
+    pub(crate) is_method: bool,
+    /// 当前函数形参个数，供 emit_arguments_init 使用。
+    arguments_param_count: u32,
     script_mode: bool,
     eval_mode: bool,
     eval_has_scope_bridge: bool,
@@ -1386,6 +1389,17 @@ impl CapturedBinding {
             name: "$this".to_string(),
             scope_id: None,
         }
+    }
+
+    fn lexical_new_target() -> Self {
+        Self {
+            name: "__wjsm_new_target".to_string(),
+            scope_id: None,
+        }
+    }
+
+    fn is_lexical_new_target(&self) -> bool {
+        self.scope_id.is_none() && self.name == "__wjsm_new_target"
     }
 
     fn env_key(&self) -> String {

@@ -59,12 +59,53 @@ impl Lowerer {
 
         let result_block = match expr_stmt.expr.as_ref() {
             swc_ast::Expr::Call(call) => self.lower_call(call, block)?,
+            swc_ast::Expr::Member(_) | swc_ast::Expr::OptChain(_) => {
+                let value = self.lower_expr(expr_stmt.expr.as_ref(), block)?;
+                self.lower_value_exception_branch(block, value)?
+            }
             expr => {
                 let _value = self.lower_expr(expr, block)?;
                 self.resolve_store_block(block)
             }
         };
         Ok(StmtFlow::Open(result_block))
+    }
+
+    pub(crate) fn lower_value_exception_branch(
+        &mut self,
+        block: BasicBlockId,
+        value: ValueId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let working_block = self.resolve_store_block(block);
+        let is_exception = self.alloc_value();
+        self.current_function.append_instruction(
+            working_block,
+            Instruction::IsException {
+                dest: is_exception,
+                value,
+            },
+        );
+        let continue_block = self.current_function.new_block();
+        let exc_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            working_block,
+            Terminator::Branch {
+                condition: is_exception,
+                true_block: exc_block,
+                false_block: continue_block,
+            },
+        );
+        let thrown_val = self.alloc_value();
+        self.current_function.append_instruction(
+            exc_block,
+            Instruction::CallBuiltin {
+                dest: Some(thrown_val),
+                builtin: Builtin::ExceptionValue,
+                args: vec![value],
+            },
+        );
+        self.emit_throw_value(exc_block, thrown_val)?;
+        Ok(self.resolve_store_block(continue_block))
     }
 
     pub(crate) fn lower_call(

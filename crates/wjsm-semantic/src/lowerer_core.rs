@@ -14,7 +14,7 @@ impl Lowerer {
             scopes,
             hoisted_vars: Vec::new(),
             hoisted_vars_set: std::collections::HashSet::new(),
-            current_function: FunctionBuilder::new("main", BasicBlockId(0)),
+            current_function: FunctionBuilder::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0)),
             label_stack: Vec::new(),
             finally_stack: Vec::new(),
             try_contexts: Vec::new(),
@@ -39,6 +39,8 @@ impl Lowerer {
             super_call_allowed: false,
             function_super_allowed_stack: Vec::new(),
             function_super_call_allowed_stack: Vec::new(),
+            function_is_arrow_stack: Vec::new(),
+            function_is_method_stack: Vec::new(),
             shared_env_stack: Vec::new(),
             current_module_id: None,
             import_bindings: std::collections::HashMap::new(),
@@ -67,6 +69,9 @@ impl Lowerer {
             async_closure_env_ir_name: None,
             pending_suspends: Vec::new(),
             strict_mode: false,
+            is_arrow: false,
+            is_method: false,
+            arguments_param_count: 0,
             script_mode: false,
             eval_mode: false,
             eval_has_scope_bridge: false,
@@ -161,7 +166,10 @@ impl Lowerer {
             .push(self.super_call_allowed);
         self.super_allowed = false;
         self.super_call_allowed = false;
-        self.shared_env_stack.push(None); // 新函数上下文，尚无共享 env 对象
+        self.function_is_arrow_stack.push(self.is_arrow);
+        self.function_is_method_stack.push(self.is_method);
+        self.is_arrow = false;
+        self.is_method = false;
         self.function_hoisted_stack.push((
             std::mem::take(&mut self.hoisted_vars),
             std::mem::take(&mut self.hoisted_vars_set),
@@ -180,6 +188,7 @@ impl Lowerer {
             .push(std::mem::take(&mut self.active_finalizers));
         self.function_pending_loop_label_stack
             .push(self.pending_loop_label.take());
+        self.shared_env_stack.push(None);
         self.reset_async_context();
     }
 
@@ -194,11 +203,21 @@ impl Lowerer {
             .function_super_allowed_stack
             .pop()
             .expect("super context stack underflow");
+        self.is_arrow = self
+            .function_is_arrow_stack
+            .pop()
+            .expect("is_arrow stack underflow");
+        self.is_method = self
+            .function_is_method_stack
+            .pop()
+            .expect("is_method stack underflow");
         self.super_call_allowed = self
             .function_super_call_allowed_stack
             .pop()
             .expect("super call context stack underflow");
-        self.shared_env_stack.pop();
+        if self.shared_env_stack.len() > 1 {
+            self.shared_env_stack.pop();
+        }
         let (vars, set) = self
             .function_hoisted_stack
             .pop()
@@ -439,10 +458,24 @@ impl Lowerer {
         })
     }
 
+    pub(crate) fn count_regular_params(params: &[swc_ast::Param]) -> u32 {
+        let mut n = 0u32;
+        for p in params {
+            if matches!(p.pat, swc_ast::Pat::Rest(_)) {
+                break;
+            }
+            n += 1;
+        }
+        n
+    }
+
     pub(crate) fn lower_module(
         mut self,
         module: &swc_ast::Module,
     ) -> Result<Program, LoweringError> {
+        // 早错误：私有名词法有效性（AllPrivateIdentifiersValid）+ 类体私有名重复校验。
+        // 必须先于降级执行；覆盖单模块、eval（均经此方法）路径。
+        crate::lowerer_classes_ts::validate_private_names(module)?;
         // main 函数也需要 shared_env_stack 条目（顶层闭包需要在 main 中创建 env 对象）
         self.shared_env_stack.push(None);
         self.strict_mode = module_has_use_strict_directive(module);
@@ -760,7 +793,7 @@ impl Lowerer {
         } else {
             let has_eval = self.current_function.has_eval();
             let blocks = self.current_function.into_blocks();
-            let mut function = Function::new("main", BasicBlockId(0));
+            let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
             function.set_has_eval(has_eval);
             if self.eval_mode {
                 function.set_params(vec![EVAL_SCOPE_ENV_PARAM.to_string()]);

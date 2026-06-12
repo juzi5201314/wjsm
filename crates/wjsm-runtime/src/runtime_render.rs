@@ -74,6 +74,22 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
         let ptr = value::decode_object_handle(val);
         let obj_ptr = resolve_handle_idx(caller, ptr as usize);
         if let Some(op) = obj_ptr {
+            // C2: 先检查 __error_brand__，仅真实 Error 对象才渲染为 "Name: message"。
+            if let Some(brand_val) = read_object_property_by_name(caller, op, "__error_brand__") {
+                if value::is_bool(brand_val) && value::decode_bool(brand_val) {
+                    if let Some(name_val) = read_object_property_by_name(caller, op, "name") {
+                        let name = render_value(caller, name_val).unwrap_or_default();
+                        let message = read_object_property_by_name(caller, op, "message")
+                            .map(|message_val| render_value(caller, message_val).unwrap_or_default())
+                            .unwrap_or_default();
+                        if message.is_empty() {
+                            return Ok(name);
+                        }
+                        return Ok(format!("{name}: {message}"));
+                    }
+                }
+            }
+
             let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
             if let Some(mh) = map_handle {
                 let handle = value::decode_f64(mh) as usize;
@@ -953,6 +969,64 @@ pub(crate) fn format_number_js(x: f64) -> String {
     }
     let s = format!("{}", x);
     s
+}
+
+pub(crate) fn format_number_to_fixed_js(x: f64, digits: i32) -> String {
+    if x.is_nan() {
+        return "NaN".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    format!("{:.1$}", x, digits as usize)
+}
+
+pub(crate) fn format_number_to_exponential_js(x: f64, digits: Option<i32>) -> String {
+    if x.is_nan() {
+        return "NaN".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    if x == 0.0 {
+        if let Some(digits) = digits
+            && digits > 0
+        {
+            return format!("0.{}e+0", "0".repeat(digits as usize));
+        }
+        return "0e+0".to_string();
+    }
+    let s = if let Some(digits) = digits {
+        format!("{:.1$e}", x, digits as usize)
+    } else {
+        format!("{:e}", x)
+    };
+    normalize_exponent(&s)
+}
+
+pub(crate) fn format_number_to_precision_js(x: f64, precision: Option<i32>) -> String {
+    if x.is_nan() {
+        return "NaN".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
+    let Some(precision) = precision else {
+        return format_number_js(x);
+    };
+    if x == 0.0 {
+        if precision == 1 {
+            return "0".to_string();
+        }
+        return format!("0.{}", "0".repeat((precision - 1) as usize));
+    }
+    let exponent = x.abs().log10().floor() as i32;
+    if exponent >= precision || exponent < -6 {
+        let s = format!("{:.1$e}", x, (precision - 1) as usize);
+        return normalize_exponent(&s);
+    }
+    let fraction_digits = (precision - exponent - 1).max(0) as usize;
+    format!("{:.1$}", x, fraction_digits)
 }
 
 pub(crate) fn format_radix(mut value: i64, radix: u32) -> String {

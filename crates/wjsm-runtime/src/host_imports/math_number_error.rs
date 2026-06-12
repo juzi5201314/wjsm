@@ -654,16 +654,7 @@ pub(crate) fn define_math_number_error(
                     "RangeError: toFixed() digits argument must be between 0 and 100".to_string(),
                 );
             }
-            if x.is_nan() {
-                return store_runtime_string(&caller, "NaN".to_string());
-            }
-            if x.is_infinite() {
-                return store_runtime_string(
-                    &caller,
-                    if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string(),
-                );
-            }
-            let s = format!("{:.1$}", x, digits as usize);
+            let s = format_number_to_fixed_js(x, digits);
             store_runtime_string(&caller, s)
         },
     );
@@ -680,35 +671,14 @@ pub(crate) fn define_math_number_error(
                 return store_runtime_string(&caller, "NaN".to_string());
             }
             let x = f64::from_bits(this_val as u64);
-            if x.is_nan() {
-                return store_runtime_string(&caller, "NaN".to_string());
-            }
-            if x.is_infinite() {
-                return store_runtime_string(
-                    &caller,
-                    if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string(),
-                );
-            }
             let digits = if value::is_undefined(digits_val) || value::is_null(digits_val) {
-                -1i32
+                None
             } else if value::is_f64(digits_val) {
-                f64::from_bits(digits_val as u64) as i32
+                Some(f64::from_bits(digits_val as u64) as i32)
             } else {
-                -1
+                None
             };
-            if x == 0.0 {
-                if digits > 0 {
-                    let s = format!("0.{}e+0", "0".repeat(digits as usize));
-                    return store_runtime_string(&caller, s);
-                }
-                return store_runtime_string(&caller, "0e+0".to_string());
-            }
-            let s = if digits >= 0 {
-                format!("{:.1$e}", x, digits as usize)
-            } else {
-                format!("{:e}", x)
-            };
-            let s = normalize_exponent(&s);
+            let s = format_number_to_exponential_js(x, digits);
             store_runtime_string(&caller, s)
         },
     );
@@ -725,33 +695,22 @@ pub(crate) fn define_math_number_error(
                 return store_runtime_string(&caller, "NaN".to_string());
             }
             let x = f64::from_bits(this_val as u64);
-            if x.is_nan() {
-                return store_runtime_string(&caller, "NaN".to_string());
-            }
-            if x.is_infinite() {
-                return store_runtime_string(
-                    &caller,
-                    if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string(),
-                );
-            }
-            let precision = if value::is_undefined(digits_val) || value::is_null(digits_val) {
-                -1i32
+            let precision = if value::is_undefined(digits_val) {
+                None
             } else if value::is_f64(digits_val) {
-                f64::from_bits(digits_val as u64) as i32
+                Some(f64::from_bits(digits_val as u64) as i32)
             } else {
-                -1
+                Some(-1)
             };
-            if !(1..=21).contains(&precision) {
-                if value::is_undefined(digits_val) {
-                    let s = format_number_js(x);
-                    return store_runtime_string(&caller, s);
-                }
+            if let Some(precision) = precision
+                && !(1..=21).contains(&precision)
+            {
                 return store_runtime_string(
                     &caller,
                     "RangeError: toPrecision() argument must be between 1 and 21".to_string(),
                 );
             }
-            let s = format!("{:.1$}", x, precision as usize);
+            let s = format_number_to_precision_js(x, precision);
             store_runtime_string(&caller, s)
         },
     );
@@ -904,15 +863,14 @@ pub(crate) fn define_math_number_error(
                 resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             let name = obj_ptr
                 .and_then(|p| read_object_property_by_name(&mut caller, p, "name"))
-                .and_then(|v| read_value_string_bytes(&mut caller, v))
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .map(|v| get_string_value(&mut caller, v))
+                .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| "Error".to_string());
             let obj_ptr2 =
                 resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
             let message = obj_ptr2
                 .and_then(|p| read_object_property_by_name(&mut caller, p, "message"))
-                .and_then(|v| read_value_string_bytes(&mut caller, v))
-                .map(|b| String::from_utf8_lossy(&b).into_owned())
+                .map(|v| get_string_value(&mut caller, v))
                 .unwrap_or_default();
             if message.is_empty() {
                 store_runtime_string(&caller, name)
@@ -926,6 +884,33 @@ pub(crate) fn define_math_number_error(
         "env",
         "error_proto_to_string",
         error_proto_to_string_fn,
+    )?;
+
+    let primitive_number_get_method_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
+            if (boxed as u64 & value::BOX_BASE) == value::BOX_BASE {
+                return value::encode_undefined();
+            }
+            let method = match read_string_bytes(&mut caller, name_id as u32).as_slice() {
+                b"toString" => 0,
+                b"valueOf" => 1,
+                b"toFixed" => 2,
+                b"toExponential" => 3,
+                b"toPrecision" => 4,
+                _ => return value::encode_undefined(),
+            };
+            create_native_callable(
+                caller.data(),
+                NativeCallable::NumberPrimitiveMethod { method },
+            )
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "primitive_number_get_method",
+        primitive_number_get_method_fn,
     )?;
 
     // ── Map / Set helper: SameValueZero equality ──────────────────────

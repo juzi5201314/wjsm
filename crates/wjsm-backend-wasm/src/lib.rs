@@ -9,7 +9,7 @@ use wasm_encoder::{
 use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, Function as IrFunction,
     HomeObject, Instruction, Module as IrModule, Program, Terminator, UnaryOp, ValueId, constants,
-    value,
+    is_module_entry_ir_function, value,
 };
 
 pub mod host_import_registry;
@@ -136,9 +136,7 @@ struct Compiler {
     shadow_stack_end_global_idx: u32,
     /// WASM global index for array prototype handle.
     array_proto_handle_global_idx: u32,
-    /// Base table index for array prototype methods (Table[N+8])
     arr_proto_table_base: u32,
-    /// WASM function index for $get_prototype_from_constructor helper.
     get_proto_from_ctor_func_idx: u32,
     /// WASM function index for nul-terminated string equality helper.
     string_eq_func_idx: u32,
@@ -299,6 +297,7 @@ mod compiler_data;
 mod compiler_helpers;
 mod compiler_instructions;
 mod compiler_module;
+mod compiler_number_proto;
 
 // ── Value ID collection ─────────────────────────────────────────────────
 fn block_has_suspend(block: &BasicBlock) -> bool {
@@ -676,6 +675,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ArrayPush => ("array.push", 2),
         Builtin::ArrayPop => ("array.pop", 1),
         Builtin::ArrayIncludes => ("array.includes", 2),
+        Builtin::ArrayPushSpread => ("array_push_spread", 2),
         Builtin::ArrayIndexOf => ("array.index_of", 3),
         Builtin::ArrayJoin => ("array.join", 2),
         Builtin::ArrayConcat => ("array.concat", 2),
@@ -723,6 +723,7 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::ObjectGetPrototypeOf => ("object.get_prototype_of", 1),
         Builtin::ObjectSetPrototypeOf => ("object.set_prototype_of", 2),
         Builtin::ObjectGetOwnPropertyNames => ("object.get_own_property_names", 1),
+        Builtin::ObjectGetOwnPropertySymbols => ("object.get_own_property_symbols", 1),
         Builtin::ObjectIs => ("object.is", 2),
         Builtin::ObjectGroupBy => ("object.group_by", 2),
         Builtin::ObjectIsExtensible => ("object.is_extensible", 1),
@@ -927,7 +928,9 @@ pub fn builtin_arity(builtin: &Builtin) -> (&'static str, usize) {
         Builtin::SharedArrayBufferProtoByteLength => ("sharedarraybuffer_proto_byte_length", 1),
         Builtin::SharedArrayBufferProtoGrow => ("sharedarraybuffer_proto_grow", 2),
         Builtin::SharedArrayBufferProtoGrowable => ("sharedarraybuffer_proto_growable", 1),
-        Builtin::SharedArrayBufferProtoMaxByteLength => ("sharedarraybuffer_proto_max_byte_length", 1),
+        Builtin::SharedArrayBufferProtoMaxByteLength => {
+            ("sharedarraybuffer_proto_max_byte_length", 1)
+        }
         Builtin::SharedArrayBufferProtoSlice => ("sharedarraybuffer_proto_slice", 3),
         Builtin::SharedArrayBufferSpecies => ("sharedarraybuffer_species", 1),
         // ── Atomics builtins ──
@@ -1194,7 +1197,7 @@ mod tests {
         let source = "if (true) { console.log(\"yes\"); } else { console.log(\"no\"); }";
         let module = wjsm_parser::parse_module(source)?;
         let program = wjsm_semantic::lower_module(module, false)?;
-        assert!(program.dump_text().contains("fn @main"));
+        assert!(program.dump_text().contains("fn @$module_main"));
         Ok(())
     }
 }

@@ -88,11 +88,24 @@ pub(crate) fn create_error_object(
         });
     }
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    let obj = alloc_host_object(caller, &env, 2);
+    let obj = alloc_host_object(caller, &env, 3);
     let name_val = store_runtime_string(caller, error_name.to_string());
-    let _ = define_host_data_property_from_caller(caller, obj, "name", name_val);
+    let _ = define_host_data_property(caller, obj, "name", name_val);
     let message_val = store_runtime_string(caller, message);
-    let _ = define_host_data_property_from_caller(caller, obj, "message", message_val);
+    let _ = define_host_data_property(caller, obj, "message", message_val);
+    // C2: 隐藏品牌标记，用于 render_value 区分真实 Error vs 普通对象 {name:"TypeError"}。
+    let brand_val = value::encode_bool(true);
+    let env2 = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let name_id = find_memory_c_string_with_env(caller, &env2, "__error_brand__")
+        .or_else(|| alloc_heap_c_string_with_env(caller, &env2, "__error_brand__"))
+        .unwrap();
+    let _ = define_host_data_property_by_name_id_with_flags(
+        caller,
+        obj,
+        encode_string_name_id(name_id),
+        brand_val,
+        0, // 非枚举
+    );
     obj
 }
 
@@ -109,9 +122,22 @@ pub(crate) fn alloc_type_error_with_env<C: AsContextMut<Data = RuntimeState>>(
         let state = ctx.as_context().data();
         store_runtime_string_in_state(state, message)
     };
-    let obj = alloc_host_object(ctx, env, 2);
+    let obj = alloc_host_object(ctx, env, 3);
     let _ = define_host_data_property_with_env(ctx, env, obj, "name", name_val);
     let _ = define_host_data_property_with_env(ctx, env, obj, "message", message_val);
+    // C2: 隐藏品牌
+    let brand_val = value::encode_bool(true);
+    let name_id = find_memory_c_string_with_env(ctx, env, "__error_brand__")
+        .or_else(|| alloc_heap_c_string_with_env(ctx, env, "__error_brand__"))
+        .unwrap();
+    let _ = define_host_data_property_by_name_id_with_env(
+        ctx,
+        env,
+        obj,
+        encode_string_name_id(name_id),
+        brand_val,
+        0,
+    );
     obj
 }
 pub(crate) fn obj_proto_to_string_impl(caller: &mut Caller<'_, RuntimeState>, obj: i64) -> i64 {
