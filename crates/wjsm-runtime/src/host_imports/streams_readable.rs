@@ -296,8 +296,22 @@ pub(crate) fn create_controller_object(
         undef,
     );
 
-    // ByteStreamController.byobRequest：当前无活动 BYOB pull-into 请求时为 null。
-    let _ = define_host_data_property_from_caller(caller, obj, "byobRequest", value::encode_null());
+    // ByteStreamController.byobRequest → accessor getter
+    // 返回当前活动的 ReadableStreamBYOBRequest 对象，或 null。
+    let byob_request_callable = NativeCallable::ReadableStreamDefaultControllerMethod {
+        handle: controller_handle,
+        kind: ReadableStreamDefaultControllerMethodKind::GetByobRequest,
+    };
+    let byob_request_idx = push_native_callable(caller, byob_request_callable);
+    let byob_request_getter = value::encode_native_callable_idx(byob_request_idx);
+    let _ = define_host_accessor_property_with_env(
+        caller,
+        &env,
+        obj,
+        "byobRequest",
+        byob_request_getter,
+        undef,
+    );
 
     obj
 }
@@ -333,6 +347,10 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
             abort_requested: false,
             abort_reason: None,
             flush_requested: false,
+            underlying_source: None,
+            pull_callback: None,
+            cancel_callback: None,
+            active_byob_request: None,
         });
         handle
     };
@@ -456,6 +474,10 @@ pub(crate) async fn construct_readable_stream(
             abort_requested: false,
             abort_reason: None,
             flush_requested: false,
+            underlying_source: None,
+            pull_callback: None,
+            cancel_callback: None,
+            active_byob_request: None,
         });
         handle
     };
@@ -500,6 +522,28 @@ pub(crate) async fn construct_readable_stream(
     if value::is_object(source) {
         let source_ptr = resolve_handle(caller, source);
         if let Some(ptr) = source_ptr {
+            // 捕获 pull / cancel callbacks
+            let pull_fn = read_object_property_by_name(caller, ptr, "pull")
+                .unwrap_or_else(value::encode_undefined);
+            let cancel_fn = read_object_property_by_name(caller, ptr, "cancel")
+                .unwrap_or_else(value::encode_undefined);
+            {
+                let mut table = caller
+                    .data()
+                    .stream_controller_table
+                    .lock()
+                    .expect("controller mutex");
+                if let Some(ctrl) = table.get_mut(controller_handle as usize) {
+                    ctrl.underlying_source = Some(source);
+                    if value::is_callable(pull_fn) {
+                        ctrl.pull_callback = Some(pull_fn);
+                    }
+                    if value::is_callable(cancel_fn) {
+                        ctrl.cancel_callback = Some(cancel_fn);
+                    }
+                }
+            }
+
             let start_fn = read_object_property_by_name(caller, ptr, "start")
                 .unwrap_or_else(value::encode_undefined);
             if value::is_callable(start_fn) {
@@ -998,6 +1042,10 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     abort_requested: false,
                     abort_reason: None,
                     flush_requested: false,
+                    underlying_source: None,
+                    pull_callback: None,
+                    cancel_callback: None,
+                    active_byob_request: None,
                 });
                 h
             };
@@ -1022,6 +1070,10 @@ pub(crate) fn call_readable_stream_method_from_caller(
                     abort_requested: false,
                     abort_reason: None,
                     flush_requested: false,
+                    underlying_source: None,
+                    pull_callback: None,
+                    cancel_callback: None,
+                    active_byob_request: None,
                 });
                 h
             };
@@ -1416,6 +1468,62 @@ pub(crate) fn call_default_reader_method_from_caller(
                         reader.pending_byob_view = byob_view;
                     }
                 }
+
+                // BYOB path：create ByobRequestEntry, set controller.active_byob_request
+                if reader_kind == ReaderKind::Byob {
+                    if let Some(view) = byob_view {
+                        let byob_handle = {
+                            let mut table = caller
+                                .data()
+                                .byob_request_table
+                                .lock()
+                                .expect("byob_request mutex");
+                            let h = table.len() as u32;
+                            table.push(ByobRequestEntry {
+                                controller_handle: ctrl_handle,
+                                reader_handle: handle,
+                                view,
+                                promise: p,
+                                responded: false,
+                            });
+                            h
+                        };
+                        let mut ctrl_table = caller
+                            .data()
+                            .stream_controller_table
+                            .lock()
+                            .expect("controller mutex");
+                        if let Some(ctrl) = ctrl_table.get_mut(ctrl_handle as usize) {
+                            ctrl.active_byob_request = Some(byob_handle);
+                        }
+                    }
+                }
+
+                // Schedule pull microtask if pull_callback is set
+                let pull_info = {
+                    let ctrl_table = caller
+                        .data()
+                        .stream_controller_table
+                        .lock()
+                        .expect("controller mutex");
+                    ctrl_table
+                        .get(ctrl_handle as usize)
+                        .and_then(|ctrl| ctrl.pull_callback.map(|cb| (cb, ctrl.underlying_source)))
+                };
+                if let Some((pull_callback, this_val)) = pull_info {
+                    let controller_obj = create_controller_object(caller, ctrl_handle);
+                    let mut queue = caller
+                        .data()
+                        .microtask_queue
+                        .lock()
+                        .expect("microtask queue mutex");
+                    queue.push_back(Microtask::ReadableStreamPull {
+                        callback: pull_callback,
+                        this_val: this_val.unwrap_or_else(value::encode_undefined),
+                        controller: controller_obj,
+                    });
+                }
+
                 return Some(p);
             }
 
@@ -1647,6 +1755,245 @@ pub(crate) fn call_default_controller_method_from_caller(
             } else {
                 Some(value::encode_null())
             }
+        }
+        ReadableStreamDefaultControllerMethodKind::GetByobRequest => {
+            Some(controller_get_byob_request(caller, handle))
+        }
+    }
+}
+
+fn controller_get_byob_request(
+    caller: &mut Caller<'_, RuntimeState>,
+    controller_handle: u32,
+) -> i64 {
+    // 1. 读取 controller.active_byob_request 与 controller_handle 校验
+    let active = {
+        let table = caller
+            .data()
+            .stream_controller_table
+            .lock()
+            .expect("controller mutex");
+        table
+            .get(controller_handle as usize)
+            .and_then(|c| c.active_byob_request)
+    };
+    let Some(byob_handle) = active else {
+        return value::encode_null();
+    };
+
+    // 2. 如果已 respond，则返回 null
+    let (view, responded) = {
+        let table = caller
+            .data()
+            .byob_request_table
+            .lock()
+            .expect("byob_request mutex");
+        let Some(entry) = table.get(byob_handle as usize) else {
+            return value::encode_null();
+        };
+        (entry.view, entry.responded)
+    };
+    if responded {
+        return value::encode_null();
+    }
+
+    // 3. 构造 { view, respond(n) } JS 对象
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    let obj = alloc_host_object(caller, &env, 4);
+    let _ = define_host_data_property_from_caller(caller, obj, "__byob_request_handle__", value::encode_f64(byob_handle as f64));
+    let _ = define_host_data_property_from_caller(caller, obj, "view", view);
+
+    let respond_callable = NativeCallable::ReadableStreamByobRequestMethod {
+        handle: byob_handle,
+        kind: ReadableStreamByobRequestMethodKind::Respond,
+    };
+    let respond_idx = push_native_callable(caller, respond_callable);
+    let respond_val = value::encode_native_callable_idx(respond_idx);
+    let _ = define_host_data_property_from_caller(caller, obj, "respond", respond_val);
+
+    obj
+}
+
+fn typedarray_entry_from_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    view: i64,
+) -> Option<TypedArrayEntry> {
+    if !value::is_object(view) {
+        return None;
+    }
+    let ptr = resolve_handle(caller, view)?;
+    let handle_raw = read_object_property_by_name(caller, ptr, "__typedarray_handle__")?;
+    let handle = value::decode_f64(handle_raw) as usize;
+    let table = caller
+        .data()
+        .typedarray_table
+        .lock()
+        .expect("typedarray mutex");
+    table.get(handle).cloned()
+}
+
+fn typedarray_length_from_object(
+    caller: &mut Caller<'_, RuntimeState>,
+    view: i64,
+) -> Option<usize> {
+    typedarray_entry_from_object(caller, view).map(|e| e.length as usize)
+}
+
+pub(crate) fn call_byob_request_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    _this_val: i64,
+    handle: u32,
+    kind: ReadableStreamByobRequestMethodKind,
+    args: &[i64],
+) -> Option<i64> {
+    match kind {
+        ReadableStreamByobRequestMethodKind::GetView => {
+            // 直接返回 view（data property 已经设置；此分支作为防御保留）
+            let table = caller
+                .data()
+                .byob_request_table
+                .lock()
+                .expect("byob_request mutex");
+            let entry = table.get(handle as usize)?;
+            if entry.responded {
+                Some(value::encode_null())
+            } else {
+                Some(entry.view)
+            }
+        }
+        ReadableStreamByobRequestMethodKind::Respond => {
+            let bytes_written_arg = args.first().copied().unwrap_or_else(value::encode_undefined);
+            if !value::is_f64(bytes_written_arg) {
+                return Some(type_error_exception(
+                    caller,
+                    "respond(bytesWritten) requires a number",
+                ));
+            }
+            let bytes_written_f = value::decode_f64(bytes_written_arg);
+            if !bytes_written_f.is_finite()
+                || bytes_written_f.fract() != 0.0
+                || bytes_written_f < 0.0
+            {
+                return Some(type_error_exception(
+                    caller,
+                    "bytesWritten must be a non-negative integer",
+                ));
+            }
+            let bytes_written = bytes_written_f as usize;
+
+            // 取出 entry 信息（释放 byob_request_table 锁后再调用需要 &mut caller 的 helper）
+            let entry_info = {
+                let table = caller
+                    .data()
+                    .byob_request_table
+                    .lock()
+                    .expect("byob_request mutex");
+                table
+                    .get(handle as usize)
+                    .map(|e| (e.controller_handle, e.reader_handle, e.view, e.promise, e.responded))
+            };
+            let Some((controller_handle, reader_handle, view, promise, already_responded)) = entry_info else {
+                return Some(type_error_exception(caller, "invalid BYOB request"));
+            };
+            let view_len = typedarray_length_from_object(caller, view).unwrap_or(0);
+
+            if already_responded {
+                return Some(type_error_exception(
+                    caller,
+                    "BYOB request already responded",
+                ));
+            }
+            if bytes_written > view_len {
+                return Some(type_error_exception(
+                    caller,
+                    "bytesWritten exceeds view.byteLength",
+                ));
+            }
+
+            // 构造结果 view：同 buffer，length = bytes_written
+            let result_view = {
+                let Some(entry) = typedarray_entry_from_object(caller, view) else {
+                    return Some(type_error_exception(caller, "invalid BYOB view"));
+                };
+                let new_ta = {
+                    let mut ta_table = caller
+                        .data()
+                        .typedarray_table
+                        .lock()
+                        .expect("typedarray mutex");
+                    let h = ta_table.len() as u32;
+                    ta_table.push(TypedArrayEntry {
+                        buffer_handle: entry.buffer_handle,
+                        byte_offset: entry.byte_offset,
+                        length: bytes_written as u32,
+                        element_size: entry.element_size,
+                        element_kind: entry.element_kind,
+                        is_shared: entry.is_shared,
+                    });
+                    h
+                };
+                // 构造 typed-array JS 对象（与 create_uint8array_with_env 类似）
+                let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+                let obj = alloc_host_object(caller, &env, 4);
+                let _ = define_host_data_property_from_caller(
+                    caller,
+                    obj,
+                    "__typedarray_handle__",
+                    value::encode_f64(new_ta as f64),
+                );
+                let _ = define_host_data_property_from_caller(
+                    caller,
+                    obj,
+                    "__arraybuffer_handle__",
+                    value::encode_f64(entry.buffer_handle as f64),
+                );
+                let len_val = value::encode_f64(bytes_written as f64);
+                let _ = define_host_data_property_from_caller(caller, obj, "length", len_val);
+                let _ = define_host_data_property_from_caller(caller, obj, "byteLength", len_val);
+                let _ = define_host_data_property_from_caller(
+                    caller,
+                    obj,
+                    "byteOffset",
+                    value::encode_f64(entry.byte_offset as f64),
+                );
+                obj
+            };
+
+            // 标记 responded + 清理 controller 上的 active_byob_request
+            {
+                let mut table = caller
+                    .data()
+                    .byob_request_table
+                    .lock()
+                    .expect("byob_request mutex");
+                if let Some(entry) = table.get_mut(handle as usize) {
+                    entry.responded = true;
+                }
+            }
+            {
+                let mut table = caller
+                    .data()
+                    .stream_controller_table
+                    .lock()
+                    .expect("controller mutex");
+                if let Some(ctrl) = table.get_mut(controller_handle as usize) {
+                    if ctrl.active_byob_request == Some(handle) {
+                        ctrl.active_byob_request = None;
+                    }
+                }
+            }
+            // 清理 reader 的 pending 状态
+            {
+                let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
+                if let Some(reader) = reader_table.get_mut(reader_handle as usize) {
+                    reader.pending_read_promise = None;
+                    reader.pending_byob_view = None;
+                }
+            }
+            // fulfill 结果 { done: false, value: resultView }
+            let result = build_reader_result(caller, false, Some(result_view));
+            settle_promise(caller.data_mut(), promise, PromiseSettlement::Fulfill(result));
+            Some(value::encode_undefined())
         }
     }
 }

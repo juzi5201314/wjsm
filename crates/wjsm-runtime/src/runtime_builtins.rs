@@ -1986,6 +1986,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::ReadableStreamDefaultControllerMethod { handle, kind } => {
             call_default_controller_method_from_caller(caller, this_val, handle, kind, &args)
         }
+        NativeCallable::ReadableStreamByobRequestMethod { handle, kind } => {
+            call_byob_request_method_from_caller(caller, this_val, handle, kind, &args)
+        }
         // ── ReadableStream async iterator (WHATWG Streams Phase 2) ──
         NativeCallable::ReadableStreamAsyncIteratorNext { reader_handle } => {
             call_default_reader_method_from_caller(
@@ -2752,6 +2755,21 @@ pub(crate) fn trace_runtime_side_table_roots_fixed_point(
                         obj_table_count,
                         num_ir_functions,
                     );
+                }
+                Microtask::ReadableStreamPull {
+                    callback,
+                    this_val,
+                    controller,
+                } => {
+                    for v in [callback, this_val, controller] {
+                        crate::runtime_heap::mark_runtime_value_recursive(
+                            caller,
+                            v,
+                            obj_table_ptr,
+                            obj_table_count,
+                            num_ir_functions,
+                        );
+                    }
                 }
             }
         }

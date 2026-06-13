@@ -388,7 +388,7 @@ fn materialize_chunk_into_entry(
     chunk: Vec<u8>,
 ) -> PromiseSettlement {
     let (value, written) = if let Some(view) = byob_view {
-        let written = write_u8_bytes_to_view_store(store, view, &chunk).unwrap_or(0);
+        let written = write_u8_bytes_to_view_store(store, env, view, &chunk).unwrap_or(0);
         (view, written)
     } else {
         let arr = create_uint8array_with_env(store, env, &chunk);
@@ -419,16 +419,21 @@ fn materialize_chunk_into_entry(
 
 fn write_u8_bytes_to_view_store(
     store: &mut wasmtime::Store<RuntimeState>,
+    env: &WasmEnv,
     view: i64,
     bytes: &[u8],
 ) -> Option<usize> {
     if !value::is_object(view) {
         return None;
     }
-    let handle = value::decode_handle(view) as usize;
+    let handle_idx = value::decode_handle(view) as usize;
+    let ptr = crate::runtime_values::resolve_handle_idx_with_env(store, env, handle_idx)?;
+    let ta_handle_raw =
+        crate::runtime_values::read_object_property_by_name_with_env(store, env, ptr, "__typedarray_handle__")?;
+    let ta_handle = value::decode_f64(ta_handle_raw) as usize;
     let entry = {
-        let table = store.data().typedarray_table.lock().expect("typedarray mutex");
-        table.get(handle).cloned()?
+        let ta_table = store.data().typedarray_table.lock().expect("typedarray mutex");
+        ta_table.get(ta_handle).cloned()?
     };
     if entry.element_size != 1 {
         return None;

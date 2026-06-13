@@ -76,6 +76,7 @@ pub(crate) use streams_queuing::construct_byte_length_queuing_strategy;
 pub(crate) use streams_queuing::construct_count_queuing_strategy;
 pub(crate) use streams_readable::build_reader_result;
 pub(crate) use streams_readable::build_reader_result_with_env;
+pub(crate) use streams_readable::call_byob_request_method_from_caller;
 pub(crate) use streams_readable::call_default_controller_method_from_caller;
 pub(crate) use streams_readable::call_default_reader_method_from_caller;
 pub(crate) use streams_readable::call_readable_stream_method_from_caller;
