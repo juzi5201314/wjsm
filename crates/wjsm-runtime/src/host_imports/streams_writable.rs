@@ -320,6 +320,10 @@ pub(crate) async fn construct_writable_stream(
             abort_requested: false,
             abort_reason: None,
             flush_requested: false,
+            underlying_source: None,
+            pull_callback: None,
+            cancel_callback: None,
+            active_byob_request: None,
         });
         handle
     };

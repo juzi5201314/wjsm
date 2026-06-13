@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+ok true
+status 200
+body hello
+req method PUT
+req header 2
+--- stderr ---

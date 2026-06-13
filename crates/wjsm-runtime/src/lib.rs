@@ -1023,6 +1023,7 @@ impl Clone for RuntimeState {
             readable_stream_table: self.readable_stream_table.clone(),
             reader_table: self.reader_table.clone(),
             stream_controller_table: self.stream_controller_table.clone(),
+            byob_request_table: self.byob_request_table.clone(),
             writable_stream_table: self.writable_stream_table.clone(),
             writer_table: self.writer_table.clone(),
             transform_stream_table: self.transform_stream_table.clone(),
@@ -1137,6 +1138,7 @@ struct RuntimeState {
     reader_table: Arc<Mutex<Vec<ReaderEntry>>>,
     /// Controller 侧表（ReadableStream DefaultController 等）
     stream_controller_table: Arc<Mutex<Vec<StreamControllerEntry>>>,
+    byob_request_table: Arc<Mutex<Vec<ByobRequestEntry>>>,
     /// WritableStream 侧表：存储可写流状态
     writable_stream_table: Arc<Mutex<Vec<WritableStreamEntry>>>,
     /// Writer 侧表：存储 WritableStreamDefaultWriter → stream 映射
@@ -1266,6 +1268,7 @@ impl RuntimeState {
             readable_stream_table: Arc::new(Mutex::new(Vec::new())),
             reader_table: Arc::new(Mutex::new(Vec::new())),
             stream_controller_table: Arc::new(Mutex::new(Vec::new())),
+            byob_request_table: Arc::new(Mutex::new(Vec::new())),
             writable_stream_table: Arc::new(Mutex::new(Vec::new())),
             transform_stream_table: Arc::new(Mutex::new(Vec::new())),
             writer_table: Arc::new(Mutex::new(Vec::new())),
@@ -1567,17 +1570,37 @@ struct StreamControllerEntry {
     strategy_size: Option<i64>,
     started: bool,
     close_requested: bool,
-    // Phase 3-5 预留字段
-    
+
     byob_reader_handle: Option<u32>,
-    
+
     pull_requested: bool,
-    
+
     abort_requested: bool,
-    
+
     abort_reason: Option<i64>,
-    
+
     flush_requested: bool,
+
+    /// underlyingSource 对象（JS 值，GC root）
+    underlying_source: Option<i64>,
+    /// underlyingSource.pull 回调（JS callable）
+    pull_callback: Option<i64>,
+    /// underlyingSource.cancel 回调（JS callable）
+    cancel_callback: Option<i64>,
+    /// 当前活动的 BYOB request handle（指向 byob_request_table）
+    active_byob_request: Option<u32>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ByobRequestEntry {
+    pub controller_handle: u32,
+    pub reader_handle: u32,
+    /// 用户提供的 Uint8Array view
+    pub view: i64,
+    /// 等待 fulfill 的 read() promise
+    pub promise: i64,
+    /// 是否已调用 respond()
+    pub responded: bool,
 }
 
 fn bigint_low_64_bytes(value: &num_bigint::BigInt) -> [u8; 8] {
@@ -2283,6 +2306,10 @@ enum NativeCallable {
         handle: u32,
         kind: ReadableStreamDefaultControllerMethodKind,
     },
+    ReadableStreamByobRequestMethod {
+        handle: u32,
+        kind: ReadableStreamByobRequestMethodKind,
+    },
     // ── ReadableStream async iterator (WHATWG Streams Phase 2) ──
     /// ReadableStream async iterator next()
     ReadableStreamAsyncIteratorNext {
@@ -2454,6 +2481,12 @@ enum ReadableStreamDefaultControllerMethodKind {
     Close,
     Error,
     GetDesiredSize,
+    GetByobRequest,
+}
+#[derive(Clone, Copy)]
+pub(crate) enum ReadableStreamByobRequestMethodKind {
+    GetView,
+    Respond,
 }
 // ── TransformStream (WHATWG Streams Phase 5) method kinds ──
 #[derive(Clone, Copy, Debug)]
@@ -2745,6 +2778,11 @@ enum Microtask {
     CleanupFinalizationRegistry {
         callback: i64,
         held_value: i64,
+    },
+    ReadableStreamPull {
+        callback: i64,
+        this_val: i64,
+        controller: i64,
     },
 }
 
