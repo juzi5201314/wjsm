@@ -72,6 +72,8 @@ reader.read(view) on byte stream with empty queue
 - **Fact**: current HTTP reader path takes `HttpResponseEntry.response` and never puts it back, so only the first chunk can be read.
 - **Fact**: current HTTP spawn sites do not use `AsyncOpGuard`, so the scheduler can exit before delayed materialization.
 - **Fact**: `controller.byobRequest` is a data property set to `null`.
+- **Fact**: body disturbance cross-table linkage is already implemented: `streams_readable.rs::call_readable_stream_method_from_caller` `GetReader` branch calls `mark_response_body_used_from_caller(response_body_handle, response_body_object)` which sets `FetchResponseEntry.body_used = true`. `ReadableStreamEntry.response_body_handle`/`response_body_object` carry the back-link. The `resp.body.getReader()` then `resp.text()` rejection path already works for the non-HTTP case; Task 5 must preserve it when rewiring HTTP bodies onto the canonical ReadableStream path.
+- **Fact**: `ReaderEntry` already carries `pending_read_promise: Option<i64>` and `pending_byob_view: Option<i64>`, but the current reader-read dispatch has no concurrency branch distinguishing default from BYOB. Per WHATWG Streams, BYOB `read(view)` on a reader with an existing pending read must throw `TypeError`, while default `read()` queues multiple reads.
 - **Assumption**: browser-only fetch policy features remain outside runtime scope per approved spec.
 - **Unknown to resolve during implementation**: whether all current BYOB tests expect spec-correct returned view length; update only fixtures whose observed behavior intentionally changes.
 
@@ -229,7 +231,7 @@ fn fetch_http_reader_reads_all_chunks() -> Result<()> {
 fn fetch_http_first_read_resolves_before_end_of_body() -> Result<()> {
     let url = spawn_chunked_server(vec![
         (b"a".to_vec(), Duration::ZERO),
-        (b"b".to_vec(), Duration::from_millis(500)),
+        (b"b".to_vec(), Duration::from_millis(1500)),
     ]);
     let start = Instant::now();
     let output = run_async(&format!(
@@ -241,7 +243,7 @@ fn fetch_http_first_read_resolves_before_end_of_body() -> Result<()> {
         console.log("len", r.value.length);
         "#,
     ))?;
-    assert!(start.elapsed() < Duration::from_millis(450), "first read waited for end-of-body: {output:?}");
+    assert!(start.elapsed() < Duration::from_millis(1200), "first read waited for end-of-body: {output:?}");
     assert!(output.contains("done false\n"), "unexpected output: {output:?}");
     assert!(output.contains("len 1\n"), "unexpected output: {output:?}");
     Ok(())
@@ -438,12 +440,34 @@ manual
 payload
 ```
 
+Additionally, add a fixture that exercises the `fetch(url, init)` path (covers `parse_fetch_input`, not just `new Request()`), e.g. `fixtures/happy/fetch_data_url_init.js`:
+
+```javascript
+const resp = await fetch("data:text/plain,hello", {
+  method: "POST",
+  headers: { "x-test": "1" },
+  redirect: "manual",
+});
+console.log("method", resp.ok || true);
+console.log("url", resp.url);
+const r2 = new Request("data:text/plain,x", { method: "PUT", body: "b" });
+console.log("req", r2.method, await r2.text());
+```
+
+Expected output:
+
+```text
+method true
+url data:text/plain,hello
+req PUT b
+```
+
 #### Verify RED
 
 Run:
 
 ```bash
-cargo nextest run -E 'test(happy__fetch_request_init)'
+cargo nextest run -E 'test(happy__fetch_request_init) or test(happy__fetch_data_url_init)'
 ```
 
 #### Minimal code
@@ -481,7 +505,7 @@ pub(crate) fn parse_request_parts(
 Run:
 
 ```bash
-cargo nextest run -E 'test(happy__fetch_request_init)'
+cargo nextest run -E 'test(happy__fetch_request_init) or test(happy__fetch_data_url_init)'
 cargo check -p wjsm-runtime
 ```
 
@@ -596,20 +620,22 @@ pub(crate) fn consume_fetch_body_to_bytes(
     http_handle: u32,
     promise: i64,
     kind: ResponseMethodKind,
-) -> Option<()>;
+) -> bool;
 ```
 
 4. `call_fetch_body_reader_read` must:
    - return done if `eof` and no `pending_bytes`;
-   - serve `pending_bytes` before starting a network pull;
-   - return existing pending promise if `pending_read_promise` is set;
+   - serve `pending_bytes` through the same fill-view-and-queue-overflow path used for network chunks (one code path, regardless of source): copy `min(view_capacity, front.len())` bytes into the BYOB view (or wrap as `Uint8Array` for default reader), keep any remainder in `pending_bytes.front_mut()`, drop the front only when fully drained, then fulfill;
+   - if `pending_read_promise` is set:
+     - BYOB (`byob_view.is_some()`): return `TypeError("BYOB reader already has a pending read")` — do not share the promise;
+     - default (`byob_view.is_none()`): return the existing pending promise so multiple awaits queue on the same in-flight pull (one network pull, many waiters);
    - take `response` out of the table, set pending, and spawn one worker;
    - move an `AsyncOpGuard` into the worker;
-   - on `Ok(Some(chunk))`, Materialize writes BYOB or creates `Uint8Array`, stores overflow in `pending_bytes`, puts `response` back, clears pending, and fulfills;
+   - on `Ok(Some(chunk))`, Materialize runs the same fill-view-and-queue-overflow path, stores overflow in `pending_bytes`, puts `response` back, clears pending, and fulfills;
    - on `Ok(None)`, Materialize marks EOF and fulfills done;
    - on `Err(e)`, Materialize stores error and rejects.
 
-5. Update `streams_readable.rs::call_default_reader_method_from_caller` HTTP branch to call `call_fetch_body_reader_read(caller, handle, http_handle, byob_view)`.
+5. Update `streams_readable.rs::call_default_reader_method_from_caller` HTTP branch to call `call_fetch_body_reader_read(caller, handle, http_handle, byob_view)`. The BYOB concurrent-read `TypeError` check (see step 4 item 3) may live at this dispatch site instead of inside `call_fetch_body_reader_read` if that keeps the bridge function simpler. Preserve the existing `mark_response_body_used_from_caller` call in the `GetReader` branch — rewiring HTTP bodies onto the canonical ReadableStream path must not drop the `FetchResponseEntry.body_used = true` cross-table linkage, otherwise `resp.body.getReader()` then `resp.text()` stops rejecting.
 
 6. Update `fetch_core.rs::call_response_method_from_caller` HTTP full-body consumer branch to use `consume_fetch_body_to_bytes` and `AsyncOpGuard`, with no direct `tokio::spawn` left in `fetch_core.rs` for HTTP body consumption.
 
@@ -621,6 +647,7 @@ Run:
 
 ```bash
 cargo nextest run -p wjsm-runtime -E 'test(fetch_http_reader_reads_all_chunks) or test(fetch_http_first_read_resolves_before_end_of_body) or test(response_text_consumes_http_body_once) or test(response_text_after_body_reader_rejects)'
+cargo nextest run -E 'test(happy__fetch_data_url) or test(happy__streams_fetch_body_data_url)'
 cargo check -p wjsm-runtime
 ```
 
@@ -762,7 +789,7 @@ const p = reader.read(view).then(r => {
   console.log("len", r.value.length);
   console.log("byte0", r.value[0]);
 });
-for (let i = 0; i < 2000; i++) ({ i });
+for (let i = 0; i < 50000; i++) ({ i, s: "x".repeat(32) });
 const req = savedController.byobRequest;
 req.view[0] = 88;
 req.respond(1);
