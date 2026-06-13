@@ -31,6 +31,8 @@
 - 当所有定时器被取消且队列为空时，调度器不得对空队列 `unwrap`（`scheduler.rs` 使用 `else if let Some(next)` 分支）。
 
 此模型保证 JavaScript run-to-completion 语义，并避免在主 future 持有 Store 时并发访问。
+async 函数/TLA 的 `$state` dispatch 依赖 IR `Terminator::Switch` 与 `Instruction::Suspend` 的交叉编译；后端在 `compile_switch_case` 中必须始终发射各 case 入口（见 `crates/wjsm-backend-wasm/tests/async_switch_compile.rs`）。
+
 
 ## Worker 边界（Host Completion Materialization）
 

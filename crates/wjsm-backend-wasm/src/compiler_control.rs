@@ -241,9 +241,10 @@ impl Compiler {
             }
 
             if suspended {
-                idx += 1;
-                continue;
-            }
+                            // Async 状态机：suspend 后的 resume 块只应由 Switch case 编译，禁止线性续编。
+                            idx = blocks.len();
+                            continue;
+                        }
 
             match block.terminator() {
                 Terminator::Return { value } => {
@@ -706,7 +707,8 @@ impl Compiler {
                 self.loop_stack.push(loop_info.clone());
             }
 
-            if self.compiled_blocks.contains(&idx) {
+            // Switch case 入口必须编译，即使 compiled_blocks 已标记（避免 async resume 块被跳过）。
+            if self.compiled_blocks.contains(&idx) && idx != case_start {
                 break;
             }
             self.compiled_blocks.insert(idx);

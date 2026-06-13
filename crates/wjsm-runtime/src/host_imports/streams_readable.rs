@@ -109,6 +109,66 @@ pub(crate) fn write_u8_bytes_to_view(
     Some(write_len)
 }
 
+/// 构造一个与原 view 共享同一 ArrayBuffer 但长度截断为 `bytes_written` 的新
+/// typed-array 视图。用于 BYOB reader.read() 返回值的 `value`，确保
+/// result.value.byteLength === bytesWritten（WHATWG Streams 规范要求）。
+pub(crate) fn truncate_byob_view_with_env<C: wasmtime::AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    view: i64,
+    bytes_written: usize,
+) -> Option<i64> {
+    let entry = typedarray_entry_from_value_with_env(ctx, env, view)?;
+    let new_ta = {
+        let mut store = ctx.as_context_mut();
+        let mut ta_table = store.data().typedarray_table.lock().expect("typedarray mutex");
+        let h = ta_table.len() as u32;
+        ta_table.push(TypedArrayEntry {
+            buffer_handle: entry.buffer_handle,
+            byte_offset: entry.byte_offset,
+            length: bytes_written as u32,
+            element_size: entry.element_size,
+            element_kind: entry.element_kind,
+            is_shared: entry.is_shared,
+        });
+        h
+    };
+    let obj = crate::runtime_heap::alloc_host_object(ctx, env, 4);
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "__typedarray_handle__",
+        value::encode_f64(new_ta as f64),
+    );
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "__arraybuffer_handle__",
+        value::encode_f64(entry.buffer_handle as f64),
+    );
+    let len_val = value::encode_f64(bytes_written as f64);
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx, env, obj, "length", len_val,
+    );
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "byteLength",
+        len_val,
+    );
+    let _ = crate::runtime_host_helpers::define_host_data_property_with_env(
+        ctx,
+        env,
+        obj,
+        "byteOffset",
+        value::encode_f64(entry.byte_offset as f64),
+    );
+    Some(obj)
+}
+
 fn reject_promise_with_type_error(
     caller: &mut Caller<'_, RuntimeState>,
     promise: i64,
@@ -149,7 +209,12 @@ fn fulfill_byob_read(
             ctrl.chunk_queue.push_front(rest);
         }
     }
-    let result = build_reader_result(caller, false, Some(view));
+    // 构造截断视图：result.value.byteLength === bytesWritten（规范语义）
+    let result_view = {
+        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+        truncate_byob_view_with_env(caller, &env, view, written).unwrap_or(view)
+    };
+    let result = build_reader_result(caller, false, Some(result_view));
     settle_promise(caller.data(), promise, PromiseSettlement::Fulfill(result));
 }
 

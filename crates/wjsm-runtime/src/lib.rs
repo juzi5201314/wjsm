@@ -1629,6 +1629,26 @@ pub(crate) fn typedarray_entry_from_value(
     table.get(handle).cloned()
 }
 
+/// 通用 AsContextMut 版本的 typed-array entry 查询。
+/// 与 typedarray_entry_from_value 语义一致，但可用于 Store/Caller 等任意 context。
+pub(crate) fn typedarray_entry_from_value_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    value_raw: i64,
+) -> Option<TypedArrayEntry> {
+    if !value::is_object(value_raw) {
+        return None;
+    }
+    let handle_idx = (value_raw as u64 & 0xFFFF_FFFF) as usize;
+    let ptr = resolve_handle_idx_with_env(ctx, env, handle_idx)?;
+    let handle_raw =
+        read_object_property_by_name_with_env(ctx, env, ptr, "__typedarray_handle__")?;
+    let handle = value::decode_f64(handle_raw) as usize;
+    let mut store = ctx.as_context_mut();
+    let table = store.data().typedarray_table.lock().ok()?;
+    table.get(handle).cloned()
+}
+
 fn typedarray_element_offset(entry: &TypedArrayEntry, index: u32) -> Option<usize> {
     if index >= entry.length {
         return None;

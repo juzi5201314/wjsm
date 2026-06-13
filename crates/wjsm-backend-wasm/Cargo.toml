@@ -10,6 +10,7 @@ wasm-encoder = { workspace = true }
 wjsm-ir = { path = "../wjsm-ir" }
 
 [dev-dependencies]
+wasmprinter = { workspace = true }
 wasmparser = { workspace = true }
 wjsm-parser = { path = "../wjsm-parser" }
 wjsm-semantic = { path = "../wjsm-semantic" }

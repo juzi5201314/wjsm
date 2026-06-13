@@ -150,6 +150,27 @@ pub(crate) async fn run_post_main_scheduler_async(
                 if drained {
                     drain_microtasks_async(store, env).await;
                 }
+                // 收尾：同步 promise fulfill（Promise.resolve / BYOB ServeBuffer 等）可能在上面
+                // 那次 drain 里又入队了新的 microtasks。此处确保全部跑完后再退出，
+                // 否则后续 continuation 永远不会执行，console.log 等副作用丢失。
+                loop {
+                    let has_pending = {
+                        let q = store
+                            .data()
+                            .microtask_queue
+                            .lock()
+                            .expect("microtask queue mutex");
+                        !q.is_empty()
+                    };
+                    if !has_pending {
+                        break;
+                    }
+                    drain_microtasks_async(store, env).await;
+                    // 新的 completion 可能在 drain 期间到达
+                    while let Ok(completion) = completion_rx.try_recv() {
+                        process_one_completion(store, env, completion);
+                    }
+                }
                 break;
             }
             if timers_empty && count > 0 {

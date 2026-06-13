@@ -4230,6 +4230,7 @@ dependencies = [
  "swc_core",
  "wasm-encoder 0.246.2",
  "wasmparser 0.246.2",
+ "wasmprinter",
  "wjsm-ir",
  "wjsm-parser",
  "wjsm-semantic",
