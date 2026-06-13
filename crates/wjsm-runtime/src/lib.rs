@@ -1456,8 +1456,12 @@ struct AbortSignalEntry {
 }
 
 #[derive(Debug)]
-struct HttpResponseEntry {
-    response: Option<reqwest::Response>,
+pub(crate) struct HttpResponseEntry {
+    pub response: Option<reqwest::Response>,
+    pub pending_read_promise: Option<i64>,
+    pub pending_bytes: std::collections::VecDeque<Vec<u8>>,
+    pub eof: bool,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug)]

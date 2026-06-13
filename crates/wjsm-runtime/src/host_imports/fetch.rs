@@ -51,7 +51,12 @@ pub(crate) fn define_fetch(
                     return promise;
                 }
                 // HTTP/HTTPS — 异步路径
-                match perform_http_fetch(
+                let guard = caller
+                    .data()
+                    .async_op_counter
+                    .as_ref()
+                    .map(|counter| counter.begin());
+                let http_result = perform_http_fetch(
                     &mut caller,
                     method,
                     url,
@@ -60,8 +65,8 @@ pub(crate) fn define_fetch(
                     redirect,
                     signal_handle,
                 )
-                .await
-                {
+                .await;
+                match http_result {
                     Ok(response_val) => {
                         settle_promise(
                             caller.data_mut(),
@@ -74,6 +79,7 @@ pub(crate) fn define_fetch(
                         settle_promise(caller.data_mut(), promise, PromiseSettlement::Reject(err));
                     }
                 }
+                drop(guard);
                 promise
             })
         },

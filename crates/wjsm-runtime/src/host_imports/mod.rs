@@ -42,6 +42,7 @@ mod get_builtin_global_entry;
 mod math_number_error;
 mod primitive_core;
 mod proxy_traps;
+mod streams_fetch_body;
 mod streams_queuing;
 mod streams_readable;
 mod streams_transform;
