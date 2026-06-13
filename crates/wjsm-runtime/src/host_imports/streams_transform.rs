@@ -9,12 +9,6 @@ use super::streams_writable::{
 use crate::*;
 use std::collections::VecDeque;
 
-/// 创建 TypeError 异常值（NaN-boxed TAG_EXCEPTION）
-
-fn type_error_exception(caller: &mut Caller<'_, RuntimeState>, message: &str) -> i64 {
-    alloc_type_error_from_caller(caller, message)
-}
-
 // ── 辅助函数 ────────────────────────────────────────────────────────────────
 
 /// 创建 TransformStream JS 对象（包含 __transform_stream_handle__、readable getter、writable getter）

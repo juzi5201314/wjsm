@@ -37,26 +37,6 @@ pub(crate) fn parse_fetch_input(
 
 // ── Core fetch execution + Response construction ────────────────────────────
 
-pub(crate) fn perform_fetch_and_build_response(
-    caller: &mut Caller<'_, RuntimeState>,
-    _method: String,
-    url: String,
-    _headers_handle: u32,
-    _body: Option<Vec<u8>>,
-) -> std::result::Result<i64, String> {
-    if url.is_empty() {
-        return Err("Failed to parse URL from request.".to_string());
-    }
-    if url.starts_with("data:") {
-        return perform_data_url_fetch(caller, &url);
-    }
-
-    Err(format!(
-        "fetch for non-data: URL not implemented in this build: {}",
-        url
-    ))
-}
-
 pub(crate) fn perform_data_url_fetch(
     caller: &mut Caller<'_, RuntimeState>,
     url: &str,

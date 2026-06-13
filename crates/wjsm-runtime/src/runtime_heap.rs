@@ -388,8 +388,6 @@ pub(crate) fn trace_native_callable_record(
         NativeCallable::HeadersMethod { .. }
         | NativeCallable::ResponseMethod { .. }
         | NativeCallable::RequestMethod { .. }
-        | NativeCallable::StreamMethod { .. }
-        | NativeCallable::ReaderMethod { .. }
         | NativeCallable::ReadableStreamMethod { .. }
         | NativeCallable::ReadableStreamDefaultReaderMethod { .. }
         | NativeCallable::ReadableStreamDefaultControllerMethod { .. }

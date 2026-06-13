@@ -2280,14 +2280,6 @@ enum NativeCallable {
     ResponseConstructor,
     RequestConstructor,
     // ── ReadableStream / Reader / AbortController ──
-    StreamMethod {
-        handle: u32,
-        kind: StreamMethodKind,
-    },
-    ReaderMethod {
-        handle: u32,
-        kind: ReaderMethodKind,
-    },
     AbortControllerConstructor,
     AbortControllerAbort {
         signal_handle: u32,
@@ -2447,16 +2439,6 @@ enum ResponseMethodKind {
 #[derive(Clone, Copy)]
 enum RequestMethodKind {
     Clone,
-}
-#[derive(Clone, Copy)]
-enum StreamMethodKind {
-    GetReader,
-    Cancel,
-}
-#[derive(Clone, Copy)]
-enum ReaderMethodKind {
-    Read,
-    ReleaseLock,
 }
 // ── ReadableStream (WHATWG Streams Phase 1) method kinds ──
 #[derive(Clone, Copy)]
