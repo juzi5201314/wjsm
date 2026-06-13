@@ -2783,6 +2783,86 @@ pub(crate) fn trace_runtime_side_table_roots_fixed_point(
                 .map(|(idx, e)| (idx, e.clone()))
                 .collect()
         };
+
+        // ── Stream side-table roots: reader pending state ──────────────────
+        let reader_pending_snapshot: Vec<(Option<i64>, Option<i64>)> = {
+            let table = caller.data().reader_table.lock().expect("reader mutex");
+            table
+                .iter()
+                .map(|r| (r.pending_read_promise, r.pending_byob_view))
+                .collect()
+        };
+        for (pending_promise, pending_view) in reader_pending_snapshot {
+            if let Some(v) = pending_promise {
+                crate::runtime_heap::mark_runtime_value_recursive(
+                    caller,
+                    v,
+                    obj_table_ptr,
+                    obj_table_count,
+                    num_ir_functions,
+                );
+            }
+            if let Some(v) = pending_view {
+                crate::runtime_heap::mark_runtime_value_recursive(
+                    caller,
+                    v,
+                    obj_table_ptr,
+                    obj_table_count,
+                    num_ir_functions,
+                );
+            }
+        }
+
+        // ── BYOB request roots ─────────────────────────────────────────────
+        let byob_snapshot: Vec<(i64, i64)> = {
+            let table = caller
+                .data()
+                .byob_request_table
+                .lock()
+                .expect("byob_request mutex");
+            table.iter().map(|e| (e.view, e.promise)).collect()
+        };
+        for (view, promise) in byob_snapshot {
+            crate::runtime_heap::mark_runtime_value_recursive(
+                caller,
+                view,
+                obj_table_ptr,
+                obj_table_count,
+                num_ir_functions,
+            );
+            crate::runtime_heap::mark_runtime_value_recursive(
+                caller,
+                promise,
+                obj_table_ptr,
+                obj_table_count,
+                num_ir_functions,
+            );
+        }
+
+        // ── Stream controller roots (underlyingSource + pull/cancel callbacks) ──
+        let controller_snapshot: Vec<(Option<i64>, Option<i64>, Option<i64>)> = {
+            let table = caller
+                .data()
+                .stream_controller_table
+                .lock()
+                .expect("controller mutex");
+            table
+                .iter()
+                .map(|c| (c.underlying_source, c.pull_callback, c.cancel_callback))
+                .collect()
+        };
+        for (source, pull, cancel) in controller_snapshot {
+            for v in [source, pull, cancel].into_iter().flatten() {
+                crate::runtime_heap::mark_runtime_value_recursive(
+                    caller,
+                    v,
+                    obj_table_ptr,
+                    obj_table_count,
+                    num_ir_functions,
+                );
+            }
+        }
+
         for (handle_idx, entry) in promise_snapshot {
             let _ = handle_idx;
             match &entry.state {
