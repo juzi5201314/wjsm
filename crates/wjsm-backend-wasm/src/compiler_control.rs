@@ -1106,7 +1106,9 @@ impl Compiler {
         }
 
         if suspended {
-            return Ok(false);
+            // Suspend 终止当前执行路径（函数返回给运行时），
+            // 视为已终止，避免调用者错误计算 merge block。
+            return Ok(true);
         }
 
         match block.terminator() {
