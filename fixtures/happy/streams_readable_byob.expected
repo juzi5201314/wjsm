@@ -4,7 +4,7 @@ byobRequest null: true
 locked before: false
 locked after: true
 done: false
-value length: 4
+value length: 3
 value byte0: 65
 value byte1: 66
 view byte2: 67
