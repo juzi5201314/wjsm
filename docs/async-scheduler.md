@@ -41,6 +41,26 @@
 
 `AsyncOpGuard` / `AsyncOpCounter` 用于 in-flight 跟踪。调度器仅在 `counter.count() == 0` 且 receiver 为空时退出。
 
+### HTTP body pull workers
+
+`ReadableStream` byte streams backed by an HTTP `Response` spawn one tokio task per `reader.read()` call:
+
+```text
+reader.read(view)
+  -> take reqwest::Response from HttpResponseEntry.response
+  -> mark HttpResponseEntry.pending_read_promise = promise
+  -> AsyncOpGuard::begin()
+  -> tokio::spawn(async move {
+       let _guard: Option<AsyncOpGuard> = guard;
+       let outcome = response.chunk().await;
+       tx.send(Materialize { promise, materialize });
+     })
+```
+
+**要求**：每个 spawn 出去的 task 必须持有 `AsyncOpGuard`，否则调度器可能在 `response.chunk().await` 期间观察到 `count == 0` 而退出。HTTP `fetch()` 的 inline await (`perform_http_fetch.await`) 同样需要 guard，因为它可能在 post-main scheduler 启动前跨越 `main.call_async` 的返回边界。
+
+`Materialize` 闭包在 scheduler owner 上执行：put `response` 回 `HttpResponseEntry`（成功路径），overflow bytes 进入 `pending_bytes`，并 fulfill 读取 promise。失败路径记录 `error` 并 reject。
+
 **绝对禁止**：worker 线程创建 JS 对象句柄或直接操作 Store。
 
 ## 公共 API（async-only，2026-06-02）
