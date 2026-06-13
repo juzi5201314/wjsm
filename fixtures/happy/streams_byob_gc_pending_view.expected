@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+done false
+len 1
+byte0 88
+--- stderr ---
