@@ -174,6 +174,10 @@ pub(crate) async fn perform_http_fetch(
         let handle = table.len() as u32;
         table.push(HttpResponseEntry {
             response: Some(response),
+            pending_read_promise: None,
+            pending_bytes: std::collections::VecDeque::new(),
+            eof: false,
+            error: None,
         });
         handle
     };

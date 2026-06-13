@@ -78,7 +78,7 @@ fn typedarray_u8_bytes(caller: &mut Caller<'_, RuntimeState>, typedarray: i64) -
     }
 }
 
-fn write_u8_bytes_to_view(
+pub(crate) fn write_u8_bytes_to_view(
     caller: &mut Caller<'_, RuntimeState>,
     view: i64,
     bytes: &[u8],
@@ -155,7 +155,7 @@ fn fulfill_byob_read(
 
 /// 创建 ReadableStream JS 对象（包含 __stream_handle__、locked getter、getReader、cancel、tee、Symbol.asyncIterator）
 /// 从 create_closed_readable_stream_from_bytes / construct_readable_stream / tee 共用
-fn create_readable_stream_js_object(
+pub(crate) fn create_readable_stream_js_object(
     caller: &mut Caller<'_, RuntimeState>,
     stream_handle: u32,
 ) -> i64 {
@@ -1421,8 +1421,13 @@ pub(crate) fn call_default_reader_method_from_caller(
 
             // 4. HTTP 路径：检查 http_response_handle
             if let Some(http_handle) = http_response_handle {
-                // 转发到 fetch_core.rs 的现有 HTTP 逻辑
-                return call_reader_http_read(caller, handle, http_handle);
+                // 转发到 fetch-backed body bridge。
+                return super::streams_fetch_body::call_fetch_body_reader_read(
+                    caller,
+                    handle,
+                    http_handle,
+                    byob_view,
+                );
             }
 
             // 5. 无 controller 且无 HTTP → closed
@@ -1547,7 +1552,7 @@ pub(crate) fn build_reader_result_with_env<C: AsContextMut<Data = RuntimeState>>
 }
 
 /// 辅助：使用 env 创建 Uint8Array（用于 HTTP chunk 回调）
-fn create_uint8array_with_env<C: AsContextMut<Data = RuntimeState>>(
+pub(crate) fn create_uint8array_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     bytes: &[u8],

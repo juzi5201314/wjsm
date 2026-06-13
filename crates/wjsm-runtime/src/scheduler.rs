@@ -124,8 +124,13 @@ pub(crate) async fn run_post_main_scheduler_async(
         }
 
         // Phase 6: 非阻塞 drain 已就绪的 completion（可能在 timer fire 期间到达）
+        let mut processed_any = false;
         while let Ok(completion) = completion_rx.try_recv() {
             process_one_completion(store, env, completion);
+            processed_any = true;
+        }
+        if processed_any {
+            drain_microtasks_async(store, env).await;
         }
 
         // 提前检查退出（空 timers + counter==0）
@@ -137,8 +142,13 @@ pub(crate) async fn run_post_main_scheduler_async(
                 .as_ref()
                 .map_or(0, |c| c.count());
             if timers_empty && count == 0 {
+                let mut drained = false;
                 while let Ok(completion) = completion_rx.try_recv() {
                     process_one_completion(store, env, completion);
+                    drained = true;
+                }
+                if drained {
+                    drain_microtasks_async(store, env).await;
                 }
                 break;
             }
@@ -146,6 +156,7 @@ pub(crate) async fn run_post_main_scheduler_async(
                 // in-flight async host op 等待：await channel（唤醒时处理，循环重检）
                 if let Some(completion) = completion_rx.recv().await {
                     process_one_completion(store, env, completion);
+                    drain_microtasks_async(store, env).await;
                 } else {
                     break;
                 }
