@@ -12,6 +12,62 @@ impl Compiler {
         self.shadow_sp_scratch_idx + 1
     }
 
+    /// GC safepoint 容量检查（P2 T2.3，spec IMPL-13/R2）。
+    /// 函数 prologue 一次性检查：当前 shadow_sp + 本函数 spill_upper_bound
+    /// 是否超出 shadow_stack_end。若超出，trap（防止 spill 区溢出覆盖对象堆）。
+    ///
+    /// spill_upper_bound = 本函数所有 safepoint 处 live handle local 数的最大值 × 8。
+    /// 编译期静态计算；运行期只发一个比较。
+    fn emit_safepoint_capacity_check(&mut self, _module: &IrModule, function: &IrFunction) {
+        let spill_upper_bound = self.compute_max_spill_bytes(function);
+        if spill_upper_bound == 0 {
+            return;
+        }
+        // if (shadow_sp + spill_upper_bound) > shadow_stack_end: unreachable
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::I32Const(spill_upper_bound as i32));
+        self.emit(WasmInstruction::I32Add);
+        self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
+        self.emit(WasmInstruction::I32GtU);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::Unreachable);
+        self.emit(WasmInstruction::End);
+    }
+
+    /// 计算本函数所有 safepoint 处 live handle local 数的最大值 × 8（字节）。
+    fn compute_max_spill_bytes(&self, function: &IrFunction) -> usize {
+        let Some(ref liveness) = self.current_fn_liveness else {
+            return 0;
+        };
+        let value_ty = self.current_fn_value_ty.as_ref();
+        let mut max = 0usize;
+        for (bid, instr_map) in liveness {
+            let block = match function.block_by_id(*bid) {
+                Some(b) => b,
+                None => continue,
+            };
+            let instrs = block.instructions();
+            for (i, ins) in instrs.iter().enumerate() {
+                if !Self::is_safepoint(ins) {
+                    continue;
+                }
+                let Some(live) = instr_map.get(&i) else {
+                    continue;
+                };
+                let cnt = live
+                    .iter()
+                    .filter(|v| {
+                        value_ty
+                            .and_then(|m| m.get(v))
+                            .map_or(true, |t| *t == wjsm_ir::value_ty::ValueTy::Handle)
+                    })
+                    .count();
+                max = max.max(cnt);
+            }
+        }
+        max * 8
+    }
+
     /// call_env_obj scratch local (i64) — 存放解析后的闭包环境对象
     pub(crate) fn call_env_obj_scratch(&self) -> u32 {
         self.string_concat_scratch_idx + 1
@@ -547,8 +603,21 @@ impl Compiler {
         // Pass 3: lower Phi to dedicated locals after variable locals to avoid index overlap.
         self.lower_phi_to_locals(function);
 
+        // ── GC safepoint（P2）：计算 liveness + ValueTy ──
+        // 供 NewObject/NewArray/Call/CallBuiltin/SuperCall/ConstructCall 的 safepoint spill。
+        // compute_liveness 返回扁平 (block_id, instr_idx) -> Set；重整为嵌套 map 便于查询。
+        let flat = wjsm_ir::liveness::compute_liveness(function);
+        let mut nested: HashMap<wjsm_ir::BasicBlockId, HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>> =
+            HashMap::new();
+        for ((bid, i), set) in flat {
+            nested.entry(bid).or_default().insert(i, set);
+        }
+        self.current_fn_liveness = Some(nested);
+        self.current_fn_value_ty = Some(wjsm_ir::value_ty::infer_value_ty(module, function));
+        self.current_emit_block_idx = 0;
+        self.current_emit_instr_idx = 0;
+
         let local_count = self.required_local_count(function);
-        // scratch locals: i64 在前, i32 在后
         // string_concat (i64) at local_count
         // call_env_obj (i64) at local_count+1
         // shadow_sp (i32) at local_count+2
@@ -569,6 +638,11 @@ impl Compiler {
         };
         self.current_func = Some(Function::new(locals));
         self.emit_eval_var_frame_enter();
+
+        // ── GC safepoint 容量检查（P2 T2.3，spec IMPL-13/R2）──
+        // 防 spill 区溢出覆盖对象堆：shadow_sp + frame_size + spill_upper_bound <= shadow_stack_end。
+        // spill_upper_bound = 本函数所有 safepoint 的最大 live handle local 数 × 8。
+        self.emit_safepoint_capacity_check(module, function);
 
         // 预分配函数属性对象：为每个 IR 函数调用 $obj_new(8)，将返回的 handle_idx
         // 对应 obj_table[0..num_functions-1]，存储函数属性对象的 ptr。
@@ -715,6 +789,8 @@ impl Compiler {
         self.var_memory_offsets.clear();
         self.phi_locals.clear();
         self.current_function_has_eval = false;
+        self.current_fn_liveness = None;
+        self.current_fn_value_ty = None;
 
         Ok(())
     }
@@ -788,6 +864,18 @@ impl Compiler {
         }
         self.lower_phi_to_locals(function);
 
+        // ── GC safepoint（P2）：计算 liveness + ValueTy ──
+        let flat = wjsm_ir::liveness::compute_liveness(function);
+        let mut nested: HashMap<wjsm_ir::BasicBlockId, HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>> =
+            HashMap::new();
+        for ((bid, i), set) in flat {
+            nested.entry(bid).or_default().insert(i, set);
+        }
+        self.current_fn_liveness = Some(nested);
+        self.current_fn_value_ty = Some(wjsm_ir::value_ty::infer_value_ty(module, function));
+        self.current_emit_block_idx = 0;
+        self.current_emit_instr_idx = 0;
+
         // 计算实际需要的 local 数量
         // SSA 值从 ssa_local_base 开始分配，需要 ssa_local_base + max_ssa 个 locals
         // 但 var_locals 已经包含了声明的参数，其索引也是从 ssa_local_base 开始
@@ -846,6 +934,9 @@ impl Compiler {
         };
         self.current_func = Some(Function::new(locals));
         self.emit_eval_var_frame_enter();
+
+        // ── GC safepoint 容量检查（P2 T2.3，spec IMPL-13/R2）──
+        self.emit_safepoint_capacity_check(module, function);
 
         // ── Prologue: Load declared params from shadow stack ──
         // args_base_ptr is at local 2, args_count is at local 3
@@ -909,6 +1000,8 @@ impl Compiler {
         self.current_function_has_eval = false;
         self.current_home_object = None;
         self.current_function_id = None;
+        self.current_fn_liveness = None;
+        self.current_fn_value_ty = None;
 
         Ok(())
     }

@@ -2,6 +2,91 @@ use super::*;
 use crate::host_import_registry::SpecialHostImport;
 
 impl Compiler {
+    /// 设置当前 emit 位置的 IR block/instruction cursor（P2 safepoint spill 用）。
+    /// 在 compile_instruction 调用前设置，使 alloc 指令能查到正确的 liveness。
+    pub(crate) fn set_emit_cursor(&mut self, block_idx: usize, instr_idx: usize) {
+        self.current_emit_block_idx = block_idx;
+        self.current_emit_instr_idx = instr_idx;
+    }
+
+    /// 判断指令是否为 GC safepoint（可能触发分配或 GC 的点）。
+    /// 这些点的 live handle locals 必须 spill 到 shadow stack，否则 GC 误回收。
+    pub(crate) fn is_safepoint(ins: &Instruction) -> bool {
+        matches!(
+            ins,
+            Instruction::NewObject { .. }
+                | Instruction::NewArray { .. }
+                | Instruction::Call { .. }
+                | Instruction::CallBuiltin { .. }
+                | Instruction::SuperCall { .. }
+                | Instruction::ConstructCall { .. }
+        )
+    }
+
+    /// 返回当前 emit 位置（紧邻当前指令执行前）需 spill 的 local idx 列表。
+    /// = live ValueId ∩ Handle 类型（保守：ValueTy 缺失当 Handle）→ local_idx。
+    /// 结果已 sort + dedup。
+    fn current_spill_locals(&self) -> Vec<u32> {
+        let Some(ref liveness) = self.current_fn_liveness else {
+            return vec![];
+        };
+        let block_map = match liveness.get(&wjsm_ir::BasicBlockId(self.current_emit_block_idx as u32)) {
+            Some(m) => m,
+            None => return vec![],
+        };
+        let Some(live) = block_map.get(&self.current_emit_instr_idx) else {
+            return vec![];
+        };
+        let value_ty = self.current_fn_value_ty.as_ref();
+        let mut spill: Vec<u32> = live
+            .iter()
+            .filter(|v| {
+                // ValueTy 缺失（Unknown）保守当 Handle
+                value_ty
+                    .and_then(|m| m.get(v))
+                    .map_or(true, |t| *t == wjsm_ir::value_ty::ValueTy::Handle)
+            })
+            .map(|v| self.local_idx(v.0))
+            .collect();
+        spill.sort_unstable();
+        spill.dedup();
+        spill
+    }
+
+    /// Safepoint spill prologue：把 live handle locals 写到 shadow stack 顶端，推进 shadow_sp。
+    /// 返回 spill 的 local 数（×8 = shadow_sp 推进量），供 epilogue 复位用。
+    ///
+    /// non-moving GC 关键：GC 不改 local 值，故无需 reload。epilogue 只复位 shadow_sp。
+    /// 不占用 shadow_sp_scratch_idx（与 Call 的 arg-push save/restore 独立）：
+    /// epilogue 用 `shadow_sp -= n*8` 复位，因 Call 的 arg-save/restore 在 call 前后对称，
+    /// 返回时 shadow_sp 已恢复到 spill 后的位置。
+    fn emit_safepoint_spill_prologue(&mut self, spill: &[u32]) {
+        for &local in spill {
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::LocalGet(local));
+            self.emit(WasmInstruction::I64Store(MemArg {
+                offset: 0,
+                align: 3,
+                memory_index: 0,
+            }));
+            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+            self.emit(WasmInstruction::I32Const(8));
+            self.emit(WasmInstruction::I32Add);
+            self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+        }
+    }
+
+    /// Safepoint spill epilogue：复位 shadow_sp（减去 spill prologue 推进的字节数）。
+    fn emit_safepoint_spill_epilogue(&mut self, spill_count: usize) {
+        if spill_count == 0 {
+            return;
+        }
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::I32Const((spill_count * 8) as i32));
+        self.emit(WasmInstruction::I32Sub);
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+    }
+
     pub(crate) fn compile_instruction(
         &mut self,
         module: &IrModule,
@@ -303,9 +388,14 @@ impl Compiler {
                 dest,
                 builtin,
                 args,
-            } => self
-                .compile_builtin_call(*dest, builtin, args)
-                .map(|_| false),
+            } => {
+                // GC safepoint（P2）：spill live handles 再调 builtin。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
+                self.compile_builtin_call(*dest, builtin, args)?;
+                self.emit_safepoint_spill_epilogue(spill.len());
+                Ok(false)
+            }
             Instruction::LoadVar { dest, name } => {
                 if let Some(offset) = self.var_memory_offsets.get(name).copied() {
                     self.emit_eval_var_address(offset);
@@ -349,7 +439,10 @@ impl Compiler {
                 this_val,
                 args,
             } => {
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 self.compile_call_with_new_target(dest, *callee, *this_val, args, None)?;
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::SuperCall {
@@ -359,7 +452,10 @@ impl Compiler {
                 args,
                 forward_args,
             } => {
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 self.compile_super_call(dest, *callee, *this_val, args, *forward_args)?;
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::ConstructCall {
@@ -367,13 +463,20 @@ impl Compiler {
                 this_val,
                 args,
             } => {
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 self.compile_call_with_new_target(&None, *callee, *this_val, args, Some(*callee))?;
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::NewObject { dest, capacity } => {
+                // GC safepoint（P2）：spill live handles，调 $obj_new，复位 shadow_sp。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 // Call $obj_new(capacity)
                 self.emit(WasmInstruction::I32Const(*capacity as i32));
                 self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 // Result is i32 ptr — encode as object handle.
                 // object_handle = BOX_BASE | (TAG_OBJECT << 32) | ptr
                 self.emit(WasmInstruction::I64ExtendI32U);
@@ -530,9 +633,13 @@ impl Compiler {
                 Ok(false)
             }
             Instruction::NewArray { dest, capacity } => {
+                // GC safepoint（P2）：spill live handles，调 $arr_new，复位 shadow_sp。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 // Call $arr_new(capacity) -> i32 (handle index)
                 self.emit(WasmInstruction::I32Const(*capacity as i32));
                 self.emit(WasmInstruction::Call(self.arr_new_func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 // Encode as array handle: BOX_BASE | (TAG_ARRAY << 32) | handle
                 self.emit(WasmInstruction::I64ExtendI32U);
                 let box_base = value::BOX_BASE as i64;

@@ -233,7 +233,8 @@ impl Compiler {
             let block = &blocks[idx];
 
             let mut suspended = false;
-            for instruction in block.instructions() {
+            for (instr_idx, instruction) in block.instructions().iter().enumerate() {
+                self.set_emit_cursor(idx, instr_idx);
                 if self.compile_instruction(module, instruction)? {
                     suspended = true;
                     break;
@@ -382,14 +383,16 @@ impl Compiler {
                             self.emit(WasmInstruction::If(BlockType::Empty));
 
                             self.compiled_blocks.insert(true_idx);
-                            for instruction in blocks[true_idx].instructions() {
+                            for (instr_idx, instruction) in blocks[true_idx].instructions().iter().enumerate() {
+                                self.set_emit_cursor(true_idx, instr_idx);
                                 self.compile_instruction(module, instruction)?;
                             }
                             self.emit_phi_moves(blocks, true_idx, common_idx);
 
                             self.emit(WasmInstruction::Else);
                             self.compiled_blocks.insert(false_idx);
-                            for instruction in blocks[false_idx].instructions() {
+                            for (instr_idx, instruction) in blocks[false_idx].instructions().iter().enumerate() {
+                                self.set_emit_cursor(false_idx, instr_idx);
                                 self.compile_instruction(module, instruction)?;
                             }
                             self.emit_phi_moves(blocks, false_idx, common_idx);
@@ -716,7 +719,8 @@ impl Compiler {
             let block = &blocks[idx];
 
             let mut suspended = false;
-            for instruction in block.instructions() {
+            for (instr_idx, instruction) in block.instructions().iter().enumerate() {
+                self.set_emit_cursor(idx, instr_idx);
                 if self.compile_instruction(module, instruction)? {
                     suspended = true;
                     break;
@@ -1098,7 +1102,8 @@ impl Compiler {
         let block = &blocks[idx];
 
         let mut suspended = false;
-        for instruction in block.instructions() {
+        for (instr_idx, instruction) in block.instructions().iter().enumerate() {
+            self.set_emit_cursor(idx, instr_idx);
             if self.compile_instruction(module, instruction)? {
                 suspended = true;
                 break;
@@ -1161,7 +1166,8 @@ impl Compiler {
                     // 会导致 update 块的 continue br 深度偏移错误。
                     self.emit_phi_moves(blocks, idx, target_idx);
                     let target_block = &blocks[target_idx];
-                    for instruction in target_block.instructions() {
+                    for (instr_idx, instruction) in target_block.instructions().iter().enumerate() {
+                        self.set_emit_cursor(target_idx, instr_idx);
                         self.compile_instruction(module, instruction)?;
                     }
                     if let Some(depth) = self.loop_continue_depth(match target_block.terminator() {
@@ -1357,14 +1363,16 @@ impl Compiler {
                         self.emit(WasmInstruction::If(BlockType::Empty));
 
                         self.compiled_blocks.insert(true_idx);
-                        for instruction in blocks[true_idx].instructions() {
+                        for (instr_idx, instruction) in blocks[true_idx].instructions().iter().enumerate() {
+                            self.set_emit_cursor(true_idx, instr_idx);
                             self.compile_instruction(module, instruction)?;
                         }
                         self.emit_phi_moves(blocks, true_idx, common_idx);
 
                         self.emit(WasmInstruction::Else);
                         self.compiled_blocks.insert(false_idx);
-                        for instruction in blocks[false_idx].instructions() {
+                        for (instr_idx, instruction) in blocks[false_idx].instructions().iter().enumerate() {
+                            self.set_emit_cursor(false_idx, instr_idx);
                             self.compile_instruction(module, instruction)?;
                         }
                         self.emit_phi_moves(blocks, false_idx, common_idx);
