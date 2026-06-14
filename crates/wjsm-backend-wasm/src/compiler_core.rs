@@ -176,7 +176,7 @@ impl Compiler {
                 "env",
                 "memory",
                 EntityType::Memory(MemoryType {
-                    minimum: 2,
+                    minimum: 4,
                     maximum: None,
                     memory64: false,
                     shared: false,
@@ -221,7 +221,7 @@ impl Compiler {
         let mut memory = MemorySection::new();
         if mode == CompileMode::Normal {
             memory.memory(MemoryType {
-                minimum: 2, // 2 pages (128KB) to accommodate shadow stack
+                minimum: 4, // 4 pages (256KB)：P4 GC obj_table 8KB + shadow stack 64KB + 对象堆
                 maximum: None,
                 memory64: false,
                 shared: false,

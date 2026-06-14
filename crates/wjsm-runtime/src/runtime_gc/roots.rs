@@ -57,6 +57,15 @@ impl RootProvider for RuntimeRoots {
         for h in 0..(n as Handle) {
             visit(h);
         }
+        // 稳定 root：prototype 对象（Array.prototype / Object.prototype）。
+        // 这些在模块初始化时创建（handle >= num_ir_functions），必须作顶层 root 否则被 sweep 回收
+        // → 原型链断裂 → 属性查找读到 garbage（P4 T4.5 发现）。
+        if let Some(h) = ctx.array_proto_handle() {
+            visit(h);
+        }
+        if let Some(h) = ctx.object_proto_handle() {
+            visit(h);
+        }
         // 动态 root：host 侧表快照 → 解析每个 raw 值为 handle。
         let snapshot = collect_host_table_values(ctx);
         for val in snapshot {

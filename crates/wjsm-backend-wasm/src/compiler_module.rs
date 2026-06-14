@@ -380,7 +380,10 @@ impl Compiler {
         // Runtime objects are stored at indices num_functions..capacity.
         let heap_start = (self.data_offset + 7) & !7; // align to 8 bytes
         let num_functions = self.num_ir_functions;
-        let handle_table_entries = std::cmp::max(256, num_functions * 2);
+        // P4 GC：obj_table 必须容纳 GC 阈值前的峰值分配数。
+        // GC 默认阈值 1000，故 obj_table 至少 2048（覆盖阈值 + 临时对象缓冲）。
+        // 旧值 max(256, num_functions*2) 在 GC 接通后不够（count 超 256 → obj_table 越界读垃圾）。
+        let handle_table_entries = std::cmp::max(2048, num_functions * 2);
         let handle_table_size = handle_table_entries * 4;
 
         let shadow_stack_base = heap_start + handle_table_size;
