@@ -24,7 +24,6 @@ pub enum SpecialHostImport {
     ClosureCreate,
     ClosureGetFunc,
     ClosureGetEnv,
-    GcCollect,
     NativeCall,
     NewTargetSet,
     ObjGetByIndex,
@@ -201,12 +200,6 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         name: "abstract_compare",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::AbstractCompare)),
-        group: None,
-    },
-    HostImportSpec {
-        name: "gc_collect",
-        type_idx: 7,
-        key: Some(HostImportKey::Special(SpecialHostImport::GcCollect)),
         group: None,
     },
     HostImportSpec {
