@@ -5,6 +5,11 @@ use wjsm_ir::value::{
     encode_scope_record_handle, encode_string_ptr, encode_symbol_handle, encode_undefined,
     tag_needs_root, TAG_ARRAY, TAG_ENUMERATOR, TAG_ITERATOR,
 };
+use wjsm_ir::value_ty::{infer_value_ty, ValueTy};
+use wjsm_ir::{
+    BasicBlock, BasicBlockId, BinaryOp, CompareOp, Constant, Function, Instruction, Module,
+    Terminator, ValueId,
+};
 
 #[test]
 fn tag_needs_root_covers_all_handle_tags() {
@@ -54,4 +59,143 @@ fn tag_needs_root_rejects_scalars() {
             "scalar at index {i} (val={val:#018x}) should NOT need rooting",
         );
     }
+}
+
+// ── ValueTy type inference (T1.2) ────────────────────────────────────────
+
+#[test]
+fn value_ty_object_producing_ops_are_handle() {
+    let mut module = Module::new();
+    let mut f = Function::new("test", BasicBlockId(0));
+    let mut bb = BasicBlock::new(BasicBlockId(0));
+    bb.push_instruction(Instruction::NewObject {
+        dest: ValueId(0),
+        capacity: 4,
+    });
+    bb.push_instruction(Instruction::NewArray {
+        dest: ValueId(1),
+        capacity: 4,
+    });
+    bb.push_instruction(Instruction::GetSuperBase { dest: ValueId(2) });
+    bb.push_instruction(Instruction::GetSuperConstructor { dest: ValueId(3) });
+    bb.push_instruction(Instruction::NewPromise { dest: ValueId(4) });
+    bb.set_terminator(Terminator::Return {
+        value: Some(ValueId(0)),
+    });
+    f.push_block(bb);
+    module.push_function(f);
+
+    let ty = infer_value_ty(&module, module.functions().last().unwrap());
+    assert_eq!(ty[&ValueId(0)], ValueTy::Handle);
+    assert_eq!(ty[&ValueId(1)], ValueTy::Handle);
+    assert_eq!(ty[&ValueId(2)], ValueTy::Handle);
+    assert_eq!(ty[&ValueId(3)], ValueTy::Handle);
+    assert_eq!(ty[&ValueId(4)], ValueTy::Handle);
+}
+
+#[test]
+fn value_ty_arithmetic_and_compare_are_scalar() {
+    let mut module = Module::new();
+    let c0 = module.add_constant(Constant::Number(1.0));
+    let c1 = module.add_constant(Constant::Number(2.0));
+    let mut f = Function::new("test", BasicBlockId(0));
+    let mut bb = BasicBlock::new(BasicBlockId(0));
+    bb.push_instruction(Instruction::Const {
+        dest: ValueId(0),
+        constant: c0,
+    });
+    bb.push_instruction(Instruction::Const {
+        dest: ValueId(1),
+        constant: c1,
+    });
+    bb.push_instruction(Instruction::Binary {
+        dest: ValueId(2),
+        op: BinaryOp::Add,
+        lhs: ValueId(0),
+        rhs: ValueId(1),
+    });
+    bb.push_instruction(Instruction::Compare {
+        dest: ValueId(3),
+        op: CompareOp::StrictEq,
+        lhs: ValueId(0),
+        rhs: ValueId(1),
+    });
+    bb.set_terminator(Terminator::Return {
+        value: Some(ValueId(2)),
+    });
+    f.push_block(bb);
+    module.push_function(f);
+
+    let ty = infer_value_ty(&module, module.functions().last().unwrap());
+    assert_eq!(ty[&ValueId(2)], ValueTy::Scalar, "Binary arithmetic -> Scalar");
+    assert_eq!(ty[&ValueId(3)], ValueTy::Scalar, "Compare -> Scalar");
+}
+
+#[test]
+fn value_ty_const_scalar_constants_are_scalar() {
+    let mut module = Module::new();
+    let n = module.add_constant(Constant::Number(3.14));
+    let b = module.add_constant(Constant::Bool(true));
+    let null = module.add_constant(Constant::Null);
+    let und = module.add_constant(Constant::Undefined);
+    let mut f = Function::new("test", BasicBlockId(0));
+    let mut bb = BasicBlock::new(BasicBlockId(0));
+    bb.push_instruction(Instruction::Const {
+        dest: ValueId(0),
+        constant: n,
+    });
+    bb.push_instruction(Instruction::Const {
+        dest: ValueId(1),
+        constant: b,
+    });
+    bb.push_instruction(Instruction::Const {
+        dest: ValueId(2),
+        constant: null,
+    });
+    bb.push_instruction(Instruction::Const {
+        dest: ValueId(3),
+        constant: und,
+    });
+    bb.set_terminator(Terminator::Return {
+        value: Some(ValueId(0)),
+    });
+    f.push_block(bb);
+    module.push_function(f);
+
+    let ty = infer_value_ty(&module, module.functions().last().unwrap());
+    assert_eq!(ty[&ValueId(0)], ValueTy::Scalar, "Const Number -> Scalar");
+    assert_eq!(ty[&ValueId(1)], ValueTy::Scalar, "Const Bool -> Scalar");
+    assert_eq!(ty[&ValueId(2)], ValueTy::Scalar, "Const Null -> Scalar");
+    assert_eq!(ty[&ValueId(3)], ValueTy::Scalar, "Const Undefined -> Scalar");
+}
+
+#[test]
+fn value_ty_const_handle_constants_and_polymorphic_are_handle() {
+    let mut module = Module::new();
+    let s = module.add_constant(Constant::String("hi".to_string())); // String const -> Handle
+    let mut f = Function::new("test", BasicBlockId(0));
+    let mut bb = BasicBlock::new(BasicBlockId(0));
+    bb.push_instruction(Instruction::Const {
+        dest: ValueId(0),
+        constant: s,
+    });
+    bb.push_instruction(Instruction::NewObject {
+        dest: ValueId(1),
+        capacity: 4,
+    });
+    // GetProp is polymorphic -> Handle (conservative)
+    bb.push_instruction(Instruction::GetProp {
+        dest: ValueId(2),
+        object: ValueId(1),
+        key: ValueId(0),
+    });
+    bb.set_terminator(Terminator::Return {
+        value: Some(ValueId(2)),
+    });
+    f.push_block(bb);
+    module.push_function(f);
+
+    let ty = infer_value_ty(&module, module.functions().last().unwrap());
+    assert_eq!(ty[&ValueId(0)], ValueTy::Handle, "Const String -> Handle");
+    assert_eq!(ty[&ValueId(2)], ValueTy::Handle, "GetProp polymorphic -> Handle");
 }
