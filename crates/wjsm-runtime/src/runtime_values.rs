@@ -224,6 +224,9 @@ pub(crate) fn grow_array(
     if slot_addr + 4 <= d.len() {
         d[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
     }
+    // 注册被抛弃的旧区域（P4-blocker #1）：handle 现在指向 heap_ptr，
+    // 旧 ptr 区域不再被 obj_table 索引，sweep 单独遍历看不到 → 注册供 sweeper 回收。
+    caller.data().abandon_region(ptr, old_size);
     if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
         let _ = g.set(&mut *caller, Val::I32((heap_ptr + new_size) as i32));
     }
@@ -275,6 +278,8 @@ pub(crate) fn grow_object(
     if slot_addr + 4 <= d.len() {
         d[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
     }
+    // 注册被抛弃的旧区域（P4-blocker #1）：同 grow_array。
+    caller.data().abandon_region(ptr, old_size);
     if let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") {
         let _ = g.set(&mut *caller, Val::I32((heap_ptr + new_size) as i32));
     }

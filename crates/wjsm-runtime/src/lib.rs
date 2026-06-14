@@ -988,6 +988,7 @@ impl Clone for RuntimeState {
             native_callables: self.native_callables.clone(),
             native_callable_free_slots: self.native_callable_free_slots.clone(),
             handle_free_list: self.handle_free_list.clone(),
+            abandoned_regions: self.abandoned_regions.clone(),
             continuation_free_slots: self.continuation_free_slots.clone(),
             combinator_context_free_slots: self.combinator_context_free_slots.clone(),
             eval_cache: self.eval_cache.clone(),
@@ -1070,6 +1071,11 @@ struct RuntimeState {
     /// runtime_gc::MarkSweepCollector::collect 把 sweep 回收的 handle push 到此；
     /// gc_take_freed_handle host import（P4）pop 给 WASM fast-path。
     handle_free_list: Arc<Mutex<Vec<u32>>>,
+    /// resize（grow_array/grow_object）抛弃的旧区域 (ptr, size)。
+    /// handle 的 obj_table 槽被重写到新 ptr 后，旧 ptr 区域不再被 obj_table 索引，
+    /// sweep 单独遍历 obj_table 看不到它 → 永久泄漏（INV-B vs §8.2 矛盾，P4-blocker #1）。
+    /// grow_array/grow_object 在重写前注册旧 (ptr, old_size)；sweep 读此并入 free list，sweep 结束清空。
+    abandoned_regions: Arc<Mutex<Vec<(usize, usize)>>>,
     /// continuation 侧表空闲槽位（handle 下标稳定，禁止 Vec::retain）。
     continuation_free_slots: Arc<Mutex<Vec<u32>>>,
     /// combinator context 侧表空闲槽位。
@@ -1187,6 +1193,22 @@ impl RuntimeState {
         self.handle_free_list.lock().ok()
     }
 
+    /// 注册 resize（grow_array/grow_object）抛弃的旧区域 (ptr, old_size)。
+    /// sweeper 读此并入 free list（P4-blocker #1）。
+    pub(crate) fn abandon_region(&self, ptr: usize, size: usize) {
+        if size == 0 {
+            return;
+        }
+        if let Ok(mut list) = self.abandoned_regions.lock() {
+            list.push((ptr, size));
+        }
+    }
+
+    /// GC 框架访问 abandoned_regions（sweeper 读 + 清空）。
+    pub(crate) fn abandoned_regions_for_gc(&self) -> Option<std::sync::MutexGuard<'_, Vec<(usize, usize)>>> {
+        self.abandoned_regions.lock().ok()
+    }
+
     /// 构造一个新的 RuntimeState，所有侧表初始化为空，well-known symbols 预分配。
     pub(crate) fn new() -> Self {
         const GC_THRESHOLD: u64 = 1000;
@@ -1207,6 +1229,7 @@ impl RuntimeState {
             native_callables: Arc::new(Mutex::new(vec![NativeCallable::EvalIndirect])),
             native_callable_free_slots: Arc::new(Mutex::new(Vec::new())),
             handle_free_list: Arc::new(Mutex::new(Vec::new())),
+            abandoned_regions: Arc::new(Mutex::new(Vec::new())),
             continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
             combinator_context_free_slots: Arc::new(Mutex::new(Vec::new())),
             eval_cache: Arc::new(Mutex::new(HashMap::new())),
