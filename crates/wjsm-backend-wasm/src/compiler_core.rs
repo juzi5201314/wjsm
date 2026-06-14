@@ -297,6 +297,10 @@ impl Compiler {
             mode,
             function_param_counts: Vec::new(),
             function_names: Vec::new(),
+            current_fn_liveness: None,
+            current_fn_value_ty: None,
+            current_emit_block_idx: 0,
+            current_emit_instr_idx: 0,
         }
     }
 }

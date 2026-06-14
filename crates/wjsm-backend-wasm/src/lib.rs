@@ -160,6 +160,17 @@ struct Compiler {
     mode: CompileMode,
     function_param_counts: Vec<u32>,
     function_names: Vec<String>,
+    // ── GC safepoint spill（P2）──
+    /// 当前函数的 per-instruction liveness（P1 已实现，wjsm_ir::liveness::compute_liveness）。
+    /// compile_function 入口计算一次。`None` 表示当前函数无 liveness 数据（例如未调用 compile_function）。
+    current_fn_liveness:
+        Option<HashMap<wjsm_ir::BasicBlockId, HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>>>,
+    /// 当前函数的 ValueTy（P1 已实现，wjsm_ir::value_ty::infer_value_ty）。
+    current_fn_value_ty: Option<HashMap<wjsm_ir::ValueId, wjsm_ir::value_ty::ValueTy>>,
+    /// 当前 emit 位置的 IR block 索引（= block id，见 wjsm-ir block_by_id O(1) by index 约定）。
+    current_emit_block_idx: usize,
+    /// 当前 emit 位置在当前 block 内的指令下标。
+    current_emit_instr_idx: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
