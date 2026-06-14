@@ -12,6 +12,7 @@
 | 2026-06-05 | SharedArrayBuffer + Atomics ES Full Implementation | [specs/2026-06-05-sharedarraybuffer-atomics-design.md](specs/2026-06-05-sharedarraybuffer-atomics-design.md) |
 | 2026-06-07 | Runtime Side Table Lifecycle (Phase 4 GC) | [specs/2026-06-07-runtime-side-table-lifecycle-design.md](specs/2026-06-07-runtime-side-table-lifecycle-design.md) |
 | 2026-06-13 | Fetch/Streams Streaming Completion | [specs/2026-06-13-fetch-streams-completion-design.md](specs/2026-06-13-fetch-streams-completion-design.md) |
+| 2026-06-14 | Pluggable GC Framework (non-moving MarkSweep) | [specs/2026-06-14-pluggable-gc-framework-design.md](specs/2026-06-14-pluggable-gc-framework-design.md) |
 ## Plans
 
 | Date | Title | File |
@@ -24,6 +25,7 @@
 | 2026-06-07 | Eval Arguments/TDZ/Super Gap Closure | [plans/2026-06-07-eval-arguments-tdz-super-gaps.md](plans/2026-06-07-eval-arguments-tdz-super-gaps.md) |
 | 2026-06-03 | WHATWG Streams Standard Implementation | [plans/2026-06-03-streams-standard.md](plans/2026-06-03-streams-standard.md) |
 | 2026-06-13 | Fetch/Streams Streaming Completion | [plans/2026-06-13-fetch-streams-completion.md](plans/2026-06-13-fetch-streams-completion.md) |
+| 2026-06-14 | Pluggable GC Framework | [plans/2026-06-14-pluggable-gc-framework.md](plans/2026-06-14-pluggable-gc-framework.md) |
 
 ## Baselines
 
