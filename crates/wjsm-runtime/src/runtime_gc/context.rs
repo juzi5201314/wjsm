@@ -122,6 +122,19 @@ impl<'a, 'b> GcContext<'a, 'b> {
             .max(0) as usize
     }
 
+    /// 读 array_proto_handle global（__array_proto_handle，Array.prototype 对象 handle）。
+    /// 返回 None 表未初始化（-1）或不可读。
+    pub fn array_proto_handle(&mut self) -> Option<Handle> {
+        let h = read_i32_global(&mut *self.caller, "__array_proto_handle")?;
+        if h < 0 { None } else { Some(h as Handle) }
+    }
+
+    /// 读 object_proto_handle global（__object_proto_handle，Object.prototype 对象 handle）。
+    pub fn object_proto_handle(&mut self) -> Option<Handle> {
+        let h = read_i32_global(&mut *self.caller, "__object_proto_handle")?;
+        if h < 0 { None } else { Some(h as Handle) }
+    }
+
     /// 读 obj_table[h] → ptr。返回 None 表示越界或空槽（ptr==0）。
     /// 注：需先读 obj_table_ptr（&mut self），再 with_memory 读 data（不可同时 &mut caller）。
     pub fn obj_table_slot(&mut self, data: &[u8], h: Handle) -> Option<usize> {
