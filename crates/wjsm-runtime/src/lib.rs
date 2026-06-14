@@ -29,6 +29,7 @@ mod runtime_host_helpers;
 mod runtime_json;
 mod runtime_microtask;
 mod runtime_promises;
+mod runtime_gc;
 mod shared_buffer;
 pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;
@@ -986,6 +987,7 @@ impl Clone for RuntimeState {
             bound_objects: self.bound_objects.clone(),
             native_callables: self.native_callables.clone(),
             native_callable_free_slots: self.native_callable_free_slots.clone(),
+            handle_free_list: self.handle_free_list.clone(),
             continuation_free_slots: self.continuation_free_slots.clone(),
             combinator_context_free_slots: self.combinator_context_free_slots.clone(),
             eval_cache: self.eval_cache.clone(),
@@ -1064,6 +1066,10 @@ struct RuntimeState {
     native_callables: Arc<Mutex<Vec<NativeCallable>>>,
     /// native_callable 表空闲槽位，用于复用已释放条目。
     native_callable_free_slots: Arc<Mutex<Vec<u32>>>,
+    /// GC sweep 回收的 obj_table handle 槽（供 fast-path 复用，spec #7/IMPL-10）。
+    /// runtime_gc::MarkSweepCollector::collect 把 sweep 回收的 handle push 到此；
+    /// gc_take_freed_handle host import（P4）pop 给 WASM fast-path。
+    handle_free_list: Arc<Mutex<Vec<u32>>>,
     /// continuation 侧表空闲槽位（handle 下标稳定，禁止 Vec::retain）。
     continuation_free_slots: Arc<Mutex<Vec<u32>>>,
     /// combinator context 侧表空闲槽位。
@@ -1175,6 +1181,12 @@ impl RuntimeState {
         state
     }
 
+    /// GC 框架访问 handle_free_list（runtime_gc::MarkSweepCollector::collect 用）。
+    /// 返回 handle_free_list 的可变引用，供 sweep 回收的 handle 入表。
+    pub(crate) fn handle_free_list_for_gc(&self) -> Option<std::sync::MutexGuard<'_, Vec<u32>>> {
+        self.handle_free_list.lock().ok()
+    }
+
     /// 构造一个新的 RuntimeState，所有侧表初始化为空，well-known symbols 预分配。
     pub(crate) fn new() -> Self {
         const GC_THRESHOLD: u64 = 1000;
@@ -1194,6 +1206,7 @@ impl RuntimeState {
             bound_objects: Arc::new(Mutex::new(Vec::new())),
             native_callables: Arc::new(Mutex::new(vec![NativeCallable::EvalIndirect])),
             native_callable_free_slots: Arc::new(Mutex::new(Vec::new())),
+            handle_free_list: Arc::new(Mutex::new(Vec::new())),
             continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
             combinator_context_free_slots: Arc::new(Mutex::new(Vec::new())),
             eval_cache: Arc::new(Mutex::new(HashMap::new())),
