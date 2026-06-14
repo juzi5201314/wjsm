@@ -551,7 +551,7 @@ fn alloc_falls_back_to_higher_class() {
 **Files**:
 - create: `crates/wjsm-runtime/src/runtime_gc/mark_sweep/marker.rs`
 
-**Why（#11）**: mark 用显式 worklist 不递归。移植 mark_object_recursive（runtime_heap.rs:577-761）的子对象收集逻辑，但把递归改 worklist。
+**Why（#11）**: mark 用显式 worklist 不递归。移植 `mark_object_recursive`（runtime_heap.rs:577-**585**，**仅 9 行委派器**）调用的 `mark_object_recursive_with_funcs`（runtime_heap.rs:**587+**，**真实子对象收集逻辑**），但把递归改 worklist。
 
 **Steps**:
 
@@ -653,7 +653,7 @@ fn mark_deep_chain_no_stack_overflow() {
 - [ ] **实现 gc_alloc_slow import**（sync Func::wrap，spec §7.2 trampoline）：调 GcContext + gc_alloc_slow → Option → Some 返 handle / None trap。
 - [ ] **实现 gc_maybe_collect import**（sync Func::wrap，无参）：调 gc_algorithm.collect（fast-path proactive 触发，spec §7.1）。
 - [ ] **实现 gc_take_freed_handle import**（sync Func::wrap）：从 host handle_free_list pop，返 i32（-1 表空）。
-- [ ] **在 host_import_registry.rs 注册** 3 个新 SpecialHostImport。
+- [ ] **在 host_import_registry.rs 注册** 3 个新 SpecialHostImport 变体（`GcAllocSlow` / `GcMaybeCollect` / `GcTakeFreedHandle`）**并加 HOST_IMPORT_SPECS 条目**（host_import_registry.rs:13 enum + :66 specs）。注：`GcCollect` 已存在（lib.rs:27）无需重加。否则 `special_host_import_indices` 不会被 compiler_core.rs:194-201 填充，导致索引缺失。
 - [ ] **编译确认**。
 
 ## T4.2 RuntimeState: gc_algorithm + handle_free_list + gc_threshold
@@ -663,7 +663,11 @@ fn mark_deep_chain_no_stack_overflow() {
 
 **Steps**:
 
-- [ ] RuntimeState 加 `gc_algorithm: Box<dyn GcAlgorithm>`（默认 MarkSweepCollector::new()）、`handle_free_list: Vec<u32>`、`gc_threshold: usize`（默认 1000）。
+- [ ] RuntimeState（lib.rs:1040）加字段：
+  - `gc_algorithm: Arc<Mutex<Box<dyn GcAlgorithm + Send + Sync>>>`（默认 `MarkSweepCollector::new()`；trait 加 `Send + Sync` bound；Arc<Mutex> 因 host fn 经 &Caller 访问需内部可变性）
+  - `handle_free_list: Arc<Mutex<Vec<u32>>>`（沿用 `native_callable_free_slots` 约定 lib.rs:1066；非裸 Vec<u32>）
+  - **gc_threshold 已存在**（lib.rs:1052，类型 **u64 非 usize**，非 Arc/Mutex 包装）—— **不重新声明**，仅调初值 1000
+  - alloc_counter（Arc<Mutex<u64>> lib.rs:1049）、gc_mark_bits（Arc<Mutex<Vec<u64>>> lib.rs:1047）**也已存在**，复用
 - [ ] **编译确认**。
 
 ## T4.3 改 $obj_new：bump + handle_free_list + proactive + gc_alloc_slow
@@ -684,7 +688,7 @@ fn mark_deep_chain_no_stack_overflow() {
 
 **Steps**:
 
-- [ ] GcCollect 改调 `gc_algorithm.collect`（经 GcContext），不调旧 trigger_gc。
+- [ ] NativeCallable 枚举定义在 **lib.rs:2172**（非 runtime_builtins.rs）；`GcCollect` 变体在 lib.rs:2270。其 match arm 在 runtime_builtins.rs:1856-1859，改调 `gc_algorithm.collect`（经 GcContext），不调旧 trigger_gc。
 - [ ] **编译确认**。
 
 ## T4.5 长循环 fixture + safepoint 安全 fixture
@@ -764,7 +768,7 @@ cargo nextest run -E 'test(streams_byob) | test(fetch_http_byob)'
 
 - [ ] 确认 trigger_gc 无调用方（GcCollect 已重接，T4.4）。
 - [ ] **删除 trigger_gc**。
-- [ ] **删除 sweep_dead_promise_slots**（已并入 sweeper）。
+- [ ] **删除 sweep_dead_promise_slots**（已并入 sweeper）。注：它当前被 `trigger_gc` 在 runtime_builtins.rs:3219 调用 —— 由于 T5.1 同时删除 trigger_gc，调用点一并消失，无残留引用。
 - [ ] **编译确认**: `cargo build -p wjsm-runtime`。
 
 ## T5.2 删除 core.rs gc_collect
@@ -842,7 +846,7 @@ gc_algorithm: GcAlgorithmChoice,
 
 - [ ] **threading**: 从 execute/run_pipeline 把 choice 传入 runtime 初始化（RuntimeState.gc_algorithm 按 choice 构造）。
 
-> 注：当前 backend_wasm::compile 只接 &Program，GC choice 是 runtime 期（非编译期），故不需改 compile 签名。在 RuntimeState 构造处按 choice 选 algorithm。
+> 注：`backend_wasm::compile` 定义在 **crates/wjsm-backend-wasm/src/lib.rs:23**（签名 `compile(program: &Program) -> Result<Vec<u8>>`），调用点在 wjsm-cli/src/lib.rs:818/1132。GC choice 是 runtime 期（非编译期），**compile() 签名不变**。在 RuntimeState 构造处按 choice 选 algorithm。
 
 - [ ] **测试**: `cargo run -- run fixtures/happy/gc_long_loop.js --gc-algorithm mark-sweep` 通过。
 - [ ] **Commit**: `feat(cli): --gc-algorithm flag`
@@ -895,7 +899,7 @@ gc_algorithm: GcAlgorithmChoice,
 - P5 删除 trigger_gc + core.rs gc_collect（框架 P4 已接管，无断档）
 - spec §18 INV/IMPL 是实现期硬约束，违反即 GC 不安全
 
-## Self-Review 结论（R2 — P0/P1 已执行验证后修订）
+## Self-Review 结论（R3 — P3-P6 API 经验证审计后修订）
 
 - **Spec 覆盖**：spec §14 的 P0-P6 + §18 全部 INV/IMPL 不变量在计划中均有对应任务（见 Tasks 总览 + 每阶段验收含 §18 硬约束）。
 - **Placeholder**：P1（IR 层）API 未知项已全部验证并回填（encode_function_idx/PhiSource/Module::constants/Function::new 见 P1）。P2 global_idx naive 假设已修正为 emit-position cursor（structured 编译非线性）。P3-P6 核心算法给完整代码。
