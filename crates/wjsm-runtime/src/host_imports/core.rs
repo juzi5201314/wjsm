@@ -1645,7 +1645,8 @@ pub(crate) fn define_core(
 
     // gc_alloc_slow(size: i32, heap_type: i32, capacity: i32) -> i32
     //   fast-path bump 失败后的 slow-path：free list → bump → GC → grow。
-    //   返回 handle；真 OOM（无法分配）时 trap（caller 内 unreachable）。
+    //   返回**线性内存 ptr**（仅地址；handle 注册在 WASM $obj_new/$arr_new 中完成）。
+    //   真 OOM（无法分配）时返回 u32::MAX sentinel（调用方 unreachable trap）。
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, size: i32, heap_type: i32, capacity: i32| -> i32 {
@@ -1663,8 +1664,8 @@ pub(crate) fn define_core(
                 let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
                 let mut ctx =
                     crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
-                if let Some(h) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
-                    return h as i32;
+                if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
+                    return ptr as i32;
                 }
             }
             // 2. collect 后重试
@@ -1679,8 +1680,8 @@ pub(crate) fn define_core(
                 let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
                 let mut ctx =
                     crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
-                if let Some(h) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
-                    return h as i32;
+                if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
+                    return ptr as i32;
                 }
             }
             // 3. grow + 重试（真 OOM 前最后手段）
@@ -1689,8 +1690,8 @@ pub(crate) fn define_core(
                 let mut ctx =
                     crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
                 if ctx.grow(1).is_ok() {
-                    if let Some(h) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
-                        return h as i32;
+                    if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
+                        return ptr as i32;
                     }
                 }
             }
@@ -1701,11 +1702,12 @@ pub(crate) fn define_core(
     linker.define(&mut store, "env", "gc_alloc_slow", f)?;
 
     // gc_maybe_collect()：proactive GC 触发。
-    //   WASM fast-path 在 alloc_counter 达 gc_threshold 时调用。host 检查阈值后 collect。
+    //   WASM fast-path 在每次 alloc 成功后调用。host 递增 alloc_counter，达 gc_threshold 时 collect。
     let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
         let (should_collect, gc_arc) = {
             let state = caller.data();
-            let counter = state.alloc_counter.lock().expect("alloc_counter mutex");
+            let mut counter = state.alloc_counter.lock().expect("alloc_counter mutex");
+            *counter += 1;
             (*counter >= state.gc_threshold, state.gc_algorithm.clone())
         };
         if !should_collect {

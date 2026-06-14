@@ -42,19 +42,19 @@ impl Allocator for MarkSweepCollector {
         &mut self,
         ctx: &mut GcContext,
         size: usize,
-        heap_type: u8,
-        capacity: u32,
-    ) -> Option<Handle> {
+        _heap_type: u8,
+        _capacity: u32,
+    ) -> Option<usize> {
         // 1. 试 free list best-fit
         if let Some(ptr) = self.free_list.alloc(size) {
-            return Some(self.register_handle(ctx, ptr, size, heap_type, capacity));
+            return Some(ptr);
         }
         // 2. 试 bump（heap_ptr 推进）
         let heap_ptr = ctx.heap_ptr();
         let mem_end = ctx.memory.data_size(&*ctx.caller);
         if heap_ptr + size <= mem_end {
             ctx.set_heap_ptr(heap_ptr + size);
-            return Some(self.register_handle(ctx, heap_ptr, size, heap_type, capacity));
+            return Some(heap_ptr);
         }
         None
     }
@@ -170,28 +170,6 @@ impl GcAlgorithm for MarkSweepCollector {
 }
 
 impl MarkSweepCollector {
-    /// 注册 handle：取 freed handle 槽或 obj_table_count++，写 obj_table（INV-A）。
-    pub(crate) fn register_handle(
-        &mut self,
-        ctx: &mut GcContext,
-        ptr: usize,
-        _size: usize,
-        _heap_type: u8,
-        _capacity: u32,
-    ) -> Handle {
-        // 优先复用 sweep 回收的 handle 槽
-        let handle = if let Some(h) = self.freed_handles.pop() {
-            h
-        } else {
-            // 新分配：obj_table_count++（IMPL-10 不缩减，下标稳定）
-            let count = ctx.obj_table_count();
-            ctx.set_obj_table_count(count + 1);
-            count as Handle
-        };
-        ctx.write_obj_table_slot(handle, ptr);
-        handle
-    }
-
     /// 带 root 迭代器的完整 collect（P4 集成时宿主调用此方法而非 collect）。
     pub fn collect_with_roots(
         &mut self,

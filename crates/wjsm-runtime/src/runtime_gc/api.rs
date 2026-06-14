@@ -36,7 +36,7 @@ pub trait HeapObjectQuery {
 // ── 分配器：fast-path 固定烧进 WASM，slow-path 走 trait ──
 pub trait Allocator {
     /// fast-path bump 失败后调用。策略决定：free list / GC / grow。
-    /// 返回 Some(handle) 表示分配成功（INV-A：handle→ptr 已写入 obj_table）；
+    /// 返回分配到的**线性内存 ptr**（仅地址，不含 handle 注册——调用方自己 take_or_alloc_handle）；
     /// None 表示真 OOM（由 trampoline trap）。
     fn alloc_slow(
         &mut self,
@@ -44,11 +44,11 @@ pub trait Allocator {
         size: usize,
         heap_type: u8,
         capacity: u32,
-    ) -> Option<Handle>;
+    ) -> Option<usize>;
     /// 接收被 sweep 释放的空闲区（MarkSweep 用）。
     fn add_free_region(&mut self, ptr: usize, size: usize);
     /// 预留：未来 TLAB / region-local 分配。默认 None。
-    fn alloc_thread_local(&mut self, _ctx: &mut GcContext, _size: usize) -> Option<Handle> {
+    fn alloc_thread_local(&mut self, _ctx: &mut GcContext, _size: usize) -> Option<usize> {
         None
     }
 }
