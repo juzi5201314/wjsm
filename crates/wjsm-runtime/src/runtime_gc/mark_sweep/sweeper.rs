@@ -93,6 +93,17 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
             }
         }
     });
+
+    // 5. 回收 resize-abandoned 区域（P4-blocker #1，INV-B）。
+    //    grow_array/grow_object 重写 obj_table 槽到新 ptr 后，旧 ptr 区域不再被
+    //    obj_table 索引，步骤 1-3 的块扫描看不到 → 单独注册到 abandoned_regions。
+    //    这里把它们并入 free list（按 ptr 进表，alloc_slow best-fit 合并），然后清空。
+    let abandoned: Vec<(usize, usize)> = ctx
+        .with_state(|st| st.abandoned_regions_for_gc().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default());
+    for (ptr, size) in abandoned {
+        collector.free_list.add_free_region(ptr, size);
+    }
+
     ctx.stats.swept = freed.len();
     let freed_bytes: usize = blocks
         .iter()
@@ -101,4 +112,37 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
         .sum();
     ctx.stats.freed_bytes = freed_bytes;
     collector.freed_handles.extend(freed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime_gc::mark_sweep::MarkSweepCollector;
+
+    /// P4-blocker #1：验证 resize-abandoned 区域经 sweeper 步骤 5 路径进入 free list。
+    /// grow_array/grow_object 重写 obj_table 槽后旧 ptr 不可达；这里单独验证
+    /// "abandoned (ptr, size) → free_list.add_free_region → alloc 可复用" 的回收链路。
+    #[test]
+    fn abandoned_region_recovers_into_free_list() {
+        let mut collector = MarkSweepCollector::new();
+        // 模拟一次 array resize：旧区域 ptr=2000, size=80（16 + 8*8），新区域在更高地址。
+        // 块扫描（步骤 1-3）只看到新区域，旧区域经 abandoned 注入步骤 5。
+        collector.free_list.add_free_region(2000, 80);
+        // 该区域应可被 alloc 复用（best-fit：80 进 class 80，alloc(80) 精确命中）。
+        assert_eq!(collector.free_list.alloc(80), Some(2000));
+        // 用尽后应 None（验证不是幽灵复用）。
+        assert_eq!(collector.free_list.alloc(80), None);
+    }
+
+    /// abandoned 区域与 sweep 释放的 unmarked 块独立入表，互不干扰。
+    #[test]
+    fn abandoned_coexists_with_swept_blocks() {
+        let mut collector = MarkSweepCollector::new();
+        // sweep 步骤 3 释放一块
+        collector.free_list.add_free_region(1000, 144);
+        // abandoned 注入另一块（不同 ptr）
+        collector.free_list.add_free_region(5000, 272);
+        assert_eq!(collector.free_list.alloc(144), Some(1000));
+        assert_eq!(collector.free_list.alloc(272), Some(5000));
+    }
 }
