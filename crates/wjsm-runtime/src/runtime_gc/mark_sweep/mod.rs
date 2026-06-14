@@ -112,6 +112,61 @@ impl GcAlgorithm for MarkSweepCollector {
     fn algorithm_name(&self) -> &'static str {
         "mark-sweep"
     }
+
+    /// 带 RootProvider 的完整 collect，含 fixed-point host-table root 追踪（IMPL-9，spec §10）。
+    ///
+    /// 流程：
+    /// 1. mark shadow stack + function property roots → drain
+    /// 2. loop：mark host-table roots（microtask/promise/continuation/streams/...）→ drain
+    ///    → 若 popcount 增长则重复（promise reactions 引用经 mark 可达后，reaction target 需再标）
+    ///    → until popcount 不变（fixed-point 收敛，受 host 表大小约束）
+    /// 3. sweep → free list + abandoned regions + handle 复用
+    fn collect_with_provider(
+        &mut self,
+        ctx: &mut GcContext,
+        roots: &mut dyn RootProvider,
+    ) -> GcStats {
+        let start = std::time::Instant::now();
+        let count = ctx.obj_table_count();
+        self.mark_bits.reset(count);
+        self.freed_handles.clear();
+
+        // 1. shadow stack + function property roots（稳定 root）
+        let shadow_roots: Vec<Handle> = {
+            let mut acc = Vec::new();
+            roots.for_each_shadow_stack_root(ctx, &mut |h| acc.push(h));
+            acc
+        };
+        self.mark(ctx, &mut shadow_roots.into_iter());
+
+        // 2. fixed-point：host-table roots 多轮注入 until popcount 不变
+        loop {
+            let before = self.mark_bits.popcount();
+            let host_roots: Vec<Handle> = {
+                let mut acc = Vec::new();
+                roots.for_each_host_table_root(ctx, &mut |h| acc.push(h));
+                acc
+            };
+            self.mark(ctx, &mut host_roots.into_iter());
+            let after = self.mark_bits.popcount();
+            if after == before {
+                break;
+            }
+        }
+
+        // 3. sweep
+        self.sweep(ctx);
+
+        ctx.with_state(|st| {
+            if let Some(mut list) = st.handle_free_list_for_gc() {
+                list.extend_from_slice(&self.freed_handles);
+            }
+        });
+
+        ctx.stats.marked = self.mark_bits.popcount();
+        ctx.stats.elapsed = start.elapsed();
+        ctx.stats.clone()
+    }
 }
 
 impl MarkSweepCollector {
@@ -157,61 +212,6 @@ impl MarkSweepCollector {
             }
         });
 
-        ctx.stats.elapsed = start.elapsed();
-        ctx.stats.clone()
-    }
-
-    /// 带 RootProvider 的完整 collect，含 fixed-point host-table root 追踪（IMPL-9，spec §10）。
-    ///
-    /// 流程：
-    /// 1. mark shadow stack + function property roots → drain
-    /// 2. loop：mark host-table roots（microtask/promise/continuation/streams/...）→ drain
-    ///    → 若 popcount 增长则重复（promise reactions 引用经 mark 可达后，reaction target 需再标）
-    ///    → until popcount 不变（fixed-point 收敛，受 host 表大小约束）
-    /// 3. sweep → free list + abandoned regions + handle 复用
-    pub fn collect_with_provider(
-        &mut self,
-        ctx: &mut GcContext,
-        roots: &mut dyn RootProvider,
-    ) -> GcStats {
-        let start = std::time::Instant::now();
-        let count = ctx.obj_table_count();
-        self.mark_bits.reset(count);
-        self.freed_handles.clear();
-
-        // 1. shadow stack + function property roots（稳定 root）
-        let shadow_roots: Vec<Handle> = {
-            let mut acc = Vec::new();
-            roots.for_each_shadow_stack_root(ctx, &mut |h| acc.push(h));
-            acc
-        };
-        self.mark(ctx, &mut shadow_roots.into_iter());
-
-        // 2. fixed-point：host-table roots 多轮注入 until popcount 不变
-        loop {
-            let before = self.mark_bits.popcount();
-            let host_roots: Vec<Handle> = {
-                let mut acc = Vec::new();
-                roots.for_each_host_table_root(ctx, &mut |h| acc.push(h));
-                acc
-            };
-            self.mark(ctx, &mut host_roots.into_iter());
-            let after = self.mark_bits.popcount();
-            if after == before {
-                break;
-            }
-        }
-
-        // 3. sweep
-        self.sweep(ctx);
-
-        ctx.with_state(|st| {
-            if let Some(mut list) = st.handle_free_list_for_gc() {
-                list.extend_from_slice(&self.freed_handles);
-            }
-        });
-
-        ctx.stats.marked = self.mark_bits.popcount();
         ctx.stats.elapsed = start.elapsed();
         ctx.stats.clone()
     }

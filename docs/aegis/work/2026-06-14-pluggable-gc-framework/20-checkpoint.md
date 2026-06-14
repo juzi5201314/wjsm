@@ -1,23 +1,27 @@
 # Checkpoint — 可插拔 GC 框架实施
 
 **Date**: 2026-06-14
-**Active slice**: P4 (分配路径集成 + 4 个 blocker)
-**Branch**: gc-framework (HEAD @ c6b6858)
+**Active slice**: P4 T4.1-T4.6（接通 alloc 路径；4 blocker 已完成）
+**Branch**: gc-framework (HEAD @ d7c3c29)
 
 ## Current Todo
-P4: T4.b1-T4.b4（4 blocker, 先做）→ T4.1-T4.6（接通）。
-**当前执行**: T4.b1 — sweeper 回收 resize-abandoned 区域
+P4 T4.1: host imports gc_alloc_slow + gc_maybe_collect + gc_take_freed_handle
+**当前执行**: T4.1
 
 ## Completed Todos
-- P0: T0.1-T0.2 SIZE_CLASSES validated (no changes)
-- P1: T1.1-T1.5 IR 层 liveness + ValueTy @ abc5e01/f0aa8bc/c308bbd (16/16 tests)
-- P2: T2.1-T2.4 + R-fix safepoint spill codegen @ ddf013c + e6ea856 (561/561 fixtures, review fix save/restore)
-- P3: T3.1-T3.8 runtime_gc 框架 + MarkSweep @ 034cbfb (16/16 runtime_gc tests, 561/561 fixtures)
+- P0: T0.1-T0.2 SIZE_CLASSES validated
+- P1: T1.1-T1.5 IR 层 liveness + ValueTy (16/16 tests)
+- P2: T2.1-T2.4 + R-fix safepoint spill codegen (561/561 fixtures)
+- P3: T3.1-T3.8 runtime_gc 框架 + MarkSweep (16/16 runtime_gc tests)
+- **P4 T4.b1**: sweeper 回收 resize-abandoned 区域 @ 477346e (abandoned_regions list, sweeper +2 tests)
+- **P4 T4.b2**: marker 标记 closure env_obj + native_callable @ 92feba3 (两阶段值解析, marker +2 tests)
+- **P4 T4.b3**: RootProvider fixed-point @ 81e8382 (移植 fixed-point tracer, collect_with_provider)
+- **P4 T4.b4**: 补全 safepoint 集 @ d7c3c29 (ObjectSpread/CollectRestArgs/NewPromise/PromiseResolve/Reject/StringConcatVa)
 
 ## Evidence Refs
-- T0-T3 evidence: 90-evidence.md
-- baseline verified: cargo build --workspace OK; runtime_gc 16/16 PASS
-- 关键文件: crates/wjsm-runtime/src/runtime_gc/{api,context,mark_bitmap,roots,mark_sweep/{mod,allocator,marker,sweeper}}.rs
+- runtime_gc 20/20 tests green
+- workspace 非 fetch_http 887/887 green（4 个 fetch_http_streaming 是预先存在的 WSL 网络 flaky，
+  git stash 回到各 blocker 前同样失败）
 
 ## ResumeStateHint
 - Execution mode: executing-plans (inline)

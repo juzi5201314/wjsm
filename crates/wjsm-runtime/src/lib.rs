@@ -989,6 +989,7 @@ impl Clone for RuntimeState {
             native_callable_free_slots: self.native_callable_free_slots.clone(),
             handle_free_list: self.handle_free_list.clone(),
             abandoned_regions: self.abandoned_regions.clone(),
+            gc_algorithm: self.gc_algorithm.clone(),
             continuation_free_slots: self.continuation_free_slots.clone(),
             combinator_context_free_slots: self.combinator_context_free_slots.clone(),
             eval_cache: self.eval_cache.clone(),
@@ -1076,6 +1077,9 @@ struct RuntimeState {
     /// sweep 单独遍历 obj_table 看不到它 → 永久泄漏（INV-B vs §8.2 矛盾，P4-blocker #1）。
     /// grow_array/grow_object 在重写前注册旧 (ptr, old_size)；sweep 读此并入 free list，sweep 结束清空。
     abandoned_regions: Arc<Mutex<Vec<(usize, usize)>>>,
+    /// 可插拔 GC 算法实例（默认 MarkSweepCollector）。host imports gc_alloc_slow/
+    /// gc_maybe_collect 经此驱动（P4）。Arc<Mutex> 因 host fn 经 &Caller 访问需内部可变性。
+    gc_algorithm: Arc<Mutex<Box<dyn crate::runtime_gc::GcAlgorithm + Send + Sync>>>,
     /// continuation 侧表空闲槽位（handle 下标稳定，禁止 Vec::retain）。
     continuation_free_slots: Arc<Mutex<Vec<u32>>>,
     /// combinator context 侧表空闲槽位。
@@ -1230,6 +1234,9 @@ impl RuntimeState {
             native_callable_free_slots: Arc::new(Mutex::new(Vec::new())),
             handle_free_list: Arc::new(Mutex::new(Vec::new())),
             abandoned_regions: Arc::new(Mutex::new(Vec::new())),
+            gc_algorithm: Arc::new(Mutex::new(Box::new(
+                crate::runtime_gc::MarkSweepCollector::new(),
+            ))),
             continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
             combinator_context_free_slots: Arc::new(Mutex::new(Vec::new())),
             eval_cache: Arc::new(Mutex::new(HashMap::new())),
