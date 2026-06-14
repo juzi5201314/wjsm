@@ -1,3 +1,5 @@
+**执行状态（R2 修订）**: P0 ✅ + P1 ✅ 已实现并提交（分支 gc-framework，wjsm-ir 16/16 绿）。P2 设计已修正（structured-compiler emit-position cursor）。P2-P6 待执行。
+
 # 可插拔 GC 框架实施计划
 
 **Goal**: 用 non-moving mark-sweep + segregated free list 替代当前 `memory.grow` 无限扩容，建立 `GcAlgorithm` trait 框架（预留 generational/incremental/parallel 接入点），并恢复自动触发 GC。同步长循环不 OOM，WASM locals 持有的对象在 alloc 触发 GC 时不被误回收。
@@ -61,8 +63,8 @@
 
 | 阶段 | 任务数 | 独立验证 |
 |------|--------|----------|
-| P0 | T0.1-T0.2 | size 直方图 + 冻结 SIZE_CLASSES |
-| P1 | T1.1-T1.5 | ValueTy + tag_needs_root + liveness pass + 单测 |
+| P0 ✅ | T0.1-T0.2 | size 直方图 + 冻结 SIZE_CLASSES（验证无需改动） |
+| P1 ✅ | T1.1-T1.5 | ValueTy + tag_needs_root + liveness pass（16/16 绿） |
 | P2 | T2.1-T2.4 | safepoint spill 代码生成 + sp 不变量 + 容量检查 |
 | P3 | T3.1-T3.8 | runtime_gc/ 框架 + MarkSweep + worklist + mock 单测 |
 | P4 | T4.1-T4.6 | 分配路径改造 + handle 复用 + proactive + 长循环 fixture |
@@ -71,7 +73,7 @@
 
 ---
 
-# 阶段 P0：size 直方图 + 冻结 SIZE_CLASSES
+# 阶段 P0：size 直方图 + 冻结 SIZE_CLASSES ✅ IMPLEMENTED
 
 **Why**: segregated free list 的 size class table 是 allocator 核心。spec §9.1 已冻结初始值，P0 验证覆盖率 ≥ 99%，必要时局部微调（不重构）。
 
@@ -140,409 +142,41 @@ const SIZE_CLASSES: &[usize] = &[
 
 ---
 
-# 阶段 P1：IR 层 liveness + ValueTy 类型推断
+# 阶段 P1：IR 层 liveness + ValueTy 类型推断 ✅ IMPLEMENTED
+
+**Status**: 已实现并提交（分支 gc-framework）。wjsm-ir 16/16 测试通过。
 
 **Why**: safepoint spill（P2）需要"在 safepoint 哪些 live ValueId 是 Handle 类型"。wjsm-ir 当前无任何 per-ValueId 类型/liveness（经验证，从零建）。
 
 **Why in wjsm-ir**: 零外部依赖，归属正确；wjsm-semantic 的 name-based liveness 后续可复用（去重，非本计划范围）。
 
-**Critical（#10）**: liveness 必须**块级 CFG join 取 union + Phi 边分发**，否则 if/else/loop 汇合点 live 集合错误 → safepoint 误判（漏 spill 活值 → GC 误回收）。
+**Critical（#10）**: liveness 必须**块级 CFG join 取 union + Phi 边分发**，否则 if/else/loop 汇合点 live 集合错误 → safepoint 误判（漏 spill 活值 → GC 误回收）。**已验证正确**（if/else join + loop backedge 测试通过）。
 
-## T1.1 扩展 tag_needs_root 谓词（value.rs）
+## 实现产物（已提交）
 
-**Files**:
-- modify: `crates/wjsm-ir/src/value.rs`
-- test: `crates/wjsm-ir/tests/liveness.rs`（新建，本任务加谓词测试）
+| 任务 | Commit | 文件 | 测试 |
+|------|--------|------|------|
+| T1.1 tag_needs_root | `abc5e01` | `crates/wjsm-ir/src/value.rs` | 2 (15 handle tags + 8 scalars) |
+| T1.2 ValueTy | `f0aa8bc` | `crates/wjsm-ir/src/value_ty.rs` | 4 (handle/scalar/const/polymorphic) |
+| T1.3-T1.4 liveness | `c308bbd` | `crates/wjsm-ir/src/liveness.rs` | 4 (linear/dead/if-else-join/loop-backedge) |
+| T1.5 export | (同上) | `crates/wjsm-ir/src/lib.rs` (`pub mod liveness; pub mod value_ty;`) | — |
 
-**Why**: shadow stack 扫描 + ValueTy 推断共用。现有 `is_js_object`（value.rs:367-375）遗漏 bigint/symbol/regexp/scope_record/runtime-string-handle/exception/iterator/enumerator。
+## 关键实现事实（供后续阶段引用）
 
-**Impact/Compatibility**: 纯新增函数，不改现有 `is_js_object`。
+- **API 名（已验证，勿再猜）**：`encode_function_idx`（非 `encode_function`）、`encode_closure_idx`、`encode_bound_idx`、`encode_bigint_handle`、`encode_symbol_handle`、`encode_regexp_handle`、`encode_proxy_handle`、`encode_scope_record_handle`、`encode_native_callable_idx`、`encode_runtime_string_handle`、`encode_object_handle`、`encode_handle(TAG_*, idx)`、`encode_exception`、`encode_undefined()`、`encode_null()`、`encode_bool(bool)`、`encode_string_ptr(ptr)`、`encode_f64(f64)`。**无** `UNDEFINED`/`NULL`/`TRUE`/`FALSE` 常量（都是函数）。无 `encode_array`（用 `encode_handle(TAG_ARRAY, idx)`）。
+- **`is_runtime_string_handle(val)` 已存在**（value.rs:203），内部已 AND `is_string`，故 `tag_needs_root` 直接用 `is_runtime_string_handle(val)` 即可。
+- **`Function::new(name, entry: BasicBlockId)`** — 只两参（无 params）。`Function` 无 `module()` 方法；`infer_value_ty` 签名为 `infer_value_ty(module: &Module, function: &Function)`，通过 `module.constants()[ConstantId.0 as usize]` 查 Constant。
+- **`PhiSource { predecessor: BasicBlockId, value: ValueId }`**（lib.rs:855）。
+- **`BasicBlockId` 无 `Ord`**（只有 `Eq + Hash`）— successors 去重用 `HashSet` 而非 `sort`/`dedup`。
+- **`SwitchCaseTarget { constant: ConstantId, target: BasicBlockId }`**。
+- **liveness 契约**：`compute_liveness(f)[(block_id, i)]` = 紧邻指令 `i` 执行**前**活跃集；`(block_id, len)` = 块出口（含 terminator uses）。细化起点 = `live_out ∪ terminator_uses`（terminator 在最后一条指令后执行）。**Phi 的 def/use 不在块内细化**（已由块级 + 边分发处理）。
+- **`Instruction` 条件 dest**：`Call`/`CallBuiltin`/`SuperCall` 的 `dest: Option<ValueId>`；`ConstructCall` **无 dest**（void）；其余 producing 都有 `dest: ValueId`。
 
-**Verification**: `cargo nextest run -p wjsm-ir`。
+## 复现命令
 
-**Steps**:
-
-- [ ] **写失败测试**。在 `crates/wjsm-ir/tests/liveness.rs`:
-
-```rust
-use wjsm_ir::value;
-
-#[test]
-fn tag_needs_root_covers_all_handle_tags() {
-    // 每种 handle tag 都应 needs_root
-    assert!(value::tag_needs_root(value::encode_object_handle(0)));
-    assert!(value::tag_needs_root(value::encode_array_handle(0)));
-    assert!(value::tag_needs_root(value::encode_function(0)));
-    assert!(value::tag_needs_root(value::encode_closure(0)));
-    assert!(value::tag_needs_root(value::encode_bound(0)));
-    assert!(value::tag_needs_root(value::encode_bigint_handle(0)));
-    assert!(value::tag_needs_root(value::encode_symbol_handle(0)));
-    assert!(value::tag_needs_root(value::encode_regexp_handle(0)));
-    assert!(value::tag_needs_root(value::encode_proxy_handle(0)));
-    assert!(value::tag_needs_root(value::encode_scope_record(0)));
-    // runtime string handle（STRING_RUNTIME_HANDLE_FLAG）
-    assert!(value::tag_needs_root(value::encode_runtime_string_handle(0)));
-}
-
-#[test]
-fn tag_needs_root_rejects_scalars() {
-    assert!(!value::tag_needs_root(value::encode_f64(3.14)));
-    assert!(!value::tag_needs_root(value::encode_f64(0.0)));
-    assert!(!value::tag_needs_root(value::UNDEFINED));
-    assert!(!value::tag_needs_root(value::NULL));
-    assert!(!value::tag_needs_root(value::TRUE));
-    assert!(!value::tag_needs_root(value::FALSE));
-    // 静态字符串 ptr（非 runtime handle）不应 needs_root
-    assert!(!value::tag_needs_root(value::encode_string_ptr(0, 5)));
-}
+```bash
+cargo nextest run -p wjsm-ir   # 16 tests, all green
 ```
-
-- [ ] **运行确认 RED**: `cargo nextest run -p wjsm-ir -E 'test(tag_needs_root)'` → 编译失败（函数不存在）。
-
-- [ ] **实现 `tag_needs_root`**。在 `crates/wjsm-ir/src/value.rs` 加 pub 函数。先确认现有 encode/decode 函数名（读 value.rs 找 `encode_*`/`is_*` 系列实际名），用实际名。骨架：
-
-```rust
-/// 判断一个 NaN-boxed i64 是否持有需要 GC root 的 handle。
-/// 供 shadow stack 扫描与 ValueTy 类型推断共用。
-/// 覆盖所有"低 32 位是 handle/下标"的 tag；scalar（f64/undefined/null/bool/静态 string ptr）返回 false。
-pub fn tag_needs_root(val: i64) -> bool {
-    is_object(val)
-        || is_array(val)
-        || is_function(val)
-        || is_closure(val)
-        || is_bound(val)
-        || is_proxy(val)
-        || is_native_callable(val)
-        || is_bigint(val)
-        || is_symbol(val)
-        || is_regexp(val)
-        || is_scope_record(val)
-        || (is_string(val) && is_runtime_string_handle(val))  // 区分 runtime handle vs 静态 ptr
-        || is_exception(val)   // exception payload 是 handle
-        || is_iterator(val)
-        || is_enumerator(val)
-}
-```
-
-> 实现前先 `grep -n "pub fn is_\|pub fn encode_\|pub const " crates/wjsm-ir/src/value.rs` 确认每个谓词/encode 的实际签名。若某谓词不存在（如 `is_runtime_string_handle`），按 STRING_RUNTIME_HANDLE_FLAG（value.rs:134）实现：`(val as u64 & 0x20) != 0` 当 is_string 时。
-
-- [ ] **运行确认 GREEN**: `cargo nextest run -p wjsm-ir -E 'test(tag_needs_root)'` → 通过。
-
-- [ ] **Commit**: `feat(ir): tag_needs_root predicate for GC root classification`
-
-## T1.2 ValueTy 类型推断（value_ty.rs）
-
-**Files**:
-- create: `crates/wjsm-ir/src/value_ty.rs`
-- modify: `crates/wjsm-ir/src/lib.rs`（加 `pub mod value_ty;`）
-- test: `crates/wjsm-ir/tests/liveness.rs`
-
-**Why**: safepoint spill 只 spill Handle 类型 local，跳过确定 Scalar。polymorphic（GetProp/Call/Phi）保守当 Handle（spec §11.2）。
-
-**Verification**: `cargo nextest run -p wjsm-ir`。
-
-**Steps**:
-
-- [ ] **写失败测试**。追加到 `crates/wjsm-ir/tests/liveness.rs`:
-
-```rust
-use wjsm_ir::{value_ty::{ValueTy, infer_value_ty}, *};
-
-#[test]
-fn value_ty_object_producing_ops_are_handle() {
-    // NewObject/NewArray/GetSuperBase → Handle
-    let mut f = Function::new("test".into(), vec![], BasicBlockId(0));
-    let mut bb = BasicBlock::new(BasicBlockId(0));
-    bb.instructions_mut().push(Instruction::NewObject { dest: ValueId(0), capacity: 4 });
-    bb.instructions_mut().push(Instruction::NewArray { dest: ValueId(1), capacity: 4 });
-    bb.instructions_mut().push(Instruction::GetSuperBase { dest: ValueId(2) });
-    bb.set_terminator(Terminator::Return { value: Some(ValueId(0)) });
-    f.blocks_mut().push(bb);
-    let ty = infer_value_ty(&f);
-    assert_eq!(ty[&ValueId(0)], ValueTy::Handle);
-    assert_eq!(ty[&ValueId(1)], ValueTy::Handle);
-    assert_eq!(ty[&ValueId(2)], ValueTy::Handle);
-}
-
-#[test]
-fn value_ty_arithmetic_is_scalar() {
-    let mut f = Function::new("test".into(), vec![], BasicBlockId(0));
-    let mut bb = BasicBlock::new(BasicBlockId(0));
-    let c0 = ConstantId(0);
-    bb.instructions_mut().push(Instruction::Const { dest: ValueId(0), constant: c0 });
-    bb.instructions_mut().push(Instruction::Const { dest: ValueId(1), constant: ConstantId(1) });
-    bb.instructions_mut().push(Instruction::Binary { dest: ValueId(2), op: BinaryOp::Add, lhs: ValueId(0), rhs: ValueId(1) });
-    bb.instructions_mut().push(Instruction::Compare { dest: ValueId(3), op: CompareOp::Eq, lhs: ValueId(0), rhs: ValueId(1) });
-    bb.set_terminator(Terminator::Return { value: Some(ValueId(2)) });
-    f.blocks_mut().push(bb);
-    let ty = infer_value_ty(&f);
-    // Const(Number) → Scalar（需 Constant::Number 才判 Scalar；先验证 Constant 枚举）
-    let ty = infer_value_ty(&f);
-    assert_eq!(ty[&ValueId(2)], ValueTy::Scalar);  // Binary 算术 → Scalar
-    assert_eq!(ty[&ValueId(3)], ValueTy::Scalar);  // Compare → Scalar
-}
-
-#[test]
-fn value_ty_polymorphic_defaults_to_handle() {
-    // GetProp/GetElem/Call 结果类型不定 → 保守 Handle
-    // （需要构造带 object 的 IR；简化：只测 GetProp，object 来自 NewObject）
-    let mut f = Function::new("test".into(), vec![], BasicBlockId(0));
-    let mut bb = BasicBlock::new(BasicBlockId(0));
-    bb.instructions_mut().push(Instruction::NewObject { dest: ValueId(0), capacity: 4 });
-    bb.instructions_mut().push(Instruction::GetProp { dest: ValueId(1), object: ValueId(0), key: PropertyKey::String(ConstantId(0)) });
-    bb.set_terminator(Terminator::Return { value: Some(ValueId(1)) });
-    f.blocks_mut().push(bb);
-    let ty = infer_value_ty(&f);
-    assert_eq!(ty[&ValueId(1)], ValueTy::Handle);  // polymorphic → Handle 保守
-}
-```
-
-> 实现前先确认 `Instruction` 各 variant 的字段名、`BinaryOp`/`CompareOp`/`PropertyKey`/`Constant` 的实际定义（读 lib.rs:318-488 + Constant enum）。测试中的字段名以实际为准，调整后再跑。
-
-- [ ] **运行确认 RED**: 编译失败（value_ty 模块不存在）。
-
-- [ ] **实现 `crates/wjsm-ir/src/value_ty.rs`**:
-
-```rust
-//! Per-ValueId 类型推断：区分 Handle（需 GC root）与 Scalar。
-//! polymorphic ops 保守判 Handle（spec §11.2）。
-use crate::{Function, Instruction, ValueId, Constant};
-use std::collections::HashMap;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ValueTy { Handle, Scalar }
-
-/// 推断函数内每个 producing instruction 的 dest 类型。
-/// 未出现在 map 中的 ValueId 视为 Handle（保守）。
-pub fn infer_value_ty(f: &Function) -> HashMap<ValueId, ValueTy> {
-    let mut ty = HashMap::new();
-    for bb in f.blocks() {
-        for ins in bb.instructions() {
-            if let Some((dest, kind)) = dest_and_kind(ins, f) {
-                ty.insert(dest, kind);
-            }
-        }
-    }
-    ty
-}
-
-/// 返回 producing instruction 的 (dest, ValueTy)。非 producing 返回 None。
-fn dest_and_kind(ins: &Instruction, f: &Function) -> Option<(ValueId, ValueTy)> {
-    use Instruction::*;
-    Some(match ins {
-        // 确定 Handle
-        NewObject { dest, .. } | NewArray { dest, .. }
-        | GetSuperBase { dest } | GetSuperConstructor { dest }
-        | ObjectSpread { dest, .. } | NewPromise { dest }
-        | ExceptionToObject { dest, .. } => (*dest, ValueTy::Handle),
-        // Const：看 Constant variant
-        Const { dest, constant } => {
-            let c = f.module().constant(*constant);  // 确认访问路径
-            let kind = match c {
-                Some(Constant::Number(_)) | Some(Constant::Bool)
-                | Some(Constant::Null) | Some(Constant::Undefined) => ValueTy::Scalar,
-                _ => ValueTy::Handle,  // String/FunctionRef 等保守 Handle
-            };
-            (*dest, kind)
-        }
-        // 算术/比较 → Scalar
-        Binary { dest, .. } | Compare { dest, .. } => (*dest, ValueTy::Scalar),
-        Unary { dest, op, .. } => {
-            // 一元非算术（如 typeof on object）保守 Handle；纯算术（-、!）Scalar
-            // 先查 UnaryOp 枚举，按 op 分（实现时读 lib.rs 确认 UnaryOp variant）
-            (*dest, unary_ty(*op))
-        }
-        // polymorphic → Handle 保守
-        GetProp { dest, .. } | GetElem { dest, .. }
-        | OptionalGetProp { dest, .. } | OptionalGetElem { dest, .. }
-        | OptionalCall { dest, .. }
-        | DeleteProp { dest, .. } | LoadVar { dest, .. }
-        | CollectRestArgs { dest, .. } | IsException { dest, .. }
-        | EncodeException { dest, .. } | Phi { dest, .. }
-        | StringConcatVa { dest, .. } => (*dest, ValueTy::Handle),
-        // 条件 dest（Call/CallBuiltin/SuperCall）的 Option<ValueId>
-        _ => return None,  // 非 producing 或条件 dest，调用方单独处理
-    })
-}
-```
-
-> 实现时先读 lib.rs 确认：(a) `Function` 是否有 `module()` 访问 Constant（可能需传 `&Module` 而非 `&Function`）；(b) `UnaryOp`/`BinaryOp` variant 名；(c) `PropertyKey` 结构。签名可能需改为 `infer_value_ty(module: &Module, f: &Function)`。调整测试以匹配。
-
-- [ ] **运行确认 GREEN**: `cargo nextest run -p wjsm-ir -E 'test(value_ty)'` → 通过。
-
-- [ ] **Commit**: `feat(ir): ValueTy type inference (Handle/Scalar) for safepoint spill`
-
-## T1.3 liveness pass 骨架：CFG successors/predecessors（liveness.rs）
-
-**Files**:
-- create: `crates/wjsm-ir/src/liveness.rs`
-- modify: `crates/wjsm-ir/src/lib.rs`（加 `pub mod liveness;`）
-
-**Why**: per-ValueId liveness 需 CFG。移植 successor/predecessor 计算（骨架自 lowerer_async_eval.rs:40-66）。
-
-**Steps**:
-
-- [ ] **实现 CFG 计算**（先无测试，纯 helper，T1.4 一起测）:
-
-```rust
-//! Per-ValueId liveness 分析（块级 CFG join union + Phi 边分发）。
-//! 供 GC safepoint spill 用（spec §11.1）。
-use crate::{Function, BasicBlockId, ValueId, Instruction, Terminator};
-use std::collections::{HashMap, HashSet};
-
-/// 计算每个 block 的后继列表。
-pub fn successors(f: &Function) -> HashMap<BasicBlockId, Vec<BasicBlockId>> {
-    let mut succ = HashMap::new();
-    for bb in f.blocks() {
-        let s: Vec<BasicBlockId> = match bb.terminator() {
-            Terminator::Return { .. } | Terminator::Throw { .. } | Terminator::Unreachable => vec![],
-            Terminator::Jump { target } => vec![*target],
-            Terminator::Branch { true_block, false_block, .. } => vec![*true_block, *false_block],
-            Terminator::Switch { cases, default_block, exit_block, .. } => {
-                let mut v: Vec<_> = cases.iter().map(|c| c.target).collect();
-                v.push(*default_block);
-                v.push(*exit_block);
-                v.sort(); v.dedup();
-                v
-            }
-        };
-        succ.insert(bb.id(), s);
-    }
-    succ
-}
-```
-
-> 实现前确认 `Switch::Case` 的字段名（target）和 Terminator::Switch 字段（读 lib.rs Terminator 定义）。
-
-- [ ] **编译确认**: `cargo build -p wjsm-ir` 通过。
-
-## T1.4 liveness 主体：块级 backward dataflow + Phi 边分发
-
-**Files**:
-- modify: `crates/wjsm-ir/src/liveness.rs`
-- test: `crates/wjsm-ir/tests/liveness.rs`
-
-**Why**: 计算 safepoint 处的 live ValueId 集合。**关键（#10）**: join 取 union，Phi 入参按边分发。
-
-**Verification**: 单测覆盖 if/else 汇合、loop 回边、嵌套控制流。
-
-**Steps**:
-
-- [ ] **写失败测试**（3 个：线性、if/else join、loop 回边）:
-
-```rust
-use wjsm_ir::liveness::compute_liveness_at;
-
-#[test]
-fn liveness_linear() {
-    // bb0: v0 = NewObject; v1 = Binary(v0,v0)? — 不合法（Binary 需 scalar）
-    // 简化：v0 = NewObject(Handle); v1 = Const(num); safepoint 在 v1 后，v0 live（return v0）
-    // 构造 IR，断言 safepoint 处 live = {v0}
-}
-
-#[test]
-fn liveness_if_else_join_union() {
-    // bb0: v0 = NewObject; Branch -> bb1/bb2
-    // bb1: v1 = NewObject; Jump bb3
-    // bb2: v2 = NewObject; Jump bb3
-    // bb3: Phi v3 = {bb1:v1, bb2:v2}; Return v3
-    // 断言：bb3 入口 live = {v0?} — v1/v2 是 Phi 源，按边分发，bb1 出口 live 含 v1，bb2 出口含 v2
-    // bb0 出口（branch 前）live = {v0}（若 bb3 用 v0；否则 phi 源在各自前驱）
-}
-
-#[test]
-fn liveness_loop_backedge() {
-    // bb0: v0 = Const(0); Jump bb1
-    // bb1: v1 = Phi{bb0:v0, bb1:v2}; Branch(v1 < N) bb2/bb3
-    // bb2: v2 = Binary(v1, +1); Jump bb1
-    // bb3: Return
-    // 断言：bb1 入口 live = {v1}，bb2 出口 live = {v2}（Phi 源在 backedge 边）
-}
-```
-
-> 构造具体 IR 时参照 lib.rs 的 Function/BasicBlock/Instruction 构造 API（参考 `crates/wjsm-ir/tests/ir_dump.rs` 现有构造模式）。
-
-- [ ] **运行确认 RED**: 编译失败（compute_liveness_at 不存在）。
-
-- [ ] **实现 liveness**。在 liveness.rs 加：
-
-```rust
-/// 计算每条指令后的 live ValueId 集合（per-instruction，块内细化）。
-/// 返回 HashMap<(BasicBlockId, usize instr_idx), HashSet<ValueId>>。
-/// safepoint spill 用：取 safepoint 指令处的集合。
-///
-/// 算法：
-/// 1. 块级 live_in/live_out（backward，join 取 union，迭代到不动点）
-/// 2. Phi 特殊：Phi v3={bb1:v1} 的 v1 仅对 bb1 的 live_out 有贡献（边分发）
-/// 3. 块内 backward 细化到 per-instruction
-pub fn compute_liveness(f: &Function) -> HashMap<(BasicBlockId, usize), HashSet<ValueId>> {
-    let succ = successors(f);
-    // use/def per block
-    let (block_uses, block_defs, phi_sources) = block_use_def_phi(f);
-    // backward iteration
-    let mut live_in: HashMap<BasicBlockId, HashSet<ValueId>> = HashMap::new();
-    let mut live_out: HashMap<BasicBlockId, HashSet<ValueId>> = HashMap::new();
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for bb in f.blocks().iter().rev() {
-            let mut out = HashSet::new();
-            for &s in succ.get(&bb.id()).unwrap_or(&vec![]) {
-                // Phi 边分发：bb 的 live_out 包含后继 s 的 Phi 源中对应 bb 的入参
-                if let Some(srcs) = phi_sources.get(&s).and_then(|m| m.get(&bb.id())) {
-                    out.extend(srcs.iter().copied());
-                }
-                out.extend(live_in.get(&s).unwrap_or(&HashSet::new()).iter().copied());
-            }
-            let mut in_ = out.clone();
-            in_.retain(|v| !block_defs.get(&bb.id()).unwrap_or(&HashSet::new()).contains(v));
-            in_.extend(block_uses.get(&bb.id()).unwrap_or(&HashSet::new()).iter().copied());
-            if live_out.get(&bb.id()) != Some(&out) { live_out.insert(bb.id(), out); changed = true; }
-            if live_in.get(&bb.id()) != Some(&in_) { live_in.insert(bb.id(), in_); changed = true; }
-        }
-    }
-    // 块内 backward 细化
-    let mut per_instr = HashMap::new();
-    for bb in f.blocks() {
-        let mut live = live_out.get(&bb.id()).cloned().unwrap_or_default();
-        for (i, ins). in bb.instructions().iter().enumerate().rev() {
-            // def/use per instruction（Phi 的 use 不在此计入，已在边分发）
-            if !matches!(ins, Instruction::Phi { .. }) {
-                if let Some(d) = instr_dest(ins) { live.remove(&d); }
-                for u in instr_uses(ins) { live.insert(u); }
-            }
-            per_instr.insert((bb.id(), i), live.clone());
-        }
-        per_instr.insert((bb.id(), bb.instructions().len()), live.clone());  // block 出口
-    }
-    per_instr
-}
-
-/// 取 safepoint（某指令前）的 live 集合。instr_idx 指令执行前 = instr_idx 处（指令后集合往前推到该指令前）。
-/// 简化：返回 (block, idx) 处的集合（idx 指令的 use 前）。
-pub fn live_at(f: &Function, block: BasicBlockId, idx: usize) -> HashSet<ValueId> {
-    compute_liveness(f).get(&(block, idx)).cloned().unwrap_or_default()
-}
-```
-
-> 实现辅助 `block_use_def_phi`、`instr_dest`、`instr_uses`（读 Instruction variant，dest 是 def，其他 ValueId 字段是 use；Phi 特殊处理：dest 是 def，sources 是按前驱边分发的 use）。Phi sources 解析：`Phi { dest, sources }` 的 sources 结构需读 lib.rs:340 确认（可能是 `Vec<(BasicBlockId, ValueId)>` 或 `Vec<ValueId>` 顺序对应前驱）。
-
-- [ ] **运行确认 GREEN**: `cargo nextest run -p wjsm-ir -E 'test(liveness)'` → 3 测试通过。
-
-- [ ] **Commit**: `feat(ir): per-ValueId liveness (block-level union + Phi edge distribution)`
-
-## T1.5 公开 API + 跨 crate 导出
-
-**Files**:
-- modify: `crates/wjsm-ir/src/lib.rs`（确保 `pub mod liveness; pub mod value_ty;` + re-export 常用）
-
-**Why**: P2 backend 需调用 `liveness::compute_liveness` 和 `value_ty::infer_value_ty`。
-
-**Steps**:
-
-- [ ] 确认 lib.rs 顶部有 `pub mod liveness; pub mod value_ty;`（T1.2/T1.3 已加，此处确认）。
-- [ ] **编译确认 backend 能引用**: `cargo build -p wjsm-backend-wasm` 通过（即使未用，确认可见）。
-- [ ] **Commit**: `feat(ir): export liveness + value_ty modules`
 
 ---
 
@@ -551,116 +185,147 @@ pub fn live_at(f: &Function, block: BasicBlockId, idx: usize) -> HashSet<ValueId
 **Why**: 编译器在每个 safepoint（alloc 点）前把 live Handle local spill 到 shadow stack，让 GC root 集精确。**本阶段不接 GC**，只验证 spill 不破坏语义（fixture 全绿）。
 
 **Critical（#4）**: `__shadow_sp` 函数入口=出口；循环内每个 safepoint 独立 save/restore。
-**R2**: 函数 prologue 容量检查。
 
-## T2.1 识别 safepoint + 计算 spill 集合
+> **P2 执行时发现的关键事实（修正原设计）**：wjsm backend 的 `compile_structured`（compiler_control.rs:190）**按控制流顺序**遍历块，而非线性顺序。`compile_instruction`（compiler_instructions.rs:5）被多处调用（compile_structured 主循环 L237、if/else 分支体 L386/393、loop 体 L720、switch case L1165…），且**调用点不传 block_idx/instr_idx**。原计划的 `compute_spill_plan(global_idx)` 假设线性 `global_idx` 可对齐 safepoint —— **不成立**。修正方案见 T2.1（emit-position cursor，非 global_idx）。
+
+## 已验证的 Compiler 字段（lib.rs:100-163）
+
+- `shadow_sp_global_idx: u32`（= 4，WASM global）
+- `shadow_sp_scratch_idx: u32`（i32 local，call 期间保存 sp）
+- `shadow_stack_end_global_idx: u32`（= 8）
+- `ssa_local_base: u32`（main=0，JS fn=8）
+- `local_idx(val_id) -> u32` = `val_id + ssa_local_base`（compiler_module.rs:6）
+- `compile_instruction(&mut self, module, instruction) -> Result<bool>`（compiler_instructions.rs:5）
+- `self.emit(WasmInstruction::*)`（emit 单条指令）
+- `alloc_counter_global_idx`（已存在，global 5）
+
+## T2.1 emit-position cursor + safepoint liveness 查找
 
 **Files**:
-- modify: `crates/wjsm-backend-wasm/src/compiler_instructions.rs`
-- modify: `crates/wjsm-backend-wasm/src/compiler_module.rs`（compile_function 加 pass 调用）
+- modify: `crates/wjsm-backend-wasm/src/lib.rs`（Compiler 加字段）
+- modify: `crates/wjsm-backend-wasm/src/compiler_module.rs`（compile_function 计算 liveness + 重置 cursor）
+- modify: `crates/wjsm-backend-wasm/src/compiler_control.rs`（调用 compile_instruction 前更新 cursor）
 
-**Why**: 在 compile_function 中，对每个函数计算"每个 safepoint 的 spill 集合"（live ValueId ∩ Handle 类型）。
+**Why（修正 global_idx）**: 因 structured 编译非线性，不能用单一 `global_idx`。改用 **(current_block_idx, current_instr_idx)** cursor：编译器在 emit 每条指令前设置 cursor，compile_instruction 内 alloc 指令用 cursor 查 liveness。
 
 **Steps**:
 
-- [ ] **在 Compiler 加字段**（compiler_module.rs 或 lib.rs 的 Compiler struct）存 spill 计划:
+- [ ] **Compiler 加字段**（lib.rs Compiler struct）:
 
 ```rust
-// Compiler struct 加：
-/// 当前函数的 safepoint spill 计划：safepoint instruction 全局 idx → 需 spill 的 local idx 列表
-spill_plan: HashMap<usize, Vec<u32>>,
+/// 当前函数的 per-instruction liveness（P1 已实现，wjsm_ir::liveness::compute_liveness）。
+/// compile_function 入口计算一次。
+current_fn_liveness: std::collections::HashMap<(wjsm_ir::BasicBlockId, usize), std::collections::HashSet<wjsm_ir::ValueId>>,
+/// 当前函数的 ValueTy（P1 已实现，wjsm_ir::value_ty::infer_value_ty）。
+current_fn_value_ty: std::collections::HashMap<wjsm_ir::ValueId, wjsm_ir::value_ty::ValueTy>,
+/// 当前 emit 位置的 IR block 索引（block 在 function.blocks() 中的下标）。
+current_emit_block_idx: usize,
+/// 当前 emit 位置在当前 block 内的指令下标。
+current_emit_instr_idx: usize,
 ```
 
-- [ ] **在 compile_function 中加 pass**（L548 lower_phi_to_locals 之后，L556 scratch 之前）:
+- [ ] **compile_function 入口计算 liveness + ValueTy**（compiler_module.rs:529，在 assign_var_locals 之后）:
 
 ```rust
-// compiler_module.rs compile_function 内，lower_phi_to_locals 之后
-self.compute_spill_plan(function);  // 新方法
+// 复用 P1 实现
+self.current_fn_liveness = wjsm_ir::liveness::compute_liveness(function);
+self.current_fn_value_ty = wjsm_ir::value_ty::infer_value_ty(module, function);
+self.current_emit_block_idx = 0;
+self.current_emit_instr_idx = 0;
 ```
 
-- [ ] **实现 compute_spill_plan**（compiler_instructions.rs 或新 compiler_gc.rs）:
+- [ ] **在 compile_structured 的 block 遍历处设置 block cursor**（compiler_control.rs:233 附近，`let block = &blocks[idx];` 之后）:
 
 ```rust
-impl Compiler {
-    /// 计算每个 safepoint 的 spill 集合。
-    /// safepoint = NewObject/NewArray/可能 alloc 的 Call/CallBuiltin。
-    /// spill 集合 = live ValueId 在该点 ∩ ValueTy==Handle → 映射到 local_idx。
-    fn compute_spill_plan(&mut self, f: &IrFunction) {
-        self.spill_plan.clear();
-        let live = wjsm_ir::liveness::compute_liveness(f);
-        let ty = wjsm_ir::value_ty::infer_value_ty(f);  // 若需 module 参数则调整
-        // 遍历所有指令找 safepoint
-        let mut global_idx = 0usize;
-        for bb in f.blocks() {
-            for (i, ins) in bb.instructions().iter().enumerate() {
-                if self.is_safepoint(ins) {
-                    let live_set = live.get(&(bb.id(), i)).cloned().unwrap_or_default();
-                    let mut spill: Vec<u32> = live_set.iter()
-                        .filter(|v| ty.get(v).map_or(true, |&t| t == ValueTy::Handle))  // Unknown 也 spill
-                        .map(|v| self.local_idx(v.0))
-                        .collect();
-                    spill.sort();
-                    spill.dedup();
-                    self.spill_plan.insert(global_idx, spill);
-                }
-                global_idx += 1;
-            }
-        }
-    }
+self.current_emit_block_idx = idx;
+self.current_emit_instr_idx = 0;
+```
 
-    fn is_safepoint(&self, ins: &Instruction) -> bool {
-        matches!(ins,
-            Instruction::NewObject { .. } | Instruction::NewArray { .. }
-            | Instruction::Call { .. } | Instruction::CallBuiltin { .. }
-            | Instruction::SuperCall { .. } | Instruction::ConstructCall { .. }
-        )
-        // 注：Call/CallBuiltin 是否 alloc 取决于被调 builtin；保守全当 safepoint（spec §11.4）
-    }
+> 同样在所有其他 compile_instruction 调用循环处（if/else/loop/switch 分支体）设置 `current_emit_block_idx`（每个分支体入口）+ 每条指令前 `current_emit_instr_idx = i`。调用点清单：compiler_control.rs L236-237（主循环）、L385-386/392-393（if/else）、L719-720（loop 体）、L1101-1102、L1164-1165（switch case）。每处 `for (i, instruction) in block.instructions().enumerate()` 改为遍历时 set cursor。
+
+- [ ] **封装"取当前 safepoint spill 集合"helper**（新方法，compiler_instructions.rs 或 compiler_module.rs）:
+
+```rust
+/// 返回当前 emit 位置（alloc 指令前）需 spill 的 local idx 列表。
+/// = live ValueId ∩ Handle 类型 → local_idx。
+fn current_spill_locals(&self) -> Vec<u32> {
+    let key = (wjsm_ir::BasicBlockId(self.current_emit_block_idx as u32),
+               self.current_emit_instr_idx);
+    let Some(live) = self.current_fn_liveness.get(&key) else { return vec![]; };
+    let mut spill: Vec<u32> = live.iter()
+        .filter(|v| {
+            // ValueTy 缺失（Unknown）保守当 Handle
+            self.current_fn_value_ty.get(v)
+                .map_or(true, |t| *t == wjsm_ir::value_ty::ValueTy::Handle)
+        })
+        .map(|v| self.local_idx(v.0))
+        .collect();
+    spill.sort();
+    spill.dedup();
+    spill
 }
 ```
+
+> 注：BasicBlockId 的值 = block 在 blocks() 中的下标（IR 约定，block_by_id O(1) by index）。需确认 BasicBlockId(u32) 的 .0 是否等于下标（读 lib.rs block_by_id 确认；若不等，改用 block.id() 映射）。
 
 - [ ] **编译确认**: `cargo build -p wjsm-backend-wasm` 通过。
 
-## T2.2 safepoint spill 代码生成（emit spill/reload 序列）
+## T2.2 safepoint spill emit（在 compile_instruction 的 alloc 分支）
 
 **Files**:
 - modify: `crates/wjsm-backend-wasm/src/compiler_instructions.rs`
 
-**Why**: 在每个 safepoint 的 alloc call 前后插入 spill/save-sp/restore-sp。
+**Why**: 在 NewObject/NewArray/Call/CallBuiltin/SuperCall/ConstructCall 的 alloc call 前后包 spill 序列。
 
 **Steps**:
 
-- [ ] **在 emit alloc call 处插入 spill**。找到 compile NewObject/NewArray/Call 的 emit 点（compiler_instructions.rs:373 NewObject, :532 NewArray），在每个 `call $obj_new`/`call $arr_new`/被调函数 call 前后包：
+- [ ] **加 spill emit helper**（compiler_instructions.rs）:
 
 ```rust
-// 伪代码：emit safepoint spill（实际要嵌入各 emit 点）
-let spill = self.spill_plan.get(&current_global_idx).cloned().unwrap_or_default();
-if !spill.is_empty() {
-    // save sp
-    func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
-    func.instruction(&WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
+/// 在 alloc call 前调用：save sp + spill 所有 live handle locals。
+/// 返回 spill 的 local 数（供 epilogue 用）。
+fn emit_safepoint_prologue(&mut self, spill: &[u32]) {
+    if spill.is_empty() { return; }
+    // save shadow_sp 到 scratch
+    self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+    self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
     // spill each live handle local
-    for &local in &spill {
-        func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
-        func.instruction(&WasmInstruction::LocalGet(local));
-        func.instruction(&WasmInstruction::I64Store(MemArg { offset: 0, align: 3, memory_index: 0 }));
-        func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
-        func.instruction(&WasmInstruction::I64Const(8));
-        func.instruction(&WasmInstruction::I64Add);
-        func.instruction(&WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+    for &local in spill {
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::LocalGet(local));
+        self.emit(WasmInstruction::I64Store(wasm_encoder::MemArg {
+            offset: 0, align: 3, memory_index: 0,
+        }));
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::I64Const(8));
+        self.emit(WasmInstruction::I64Add);
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
     }
 }
-// === 原 alloc call ===
-// ... call $obj_new ...
-// === spill 后 ===
-if !spill.is_empty() {
-    // restore sp（non-moving 无需 reload local 值）
-    func.instruction(&WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
-    func.instruction(&WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+
+/// 在 alloc call 后调用：restore shadow_sp（non-moving 无需 reload local 值）。
+fn emit_safepoint_epilogue(&mut self, spill: &[u32]) {
+    if spill.is_empty() { return; }
+    self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+    self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
 }
 ```
 
-> 需要 `current_global_idx` 跟踪：在 compile_function 主循环每条指令递增，与 compute_spill_plan 的 global_idx 对齐。调整主循环（compiler_module.rs 的指令遍历）维护该计数。
+- [ ] **在 NewObject 分支包裹**（compiler_instructions.rs:373）:
+
+```rust
+Instruction::NewObject { dest, capacity } => {
+    let spill = self.current_spill_locals();  // 在 call 前
+    self.emit_safepoint_prologue(&spill);
+    // ... 原 emit（call obj_new 等）...
+    self.emit_safepoint_epilogue(&spill);
+    // ... 原 LocalSet(dest) ...
+}
+```
+
+- [ ] **同样包裹 NewArray（L532）、Call（L346）、CallBuiltin、SuperCall、ConstructCall**。注意 Call/CallBuiltin/SuperCall 的 dest 是 Option；ConstructCall 无 dest。spill 在 call 指令前，epilogue 在 call 后（LocalSet 前/后均可，因 non-moving 不改值）。
+
+> **关键**：current_spill_locals() 必须在 emit 该指令**之前**调用（此时 cursor 指向该指令）。若 compile_instruction 内部在 emit 前已 set cursor，则 OK；否则在调用 current_spill_locals 前 self.current_emit_instr_idx 已被 compile_structured 设置。
 
 - [ ] **编译确认**: `cargo build -p wjsm-backend-wasm` 通过。
 
@@ -669,35 +334,62 @@ if !spill.is_empty() {
 **Files**:
 - modify: `crates/wjsm-backend-wasm/src/compiler_module.rs`（compile_function prologue）
 
-**Why（R2）**: 防止 spill 区溢出覆盖对象堆。
+**Why（R2）**: 防止 spill 区溢出覆盖对象堆。spill_upper_bound = max spill 集合大小 × 8（编译期已知）。
 
 **Steps**:
 
-- [ ] **在 compile_function prologue 加容量检查**:
+- [ ] **compile_function 入口算 spill_upper_bound**:
 
 ```rust
-// 计算 spill_upper_bound = max spill 集合大小 × 8（编译期已知）
-let spill_upper_bound = self.spill_plan.values().map(|v| v.len()).max().unwrap_or(0) * 8;
-// prologue: 若 shadow_sp + frame + spill_upper_bound > shadow_stack_end → trap
-func.instruction(&WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
-func.instruction(&WasmInstruction::I32Const(frame_size + spill_upper_bound as i32));
-func.instruction(&WasmInstruction::I32Add);
-func.instruction(&WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
-func.instruction(&WasmInstruction::I32GtU);
-func.instruction(&WasmInstruction::If(BlockType::Empty));
-func.instruction(&WasmInstruction::Unreachable);
-func.instruction(&WasmInstruction::End);
+// 遍历所有 safepoint，取最大 live-handle-local 数 × 8
+let spill_upper_bound = self.compute_max_spill_bytes(module, function);
 ```
 
-> 确认 `shadow_stack_end_global_idx` 存在（compiler_module.rs globals，idx 8）。frame_size = 该函数 shadow stack frame 大小。
+```rust
+fn compute_max_spill_bytes(&self, module: &IrModule, function: &IrFunction) -> usize {
+    let live = wjsm_ir::liveness::compute_liveness(function);
+    let ty = wjsm_ir::value_ty::infer_value_ty(module, function);
+    let mut max = 0usize;
+    let mut global_idx = 0usize;
+    for bb in function.blocks() {
+        for (i, ins) in bb.instructions().enumerate() {
+            if self.is_safepoint(ins) {
+                let key = (bb.id(), i);
+                let cnt = live.get(&key)
+                    .map(|s| s.iter().filter(|v| ty.get(v).map_or(true, |t| *t == wjsm_ir::value_ty::ValueTy::Handle)).count())
+                    .unwrap_or(0);
+                max = max.max(cnt);
+            }
+            global_idx += 1;  // 注：global_idx 仅用于此估算，不用于 emit 查找
+        }
+    }
+    max * 8
+}
+```
 
-- [ ] **编译确认**: `cargo build`。
+- [ ] **prologue 加容量检查**（compile_function，local 声明之后、body 之前）:
+
+```rust
+// if shadow_sp + frame_size + spill_upper_bound > shadow_stack_end: unreachable
+self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+self.emit(WasmInstruction::I32Const((frame_size + spill_upper_bound as i32).max(0)));
+self.emit(WasmInstruction::I32Add);
+self.emit(WasmInstruction::GlobalGet(self.shadow_stack_end_global_idx));
+self.emit(WasmInstruction::I32GtU);
+self.emit(WasmInstruction::If(BlockType::Empty));
+self.emit(WasmInstruction::Unreachable);
+self.emit(WasmInstruction::End);
+```
+
+> `frame_size` = 该函数 shadow stack frame 大小（params + eval vars；从现有 prologue 的 sp 推进量算）。确认 align 用 `BlockType::Empty`（import 自 wasm_encoder）。
+
+- [ ] **编译确认**: `cargo build -p wjsm-backend-wasm`。
 
 ## T2.4 验证 spill 不破坏语义（fixture 全绿）
 
 **Files**: 无（仅验证）
 
-**Why**: 本阶段不接 GC，spill 只是写 shadow stack 又复位，应无语义影响。
+**Why**: 本阶段不接 GC，spill 只是写 shadow stack 又复位 sp，应无语义影响（值写了但 GC 不读，因 P2 无 GC）。验证 spill 代码生成正确 + sp 复位 + 容量不溢出。
 
 **Verification**: fixture 全绿 + dump-wat 检查。
 
@@ -709,11 +401,10 @@ func.instruction(&WasmInstruction::End);
 cargo nextest run --workspace
 ```
 
-- [ ] **若失败**：用 dump-wat 检查出问题的 fixture：
+- [ ] **若失败**：用 dump-wat 检查出问题的 fixture（spill 序列、sp 复位、cursor 对齐）:
 
 ```bash
 cargo run -- dump-wat fixtures/happy/<fail>.js > /tmp/out.wat
-# 检查 spill 序列是否正确 save/restore，global_idx 是否对齐
 ```
 
 - [ ] **dump-wat 抽查一个有 alloc 的 fixture**（如 hello.js）确认 spill 序列存在且 sp 复位。
@@ -1204,12 +895,12 @@ gc_algorithm: GcAlgorithmChoice,
 - P5 删除 trigger_gc + core.rs gc_collect（框架 P4 已接管，无断档）
 - spec §18 INV/IMPL 是实现期硬约束，违反即 GC 不安全
 
-## Self-Review 结论
+## Self-Review 结论（R2 — P0/P1 已执行验证后修订）
 
 - **Spec 覆盖**：spec §14 的 P0-P6 + §18 全部 INV/IMPL 不变量在计划中均有对应任务（见 Tasks 总览 + 每阶段验收含 §18 硬约束）。
-- **Placeholder**：核心算法/数据结构（tag_needs_root、MarkBitmap、SegregatedFreeList、liveness 主体、sweep、spill 序列、GcContext）给出完整代码。IR/Compiler 内部 API 接缝（Instruction variant 字段名、Function 访问 Constant 路径、UnaryOp variant）标注为“实现时先 grep 确认实际名”并给行号 —— 这些是诚实承认的未知项，非敷衍 placeholder（逐行预写会因 API 名猜错失效）。
+- **Placeholder**：P1（IR 层）API 未知项已全部验证并回填（encode_function_idx/PhiSource/Module::constants/Function::new 见 P1）。P2 global_idx naive 假设已修正为 emit-position cursor（structured 编译非线性）。P3-P6 核心算法给完整代码。
 - **类型一致**：GcContext 持 Caller 贯穿；gc_alloc_slow → Option<Handle> 贯穿；RootProvider 回调式贯穿。
 - **兼容性**：§18 为硬约束；fixture 全绿跨阶段闸；活动对象布局/NaN-boxing/obj_table 不变。
 - **验证**：每阶段确切命令（cargo nextest run -E ... / cargo build -p ...）。
 - **双轨**：P5 Retirement（删旧 GC，P4 先接管无断档）。
-- **结论**：计划可执行。实施时遇 IR/Compiler API 名不符，按任务内 grep 指引确认后调整（属正常适配，非计划缺陷）。
+- **结论**：计划完整可执行。P2 已修正关键设计缺陷；P1 API 已验证；P3-P6 待执行但代码骨架完整。
