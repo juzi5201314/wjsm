@@ -8,12 +8,13 @@
 ## O2: 同步块中的对象字面量触发 async 再入
 
 **Severity**: P2（有 workaround）  
-**Status**: OPEN
+**Status**: FIXED
 
-在 **同步执行路径**（pending microtask、GC 压力下宿主回调等）中走 **对象字面量** 相关路径，可能触发 **async Store 上不正确再入/挂起**，输出丢失或不稳定。与 dispatch（state≥2）**无直接关系**。
+**根因**：`$obj_new` 和 `$arr_new` 中的 GC 触发逻辑（proactive GC 和 OOM GC）在同步执行路径中调用 `gc_collect`，导致活跃 WASM 局部变量中的对象指针被异步挂起和重新进入，破坏了 Store 的线性语义。
 
-- **Workaround**：`fixtures/happy/streams_byob_gc_pending_view.js` 用 `sink += "x"` 代替 `push({})` / 字面量分配。
-- **试探复现**：同上 fixture 改为循环内 `sink = { x: 1 }` 或 `push({})`。
+**修复**：将 `$obj_new` 和 `$arr_new` 中的 GC 触发替换为 `memory.grow`，确保内存扩展是同步操作，不会触发 async 再入。保留 `$obj_delete` 中的 GC 调用（删除操作不会持有活跃局部变量）。
+
+**验证**：`fixtures/happy/streams_byob_gc_pending_view.js` 现在使用对象字面量分配（`sink.push({ x: i })`），测试通过。
 
 ---
 
