@@ -53,14 +53,22 @@ impl Compiler {
         spill
     }
 
-    /// Safepoint spill prologue：把 live handle locals 写到 shadow stack 顶端，推进 shadow_sp。
-    /// 返回 spill 的 local 数（×8 = shadow_sp 推进量），供 epilogue 复位用。
+    /// Safepoint spill prologue：保存 spill 前 shadow_sp，把 live handle locals 写到 shadow stack 顶端，推进 shadow_sp。
     ///
-    /// non-moving GC 关键：GC 不改 local 值，故无需 reload。epilogue 只复位 shadow_sp。
-    /// 不占用 shadow_sp_scratch_idx（与 Call 的 arg-push save/restore 独立）：
-    /// epilogue 用 `shadow_sp -= n*8` 复位，因 Call 的 arg-save/restore 在 call 前后对称，
-    /// 返回时 shadow_sp 已恢复到 spill 后的位置。
+    /// non-moving GC 关键：GC 不改 local 值，故无需 reload。epilogue 恢复 shadow_sp 到保存值。
+    /// 用独立 safepoint_sp_saved_idx（i32 local），不占用 shadow_sp_scratch_idx（Call arg-save 用），
+    /// 避免与 Call/SuperCall body 内部的 shadow_sp 操作冲突。
+    ///
+    /// 注：不能用 `shadow_sp -= n*8` 复位——SuperCall forward_args 分支会把 shadow_sp
+    /// 重置为 caller args_base（非 spill 前值），subtract 会得到错误结果。save/restore 稳健。
     fn emit_safepoint_spill_prologue(&mut self, spill: &[u32]) {
+        if spill.is_empty() {
+            return;
+        }
+        // 保存 spill 前 shadow_sp 到 safepoint_sp_saved
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::LocalSet(self.safepoint_sp_saved_idx));
+        // spill each live handle local
         for &local in spill {
             self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
             self.emit(WasmInstruction::LocalGet(local));
@@ -76,14 +84,12 @@ impl Compiler {
         }
     }
 
-    /// Safepoint spill epilogue：复位 shadow_sp（减去 spill prologue 推进的字节数）。
+    /// Safepoint spill epilogue：恢复 shadow_sp 到 prologue 保存的值（non-moving 无需 reload local）。
     fn emit_safepoint_spill_epilogue(&mut self, spill_count: usize) {
         if spill_count == 0 {
             return;
         }
-        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
-        self.emit(WasmInstruction::I32Const((spill_count * 8) as i32));
-        self.emit(WasmInstruction::I32Sub);
+        self.emit(WasmInstruction::LocalGet(self.safepoint_sp_saved_idx));
         self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
     }
 

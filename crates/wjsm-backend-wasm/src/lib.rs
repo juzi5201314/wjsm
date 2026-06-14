@@ -124,6 +124,10 @@ struct Compiler {
     shadow_sp_global_idx: u32,
     /// WASM local index for shadow_sp scratch variable (i32, used during Call).
     shadow_sp_scratch_idx: u32,
+    /// WASM local index for safepoint spill saved shadow_sp (i32, P2)。
+    /// safepoint prologue 保存 spill 前 shadow_sp，epilogue 恢复。
+    /// 独立于 shadow_sp_scratch_idx（Call arg-save 用），避免冲突。
+    safepoint_sp_saved_idx: u32,
     /// WASM local index for the base address of eval-visible variable storage.
     eval_var_base_local_idx: u32,
     /// WASM global index for alloc_counter (GC heuristic).
