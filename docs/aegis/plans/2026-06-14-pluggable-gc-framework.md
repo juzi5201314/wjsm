@@ -1,4 +1,4 @@
-**执行状态（R2 修订）**: P0 ✅ + P1 ✅ 已实现并提交（分支 gc-framework，wjsm-ir 16/16 绿）。P2 设计已修正（structured-compiler emit-position cursor）。P2-P6 待执行。
+**执行状态（R4 修订，review 后）**: P0 ✅ + P1 ✅ + P2 ✅（含 review fix e6ea856）+ P3 ✅ 已实现并提交（分支 gc-framework）。P2/P3 review 发现 3 个 P4-blocker（resize-abandoned 回收、closure env_obj 标记、RootProvider fixed-point）+ 1 个 P4-deferred（safepoint 集补全），已记入 P4 任务。P4-P6 待执行。
 
 # 可插拔 GC 框架实施计划
 
@@ -65,11 +65,20 @@
 |------|--------|----------|
 | P0 ✅ | T0.1-T0.2 | size 直方图 + 冻结 SIZE_CLASSES（验证无需改动） |
 | P1 ✅ | T1.1-T1.5 | ValueTy + tag_needs_root + liveness pass（16/16 绿） |
-| P2 | T2.1-T2.4 | safepoint spill 代码生成 + sp 不变量 + 容量检查 |
-| P3 | T3.1-T3.8 | runtime_gc/ 框架 + MarkSweep + worklist + mock 单测 |
-| P4 | T4.1-T4.6 | 分配路径改造 + handle 复用 + proactive + 长循环 fixture |
+| P2 ✅ | T2.1-T2.4 + R-fix | safepoint spill 代码生成 + sp 不变量 + 容量检查（561/561 绿，review fix e6ea856） |
+| P3 ✅ | T3.1-T3.8 | runtime_gc/ 框架 + MarkSweep + worklist + mock 单测（16/16 绿，561/561 无回归） |
+| P4 | T4.1-T4.6 + **T4.b1/b2/b3**（review 新增 blocker） | 分配路径改造 + handle 复用 + proactive + 长循环 fixture + **3 个 P4-blocker** |
 | P5 | T5.1-T5.3 | 删除旧 GC + 迁移 fixed-point + grep 无残留 |
 | P6 | T6.1-T6.2 | 预留 hook 默认 impl + CLI --gc-algorithm |
+
+### P4 新增 blocker 任务（review 发现，P3 记录详见上方）
+
+| 任务 | 内容 | 阻塞原因 |
+|------|------|----------|
+| **T4.b1** | sweeper 回收 resize-abandoned 区域（abandoned list 或 gap 扫描） | INV-B vs §8.2 矛盾；长循环 OOM |
+| **T4.b2** | marker 标记 closure env_obj + native_callable 内部引用 | 闭包捕获对象误回收 |
+| **T4.b3** | RootProvider fixed-point（continuation_table.captured_vars 等） | IMPL-9；async/promise 路径漏 root |
+| **T4.b4**（P2 deferred） | 补全 safepoint 集（ObjectSpread/CollectRestArgs/NewPromise/...） | 这些 alloc 点漏 spill |
 
 ---
 
@@ -180,15 +189,46 @@ cargo nextest run -p wjsm-ir   # 16 tests, all green
 
 ---
 
-# 阶段 P2：Backend safepoint spill 代码生成
+# 阶段 P2：Backend safepoint spill 代码生成 ✅ IMPLEMENTED
+
+**Status**: 已实现并提交（ddf013c + review fix e6ea856）。561/561 非 network fixture 绿。
 
 **Why**: 编译器在每个 safepoint（alloc 点）前把 live Handle local spill 到 shadow stack，让 GC root 集精确。**本阶段不接 GC**，只验证 spill 不破坏语义（fixture 全绿）。
 
 **Critical（#4）**: `__shadow_sp` 函数入口=出口；循环内每个 safepoint 独立 save/restore。
 
-> **P2 执行时发现的关键事实（修正原设计）**：wjsm backend 的 `compile_structured`（compiler_control.rs:190）**按控制流顺序**遍历块，而非线性顺序。`compile_instruction`（compiler_instructions.rs:5）被多处调用（compile_structured 主循环 L237、if/else 分支体 L386/393、loop 体 L720、switch case L1165…），且**调用点不传 block_idx/instr_idx**。原计划的 `compute_spill_plan(global_idx)` 假设线性 `global_idx` 可对齐 safepoint —— **不成立**。修正方案见 T2.1（emit-position cursor，非 global_idx）。
+## 实现产物（已提交）
 
-## 已验证的 Compiler 字段（lib.rs:100-163）
+| 任务 | Commit | 文件 | 说明 |
+|------|--------|------|------|
+| T2.1 cursor | `ddf013c` | `compiler_control.rs`（8 个 compile_instruction 调用点全设 cursor）、`compiler_core.rs`（Compiler 字段）、`lib.rs`、`compiler_module.rs` | emit-position cursor `(current_emit_block_idx, current_emit_instr_idx)`；`current_spill_locals()` 查 liveness |
+| T2.2 spill emit | `ddf013c` | `compiler_instructions.rs` | `emit_safepoint_spill_prologue/epilogue` 包裹 NewObject/NewArray/Call/CallBuiltin/SuperCall/ConstructCall |
+| T2.3 容量检查 | `ddf013c` | `compiler_module.rs` | `compute_max_spill_bytes` + `emit_safepoint_capacity_check`（函数 prologue 一次） |
+| T2.4 验证 | `ddf013c` | fixture 更新 | `eval_exception_expression_contexts.expected`（仅 wasm addr padding） |
+| **R-fix** | `e6ea856` | 同上 | **修正 spill epilogue：subtract-restore → save/restore**（见下方偏差） |
+
+## 偏差与修正（review 发现）
+
+1. **liveness map 重整为嵌套**（T2.1 偏差）：`compute_liveness` 返回扁平 `(block_id, instr_idx)→Set`；在 `compile_function`/`compile_js_function` 重整为 `HashMap<BasicBlockId, HashMap<usize, Set>>` 便于 `current_spill_locals` 查询。**原计划未指定扁平/嵌套**——实现选择嵌套，无 API 影响。
+
+2. **spill epilogue 用 save/restore 而非 subtract**（review 修正，e6ea856）：原实现 `shadow_sp -= n*8` 复位。**Bug**：SuperCall `forward_args` 分支把 `shadow_sp` 重置为 caller `args_base`（local 2），非 spill 前值，subtract 得错误指针。P2 被 GC 未触发掩盖，P4 会崩。**修正**：新增 `safepoint_sp_saved_idx`（i32 local，local_count+4）保存 spill 前 `shadow_sp`，epilogue 恢复。同时修 slot 冲突：`eval_var_base_local_idx` 从 local_count+4 移到 +5，`total_i32_locals` 2→3。
+
+3. **CompileMode::Eval 走 compile_function**（验证）：eval module 也经 `compile_function`（compiler_module.rs:345），liveness + spill + 容量检查全覆盖。
+
+## P4-deferred（P2 安全不阻塞，P4 必须补）
+
+**safepoint 集不完整**：当前 `is_safepoint()` 只含 NewObject/NewArray/Call/CallBuiltin/SuperCall/ConstructCall。下列也分配但未 wrap，P2（GC 未触发）无碍，**P4 GC 接通后会漏 spill → 误回收**：
+
+- `ObjectSpread`（compile_object_spread，调 obj_new）
+- `CollectRestArgs`（compiler_instructions.rs:735，调 arr_new + ArrayPush）
+- `NewPromise`（调 promise_create，host alloc）
+- `PromiseResolve`/`PromiseReject`（可能 host alloc）
+- `StringConcatVa`（产 runtime string handle）
+- `SetProto`（可能触发 grow_object）
+
+**P4 任务**：扩展 `is_safepoint()` + 在对应 compile 分支包裹 spill。`compile_builtin_call`（CallBuiltin 走此）已包裹，但 builtin 内部若调 host-alloc 的（PromiseCreate/StringConcat 等）经由 CallBuiltin 已被 wrap——**需验证**：CallBuiltin 的 spill 是否覆盖 builtin 内部的 alloc（是的，CallBuiltin 是 safepoint，spill 在 call 前，覆盖 builtin 内部所有 alloc 点）。
+
+## 已验证的 Compiler 字段（lib.rs:100-163，review 后更新）
 
 - `shadow_sp_global_idx: u32`（= 4，WASM global）
 - `shadow_sp_scratch_idx: u32`（i32 local，call 期间保存 sp）
@@ -413,12 +453,70 @@ cargo run -- dump-wat fixtures/happy/<fail>.js > /tmp/out.wat
 
 ---
 
-# 阶段 P3：runtime_gc/ 框架 + MarkSweep 实现
+# 阶段 P3：runtime_gc/ 框架 + MarkSweep 实现 ✅ IMPLEMENTED
+
+**Status**: 已实现并提交（034cbfb）。16/16 GC 单测绿；561/561 非 network fixture 绿（无回归）。
 
 **Why**: 建立 GcAlgorithm trait 框架 + MarkSweep（worklist mark + sweep 重建 free list）。本阶段用 mock GcContext 单测，不接 backend（P4 集成）。
 
 **Critical（#9）**: GcContext 持 Caller 不持 slice；with_memory/grow 分离。
 **Critical（#11）**: mark worklist 不递归。
+
+## 实现产物（已提交 034cbfb）
+
+| 任务 | 文件 | 测试 |
+|------|------|------|
+| T3.1 api.rs | `runtime_gc/api.rs`（trait 全集 + GcContext + GcStats） | — |
+| T3.2 mark_bitmap | `runtime_gc/mark_bitmap.rs` | 5（mark/dedup/grow/popcount/reset） |
+| T3.3 context.rs | `runtime_gc/context.rs`（heap-meta helpers + global readers） | — |
+| T3.4 SegregatedFreeList | `runtime_gc/mark_sweep/allocator.rs` | 7（exact/split/fallback/big/too-small/empty/size_class） |
+| T3.5 Marker | `runtime_gc/mark_sweep/marker.rs` | 4（linear/dead/cycle/deep-chain-R8-10000） |
+| T3.6 Sweeper | `runtime_gc/mark_sweep/sweeper.rs` | （集成测试待 P4） |
+| T3.7 MarkSweepCollector | `runtime_gc/mark_sweep/mod.rs`（collect + collect_with_roots） | — |
+| T3.8 RuntimeRoots | `runtime_gc/roots.rs`（shadow stack scan + function props） | — |
+
+## 偏差（review 记录）
+
+1. **GcContext.with_memory_mut 签名收窄**（T3.3 偏差）：原设计 `with_memory_mut(f: FnOnce(&mut Caller, &mut [u8]))`。**借用冲突**：`memory.data_mut(&mut *self.caller)` 与 `f(&mut *self.caller, data)` 双重可变借 caller。**修正**：改为 `with_memory_mut(f: FnOnce(&mut [u8]))`，不传 caller（caller 经 self 后续访问）。调用方（sweeper write_obj_table_slot）相应去掉 `_caller` 参数。
+
+2. **global reader 需 `&mut Caller`**（T3.3 偏差）：wasmtime `Global::get` 需 `AsContextMut`（`&mut Caller`），非 `&Caller`。故 GcContext 的 `obj_table_ptr/count/heap_ptr/shadow_sp/...` 等读方法全改 `&mut self`（经 `&mut *self.caller`）。marker/sweeper/collect 调用处相应调整。`Global::get` 返回 `Val`（非 `Result`），`.i32()` 链式取值。
+
+3. **handle_free_list 字段加在 RuntimeState**（T4.2 前置）：P3 实现 `MarkSweepCollector::collect` 时需把 `freed_handles` 推入 RuntimeState 供 fast-path 复用。**提前**在 P3 加了 `handle_free_list: Arc<Mutex<Vec<u32>>>` 字段（lib.rs）+ `handle_free_list_for_gc()` accessor。原计划放 T4.2，实现提前到 P3 因 collect 已需它。
+
+4. **mark_children 用 `tag_needs_root` 过滤**（T3.5 实现）：移植自 `collect_child_from_value`，但用 P1 新增的 `tag_needs_root` 统一过滤，替代分散的 `is_object||is_array||is_function` 检查。`is_object/is_array → decode_object_handle`；`is_function → low32`；其他 handle tag（closure/native_callable/bigint/...）**当前不解析**（见 P4-blocker #2）。
+
+5. **测试用纯 buffer 而非 mock GcContext**（T3.5 测试策略）：`mark_drain_on_buffer(mark_bits, data, obj_table_ptr, count, roots)` 在 `&[u8]` 上跑完整 mark（seed+drain），不依赖 wasmtime。4 个 marker 测试（linear/dead/cycle/deep-chain）用此。**R8 验证**：10000 层链表不栈溢出（worklist Vec）。
+
+## P4-blockers（P3 mock 测试不暴露，P4 GC 接通前必须解决）
+
+### P4-blocker #1：sweeper 不回收 resize-abandoned 区域
+
+**问题**：INV-B 声称 "resize 后旧块成为死块，由 sweep 回收"。但 §8.2 sweep 算法只遍历 `obj_table`，而 `grow_array`/`grow_object`（runtime_values.rs:222-226/273-277）把已有 handle 的 ptr 重写到更高位置后，**旧 ptr 区域不在 obj_table 中**（handle 已指向新 ptr）。sweep 看不到旧区域 → 无法回收 → 凸堆永久泄漏。
+
+**影响**：长循环（spec 验收 #1）数组频繁 push→resize，每次 resize 泄漏旧区域 → OOM。**P4 阻塞**。
+
+**修复方案（P4 T4.x 新增）**：sweep 在按 ptr sort 的块扫描后，补充一次 gap 扫描：
+- 收集所有 obj_table 块的 `[ptr, ptr+size)` 区间（sort 后）
+- 扫 [object_heap_start, max_block_end)：未被任何块覆盖的 gap → add_free_region
+- 或：让 grow_array/grow_object 在重写 ptr 前，把旧 (ptr, size) 注册到一个 host 维护的 "abandoned list"，sweep 读取并入 free list（更精确，避免 gap 扫描的 O(n²)）
+
+**推荐**：abandoned list（O(1) 注册，sweep O(n) 合并）。需改 grow_array/grow_object + RuntimeState 加 `abandoned_regions: Vec<(ptr, size)>`。
+
+### P4-blocker #2：marker 漏标 closure/native_callable 的内部引用
+
+**问题**：`push_value_handle`（marker.rs:153）只处理 object/array/function。**closure**（TAG_CLOSURE）持有 `env_obj`（对象 handle），存在对象属性/数组元素里时 marker 遍历到但不解析 → env_obj 对象漏标 → 误回收。`native_callable` 同理（内部可能持有对象引用）。
+
+**现有 compact GC 处理**：`mark_runtime_value_recursive`（runtime_heap.rs:471-490）对 closure 查 `RuntimeState.closures[closure_idx].env_obj` 递归标记。
+
+**修复方案（P4 T4.x 新增）**：marker 的 `collect_child_handles` 对 closure 值，经 `ctx.with_state` 查 `closures` 表取 `env_obj`，作为 object handle 加入候选。native_callable 类似（查 `native_callables` 表）。需把 `collect_child_handles` 改为 `ctx.with_memory` + `ctx.with_state` 混合（当前只 with_memory）。
+
+**影响**：闭包持有捕获变量的对象会被误回收 → P4 fixture（任何用闭包的）崩。**P4 阻塞**。
+
+### P4-blocker #3：RootProvider fixed-point 未实现
+
+**问题**：`RuntimeRoots::for_each_host_table_root`（roots.rs）只提供 function props（0..num_ir_functions）作为稳定 root。**fixed-point host 侧表追踪**（microtask/promise reactions/continuation_table.captured_vars/streams/BYOB/async_generator/combinator）未实现。spec §10 要求 continuation_table 非 completed 条目的 captured_vars 作为**顶层 root**（IMPL-9）。
+
+**修复方案（P4 T4.x）**：移植 `trace_runtime_side_table_roots_fixed_point`（runtime_builtins.rs:2590-2918）到 `for_each_host_table_root`，或在 `collect_with_roots` 中分轮注入 roots（mark → fixed-point loop：再 mark host table roots until popcount 不变）。
 
 ## T3.1 runtime_gc 模块骨架 + api.rs（trait 定义）
 
@@ -641,6 +739,72 @@ fn mark_deep_chain_no_stack_overflow() {
 
 **Critical（IMPL-3）**: gc_alloc_slow/gc_maybe_collect 注册 sync Func::wrap。
 **Critical（#8）**: gc_alloc_slow 返回 Option<Handle>，trap 仅 trampoline。
+
+> **P2/P3 review 发现的 P4-blocker（必须在本阶段解决，详见上方 P3/P2 章节）**：
+> - **T4.b1** sweeper 回收 resize-abandoned 区域（INV-B vs §8.2 矛盾）
+> - **T4.b2** marker 标记 closure env_obj + native_callable 内部引用
+> - **T4.b3** RootProvider fixed-point（continuation_table.captured_vars 等）
+> - **T4.b4** 补全 safepoint 集（ObjectSpread/CollectRestArgs/NewPromise/...）
+>
+> 这 4 个在 P2/P3 被 "GC 未触发" 掩盖，P4 GC 接通后会立即暴露为 fixture 崩溃或长循环 OOM。**建议执行顺序：先 T4.b1/b2/b3/b4（修框架正确性），再 T4.1-T4.6（接通）**。
+
+## T4.b1 sweeper 回收 resize-abandoned 区域（P4-blocker #1）
+
+**Files**:
+- modify: `crates/wjsm-runtime/src/runtime_gc/mark_sweep/sweeper.rs`
+- modify: `crates/wjsm-runtime/src/runtime_values.rs`（grow_array/grow_object 注册旧区域）
+- modify: `crates/wjsm-runtime/src/lib.rs`（RuntimeState 加 `abandoned_regions`）
+
+**Why**: INV-B 声称 resize 旧块由 sweep 回收，但 sweep 只遍历 obj_table，看不到被重写 ptr 后的旧区域 → 凸堆永久泄漏 → 长循环 OOM。
+
+**Steps**:
+- [ ] RuntimeState 加 `abandoned_regions: Arc<Mutex<Vec<(usize, usize)>>>`（ptr, size）。
+- [ ] `grow_array`/`grow_object`（runtime_values.rs:222/273）在重写 obj_table 槽前，把旧 `(ptr, old_size)` push 到 `abandoned_regions`。注：`$obj_set` reallocate（compiler_helpers.rs:1037）同理。
+- [ ] sweeper 在 §8.2 块扫描后，读 `abandoned_regions`，对每条 `(ptr, size)` add_free_region（按 ptr merge 进已 sort 的块序列，或单独入表后让 alloc_slow 合并）。
+- [ ] sweep 结束清空 `abandoned_regions`。
+- [ ] **编译 + 单测**：构造 resize 场景（数组 push 触发 grow），验证旧区域进 free list。
+- [ ] **Commit**: `fix(gc): sweep回收 resize-abandoned 区域 (P4-blocker #1)`
+
+## T4.b2 marker 标记 closure env_obj（P4-blocker #2）
+
+**Files**:
+- modify: `crates/wjsm-runtime/src/runtime_gc/mark_sweep/marker.rs`
+
+**Why**: closure（TAG_CLOSURE）持有 env_obj（对象 handle），存在对象属性/数组元素里时 marker 遍历到但不解析 → env_obj 漏标 → 误回收。
+
+**Steps**:
+- [ ] `collect_child_handles` 改为接收 `ctx`（或拆成两步：with_memory 收集 raw values，再 with_state 解析 closure）。
+- [ ] 对 closure 值：`ctx.with_state(|st| st.closures.lock().get(idx).map(|e| e.env_obj))`，env_obj 作为 object handle 加入候选。
+- [ ] native_callable：查 `native_callables` 表（若内部持有对象引用，如 bound_objects）。
+- [ ] **测试**：构造闭包持有捕获对象的对象图，验证 env_obj 被 marked。
+- [ ] **Commit**: `fix(gc): marker 标记 closure env_obj + native_callable (P4-blocker #2)`
+
+## T4.b3 RootProvider fixed-point（P4-blocker #3）
+
+**Files**:
+- modify: `crates/wjsm-runtime/src/runtime_gc/roots.rs`
+- 移植自: `runtime_builtins.rs:trace_runtime_side_table_roots_fixed_point`（L2590-2918）
+
+**Why**: continuation_table 非 completed 条目的 captured_vars 必须作为顶层 root（IMPL-9/spec §10）。当前 for_each_host_table_root 只提供 function props。
+
+**Steps**:
+- [ ] 移植 fixed-point tracer 到 `RuntimeRoots::for_each_host_table_root`：遍历 microtask_queue / promise reactions / continuation_table.captured_vars / stream readers/controllers / BYOB views / async_generator queue / combinator contexts。
+- [ ] 在 `collect_with_roots`（mark_sweep/mod.rs）实现 fixed-point loop：mark → 再注入 host table roots → until popcount 不变。
+- [ ] **测试**：构造 pending continuation（无 reaction 引用）场景，验证 captured_vars 对象存活。
+- [ ] **Commit**: `fix(gc): RootProvider fixed-point (continuation/promise/streams) (P4-blocker #3)`
+
+## T4.b4 补全 safepoint 集（P2-deferred → P4）
+
+**Files**:
+- modify: `crates/wjsm-backend-wasm/src/compiler_instructions.rs`（is_safepoint + 各 handler 包裹）
+
+**Why**: ObjectSpread/CollectRestArgs/NewPromise/PromiseResolve/Reject/StringConcatVa/SetProto 也分配但未 wrap spill。P2（GC 未触发）无碍，P4 会漏 spill → 误回收。
+
+**Steps**:
+- [ ] `is_safepoint()` 加 ObjectSpread/CollectRestArgs/NewPromise/PromiseResolve/PromiseReject/StringConcatVa/SetProto。
+- [ ] 各 handler 分支包裹 `emit_safepoint_spill_prologue/epilogue`（参照 NewObject 模式）。
+- [ ] **验证**：fixture 全绿（spill 不破坏语义）。
+- [ ] **Commit**: `fix(backend): 补全 safepoint 集 (P2-deferred, P4)`
 
 ## T4.1 host imports: gc_alloc_slow + gc_maybe_collect + gc_take_freed_handle
 
@@ -899,12 +1063,24 @@ gc_algorithm: GcAlgorithmChoice,
 - P5 删除 trigger_gc + core.rs gc_collect（框架 P4 已接管，无断档）
 - spec §18 INV/IMPL 是实现期硬约束，违反即 GC 不安全
 
-## Self-Review 结论（R3 — P3-P6 API 经验证审计后修订）
+## Self-Review 结论（R4 — P2/P3 实现后 review 修订）
 
-- **Spec 覆盖**：spec §14 的 P0-P6 + §18 全部 INV/IMPL 不变量在计划中均有对应任务（见 Tasks 总览 + 每阶段验收含 §18 硬约束）。
-- **Placeholder**：P1（IR 层）API 未知项已全部验证并回填（encode_function_idx/PhiSource/Module::constants/Function::new 见 P1）。P2 global_idx naive 假设已修正为 emit-position cursor（structured 编译非线性）。P3-P6 核心算法给完整代码。
+- **实现进度**：P0-P3 ✅ 已实现并提交（ddf013c P2、e6ea856 P2 review-fix、034cbfb P3）。测试：wjsm-ir 16/16、runtime_gc 16/16、非 network fixture 561/561 全绿。
+- **Spec 覆盖**：spec §14 的 P0-P6 + §18 全部 INV/IMPL 不变量在计划中均有对应任务。
+- **Review 发现 4 个 P4 阻塞项**（P2/P3 被 "GC 未触发" 掩盖）：
+  - **T4.b1**：sweeper 不回收 resize-abandoned 区域（INV-B vs §8.2 算法矛盾 —— spec 自身不完整）。→ 长循环 OOM。
+  - **T4.b2**：marker 漏标 closure env_obj / native_callable 内部引用。→ 闭包捕获对象误回收。
+  - **T4.b3**：RootProvider fixed-point 未实现（continuation_table.captured_vars 等）。→ async/promise 漏 root。
+  - **T4.b4**：safepoint 集不完整（ObjectSpread/CollectRestArgs/NewPromise/...）。→ 这些 alloc 点漏 spill。
+- **已修正的实现偏差**（P2/P3 review 记录，详见各阶段章节）：
+  - P2 spill epilogue：subtract-restore → save/restore（forward_args bug，e6ea856）。
+  - P2 liveness map：扁平 → 嵌套（便于查询）。
+  - P3 with_memory_mut：去掉 caller 参数（借用冲突）。
+  - P3 global readers：`&self` → `&mut self`（wasmtime AsContextMut）。
+  - P3 handle_free_list：T4.2 前置到 P3（collect 已需它）。
 - **类型一致**：GcContext 持 Caller 贯穿；gc_alloc_slow → Option<Handle> 贯穿；RootProvider 回调式贯穿。
 - **兼容性**：§18 为硬约束；fixture 全绿跨阶段闸；活动对象布局/NaN-boxing/obj_table 不变。
 - **验证**：每阶段确切命令（cargo nextest run -E ... / cargo build -p ...）。
 - **双轨**：P5 Retirement（删旧 GC，P4 先接管无断档）。
-- **结论**：计划完整可执行。P2 已修正关键设计缺陷；P1 API 已验证；P3-P6 待执行但代码骨架完整。
+- **结论**：P0-P3 实现稳定可验证。P4 在接通 GC 前**必须先解决 T4.b1-b4 四个 blocker**（否则 fixture 立即崩或长循环 OOM）。P5-P6 待执行。
+
