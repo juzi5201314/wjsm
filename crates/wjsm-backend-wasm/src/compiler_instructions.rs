@@ -20,6 +20,13 @@ impl Compiler {
                 | Instruction::CallBuiltin { .. }
                 | Instruction::SuperCall { .. }
                 | Instruction::ConstructCall { .. }
+                // P4-b4 补全：下列指令也分配（host alloc 或 arr_new/obj_new）
+                | Instruction::ObjectSpread { .. }
+                | Instruction::CollectRestArgs { .. }
+                | Instruction::NewPromise { .. }
+                | Instruction::PromiseResolve { .. }
+                | Instruction::PromiseReject { .. }
+                | Instruction::StringConcatVa { .. }
         )
     }
 
@@ -682,7 +689,16 @@ impl Compiler {
                 Ok(false)
             }
             Instruction::StringConcatVa { dest, parts } => {
-                self.compile_string_concat_va(dest, parts).map(|_| false)
+                // P4-b4 safepoint：string_concat_va host 产 runtime string handle（alloc）。
+                // 注：compile_string_concat_va 内部自管 shadow_sp（push parts + restore），
+                // spill prologue/epilogue 用独立 safepoint_sp_saved_idx，不冲突。
+                // spill 在 compile_string_concat_va 入口前发生，其内部 push 在 spill 之上，
+                // epilogue 在其 restore 后恢复 shadow_sp 到 spill 前。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
+                let r = self.compile_string_concat_va(dest, parts);
+                self.emit_safepoint_spill_epilogue(spill.len());
+                r.map(|_| false)
             }
             Instruction::OptionalGetProp { dest, object, key } => self
                 .compile_optional_get(dest, object, true, Some(key), false)
@@ -699,31 +715,48 @@ impl Compiler {
                 .compile_optional_call(dest, callee, this_val, args)
                 .map(|_| false),
             Instruction::ObjectSpread { dest, source } => {
-                self.compile_object_spread(dest, source).map(|_| false)
+                // P4-b4 safepoint：ObjSpread host alloc 可能触发 GC，spill live handles。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
+                let r = self.compile_object_spread(dest, source);
+                self.emit_safepoint_spill_epilogue(spill.len());
+                r.map(|_| false)
             }
             Instruction::GetSuperBase { dest } => self.compile_get_super_base(dest).map(|_| false),
             Instruction::GetSuperConstructor { dest } => {
                 self.compile_get_super_constructor(dest).map(|_| false)
             }
             Instruction::NewPromise { dest } => {
+                // P4-b4 safepoint：promise_create host alloc 可能触发 GC，spill live handles。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 let func_idx = self.builtin_func_indices[&Builtin::PromiseCreate];
                 self.emit(WasmInstruction::I64Const(0));
                 self.emit(WasmInstruction::Call(func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(false)
             }
             Instruction::PromiseResolve { promise, value } => {
+                // P4-b4 safepoint：host 可能 alloc（reaction/natives）。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 let func_idx = self.builtin_func_indices[&Builtin::PromiseInstanceResolve];
                 self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 self.emit(WasmInstruction::Call(func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::PromiseReject { promise, reason } => {
+                // P4-b4 safepoint：host 可能 alloc（reaction/natives）。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 let func_idx = self.builtin_func_indices[&Builtin::PromiseInstanceReject];
                 self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(reason.0)));
                 self.emit(WasmInstruction::Call(func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::Suspend { promise, state } => {
@@ -739,6 +772,11 @@ impl Compiler {
                 Ok(true)
             }
             Instruction::CollectRestArgs { dest, skip } => {
+                // P4-b4 safepoint：arr_new 在此 handler 内调用（alloc，可能触发 GC）。
+                // 循环内 ArrayPush 经 grow_array 分配但不主动触发 GC（无 gc_maybe_collect），
+                // 故顶层 spill 覆盖 arr_new 处的 live handle locals 即可。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 let skip_val = *skip as i32;
                 let arr_push_func_idx = self.builtin_func_indices[&Builtin::ArrayPush];
 
@@ -818,6 +856,7 @@ impl Compiler {
                 self.emit(WasmInstruction::End); // end loop
                 self.emit(WasmInstruction::End); // end block
 
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::IsException { dest, value } => {
