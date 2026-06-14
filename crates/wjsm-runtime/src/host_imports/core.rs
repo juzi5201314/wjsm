@@ -1641,6 +1641,101 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "gc_collect", f)?;
 
+    // ── P4 GC framework: gc_alloc_slow / gc_maybe_collect / gc_take_freed_handle ──
+
+    // gc_alloc_slow(size: i32, heap_type: i32, capacity: i32) -> i32
+    //   fast-path bump 失败后的 slow-path：free list → bump → GC → grow。
+    //   返回 handle；真 OOM（无法分配）时 trap（caller 内 unreachable）。
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, size: i32, heap_type: i32, capacity: i32| -> i32 {
+            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                return u32::MAX as i32;
+            };
+            let size = size.max(0) as usize;
+            let heap_type = heap_type.max(0).min(255) as u8;
+            let capacity = capacity.max(0) as u32;
+            // 算法持有在 RuntimeState.gc_algorithm（Arc<Mutex>），经 GcContext 调用。
+            // 先 clone Arc 释放 caller 不可变借用，再 lock，避免借用冲突。
+            let gc_arc = caller.data().gc_algorithm.clone();
+            // 1. alloc_slow（free list + bump）
+            {
+                let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
+                let mut ctx =
+                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                if let Some(h) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
+                    return h as i32;
+                }
+            }
+            // 2. collect 后重试
+            {
+                let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
+                let mut ctx =
+                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                let mut roots = crate::runtime_gc::roots::RuntimeRoots;
+                gc.collect_with_provider(&mut ctx, &mut roots as _);
+            }
+            {
+                let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
+                let mut ctx =
+                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                if let Some(h) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
+                    return h as i32;
+                }
+            }
+            // 3. grow + 重试（真 OOM 前最后手段）
+            {
+                let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
+                let mut ctx =
+                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                if ctx.grow(1).is_ok() {
+                    if let Some(h) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
+                        return h as i32;
+                    }
+                }
+            }
+            // 真 OOM：返回 sentinel（u32::MAX），调用方应 unreachable trap。
+            u32::MAX as i32
+        },
+    );
+    linker.define(&mut store, "env", "gc_alloc_slow", f)?;
+
+    // gc_maybe_collect()：proactive GC 触发。
+    //   WASM fast-path 在 alloc_counter 达 gc_threshold 时调用。host 检查阈值后 collect。
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
+        let (should_collect, gc_arc) = {
+            let state = caller.data();
+            let counter = state.alloc_counter.lock().expect("alloc_counter mutex");
+            (*counter >= state.gc_threshold, state.gc_algorithm.clone())
+        };
+        if !should_collect {
+            return;
+        }
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return;
+        };
+        {
+            let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
+            let mut ctx =
+                crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+            let mut roots = crate::runtime_gc::roots::RuntimeRoots;
+            gc.collect_with_provider(&mut ctx, &mut roots as _);
+        }
+        // 重置 alloc_counter（下一轮阈值窗口）。
+        if let Ok(mut c) = caller.data().alloc_counter.lock() {
+            *c = 0;
+        }
+    });
+    linker.define(&mut store, "env", "gc_maybe_collect", f)?;
+
+    // gc_take_freed_handle() -> i32：从 host handle_free_list pop 复用（fast-path take_or_alloc）。
+    //   返回 handle（≥0）或 -1（空，调用方走 count++ 分支）。
+    let f = Func::wrap(&mut store, |caller: Caller<'_, RuntimeState>| -> i32 {
+        let mut list = caller.data().handle_free_list.lock().expect("handle_free_list mutex");
+        list.pop().map(|h| h as i32).unwrap_or(-1)
+    });
+    linker.define(&mut store, "env", "gc_take_freed_handle", f)?;
+
     // ── Import 22: console_error(i64) → () ────────────────────────────────
     // Already created above as `console_error`.
 

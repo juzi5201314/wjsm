@@ -118,6 +118,20 @@ pub trait GcAlgorithm: Allocator + Marker + Sweeper {
     /// 完整 GC 周期：reset mark → mark roots（经 RootProvider 回调）→ fixed-point → sweep → weak refs。
     fn collect(&mut self, ctx: &mut GcContext) -> GcStats;
     fn algorithm_name(&self) -> &'static str;
+
+    /// 带 RootProvider 的完整 collect（fixed-point host-table root 追踪，IMPL-9，spec §10）。
+    /// 默认实现回退到 collect（无 fixed-point）；MarkSweepCollector 覆盖为真正的 fixed-point。
+    fn collect_with_provider(
+        &mut self,
+        _ctx: &mut GcContext,
+        _roots: &mut dyn RootProvider,
+    ) -> GcStats {
+        // 默认：无 RootProvider 信息，回退到 collect（不应被 P4 集成调用）。
+        let empty: std::iter::Empty<Handle> = std::iter::empty();
+        self.mark(_ctx, &mut Box::new(empty) as _);
+        self.sweep(_ctx);
+        _ctx.stats.clone()
+    }
 }
 
 // ── 算法运行时上下文（注入给 trait 方法） ──
