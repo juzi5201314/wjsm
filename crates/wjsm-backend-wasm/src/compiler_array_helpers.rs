@@ -25,7 +25,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(1));
 
-            // ── GC 检查 ──
+            // ── OOM 检查：用 memory.grow 代替 gc_collect ──
+            // GC 不能在分配路径中触发，因为 WASM 局部变量不在影子栈上，
+            // GC 压缩堆后局部变量中的对象指针变成陈旧指针。
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Add);
@@ -36,29 +38,23 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32WrapI64);
             func.instruction(&WasmInstruction::I32GtU);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // 需要更多内存 — memory.grow(pages)
+            // pages = ceil(size / 65536) + 1
             func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Call(gc_collect_idx));
-            func.instruction(&WasmInstruction::I32Eqz);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::Unreachable);
-            func.instruction(&WasmInstruction::End);
-            func.instruction(&WasmInstruction::End);
-
-            // ── Proactive GC ──
-            func.instruction(&WasmInstruction::GlobalGet(self.alloc_counter_global_idx));
+            func.instruction(&WasmInstruction::I32Const(65535));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::I32Const(65536));
+            func.instruction(&WasmInstruction::I32DivU);
             func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::I32Add);
-            func.instruction(&WasmInstruction::LocalTee(3));
-            func.instruction(&WasmInstruction::GlobalSet(self.alloc_counter_global_idx));
-            func.instruction(&WasmInstruction::LocalGet(3));
-            func.instruction(&WasmInstruction::I32Const(1000));
-            func.instruction(&WasmInstruction::I32GeU);
+            func.instruction(&WasmInstruction::MemoryGrow(0));
+            // 检查返回值是否为 -1（失败）
+            func.instruction(&WasmInstruction::I32Const(-1));
+            func.instruction(&WasmInstruction::I32Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::I32Const(0));
-            func.instruction(&WasmInstruction::Call(gc_collect_idx));
-            func.instruction(&WasmInstruction::Drop);
-            func.instruction(&WasmInstruction::I32Const(0));
-            func.instruction(&WasmInstruction::GlobalSet(self.alloc_counter_global_idx));
+            // OOM - unreachable
+            func.instruction(&WasmInstruction::Unreachable);
+            func.instruction(&WasmInstruction::End);
             func.instruction(&WasmInstruction::End);
 
             // ptr = heap_ptr; heap_ptr += size
