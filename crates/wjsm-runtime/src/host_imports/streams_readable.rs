@@ -121,7 +121,11 @@ pub(crate) fn truncate_byob_view_with_env<C: wasmtime::AsContextMut<Data = Runti
     let entry = typedarray_entry_from_value_with_env(ctx, env, view)?;
     let new_ta = {
         let mut store = ctx.as_context_mut();
-        let mut ta_table = store.data().typedarray_table.lock().expect("typedarray mutex");
+        let mut ta_table = store
+            .data()
+            .typedarray_table
+            .lock()
+            .expect("typedarray mutex");
         let h = ta_table.len() as u32;
         ta_table.push(TypedArrayEntry {
             buffer_handle: entry.buffer_handle,
@@ -1865,7 +1869,12 @@ fn controller_get_byob_request(
     // 3. 构造 { view, respond(n) } JS 对象
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
     let obj = alloc_host_object(caller, &env, 4);
-    let _ = define_host_data_property_from_caller(caller, obj, "__byob_request_handle__", value::encode_f64(byob_handle as f64));
+    let _ = define_host_data_property_from_caller(
+        caller,
+        obj,
+        "__byob_request_handle__",
+        value::encode_f64(byob_handle as f64),
+    );
     let _ = define_host_data_property_from_caller(caller, obj, "view", view);
 
     let respond_callable = NativeCallable::ReadableStreamByobRequestMethod {
@@ -1927,7 +1936,10 @@ pub(crate) fn call_byob_request_method_from_caller(
             }
         }
         ReadableStreamByobRequestMethodKind::Respond => {
-            let bytes_written_arg = args.first().copied().unwrap_or_else(value::encode_undefined);
+            let bytes_written_arg = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
             if !value::is_f64(bytes_written_arg) {
                 return Some(type_error_exception(
                     caller,
@@ -1953,11 +1965,19 @@ pub(crate) fn call_byob_request_method_from_caller(
                     .byob_request_table
                     .lock()
                     .expect("byob_request mutex");
-                table
-                    .get(handle as usize)
-                    .map(|e| (e.controller_handle, e.reader_handle, e.view, e.promise, e.responded))
+                table.get(handle as usize).map(|e| {
+                    (
+                        e.controller_handle,
+                        e.reader_handle,
+                        e.view,
+                        e.promise,
+                        e.responded,
+                    )
+                })
             };
-            let Some((controller_handle, reader_handle, view, promise, already_responded)) = entry_info else {
+            let Some((controller_handle, reader_handle, view, promise, already_responded)) =
+                entry_info
+            else {
                 return Some(type_error_exception(caller, "invalid BYOB request"));
             };
             let view_len = typedarray_length_from_object(caller, view).unwrap_or(0);
@@ -2057,7 +2077,11 @@ pub(crate) fn call_byob_request_method_from_caller(
             }
             // fulfill 结果 { done: false, value: resultView }
             let result = build_reader_result(caller, false, Some(result_view));
-            settle_promise(caller.data_mut(), promise, PromiseSettlement::Fulfill(result));
+            settle_promise(
+                caller.data_mut(),
+                promise,
+                PromiseSettlement::Fulfill(result),
+            );
             Some(value::encode_undefined())
         }
     }

@@ -162,9 +162,10 @@ impl Compiler {
         );
         // Type 35: (i32, i32, i32) -> (i32) — gc_alloc_slow(size, heap_type, capacity) -> handle
         //   None（真 OOM）时 host 内部 trap（unreachable），故返回值总有效。
-        types
-            .ty()
-            .function(vec![ValType::I32, ValType::I32, ValType::I32], vec![ValType::I32]);
+        types.ty().function(
+            vec![ValType::I32, ValType::I32, ValType::I32],
+            vec![ValType::I32],
+        );
         // Type 36: () -> (i32) — gc_take_freed_handle() -> handle（-1 表空）
         types.ty().function(vec![], vec![ValType::I32]);
         let mut imports = ImportSection::new();
@@ -309,6 +310,7 @@ impl Compiler {
             current_fn_value_ty: None,
             current_emit_block_idx: 0,
             current_emit_instr_idx: 0,
+            gc_analysis: None,
         }
     }
 }

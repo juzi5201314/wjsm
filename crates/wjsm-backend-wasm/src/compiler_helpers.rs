@@ -134,7 +134,9 @@ impl Compiler {
 
             // ── 初始化对象 header（与旧实现一致）──
             func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::GlobalGet(self.object_proto_handle_global_idx));
+            func.instruction(&WasmInstruction::GlobalGet(
+                self.object_proto_handle_global_idx,
+            ));
             func.instruction(&WasmInstruction::I32Store(MemArg {
                 offset: 0,
                 align: 2,

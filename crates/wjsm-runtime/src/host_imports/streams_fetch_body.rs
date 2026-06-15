@@ -78,10 +78,8 @@ pub(crate) fn call_fetch_body_reader_read(
         ReadDecision::SharePending(existing) => Some(existing),
         ReadDecision::ByobConflict => {
             let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
-            let err = alloc_type_error_from_caller(
-                caller,
-                "BYOB reader already has a pending read",
-            );
+            let err =
+                alloc_type_error_from_caller(caller, "BYOB reader already has a pending read");
             settle_promise(caller.data_mut(), p, PromiseSettlement::Reject(err));
             Some(p)
         }
@@ -198,11 +196,8 @@ fn spawn_chunk_pull(
                         }
                     }
                     clear_reader_pending(store, reader_handle);
-                    let err = crate::runtime_heap::alloc_type_error_with_env(
-                        store,
-                        env,
-                        e.to_string(),
-                    );
+                    let err =
+                        crate::runtime_heap::alloc_type_error_with_env(store, env, e.to_string());
                     PromiseSettlement::Reject(err)
                 }
             }),
@@ -297,12 +292,11 @@ pub(crate) fn consume_fetch_body_to_bytes(
                             let mut parser = crate::runtime_json::JsonParser::new(text.as_bytes());
                             match parser.parse_value() {
                                 Ok(json_value) => {
-                                    let wasm_value =
-                                        crate::runtime_json::build_wasm_value_with_env(
-                                            store,
-                                            env,
-                                            &json_value,
-                                        );
+                                    let wasm_value = crate::runtime_json::build_wasm_value_with_env(
+                                        store,
+                                        env,
+                                        &json_value,
+                                    );
                                     PromiseSettlement::Fulfill(wasm_value)
                                 }
                                 Err(e) => {
@@ -430,11 +424,19 @@ fn write_u8_bytes_to_view_store(
     }
     let handle_idx = value::decode_handle(view) as usize;
     let ptr = crate::runtime_values::resolve_handle_idx_with_env(store, env, handle_idx)?;
-    let ta_handle_raw =
-        crate::runtime_values::read_object_property_by_name_with_env(store, env, ptr, "__typedarray_handle__")?;
+    let ta_handle_raw = crate::runtime_values::read_object_property_by_name_with_env(
+        store,
+        env,
+        ptr,
+        "__typedarray_handle__",
+    )?;
     let ta_handle = value::decode_f64(ta_handle_raw) as usize;
     let entry = {
-        let ta_table = store.data().typedarray_table.lock().expect("typedarray mutex");
+        let ta_table = store
+            .data()
+            .typedarray_table
+            .lock()
+            .expect("typedarray mutex");
         ta_table.get(ta_handle).cloned()?
     };
     if entry.element_size != 1 {
@@ -442,10 +444,17 @@ fn write_u8_bytes_to_view_store(
     }
     let write_len = (entry.length as usize).min(bytes.len());
     let start = entry.byte_offset as usize;
-    let mut ab_table = store.data().arraybuffer_table.lock().expect("arraybuffer mutex");
+    let mut ab_table = store
+        .data()
+        .arraybuffer_table
+        .lock()
+        .expect("arraybuffer mutex");
     let buffer = ab_table.get_mut(entry.buffer_handle as usize)?;
     let end = start.checked_add(write_len)?;
-    buffer.data.get_mut(start..end)?.copy_from_slice(&bytes[..write_len]);
+    buffer
+        .data
+        .get_mut(start..end)?
+        .copy_from_slice(&bytes[..write_len]);
     Some(write_len)
 }
 
@@ -469,7 +478,11 @@ fn fulfill_read_from_buffer(
         (arr, front_chunk.len())
     };
     let result = build_reader_result(caller, false, Some(value));
-    settle_promise(caller.data_mut(), promise, PromiseSettlement::Fulfill(result));
+    settle_promise(
+        caller.data_mut(),
+        promise,
+        PromiseSettlement::Fulfill(result),
+    );
 
     {
         let mut table = caller

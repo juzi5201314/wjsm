@@ -145,11 +145,7 @@ impl<'a, 'b> GcContext<'a, 'b> {
         }
         let ptr = u32::from_le_bytes([data[addr], data[addr + 1], data[addr + 2], data[addr + 3]])
             as usize;
-        if ptr == 0 {
-            None
-        } else {
-            Some(ptr)
-        }
+        if ptr == 0 { None } else { Some(ptr) }
     }
 
     /// 写 obj_table[h] = ptr（INV-A：注册 handle）。

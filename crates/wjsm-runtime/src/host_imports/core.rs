@@ -1215,7 +1215,6 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "abstract_compare", f)?;
 
-
     // ── P4 GC framework: gc_alloc_slow / gc_maybe_collect / gc_take_freed_handle ──
 
     // gc_alloc_slow(size: i32, heap_type: i32, capacity: i32) -> i32
@@ -1308,7 +1307,11 @@ pub(crate) fn define_core(
     // gc_take_freed_handle() -> i32：从 host handle_free_list pop 复用（fast-path take_or_alloc）。
     //   返回 handle（≥0）或 -1（空，调用方走 count++ 分支）。
     let f = Func::wrap(&mut store, |caller: Caller<'_, RuntimeState>| -> i32 {
-        let mut list = caller.data().handle_free_list.lock().expect("handle_free_list mutex");
+        let mut list = caller
+            .data()
+            .handle_free_list
+            .lock()
+            .expect("handle_free_list mutex");
         list.pop().map(|h| h as i32).unwrap_or(-1)
     });
     linker.define(&mut store, "env", "gc_take_freed_handle", f)?;

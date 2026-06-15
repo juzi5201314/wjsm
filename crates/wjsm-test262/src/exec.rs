@@ -8,9 +8,6 @@ use std::{
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
 
-
-
-
 use rayon::prelude::*;
 
 use crate::read::{Harness, Negative, Phase, Test, TestSuite};
@@ -50,7 +47,6 @@ fn wait_child_timeout(
         }
     }
 }
-
 
 /// 单个测试的结果。
 #[derive(Debug, Clone)]
@@ -147,9 +143,10 @@ pub fn run_test(test: &Test, harness: &Harness, limits: RunLimits) -> TestResult
     };
 
     if let Some(mut stdin) = child.stdin.take()
-        && let Err(e) = stdin.write_all(source.as_bytes()) {
-            return TestResult::Error(format!("failed to write to stdin: {}", e));
-        }
+        && let Err(e) = stdin.write_all(source.as_bytes())
+    {
+        return TestResult::Error(format!("failed to write to stdin: {}", e));
+    }
 
     let status = match wait_child_timeout(&mut child, limits.timeout) {
         Ok(Some(s)) => s,
@@ -158,10 +155,7 @@ pub fn run_test(test: &Test, harness: &Harness, limits: RunLimits) -> TestResult
             let _ = child.wait();
             return TestResult::Failed {
                 expected: "complete within timeout".to_string(),
-                actual: format!(
-                    "timeout after {}s (child killed)",
-                    limits.timeout.as_secs()
-                ),
+                actual: format!("timeout after {}s (child killed)", limits.timeout.as_secs()),
             };
         }
         Err(e) => return TestResult::Error(format!("failed to wait for wjsm: {}", e)),
@@ -176,15 +170,15 @@ pub fn run_test(test: &Test, harness: &Harness, limits: RunLimits) -> TestResult
         let _ = std::io::Read::read_to_end(&mut err, &mut stderr);
     }
 
-    evaluate_wjsm_output(
-        test,
-        &stdout,
-        &stderr,
-        status.code().unwrap_or(-1),
-    )
+    evaluate_wjsm_output(test, &stdout, &stderr, status.code().unwrap_or(-1))
 }
 
-fn evaluate_wjsm_output(test: &Test, stdout_raw: &[u8], stderr_raw: &[u8], exit_code: i32) -> TestResult {
+fn evaluate_wjsm_output(
+    test: &Test,
+    stdout_raw: &[u8],
+    stderr_raw: &[u8],
+    exit_code: i32,
+) -> TestResult {
     let stdout = String::from_utf8_lossy(stdout_raw);
     let stderr = String::from_utf8_lossy(stderr_raw);
 
@@ -370,7 +364,6 @@ pub fn run_suite(
         .into_iter()
         .filter(|t| should_run(t))
         .collect();
-
 
     if parallel && limits.jobs > 1 {
         let pool = rayon::ThreadPoolBuilder::new()

@@ -59,7 +59,7 @@ impl Compiler {
                     .filter(|v| {
                         value_ty
                             .and_then(|m| m.get(v))
-                            .map_or(true, |t| *t == wjsm_ir::value_ty::ValueTy::Handle)
+                            .is_none_or(|t| *t == wjsm_ir::value_ty::ValueTy::Handle)
                     })
                     .count();
                 max = max.max(cnt);
@@ -139,6 +139,10 @@ impl Compiler {
     }
 
     pub(crate) fn compile_module(&mut self, module: &IrModule) -> Result<()> {
+        // Pass 0: 模块级 GC 分析（Layer 3c）
+        self.gc_analysis = Some(GcAnalysis::analyze(module));
+
+        // Pass 1: Register all IR functions as WASM functions.
         // Pass 1: Register all IR functions as WASM functions.
         let mut main_wasm_idx: Option<u32> = None;
         for (i, function) in module.functions().iter().enumerate() {
@@ -177,7 +181,8 @@ impl Compiler {
         }
 
         // Add main export (must be known now).
-        let main_idx = main_wasm_idx.context("backend-wasm expects lowered module entry function")?;
+        let main_idx =
+            main_wasm_idx.context("backend-wasm expects lowered module entry function")?;
         if self.mode == CompileMode::Eval {
             self.exports
                 .export("__eval_entry", ExportKind::Func, main_idx);
@@ -610,8 +615,10 @@ impl Compiler {
         // 供 NewObject/NewArray/Call/CallBuiltin/SuperCall/ConstructCall 的 safepoint spill。
         // compute_liveness 返回扁平 (block_id, instr_idx) -> Set；重整为嵌套 map 便于查询。
         let flat = wjsm_ir::liveness::compute_liveness(function);
-        let mut nested: HashMap<wjsm_ir::BasicBlockId, HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>> =
-            HashMap::new();
+        let mut nested: HashMap<
+            wjsm_ir::BasicBlockId,
+            HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>,
+        > = HashMap::new();
         for ((bid, i), set) in flat {
             nested.entry(bid).or_default().insert(i, set);
         }
@@ -871,8 +878,10 @@ impl Compiler {
 
         // ── GC safepoint（P2）：计算 liveness + ValueTy ──
         let flat = wjsm_ir::liveness::compute_liveness(function);
-        let mut nested: HashMap<wjsm_ir::BasicBlockId, HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>> =
-            HashMap::new();
+        let mut nested: HashMap<
+            wjsm_ir::BasicBlockId,
+            HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>,
+        > = HashMap::new();
         for ((bid, i), set) in flat {
             nested.entry(bid).or_default().insert(i, set);
         }

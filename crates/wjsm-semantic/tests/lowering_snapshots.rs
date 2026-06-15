@@ -126,7 +126,10 @@ fn function_decl_is_supported() {
     let program = result.unwrap();
     let text = program.dump_text();
     assert!(text.contains("fn @greet"), "should have a 'greet' function");
-    assert!(text.contains("fn @$module_main"), "should still have module entry");
+    assert!(
+        text.contains("fn @$module_main"),
+        "should still have module entry"
+    );
     assert!(text.contains("functionref(@0)"), "should reference greet");
     assert!(
         text.contains("store var $0.greet"),

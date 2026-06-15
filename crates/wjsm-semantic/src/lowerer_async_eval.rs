@@ -82,11 +82,10 @@ fn compute_use_def(blocks: &[BasicBlock]) -> (Vec<HashSet<String>>, Vec<HashSet<
                         use_sets[bid].insert(name.clone());
                     }
                 }
-                Instruction::StoreVar { name, .. }
-                    if !Lowerer::is_async_internal_binding(name) => {
-                        local_def.insert(name.clone());
-                        def_sets[bid].insert(name.clone());
-                    }
+                Instruction::StoreVar { name, .. } if !Lowerer::is_async_internal_binding(name) => {
+                    local_def.insert(name.clone());
+                    def_sets[bid].insert(name.clone());
+                }
                 _ => {}
             }
         }

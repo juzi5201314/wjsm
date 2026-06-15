@@ -31,12 +31,9 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
             if addr + 4 > data.len() {
                 break;
             }
-            let ptr = u32::from_le_bytes([
-                data[addr],
-                data[addr + 1],
-                data[addr + 2],
-                data[addr + 3],
-            ]) as usize;
+            let ptr =
+                u32::from_le_bytes([data[addr], data[addr + 1], data[addr + 2], data[addr + 3]])
+                    as usize;
             if ptr == 0 {
                 continue; // 空槽（已回收的 handle）
             }
@@ -77,7 +74,9 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
             run_end = blocks[i].ptr + blocks[i].size;
             i += 1;
         }
-        collector.free_list.add_free_region(run_ptr, run_end - run_ptr);
+        collector
+            .free_list
+            .add_free_region(run_ptr, run_end - run_ptr);
     }
 
     // 4. 清空 unmarked handle 槽 + 推入 freed_handles
@@ -98,18 +97,17 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
     //    grow_array/grow_object 重写 obj_table 槽到新 ptr 后，旧 ptr 区域不再被
     //    obj_table 索引，步骤 1-3 的块扫描看不到 → 单独注册到 abandoned_regions。
     //    这里把它们并入 free list（按 ptr 进表，alloc_slow best-fit 合并），然后清空。
-    let abandoned: Vec<(usize, usize)> = ctx
-        .with_state(|st| st.abandoned_regions_for_gc().map(|mut g| std::mem::take(&mut *g)).unwrap_or_default());
+    let abandoned: Vec<(usize, usize)> = ctx.with_state(|st| {
+        st.abandoned_regions_for_gc()
+            .map(|mut g| std::mem::take(&mut *g))
+            .unwrap_or_default()
+    });
     for (ptr, size) in abandoned {
         collector.free_list.add_free_region(ptr, size);
     }
 
     ctx.stats.swept = freed.len();
-    let freed_bytes: usize = blocks
-        .iter()
-        .filter(|b| !b.marked)
-        .map(|b| b.size)
-        .sum();
+    let freed_bytes: usize = blocks.iter().filter(|b| !b.marked).map(|b| b.size).sum();
     ctx.stats.freed_bytes = freed_bytes;
     collector.freed_handles.extend(freed);
 }

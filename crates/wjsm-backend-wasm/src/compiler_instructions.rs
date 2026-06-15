@@ -37,10 +37,11 @@ impl Compiler {
         let Some(ref liveness) = self.current_fn_liveness else {
             return vec![];
         };
-        let block_map = match liveness.get(&wjsm_ir::BasicBlockId(self.current_emit_block_idx as u32)) {
-            Some(m) => m,
-            None => return vec![],
-        };
+        let block_map =
+            match liveness.get(&wjsm_ir::BasicBlockId(self.current_emit_block_idx as u32)) {
+                Some(m) => m,
+                None => return vec![],
+            };
         let Some(live) = block_map.get(&self.current_emit_instr_idx) else {
             return vec![];
         };
@@ -51,7 +52,7 @@ impl Compiler {
                 // ValueTy 缺失（Unknown）保守当 Handle
                 value_ty
                     .and_then(|m| m.get(v))
-                    .map_or(true, |t| *t == wjsm_ir::value_ty::ValueTy::Handle)
+                    .is_none_or(|t| *t == wjsm_ir::value_ty::ValueTy::Handle)
             })
             .map(|v| self.local_idx(v.0))
             .collect();
@@ -458,10 +459,27 @@ impl Compiler {
                 this_val,
                 args,
             } => {
-                let spill = self.current_spill_locals();
-                self.emit_safepoint_spill_prologue(&spill);
-                self.compile_call_with_new_target(dest, *callee, *this_val, args, None)?;
-                self.emit_safepoint_spill_epilogue(spill.len());
+                // Layer 3d: 检查 callee 是否可能触发 GC
+                // 如果 callee 是已知 no-GC 函数，可省 safepoint spill
+                let may_gc = if let Some(func_id) = self.current_function_id {
+                    if let Some(ref analysis) = self.gc_analysis {
+                        analysis.call_may_trigger_gc(func_id, *callee)
+                    } else {
+                        true // 无分析结果，保守 spill
+                    }
+                } else {
+                    true // 模块入口函数，保守 spill
+                };
+
+                if may_gc {
+                    let spill = self.current_spill_locals();
+                    self.emit_safepoint_spill_prologue(&spill);
+                    self.compile_call_with_new_target(dest, *callee, *this_val, args, None)?;
+                    self.emit_safepoint_spill_epilogue(spill.len());
+                } else {
+                    // no-GC callee: 省掉 safepoint spill
+                    self.compile_call_with_new_target(dest, *callee, *this_val, args, None)?;
+                }
                 Ok(false)
             }
             Instruction::SuperCall {
@@ -471,6 +489,7 @@ impl Compiler {
                 args,
                 forward_args,
             } => {
+                // SuperCall 保守保留 spill（构造调用几乎必分配）
                 let spill = self.current_spill_locals();
                 self.emit_safepoint_spill_prologue(&spill);
                 self.compile_super_call(dest, *callee, *this_val, args, *forward_args)?;
@@ -482,6 +501,7 @@ impl Compiler {
                 this_val,
                 args,
             } => {
+                // ConstructCall 保守保留 spill（构造调用几乎必分配）
                 let spill = self.current_spill_locals();
                 self.emit_safepoint_spill_prologue(&spill);
                 self.compile_call_with_new_target(&None, *callee, *this_val, args, Some(*callee))?;

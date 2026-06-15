@@ -40,7 +40,7 @@ pub enum Phase {
 }
 
 /// 错误类型。
-
+#[allow(clippy::enum_variant_names)]
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 pub enum ErrorType {
     Test262Error,

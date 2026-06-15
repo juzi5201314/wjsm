@@ -24,12 +24,12 @@ mod runtime_async_fn;
 mod runtime_builtins;
 mod runtime_combinators;
 mod runtime_eval;
+mod runtime_gc;
 mod runtime_heap;
 mod runtime_host_helpers;
 mod runtime_json;
 mod runtime_microtask;
 mod runtime_promises;
-mod runtime_gc;
 mod shared_buffer;
 pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;
@@ -1052,7 +1052,6 @@ struct RuntimeState {
     /// 分配计数器：每次对象分配后递增，用于触发周期性 GC。
     alloc_counter: Arc<Mutex<u64>>,
     /// GC 触发阈值：当 alloc_counter 达到此值时触发 GC。
-    
     gc_threshold: u64,
     /// 定时器列表
     timers: Arc<Mutex<Vec<TimerEntry>>>,
@@ -1209,7 +1208,9 @@ impl RuntimeState {
     }
 
     /// GC 框架访问 abandoned_regions（sweeper 读 + 清空）。
-    pub(crate) fn abandoned_regions_for_gc(&self) -> Option<std::sync::MutexGuard<'_, Vec<(usize, usize)>>> {
+    pub(crate) fn abandoned_regions_for_gc(
+        &self,
+    ) -> Option<std::sync::MutexGuard<'_, Vec<(usize, usize)>>> {
         self.abandoned_regions.lock().ok()
     }
 
@@ -1684,8 +1685,7 @@ pub(crate) fn typedarray_entry_from_value_with_env<C: AsContextMut<Data = Runtim
     }
     let handle_idx = (value_raw as u64 & 0xFFFF_FFFF) as usize;
     let ptr = resolve_handle_idx_with_env(ctx, env, handle_idx)?;
-    let handle_raw =
-        read_object_property_by_name_with_env(ctx, env, ptr, "__typedarray_handle__")?;
+    let handle_raw = read_object_property_by_name_with_env(ctx, env, ptr, "__typedarray_handle__")?;
     let handle = value::decode_f64(handle_raw) as usize;
     let mut store = ctx.as_context_mut();
     let table = store.data().typedarray_table.lock().ok()?;
@@ -2839,7 +2839,6 @@ struct ContinuationEntry {
     captured_vars: Vec<i64>,
     completed: bool,
 }
-
 
 struct AsyncGeneratorEntry {
     state: AsyncGeneratorState,

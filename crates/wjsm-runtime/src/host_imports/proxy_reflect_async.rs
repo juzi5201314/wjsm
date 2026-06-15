@@ -114,15 +114,32 @@ pub(crate) fn define_proxy_reflect_async(
             Box::new(async move {
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
-                    let entry = { let table = caller.data().proxy_table.lock().expect("proxy_table mutex"); table.get(handle).cloned() };
+                    let entry = {
+                        let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                        table.get(handle).cloned()
+                    };
                     if let Some(entry) = entry {
-                        if let Some(exc) = check_proxy_revoked(&mut caller, &entry, "deleteProperty") {
+                        if let Some(exc) =
+                            check_proxy_revoked(&mut caller, &entry, "deleteProperty")
+                        {
                             return exc;
                         }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                            let trap = read_object_property_by_name(&mut caller, handler_ptr, "deleteProperty").unwrap_or_else(value::encode_undefined);
+                            let trap = read_object_property_by_name(
+                                &mut caller,
+                                handler_ptr,
+                                "deleteProperty",
+                            )
+                            .unwrap_or_else(value::encode_undefined);
                             if !value::is_undefined(trap) && !value::is_null(trap) {
-                                let result = call_wasm_callback_async(&mut caller, trap, entry.handler, &[entry.target, prop]).await.unwrap_or_else(|_| value::encode_bool(false));
+                                let result = call_wasm_callback_async(
+                                    &mut caller,
+                                    trap,
+                                    entry.handler,
+                                    &[entry.target, prop],
+                                )
+                                .await
+                                .unwrap_or_else(|_| value::encode_bool(false));
                                 return value::encode_bool(nanbox_to_bool(result));
                             }
                         }
@@ -131,7 +148,6 @@ pub(crate) fn define_proxy_reflect_async(
                     return value::encode_bool(false);
                 }
                 reflect_delete_property_impl(&mut caller, target, prop)
-
             })
         },
     )?;
@@ -142,31 +158,63 @@ pub(crate) fn define_proxy_reflect_async(
         |mut caller: Caller<'_, RuntimeState>, (target, this_arg, args_array): (i64, i64, i64)| {
             Box::new(async move {
                 if !is_callable_in_runtime(&mut caller, target) {
-                    return make_type_error_exception(&mut caller, "TypeError: Reflect.apply target must be callable");
+                    return make_type_error_exception(
+                        &mut caller,
+                        "TypeError: Reflect.apply target must be callable",
+                    );
                 }
                 let args = match extract_array_like_elements(&mut caller, args_array) {
                     Ok(arr) => arr,
-                    Err(err) => { set_runtime_error(caller.data(), err); return value::encode_undefined(); }
+                    Err(err) => {
+                        set_runtime_error(caller.data(), err);
+                        return value::encode_undefined();
+                    }
                 };
                 if value::is_proxy(target) {
                     let handle = value::decode_proxy_handle(target) as usize;
-                    let entry = { let table = caller.data().proxy_table.lock().unwrap(); table.get(handle).cloned() };
+                    let entry = {
+                        let table = caller.data().proxy_table.lock().unwrap();
+                        table.get(handle).cloned()
+                    };
                     if let Some(entry) = entry {
                         if let Some(exc) = check_proxy_revoked(&mut caller, &entry, "apply") {
                             return exc;
                         }
                         if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                            let trap = read_object_property_by_name(&mut caller, handler_ptr, "apply").unwrap_or_else(value::encode_undefined);
+                            let trap =
+                                read_object_property_by_name(&mut caller, handler_ptr, "apply")
+                                    .unwrap_or_else(value::encode_undefined);
                             if !value::is_undefined(trap) && !value::is_null(trap) {
                                 let arr = alloc_array(&mut caller, args.len() as u32);
-                                for (i, &arg) in args.iter().enumerate() { set_array_elem(&mut caller, arr, i as i32, arg); }
-                                return match call_wasm_callback_async(&mut caller, trap, entry.handler, &[entry.target, this_arg, arr]).await {
+                                for (i, &arg) in args.iter().enumerate() {
+                                    set_array_elem(&mut caller, arr, i as i32, arg);
+                                }
+                                return match call_wasm_callback_async(
+                                    &mut caller,
+                                    trap,
+                                    entry.handler,
+                                    &[entry.target, this_arg, arr],
+                                )
+                                .await
+                                {
                                     Ok(res) => res,
-                                    Err(e) => { set_runtime_error(caller.data(), format!("TypeError: Proxy apply trap failed: {}", e)); value::encode_undefined() }
+                                    Err(e) => {
+                                        set_runtime_error(
+                                            caller.data(),
+                                            format!("TypeError: Proxy apply trap failed: {}", e),
+                                        );
+                                        value::encode_undefined()
+                                    }
                                 };
                             }
                         }
-                        return reflect_apply_impl_async(&mut caller, entry.target, this_arg, &args).await;
+                        return reflect_apply_impl_async(
+                            &mut caller,
+                            entry.target,
+                            this_arg,
+                            &args,
+                        )
+                        .await;
                     }
                 }
                 reflect_apply_impl_async(&mut caller, target, this_arg, &args).await
@@ -303,7 +351,10 @@ pub(crate) fn define_proxy_reflect_async(
                     return value::encode_bool(false);
                 }
                 if proxy_is_revoked(&mut caller, target) {
-                    return make_type_error_exception(&mut caller, "TypeError: Cannot perform 'isExtensible' on a proxy that has been revoked");
+                    return make_type_error_exception(
+                        &mut caller,
+                        "TypeError: Cannot perform 'isExtensible' on a proxy that has been revoked",
+                    );
                 }
                 value::encode_bool(
                     proxy_or_target_is_extensible_impl_async(&mut caller, target).await,
@@ -445,7 +496,8 @@ pub(crate) fn define_proxy_reflect_async(
                     if let Some(_exc) = check_proxy_revoked(&mut caller, &entry, "call") {
                         set_runtime_error(
                             caller.data(),
-                            "TypeError: Cannot perform call on a proxy that has been revoked".to_string(),
+                            "TypeError: Cannot perform call on a proxy that has been revoked"
+                                .to_string(),
                         );
                         return value::encode_undefined();
                     }
@@ -506,7 +558,8 @@ pub(crate) fn define_proxy_reflect_async(
                     if let Some(_exc) = check_proxy_revoked(&mut caller, &entry, "construct") {
                         set_runtime_error(
                             caller.data(),
-                            "TypeError: Cannot perform construct on a proxy that has been revoked".to_string(),
+                            "TypeError: Cannot perform construct on a proxy that has been revoked"
+                                .to_string(),
                         );
                         return value::encode_undefined();
                     }

@@ -65,7 +65,6 @@ fn test_timer_zero_delay_order() {
     );
 }
 
-
 #[test]
 fn test_set_interval_clears_from_callback() {
     let code = r#"
