@@ -20,10 +20,13 @@
 // `happy__gc_long_loop`), which execute and would miscompute or trap if a needed
 // spill were dropped.
 //
-// Each snippet gives its callee an `arguments` parameter. That suppresses the
-// implicit arguments-object materialisation (`CollectRestArgs` +
-// `create_mapped_arguments_object`, both may-GC), which otherwise marks *every*
-// function as may-GC and would mask the property under test.
+// These snippets use ordinary functions with a normal parameter (`function inc(x)`).
+// Thanks to the arguments-object lazy-elision optimization (wjsm-semantic: skip
+// `emit_arguments_init` when the body never references `arguments`), such a function
+// no longer materialises a mapped `arguments` object (`CollectRestArgs` +
+// `create_mapped_arguments_object`, both may-GC). So a pure-arithmetic callee is now
+// genuinely no-GC without the old contrivance of naming a parameter `arguments`, and
+// these tests double as a regression check that the optimization fires on real code.
 
 use anyhow::Result;
 use wjsm_backend_wasm::GcAnalysis;
@@ -79,11 +82,12 @@ fn outer_knows(program: &Program, outer: FunctionId, callee_fn: FunctionId) -> b
 fn known_no_gc_callee_omits_safepoint_spill() -> Result<()> {
     // `inc` is a nested function declaration (so `outer` records it in
     // `known_callee_vars`) whose body is pure arithmetic — genuinely
-    // non-allocating. The call must be flagged no-GC so the spill is dropped.
+    // non-allocating, and (post arguments-elision) it builds no implicit
+    // `arguments` object. The call must be flagged no-GC so the spill is dropped.
     let program = lower(
         r#"
 function outer(o) {
-  function inc(arguments) { return arguments + 1; }
+  function inc(x) { return x + 1; }
   let a = { v: 1 };
   return inc(o) + a.v;
 }
@@ -118,7 +122,7 @@ fn unknown_function_expression_callee_forces_conservative_spill() -> Result<()> 
     let program = lower(
         r#"
 function outer(o) {
-  let f = function (arguments) { return arguments + 1; };
+  let f = function (x) { return x + 1; };
   let a = { v: 1 };
   return f(o) + a.v;
 }
@@ -156,14 +160,14 @@ console.log(outer(1));
 #[test]
 fn known_but_transitively_allocating_callee_spills() -> Result<()> {
     // `inner` IS a known callee (nested declaration → recorded in
-    // `outer.known_callee_vars`), and its `arguments` parameter suppresses the
-    // implicit arguments object, so its may-GC status comes purely from the object
-    // literal it allocates. The fixed-point analysis must propagate that across
-    // the known-callee edge and still require a spill at the call site.
+    // `outer.known_callee_vars`), and it builds no implicit arguments object, so its
+    // may-GC status comes purely from the object literal it allocates. The fixed-point
+    // analysis must propagate that across the known-callee edge and still require a
+    // spill at the call site.
     let program = lower(
         r#"
 function outer(o) {
-  function inner(arguments) { return { v: arguments }; }
+  function inner(x) { return { v: x }; }
   let a = { v: 1 };
   return inner(o).v + a.v;
 }

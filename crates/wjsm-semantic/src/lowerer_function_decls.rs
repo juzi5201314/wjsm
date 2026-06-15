@@ -41,7 +41,10 @@ impl Lowerer {
         let body_entry = self.emit_param_inits(&fn_decl.function.params, &param_ir_names, entry)?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
-        let body_entry = self.emit_arguments_init(body_entry)?;
+        let body_entry = self.emit_arguments_init(
+            body_entry,
+            Self::function_needs_arguments_object(&fn_decl.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
             || self.scopes.lookup("arguments").is_ok();
         // Lower the function body.
@@ -411,7 +414,10 @@ impl Lowerer {
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
-        let after_inits = self.emit_arguments_init(after_inits)?;
+        let after_inits = self.emit_arguments_init(
+            after_inits,
+            Self::function_needs_arguments_object(&fn_decl.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
             || self.scopes.lookup("arguments").is_ok();
         let dispatch_block = self.current_function.new_block();
@@ -559,7 +565,10 @@ impl Lowerer {
         )?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
-        let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
+        let wrapper_after_inits = self.emit_arguments_init(
+            wrapper_after_inits,
+            Self::function_needs_arguments_object(&fn_decl.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
             || self.scopes.lookup("arguments").is_ok();
         let func_ref_const = self
@@ -1004,7 +1013,10 @@ impl Lowerer {
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
-        let after_inits = self.emit_arguments_init(after_inits)?;
+        let after_inits = self.emit_arguments_init(
+            after_inits,
+            Self::function_needs_arguments_object(&fn_decl.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
             || self.scopes.lookup("arguments").is_ok();
         let dispatch_block = self.current_function.new_block();
@@ -1167,7 +1179,10 @@ impl Lowerer {
         )?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
-        let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
+        let wrapper_after_inits = self.emit_arguments_init(
+            wrapper_after_inits,
+            Self::function_needs_arguments_object(&fn_decl.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
             || self.scopes.lookup("arguments").is_ok();
         let promise_val = self.alloc_value();

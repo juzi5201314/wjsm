@@ -395,11 +395,26 @@ impl Lowerer {
         );
     }
 
+    /// 发射隐式 `arguments` 对象的物化代码（`CollectRestArgs` + `CreateMappedArgumentsObject`）。
+    ///
+    /// `references_arguments`：调用方扫描函数 AST（形参 + 体，穿透嵌套箭头、止于嵌套普通函数）
+    /// 得出的"是否引用 arguments"标志。为 `false` 时跳过物化——这是"arguments 惰性消除"优化的核心，
+    /// 使未引用 `arguments` 的普通函数恢复为 no-GC（省去两条 may-GC 指令）。详见
+    /// `Lowerer::function_references_arguments`。
+    ///
+    /// **正确性**：mapped arguments 仅可通过 `arguments` 绑定观测，无观测者 ⇒ 消除无行为差异。
+    /// 若标志误判为 `false` 而体内实际引用了 `arguments`，后续 body 降级 `lookup("arguments")`
+    /// 会失败并编译报错（fail-loud），不会静默错误编译。
     pub(crate) fn emit_arguments_init(
         &mut self,
         block: BasicBlockId,
+        references_arguments: bool,
     ) -> Result<BasicBlockId, LoweringError> {
         if self.scopes.current_function_has_param_arguments() {
+            return Ok(block);
+        }
+        // 惰性消除：函数未引用 arguments → 不物化（恢复 no-GC）。
+        if !references_arguments {
             return Ok(block);
         }
         let scope_id = match self.scopes.declare("arguments", VarKind::Let, true) {
