@@ -143,7 +143,6 @@ impl Compiler {
         self.gc_analysis = Some(GcAnalysis::analyze(module));
 
         // Pass 1: Register all IR functions as WASM functions.
-        // Pass 1: Register all IR functions as WASM functions.
         let mut main_wasm_idx: Option<u32> = None;
         for (i, function) in module.functions().iter().enumerate() {
             let wasm_idx = self._next_import_func;

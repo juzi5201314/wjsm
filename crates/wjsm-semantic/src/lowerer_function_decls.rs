@@ -143,7 +143,8 @@ impl Lowerer {
     ) -> Result<BasicBlockId, LoweringError> {
         let ir_name = format!("${scope_id}.{name}");
         // 记录 callee 变量→FunctionId 映射（Layer 3 callee no-GC 分析）。
-        // 仅对函数声明（hoisted，语义不可重赋）安全；闭包变量也通过此路径记录，
+        // 仅对函数声明（hoisted，语义不可重赋）安全；async / async-generator 的包装函数
+        // 也是通过此路径记录的（它们仍是函数声明，不是 let/const 闭包），
         // 后端分析对该 callee 保守视其函数体 may-GC（闭包 env 可能分配）。
         self.current_function
             .record_known_callee(ir_name.clone(), callee_fn_id);

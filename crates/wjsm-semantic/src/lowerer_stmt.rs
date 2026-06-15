@@ -8,6 +8,7 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         match stmt {
             swc_ast::Stmt::Expr(expr_stmt) => self.lower_expr_stmt(expr_stmt, flow),
+            // N.B.: exhaustive match — new swc_ast::Decl variants must be handled here.
             swc_ast::Stmt::Decl(decl) => match decl {
                 swc_ast::Decl::Fn(fn_decl) => self.lower_fn_decl(fn_decl, flow),
                 swc_ast::Decl::Var(var_decl) => self.lower_var_decl(var_decl, flow),

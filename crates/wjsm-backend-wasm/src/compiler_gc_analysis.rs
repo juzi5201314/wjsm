@@ -16,7 +16,9 @@ use wjsm_ir::{Builtin, FunctionId, Instruction, Module, ValueId};
 
 /// 该 builtin 是否**可能**触发 GC（分配堆对象或 reentrant 回用户 JS）。
 ///
-/// 这是 `builtin_returns_scalar` 的反面（层 1 value_ty.rs）。
+/// 这是 `builtin_returns_scalar` 的反面（层 1 `wjsm-ir/src/value_ty.rs:125`）。
+/// **维护提醒**：新增 Builtin variant 时须同时检查本白名单和 `builtin_returns_scalar`，
+/// 新增的标量 builtin 若漏加到此处不会导致正确性 bug（仅多 spill），但会损失优化效果。
 /// 返回 `true` 表示该 builtin **可能**触发 GC，需要 safepoint spill；
 /// 返回 `false` 表示该 builtin **规范保证**不触发 GC，可省 spill。
 ///
