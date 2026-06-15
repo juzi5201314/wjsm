@@ -1,16 +1,16 @@
+use wjsm_ir::liveness::compute_liveness;
 use wjsm_ir::value::{
-    encode_bigint_handle, encode_bool, encode_bound_idx, encode_closure_idx, encode_exception,
-    encode_f64, encode_function_idx, encode_handle, encode_native_callable_idx, encode_null,
-    encode_object_handle, encode_proxy_handle, encode_regexp_handle, encode_runtime_string_handle,
-    encode_scope_record_handle, encode_string_ptr, encode_symbol_handle, encode_undefined,
-    tag_needs_root, TAG_ARRAY, TAG_ENUMERATOR, TAG_ITERATOR,
+    TAG_ARRAY, TAG_ENUMERATOR, TAG_ITERATOR, encode_bigint_handle, encode_bool, encode_bound_idx,
+    encode_closure_idx, encode_exception, encode_f64, encode_function_idx, encode_handle,
+    encode_native_callable_idx, encode_null, encode_object_handle, encode_proxy_handle,
+    encode_regexp_handle, encode_runtime_string_handle, encode_scope_record_handle,
+    encode_string_ptr, encode_symbol_handle, encode_undefined, tag_needs_root,
 };
-use wjsm_ir::value_ty::{infer_value_ty, ValueTy};
+use wjsm_ir::value_ty::{ValueTy, infer_value_ty};
 use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, CompareOp, Constant, Function, Instruction, Module,
     Terminator, ValueId,
 };
-use wjsm_ir::liveness::compute_liveness;
 
 #[test]
 fn tag_needs_root_covers_all_handle_tags() {
@@ -43,7 +43,7 @@ fn tag_needs_root_covers_all_handle_tags() {
 #[test]
 fn tag_needs_root_rejects_scalars() {
     let scalars: &[i64] = &[
-        encode_f64(3.14),
+        encode_f64(3.15),
         encode_f64(0.0),
         encode_f64(-0.0),
         encode_undefined(),
@@ -128,14 +128,18 @@ fn value_ty_arithmetic_and_compare_are_scalar() {
     module.push_function(f);
 
     let ty = infer_value_ty(&module, module.functions().last().unwrap());
-    assert_eq!(ty[&ValueId(2)], ValueTy::Scalar, "Binary arithmetic -> Scalar");
+    assert_eq!(
+        ty[&ValueId(2)],
+        ValueTy::Scalar,
+        "Binary arithmetic -> Scalar"
+    );
     assert_eq!(ty[&ValueId(3)], ValueTy::Scalar, "Compare -> Scalar");
 }
 
 #[test]
 fn value_ty_const_scalar_constants_are_scalar() {
     let mut module = Module::new();
-    let n = module.add_constant(Constant::Number(3.14));
+    let n = module.add_constant(Constant::Number(3.15));
     let b = module.add_constant(Constant::Bool(true));
     let null = module.add_constant(Constant::Null);
     let und = module.add_constant(Constant::Undefined);
@@ -167,7 +171,11 @@ fn value_ty_const_scalar_constants_are_scalar() {
     assert_eq!(ty[&ValueId(0)], ValueTy::Scalar, "Const Number -> Scalar");
     assert_eq!(ty[&ValueId(1)], ValueTy::Scalar, "Const Bool -> Scalar");
     assert_eq!(ty[&ValueId(2)], ValueTy::Scalar, "Const Null -> Scalar");
-    assert_eq!(ty[&ValueId(3)], ValueTy::Scalar, "Const Undefined -> Scalar");
+    assert_eq!(
+        ty[&ValueId(3)],
+        ValueTy::Scalar,
+        "Const Undefined -> Scalar"
+    );
 }
 
 #[test]
@@ -198,7 +206,11 @@ fn value_ty_const_handle_constants_and_polymorphic_are_handle() {
 
     let ty = infer_value_ty(&module, module.functions().last().unwrap());
     assert_eq!(ty[&ValueId(0)], ValueTy::Handle, "Const String -> Handle");
-    assert_eq!(ty[&ValueId(2)], ValueTy::Handle, "GetProp polymorphic -> Handle");
+    assert_eq!(
+        ty[&ValueId(2)],
+        ValueTy::Handle,
+        "GetProp polymorphic -> Handle"
+    );
 }
 
 // ── Liveness analysis (T1.3-T1.4) ────────────────────────────────────────
@@ -236,8 +248,14 @@ fn liveness_linear_live_value_survives_to_return() {
     let live = compute_liveness(module.functions().last().unwrap());
     // 紧邻 Const(idx=1) 执行前：v0 活跃（被 return 用）；v1 还没 def
     let at_const = live.get(&(bb(0), 1)).unwrap();
-    assert!(at_const.contains(&v(0)), "v0 live before Const: {at_const:?}");
-    assert!(!at_const.contains(&v(1)), "v1 not yet defined: {at_const:?}");
+    assert!(
+        at_const.contains(&v(0)),
+        "v0 live before Const: {at_const:?}"
+    );
+    assert!(
+        !at_const.contains(&v(1)),
+        "v1 not yet defined: {at_const:?}"
+    );
 }
 
 #[test]
@@ -262,7 +280,10 @@ fn liveness_dead_value_not_live() {
     let live = compute_liveness(module.functions().last().unwrap());
     // 块出口 live 应只有 v0（v1 死）
     let out = live.get(&(bb(0), 2)).unwrap();
-    assert!(out.contains(&v(0)) && !out.contains(&v(1)), "only v0 live at exit: {out:?}");
+    assert!(
+        out.contains(&v(0)) && !out.contains(&v(1)),
+        "only v0 live at exit: {out:?}"
+    );
 }
 
 #[test]

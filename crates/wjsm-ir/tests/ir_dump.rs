@@ -1,6 +1,6 @@
-use wjsm_ir::{MODULE_ENTRY_IR_NAME, 
-    BasicBlock, BasicBlockId, BinaryOp, Builtin, Constant, Function, Instruction, Module,
-    PhiSource, SwitchCaseTarget, Terminator, ValueId,
+use wjsm_ir::{
+    BasicBlock, BasicBlockId, BinaryOp, Builtin, Constant, Function, Instruction,
+    MODULE_ENTRY_IR_NAME, Module, PhiSource, SwitchCaseTarget, Terminator, ValueId,
 };
 
 #[test]

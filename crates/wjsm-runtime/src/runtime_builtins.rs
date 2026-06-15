@@ -95,7 +95,11 @@ pub(crate) async fn advance_object_iterator_from_caller_async(
     if is_promise_value(caller.data(), result) {
         let promise_handle = raw_promise_handle(result);
         let (fulfilled, rejected) = {
-            let table_p = caller.data().promise_table.lock().expect("promise table mutex");
+            let table_p = caller
+                .data()
+                .promise_table
+                .lock()
+                .expect("promise table mutex");
             match promise_entry(&table_p, promise_handle).map(|e| &e.state) {
                 Some(PromiseState::Fulfilled(v)) => (Some(*v), None),
                 Some(PromiseState::Rejected(r)) => (None, Some(*r)),
@@ -1860,7 +1864,8 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             };
             let gc_arc = caller.data().gc_algorithm.clone();
             let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
-            let mut ctx = crate::runtime_gc::GcContext::new(&mut *caller, memory, gc.algorithm_name());
+            let mut ctx =
+                crate::runtime_gc::GcContext::new(&mut *caller, memory, gc.algorithm_name());
             let mut roots = crate::runtime_gc::roots::RuntimeRoots;
             gc.collect_with_provider(&mut ctx, &mut roots as _);
             Some(value::encode_undefined())
@@ -2146,9 +2151,7 @@ pub(crate) async fn call_native_callable_with_args_from_caller_async(
                     entry.sync_done = true;
                 }
             }
-            Some(
-                call_sync_iter_and_wrap_async(caller, sync_iter_handle, Some(arg), false).await,
-            )
+            Some(call_sync_iter_and_wrap_async(caller, sync_iter_handle, Some(arg), false).await)
         }
         NativeCallable::AgentStart
         | NativeCallable::AgentBroadcast
@@ -2257,8 +2260,7 @@ async fn call_sync_iter_and_wrap_async(
     }
 
     let call_arg = arg_if_return.unwrap_or(value::encode_undefined());
-    let raw_result =
-        call_iterator_method_async(caller, method_to_call, iterator, call_arg).await;
+    let raw_result = call_iterator_method_async(caller, method_to_call, iterator, call_arg).await;
 
     if value::is_exception(raw_result) {
         {
@@ -2269,11 +2271,7 @@ async fn call_sync_iter_and_wrap_async(
         }
         let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
         let reason = exception_reason(caller, raw_result);
-        settle_promise(
-            caller.data(),
-            promise,
-            PromiseSettlement::Reject(reason),
-        );
+        settle_promise(caller.data(), promise, PromiseSettlement::Reject(reason));
         return promise;
     }
 
@@ -2558,4 +2556,3 @@ pub(crate) fn fr_register_impl_with_args(
     }
     value::encode_undefined()
 }
-

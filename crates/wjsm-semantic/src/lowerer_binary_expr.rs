@@ -14,7 +14,10 @@ impl Lowerer {
             | swc_ast::Expr::OptChain(_)
             | swc_ast::Expr::TaggedTpl(_) => true,
             swc_ast::Expr::Bin(bin) => {
-                matches!(bin.op, swc_ast::BinaryOp::In | swc_ast::BinaryOp::InstanceOf)
+                matches!(
+                    bin.op,
+                    swc_ast::BinaryOp::In | swc_ast::BinaryOp::InstanceOf
+                )
             }
             swc_ast::Expr::Paren(p) => self.expr_can_throw(&p.expr),
             swc_ast::Expr::TsAs(e) => self.expr_can_throw(&e.expr),
@@ -34,8 +37,6 @@ impl Lowerer {
         !self.is_async_fn && !self.is_async_generator_fn
     }
 }
-
-
 
 impl Lowerer {
     pub(crate) fn lower_expr_then_continue(

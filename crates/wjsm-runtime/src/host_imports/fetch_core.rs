@@ -199,7 +199,8 @@ pub(crate) fn create_response_object_with_http_handle(
         });
         sh
     };
-    let stream_obj = super::streams_readable::create_readable_stream_js_object(caller, stream_handle);
+    let stream_obj =
+        super::streams_readable::create_readable_stream_js_object(caller, stream_handle);
     let _ = define_host_data_property_from_caller(caller, obj, "body", stream_obj);
     let _ =
         define_host_data_property_from_caller(caller, obj, "bodyUsed", value::encode_bool(false));
@@ -533,7 +534,7 @@ pub(crate) fn call_response_method_from_caller(
             let parsed = json_parse_to_wasm(caller, text, value::encode_undefined());
             let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
             if value::is_exception(parsed) {
-    let reason = exception_reason(caller, parsed);
+                let reason = exception_reason(caller, parsed);
                 settle_promise(caller.data_mut(), p, PromiseSettlement::Reject(reason));
             } else {
                 settle_promise(caller.data_mut(), p, PromiseSettlement::Fulfill(parsed));

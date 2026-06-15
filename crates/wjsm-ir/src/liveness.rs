@@ -38,7 +38,11 @@ fn successors(f: &Function) -> HashMap<BasicBlockId, Vec<BasicBlockId>> {
                 // 去重（BasicBlockId 无 Ord，用 HashSet）
                 let mut seen: HashSet<BasicBlockId> = HashSet::new();
                 let mut v: Vec<BasicBlockId> = Vec::new();
-                for t in cases.iter().map(|c| c.target).chain([*default_block, *exit_block]) {
+                for t in cases
+                    .iter()
+                    .map(|c| c.target)
+                    .chain([*default_block, *exit_block])
+                {
                     if seen.insert(t) {
                         v.push(t);
                     }
@@ -78,12 +82,7 @@ fn instr_dest(ins: &Instruction) -> Option<ValueId> {
         | IsException { dest, .. }
         | EncodeException { dest, .. }
         | ExceptionToObject { dest, .. } => *dest,
-        Call { dest, .. } | CallBuiltin { dest, .. } | SuperCall { dest, .. } => {
-            match dest {
-                Some(d) => *d,
-                None => return None,
-            }
-        }
+        Call { dest, .. } | CallBuiltin { dest, .. } | SuperCall { dest, .. } => (*dest)?,
         // 非 producing
         StoreVar { .. }
         | SetProp { .. }
@@ -107,8 +106,12 @@ fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         SetProp { object, key, value } => vec![*object, *key, *value],
         SetProto { object, value } => vec![*object, *value],
         LoadVar { .. } => vec![],
-        NewObject { .. } | NewArray { .. } | GetSuperBase { .. } | GetSuperConstructor { .. }
-        | NewPromise { .. } | CollectRestArgs { .. } => vec![],
+        NewObject { .. }
+        | NewArray { .. }
+        | GetSuperBase { .. }
+        | GetSuperConstructor { .. }
+        | NewPromise { .. }
+        | CollectRestArgs { .. } => vec![],
         GetElem { object, index, .. } => vec![*object, *index],
         SetElem {
             object: _,
@@ -158,11 +161,17 @@ fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
         }
         CallBuiltin { args, .. } => args.clone(),
         DeleteProp { object, key, .. } => vec![*object, *key],
-        PromiseResolve { promise, value } | PromiseReject { promise, reason: value } => {
+        PromiseResolve { promise, value }
+        | PromiseReject {
+            promise,
+            reason: value,
+        } => {
             vec![*promise, *value]
         }
         Suspend { promise, .. } => vec![*promise],
-        IsException { value, .. } | EncodeException { value, .. } | ExceptionToObject { value, .. } => {
+        IsException { value, .. }
+        | EncodeException { value, .. }
+        | ExceptionToObject { value, .. } => {
             vec![*value]
         }
         Phi { .. } => vec![], // Phi use 经边分发，不计入块 use 集
@@ -174,13 +183,12 @@ fn instr_uses(ins: &Instruction) -> Vec<ValueId> {
 /// 块级 use/def + Phi 源（按后继块索引）。
 /// 返回 (block_use, block_def, phi_sources)。
 /// phi_sources[succ_block][pred_block] = 该 succ 的 Phi 中来自 pred 的入参 ValueId 列表。
-fn block_use_def_phi(
-    f: &Function,
-) -> (
-    HashMap<BasicBlockId, HashSet<ValueId>>,
-    HashMap<BasicBlockId, HashSet<ValueId>>,
-    HashMap<BasicBlockId, HashMap<BasicBlockId, Vec<ValueId>>>,
-) {
+/// 类型别名：减少嵌套 HashMap 的复杂度
+type BlockUse = HashMap<BasicBlockId, HashSet<ValueId>>;
+type BlockDef = HashMap<BasicBlockId, HashSet<ValueId>>;
+type PhiSources = HashMap<BasicBlockId, HashMap<BasicBlockId, Vec<ValueId>>>;
+
+fn block_use_def_phi(f: &Function) -> (BlockUse, BlockDef, PhiSources) {
     let mut block_use: HashMap<BasicBlockId, HashSet<ValueId>> = HashMap::new();
     let mut block_def: HashMap<BasicBlockId, HashSet<ValueId>> = HashMap::new();
     // phi_sources[succ][pred] = Vec<ValueId>
@@ -255,10 +263,10 @@ pub fn compute_liveness(f: &Function) -> HashMap<(BasicBlockId, usize), HashSet<
             // live_out = ∪ successors: (后继 live_in) ∪ (该后继 Phi 中来自本块的入参)
             let mut out = HashSet::new();
             for &s in succ.get(&id).unwrap_or(&vec![]) {
-                if let Some(pred_map) = phi_sources.get(&s) {
-                    if let Some(srcs) = pred_map.get(&id) {
-                        out.extend(srcs.iter().copied());
-                    }
+                if let Some(pred_map) = phi_sources.get(&s)
+                    && let Some(srcs) = pred_map.get(&id)
+                {
+                    out.extend(srcs.iter().copied());
                 }
                 out.extend(live_in.get(&s).unwrap_or(&HashSet::new()).iter().copied());
             }

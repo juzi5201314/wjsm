@@ -88,7 +88,10 @@ fn fetch_http_reader_reads_all_chunks() -> Result<()> {
         }});
         "#,
     ));
-    assert!(output.contains("total 7\n"), "unexpected output: {output:?}");
+    assert!(
+        output.contains("total 7\n"),
+        "unexpected output: {output:?}"
+    );
     assert!(
         output.contains("reads 2\n"),
         "response must survive past first chunk: {output:?}"
@@ -116,7 +119,10 @@ fn fetch_http_first_read_resolves_before_end_of_body() -> Result<()> {
         start.elapsed() < Duration::from_millis(1200),
         "first read waited for end-of-body: {output:?}"
     );
-    assert!(output.contains("done false\n"), "unexpected output: {output:?}");
+    assert!(
+        output.contains("done false\n"),
+        "unexpected output: {output:?}"
+    );
     assert!(output.contains("len 1\n"), "unexpected output: {output:?}");
     Ok(())
 }
@@ -137,7 +143,10 @@ fn fetch_http_byob_reader_fills_supplied_view() -> Result<()> {
         console.log("second", r2.done, r2.value.length, r2.value[0], r2.value[1]);
         "#,
     ));
-    assert!(output.contains("done false\n"), "unexpected output: {output:?}");
+    assert!(
+        output.contains("done false\n"),
+        "unexpected output: {output:?}"
+    );
     assert!(output.contains("len 3\n"), "unexpected output: {output:?}");
     assert!(
         output.contains("bytes 104 101 108\n"),

@@ -188,7 +188,11 @@ pub(crate) fn define_core_async(
 
         let promise_handle = raw_promise_handle(promise);
         let (fulfilled, rejected) = {
-            let table_p = caller.data().promise_table.lock().expect("promise table mutex");
+            let table_p = caller
+                .data()
+                .promise_table
+                .lock()
+                .expect("promise table mutex");
             match promise_entry(&table_p, promise_handle).map(|e| &e.state) {
                 Some(PromiseState::Fulfilled(v)) => (Some(*v), None),
                 Some(PromiseState::Rejected(r)) => (None, Some(*r)),
@@ -303,11 +307,7 @@ pub(crate) fn define_core_async(
         if value::is_exception(result) {
             let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
             let reason = exception_reason(caller, result);
-            settle_promise(
-                caller.data(),
-                promise,
-                PromiseSettlement::Reject(reason),
-            );
+            settle_promise(caller.data(), promise, PromiseSettlement::Reject(reason));
             return promise;
         }
 
@@ -320,7 +320,11 @@ pub(crate) fn define_core_async(
         if is_promise_value(caller.data(), result) {
             let promise_handle = raw_promise_handle(result);
             let (fulfilled, rejected) = {
-                let table_p = caller.data().promise_table.lock().expect("promise table mutex");
+                let table_p = caller
+                    .data()
+                    .promise_table
+                    .lock()
+                    .expect("promise table mutex");
                 match promise_entry(&table_p, promise_handle).map(|e| &e.state) {
                     Some(PromiseState::Fulfilled(v)) => (Some(*v), None),
                     Some(PromiseState::Rejected(r)) => (None, Some(*r)),
@@ -329,11 +333,7 @@ pub(crate) fn define_core_async(
             };
             if let Some(reason) = rejected {
                 let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
-                settle_promise(
-                    caller.data(),
-                    promise,
-                    PromiseSettlement::Reject(reason),
-                );
+                settle_promise(caller.data(), promise, PromiseSettlement::Reject(reason));
                 return promise;
             }
             if let Some(settled_val) = fulfilled {
@@ -365,10 +365,7 @@ pub(crate) fn define_core_async(
             *stored_has_current = has_current;
         }
         if has_current {
-            if value::is_object(result)
-                || value::is_function(result)
-                || value::is_array(result)
-            {
+            if value::is_object(result) || value::is_function(result) || value::is_array(result) {
                 return result;
             }
             return alloc_iterator_result_from_caller(caller, current_value, done);

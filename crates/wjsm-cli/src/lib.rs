@@ -243,7 +243,6 @@ enum Commands {
 // ============================================================================
 
 struct PipelineResult {
-    
     source: Option<String>,
     ast: Option<swc_core::ecma::ast::Module>,
     program: Option<Program>,

@@ -82,9 +82,7 @@ pub fn infer_value_ty(module: &Module, function: &Function) -> HashMap<ValueId, 
                 continue;
             }
             // 要求所有源都已分类为 Scalar（缺失视为 Handle，保守不降级）
-            let all_scalar = sources
-                .iter()
-                .all(|s| ty.get(s) == Some(&ValueTy::Scalar));
+            let all_scalar = sources.iter().all(|s| ty.get(s) == Some(&ValueTy::Scalar));
             if all_scalar {
                 ty.insert(*dest, ValueTy::Scalar);
                 changed = true;
@@ -99,9 +97,7 @@ pub fn infer_value_ty(module: &Module, function: &Function) -> HashMap<ValueId, 
             if sources.is_empty() {
                 continue;
             }
-            let all_scalar = sources
-                .iter()
-                .all(|s| ty.get(s) == Some(&ValueTy::Scalar));
+            let all_scalar = sources.iter().all(|s| ty.get(s) == Some(&ValueTy::Scalar));
             if all_scalar {
                 ty.insert(*dest, ValueTy::Scalar);
                 changed = true;
@@ -206,8 +202,10 @@ fn dest_and_kind(ins: &Instruction, constants: &[Constant]) -> Option<(ValueId, 
         // ── Const：看 Constant variant ──
         Const { dest, constant } => {
             let kind = match constants.get(constant.0 as usize) {
-                Some(Constant::Number(_)) | Some(Constant::Bool(_))
-                | Some(Constant::Null) | Some(Constant::Undefined) => ValueTy::Scalar,
+                Some(Constant::Number(_))
+                | Some(Constant::Bool(_))
+                | Some(Constant::Null)
+                | Some(Constant::Undefined) => ValueTy::Scalar,
                 // String / FunctionRef / NativeCallableEval / BigInt / RegExp / ModuleId
                 // 都涉及 handle 或运行时对象 -> Handle
                 _ => ValueTy::Handle,
@@ -268,20 +266,14 @@ fn dest_and_kind(ins: &Instruction, constants: &[Constant]) -> Option<(ValueId, 
             } else {
                 ValueTy::Handle
             };
-            match dest {
-                Some(d) => (*d, kind),
-                None => return None,
-            }
+            ((*dest)?, kind)
         }
 
         // ── Call / SuperCall（用户函数）：返回值类型不定 -> Handle ──
         // 层 3 的 callee no-GC 分析可进一步省掉 Call 的 safepoint spill，
         // 但那是基于 callee "是否触发 GC" 的分析，与 "返回值是否标量" 是不同维度。
         // 返回值类型仍取决于被调函数实际 return 什么，保守 Handle。
-        Call { dest, .. } | SuperCall { dest, .. } => match dest {
-            Some(d) => (*d, ValueTy::Handle),
-            None => return None,
-        },
+        Call { dest, .. } | SuperCall { dest, .. } => ((*dest)?, ValueTy::Handle),
 
         // ── 非 producing（无 dest 或 void）──
         StoreVar { .. }

@@ -100,7 +100,9 @@ impl PrivateNameValidator {
                     };
                     (m.key.name.to_string(), m.key.span, slot)
                 }
-                swc_ast::ClassMember::PrivateProp(p) => (p.key.name.to_string(), p.key.span, 0usize),
+                swc_ast::ClassMember::PrivateProp(p) => {
+                    (p.key.name.to_string(), p.key.span, 0usize)
+                }
                 _ => continue,
             };
             let entry = tally.entry(name.clone()).or_insert((0, 0, 0));

@@ -172,11 +172,19 @@ fn resolve_value_handles(ctx: &mut GcContext, val: i64, obj_table_count: usize) 
     }
     if value::is_object(val) || value::is_array(val) {
         let h = value::decode_object_handle(val);
-        return if (h as usize) < obj_table_count { vec![h] } else { vec![] };
+        return if (h as usize) < obj_table_count {
+            vec![h]
+        } else {
+            vec![]
+        };
     }
     if value::is_function(val) {
         let h = (val as u32) as Handle;
-        return if (h as usize) < obj_table_count { vec![h] } else { vec![] };
+        return if (h as usize) < obj_table_count {
+            vec![h]
+        } else {
+            vec![]
+        };
     }
     if value::is_closure(val) {
         // closure → env_obj（可能 object/closure，递归解析）
@@ -209,7 +217,12 @@ fn resolve_value_handles(ctx: &mut GcContext, val: i64, obj_table_count: usize) 
 /// 从 native_callable 表项提取其内部持有的对象引用（移植自 trace_native_callable_record）。
 /// 返回 raw i64 值列表（由 resolve_value_handles 进一步解析为 handle）。
 fn collect_native_callable_refs(st: &mut crate::RuntimeState, idx: usize) -> Vec<i64> {
-    let record = match st.native_callables.lock().ok().and_then(|g| g.get(idx).cloned()) {
+    let record = match st
+        .native_callables
+        .lock()
+        .ok()
+        .and_then(|g| g.get(idx).cloned())
+    {
         Some(r) => r,
         None => return vec![],
     };
@@ -235,7 +248,12 @@ fn collect_native_callable_refs(st: &mut crate::RuntimeState, idx: usize) -> Vec
 }
 
 /// 读 obj_table[h] → ptr（None = 越界/空槽）。
-fn resolve_handle(data: &[u8], h: Handle, obj_table_ptr: usize, obj_table_count: usize) -> Option<usize> {
+fn resolve_handle(
+    data: &[u8],
+    h: Handle,
+    obj_table_ptr: usize,
+    obj_table_count: usize,
+) -> Option<usize> {
     if (h as usize) >= obj_table_count {
         return None;
     }
@@ -243,12 +261,9 @@ fn resolve_handle(data: &[u8], h: Handle, obj_table_ptr: usize, obj_table_count:
     if addr + 4 > data.len() {
         return None;
     }
-    let ptr = u32::from_le_bytes([data[addr], data[addr + 1], data[addr + 2], data[addr + 3]]) as usize;
-    if ptr == 0 {
-        None
-    } else {
-        Some(ptr)
-    }
+    let ptr =
+        u32::from_le_bytes([data[addr], data[addr + 1], data[addr + 2], data[addr + 3]]) as usize;
+    if ptr == 0 { None } else { Some(ptr) }
 }
 
 // ── 测试辅助：纯 buffer 上的 worklist drain（不依赖 wasmtime，验证 R8 不栈溢出）──
@@ -425,7 +440,11 @@ mod tests {
         let base = 50_000;
         for i in 0..N {
             let ptr = base + i * 48;
-            let props = if i + 1 < N { vec![enc_obj((i + 1) as u32)] } else { vec![] };
+            let props = if i + 1 < N {
+                vec![enc_obj((i + 1) as u32)]
+            } else {
+                vec![]
+            };
             objects.push((i as u32, ptr, 0xFFFF_FFFF, props));
         }
         let buf = build_object_buffer(obj_table_ptr, &objects, N);
@@ -473,12 +492,7 @@ mod tests {
             env_obj,
         }]));
         // 验证 closures 表读路径（resolve_value_handles 内部用同样的锁路径）
-        let read_env = st
-            .closures
-            .lock()
-            .unwrap()
-            .get(0)
-            .map(|e| e.env_obj);
+        let read_env = st.closures.lock().unwrap().get(0).map(|e| e.env_obj);
         assert_eq!(read_env, Some(env_obj));
         assert!(value::is_object(read_env.unwrap()));
     }

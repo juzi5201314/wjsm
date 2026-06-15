@@ -151,7 +151,11 @@ pub struct GcContext<'a, 'b> {
 }
 
 impl<'a, 'b> GcContext<'a, 'b> {
-    pub fn new(caller: &'a mut Caller<'b, RuntimeState>, memory: Memory, algorithm_name: &'static str) -> Self {
+    pub fn new(
+        caller: &'a mut Caller<'b, RuntimeState>,
+        memory: Memory,
+        algorithm_name: &'static str,
+    ) -> Self {
         Self {
             caller,
             memory,

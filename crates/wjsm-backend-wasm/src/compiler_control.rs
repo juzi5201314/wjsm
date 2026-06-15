@@ -242,10 +242,10 @@ impl Compiler {
             }
 
             if suspended {
-                            // Async 状态机：suspend 后的 resume 块只应由 Switch case 编译，禁止线性续编。
-                            idx = blocks.len();
-                            continue;
-                        }
+                // Async 状态机：suspend 后的 resume 块只应由 Switch case 编译，禁止线性续编。
+                idx = blocks.len();
+                continue;
+            }
 
             match block.terminator() {
                 Terminator::Return { value } => {
@@ -374,34 +374,38 @@ impl Compiler {
                     };
                     if let Some(common_idx) = common_direct_jump
                         && self.loop_continue_depth(common_idx).is_none()
-                            && self.loop_break_depth(common_idx).is_none()
-                            && !block_has_suspend(&blocks[true_idx])
-                            && !block_has_suspend(&blocks[false_idx])
+                        && self.loop_break_depth(common_idx).is_none()
+                        && !block_has_suspend(&blocks[true_idx])
+                        && !block_has_suspend(&blocks[false_idx])
+                    {
+                        self.emit_to_bool_i32(condition.0);
+                        self.if_depth += 1;
+                        self.emit(WasmInstruction::If(BlockType::Empty));
+
+                        self.compiled_blocks.insert(true_idx);
+                        for (instr_idx, instruction) in
+                            blocks[true_idx].instructions().iter().enumerate()
                         {
-                            self.emit_to_bool_i32(condition.0);
-                            self.if_depth += 1;
-                            self.emit(WasmInstruction::If(BlockType::Empty));
-
-                            self.compiled_blocks.insert(true_idx);
-                            for (instr_idx, instruction) in blocks[true_idx].instructions().iter().enumerate() {
-                                self.set_emit_cursor(true_idx, instr_idx);
-                                self.compile_instruction(module, instruction)?;
-                            }
-                            self.emit_phi_moves(blocks, true_idx, common_idx);
-
-                            self.emit(WasmInstruction::Else);
-                            self.compiled_blocks.insert(false_idx);
-                            for (instr_idx, instruction) in blocks[false_idx].instructions().iter().enumerate() {
-                                self.set_emit_cursor(false_idx, instr_idx);
-                                self.compile_instruction(module, instruction)?;
-                            }
-                            self.emit_phi_moves(blocks, false_idx, common_idx);
-
-                            self.emit(WasmInstruction::End);
-                            self.if_depth -= 1;
-                            idx = common_idx;
-                            continue;
+                            self.set_emit_cursor(true_idx, instr_idx);
+                            self.compile_instruction(module, instruction)?;
                         }
+                        self.emit_phi_moves(blocks, true_idx, common_idx);
+
+                        self.emit(WasmInstruction::Else);
+                        self.compiled_blocks.insert(false_idx);
+                        for (instr_idx, instruction) in
+                            blocks[false_idx].instructions().iter().enumerate()
+                        {
+                            self.set_emit_cursor(false_idx, instr_idx);
+                            self.compile_instruction(module, instruction)?;
+                        }
+                        self.emit_phi_moves(blocks, false_idx, common_idx);
+
+                        self.emit(WasmInstruction::End);
+                        self.if_depth -= 1;
+                        idx = common_idx;
+                        continue;
+                    }
 
                     // 普通 if/else
                     self.emit_to_bool_i32(condition.0);
@@ -612,10 +616,11 @@ impl Compiler {
                             // exit在循环内，已完整编译，跳过重新发射
                             // 继续到循环出口或结束
                             if let Some(loop_info) = self.loop_stack.last()
-                                && !self.compiled_blocks.contains(&loop_info.exit_idx) {
-                                    idx = loop_info.exit_idx;
-                                    continue;
-                                }
+                                && !self.compiled_blocks.contains(&loop_info.exit_idx)
+                            {
+                                idx = loop_info.exit_idx;
+                                continue;
+                            }
                             idx = blocks.len();
                         } else {
                             // exit不在循环内，跳过重新发射（exit已在default case完整编译）
@@ -627,12 +632,12 @@ impl Compiler {
                         // 检查是否有循环出口需要续编
                         if let Some(loop_info) = self.loop_stack.last()
                             && loop_info.exit_idx != exit_idx
-                                && !self.compiled_blocks.contains(&loop_info.exit_idx)
-                            {
-                                // 循环出口未编译，续编它
-                                idx = loop_info.exit_idx;
-                                continue;
-                            }
+                            && !self.compiled_blocks.contains(&loop_info.exit_idx)
+                        {
+                            // 循环出口未编译，续编它
+                            idx = loop_info.exit_idx;
+                            continue;
+                        }
                         // exit已编译且无其他出口，结束
                         idx = blocks.len();
                     } else {
@@ -670,10 +675,9 @@ impl Compiler {
 
         Ok(())
     }
-
     /// 编译 switch case body。支持嵌套控制流（if/else、循环、嵌套 switch）。
     /// 从 case_idx 开始，跟随控制流编译所有属于 case body 的 block。
-    
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn compile_switch_case(
         &mut self,
         module: &IrModule,
@@ -1354,39 +1358,43 @@ impl Compiler {
                 };
                 if let Some(common_idx) = common_direct_jump
                     && self.loop_continue_depth(common_idx).is_none()
-                        && self.loop_break_depth(common_idx).is_none()
-                        && !block_has_suspend(&blocks[true_idx])
-                        && !block_has_suspend(&blocks[false_idx])
+                    && self.loop_break_depth(common_idx).is_none()
+                    && !block_has_suspend(&blocks[true_idx])
+                    && !block_has_suspend(&blocks[false_idx])
+                {
+                    self.emit_to_bool_i32(condition.0);
+                    self.if_depth += 1;
+                    self.emit(WasmInstruction::If(BlockType::Empty));
+
+                    self.compiled_blocks.insert(true_idx);
+                    for (instr_idx, instruction) in
+                        blocks[true_idx].instructions().iter().enumerate()
                     {
-                        self.emit_to_bool_i32(condition.0);
-                        self.if_depth += 1;
-                        self.emit(WasmInstruction::If(BlockType::Empty));
-
-                        self.compiled_blocks.insert(true_idx);
-                        for (instr_idx, instruction) in blocks[true_idx].instructions().iter().enumerate() {
-                            self.set_emit_cursor(true_idx, instr_idx);
-                            self.compile_instruction(module, instruction)?;
-                        }
-                        self.emit_phi_moves(blocks, true_idx, common_idx);
-
-                        self.emit(WasmInstruction::Else);
-                        self.compiled_blocks.insert(false_idx);
-                        for (instr_idx, instruction) in blocks[false_idx].instructions().iter().enumerate() {
-                            self.set_emit_cursor(false_idx, instr_idx);
-                            self.compile_instruction(module, instruction)?;
-                        }
-                        self.emit_phi_moves(blocks, false_idx, common_idx);
-
-                        self.emit(WasmInstruction::End);
-                        self.if_depth -= 1;
-                        return self.compile_branch_body_with_context(
-                            module,
-                            blocks,
-                            common_idx,
-                            case_start,
-                            extra_depth,
-                        );
+                        self.set_emit_cursor(true_idx, instr_idx);
+                        self.compile_instruction(module, instruction)?;
                     }
+                    self.emit_phi_moves(blocks, true_idx, common_idx);
+
+                    self.emit(WasmInstruction::Else);
+                    self.compiled_blocks.insert(false_idx);
+                    for (instr_idx, instruction) in
+                        blocks[false_idx].instructions().iter().enumerate()
+                    {
+                        self.set_emit_cursor(false_idx, instr_idx);
+                        self.compile_instruction(module, instruction)?;
+                    }
+                    self.emit_phi_moves(blocks, false_idx, common_idx);
+
+                    self.emit(WasmInstruction::End);
+                    self.if_depth -= 1;
+                    return self.compile_branch_body_with_context(
+                        module,
+                        blocks,
+                        common_idx,
+                        case_start,
+                        extra_depth,
+                    );
+                }
 
                 self.emit_to_bool_i32(condition.0);
                 self.if_depth += 1;

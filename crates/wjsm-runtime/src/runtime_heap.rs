@@ -328,7 +328,6 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
     obj
 }
 
-
 fn mark_promise_handle(
     caller: &mut Caller<'_, RuntimeState>,
     promise: i64,
@@ -375,7 +374,10 @@ pub(crate) fn trace_native_callable_record(
         NativeCallable::PromiseCombinatorReaction { context, .. } => {
             let (rp, ra) = {
                 let state = caller.data();
-                let contexts = state.combinator_contexts.lock().expect("combinator context mutex");
+                let contexts = state
+                    .combinator_contexts
+                    .lock()
+                    .expect("combinator context mutex");
                 contexts
                     .get(*context)
                     .map(|e| (e.result_promise, e.result_array))
@@ -616,7 +618,14 @@ pub(crate) fn mark_object_recursive(
     obj_table_ptr: usize,
     obj_table_count: usize,
 ) {
-    mark_object_recursive_with_funcs(caller, handle_idx, obj_ptr, obj_table_ptr, obj_table_count, usize::MAX);
+    mark_object_recursive_with_funcs(
+        caller,
+        handle_idx,
+        obj_ptr,
+        obj_table_ptr,
+        obj_table_count,
+        usize::MAX,
+    );
 }
 
 fn mark_object_recursive_with_funcs(

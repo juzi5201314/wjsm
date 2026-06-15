@@ -1,3 +1,4 @@
+use crate::compiler_gc_analysis::GcAnalysis;
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use wasm_encoder::{
@@ -167,14 +168,18 @@ struct Compiler {
     // ── GC safepoint spill（P2）──
     /// 当前函数的 per-instruction liveness（P1 已实现，wjsm_ir::liveness::compute_liveness）。
     /// compile_function 入口计算一次。`None` 表示当前函数无 liveness 数据（例如未调用 compile_function）。
-    current_fn_liveness:
-        Option<HashMap<wjsm_ir::BasicBlockId, HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>>>,
+    current_fn_liveness: Option<
+        HashMap<wjsm_ir::BasicBlockId, HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>>,
+    >,
     /// 当前函数的 ValueTy（P1 已实现，wjsm_ir::value_ty::infer_value_ty）。
     current_fn_value_ty: Option<HashMap<wjsm_ir::ValueId, wjsm_ir::value_ty::ValueTy>>,
     /// 当前 emit 位置的 IR block 索引（= block id，见 wjsm-ir block_by_id O(1) by index 约定）。
     current_emit_block_idx: usize,
     /// 当前 emit 位置在当前 block 内的指令下标。
     current_emit_instr_idx: usize,
+    // ── Layer 3: callee no-GC 分析 ──
+    /// 模块级 GC 分析结果。compile_module 入口计算一次，用于 Call safepoint 省略判断。
+    gc_analysis: Option<GcAnalysis>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -250,14 +255,6 @@ impl Cfg {
 enum Region {
     Linear { start_idx: usize },
 }
-
-#[derive(Debug, Clone)]
-
-struct SwitchCaseRegion {
-    _case_idx: usize,
-    _target_idx: usize,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompileMode {
     Normal,
@@ -309,6 +306,7 @@ mod compiler_builtins;
 mod compiler_control;
 mod compiler_core;
 mod compiler_data;
+mod compiler_gc_analysis;
 mod compiler_helpers;
 mod compiler_instructions;
 mod compiler_module;
