@@ -68,27 +68,33 @@ impl Compiler {
     ///
     /// 注：不能用 `shadow_sp -= n*8` 复位——SuperCall forward_args 分支会把 shadow_sp
     /// 重置为 caller args_base（非 spill 前值），subtract 会得到错误结果。save/restore 稳健。
+    ///
+    /// **Layer 2 batch 优化（7→3 条/值）**：原方案逐值推进 shadow_sp（每值 7 条指令）。
+    /// 改用 immediate offset：先把 shadow_sp 存为 spill_base，N 个值全部写到
+    /// `base + i*8`（每值 3 条），最后一次性把 shadow_sp 推进 N*8 让 GC 扫到 spilled 值。
+    /// 总指令：2（存 base）+ 3N（写 N 值）+ 3（推进 sp）= 3N+5（vs 原 7N+2），N=35 时 110 vs 247。
     fn emit_safepoint_spill_prologue(&mut self, spill: &[u32]) {
         if spill.is_empty() {
             return;
         }
-        // 保存 spill 前 shadow_sp 到 safepoint_sp_saved
+        // 保存 spill 前 shadow_sp 到 safepoint_sp_saved（= spill_base）
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
         self.emit(WasmInstruction::LocalSet(self.safepoint_sp_saved_idx));
-        // spill each live handle local
-        for &local in spill {
-            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        // spill each live handle local 到 base + i*8（immediate offset，无需逐值推进 sp）
+        for (i, &local) in spill.iter().enumerate() {
+            self.emit(WasmInstruction::LocalGet(self.safepoint_sp_saved_idx));
             self.emit(WasmInstruction::LocalGet(local));
             self.emit(WasmInstruction::I64Store(MemArg {
-                offset: 0,
+                offset: (i as u64) * 8,
                 align: 3,
                 memory_index: 0,
             }));
-            self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
-            self.emit(WasmInstruction::I32Const(8));
-            self.emit(WasmInstruction::I32Add);
-            self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
         }
+        // 一次性推进 shadow_sp = base + N*8，让 GC 扫到 spilled 值
+        self.emit(WasmInstruction::LocalGet(self.safepoint_sp_saved_idx));
+        self.emit(WasmInstruction::I32Const((spill.len() * 8) as i32));
+        self.emit(WasmInstruction::I32Add);
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
     }
 
     /// Safepoint spill epilogue：恢复 shadow_sp 到 prologue 保存的值（non-moving 无需 reload local）。
