@@ -629,3 +629,84 @@ fn eval_predeclare_function_name() {
         result.err()
     );
 }
+
+// ── arguments-object lazy elision ────────────────────────────────────────
+//
+// A function whose body never references `arguments` must NOT materialise the
+// implicit mapped arguments object (`collect_rest_args` + `create_mapped_arguments_object`,
+// both may-GC). Eliding it restores ordinary functions to no-GC and unlocks the
+// Layer 3 backend call-spill omission. The marker we assert on is the
+// `create_mapped_arguments_object` builtin call in the IR dump.
+
+const ARGS_OBJ_MARKER: &str = "create_mapped_arguments_object";
+
+fn dump(source: &str) -> String {
+    let module = wjsm_parser::parse_module(source).expect("source should parse");
+    lower_module(module, false)
+        .expect("lowering should succeed")
+        .dump_text()
+}
+
+#[test]
+fn fn_without_arguments_ref_elides_arguments_object() {
+    // The whole point of the optimization: a plain `function inc(x){return x+1;}`
+    // builds no arguments object and is therefore no-GC.
+    let text = dump("function inc(x) { return x + 1; }\ninc(1);\n");
+    assert!(
+        !text.contains(ARGS_OBJ_MARKER),
+        "function not referencing `arguments` must not materialise the arguments object:\n{text}"
+    );
+}
+
+#[test]
+fn fn_with_arguments_ref_keeps_arguments_object() {
+    // When the body reads `arguments`, the object must still be built.
+    let text = dump("function f() { return arguments.length; }\nf(1, 2);\n");
+    assert!(
+        text.contains(ARGS_OBJ_MARKER),
+        "function referencing `arguments` must still materialise the arguments object:\n{text}"
+    );
+}
+
+#[test]
+fn arrow_referencing_arguments_keeps_enclosing_object() {
+    // A nested arrow inherits the enclosing non-arrow function's `arguments`, so the
+    // enclosing function must build it even though the reference is lexically inside
+    // the arrow.
+    let text = dump("function f() { return (() => arguments[0])(); }\nf(42);\n");
+    assert!(
+        text.contains(ARGS_OBJ_MARKER),
+        "arrow referencing `arguments` must force the enclosing function to build it:\n{text}"
+    );
+}
+
+#[test]
+fn nested_fn_arguments_does_not_force_outer() {
+    // `g` references its OWN `arguments`; `f` does not reference any. Only `g` should
+    // build an arguments object — exactly one marker in the whole module.
+    let text = dump(
+        r#"
+function f() {
+  function g() { return arguments.length; }
+  return g;
+}
+f();
+"#,
+    );
+    let count = text.matches(ARGS_OBJ_MARKER).count();
+    assert_eq!(
+        count, 1,
+        "only the inner `g` (which references `arguments`) should build the object, \
+         got {count} occurrences:\n{text}"
+    );
+}
+
+#[test]
+fn eval_in_body_keeps_arguments_object() {
+    // Direct `eval` could read `arguments` dynamically, so we conservatively keep it.
+    let text = dump("function f() { eval(\"0\"); }\nf();\n");
+    assert!(
+        text.contains(ARGS_OBJ_MARKER),
+        "direct eval in body must conservatively keep the arguments object:\n{text}"
+    );
+}

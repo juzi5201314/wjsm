@@ -1,4 +1,47 @@
 use super::*;
+use swc_core::ecma::visit::{Visit, VisitWith};
+
+/// 扫描某函数体/形参是否引用了隐式 `arguments` 绑定。
+///
+/// 用于"`arguments` 对象惰性消除"优化：函数体未引用 `arguments` 时跳过
+/// `emit_arguments_init`，使普通函数声明恢复为 no-GC（解锁 backend Layer 3 call-spill 省略）。
+///
+/// **边界语义（正确性红线）**：
+/// - 嵌套**箭头函数**继承外层非箭头函数的 `arguments` → 必须下降（默认 `visit_*` 即下降）。
+/// - 嵌套**普通函数 / 方法**有各自的 `arguments` → 在 `visit_function` 处截断（no-op）。
+/// - 类的计算属性键 / `extends` / 字段初始化器在外层作用域求值 → 不覆写 `visit_class`，
+///   保持默认下降（保守正确）；其内部方法体仍被 `visit_function` no-op 截断。
+/// - 直接 `eval(...)` 可能动态读取 `arguments` → 保守视为引用。
+///
+/// **保守原则**：任何不确定都判定为"引用"（宁可多建 arguments 对象，不可漏建——
+/// 漏建会在后续 body 降级时 `lookup("arguments")` 失败而编译报错，但本扫描的职责是避免误删）。
+#[derive(Default)]
+struct ArgumentsRefScan {
+    found: bool,
+}
+
+impl Visit for ArgumentsRefScan {
+    fn visit_ident(&mut self, ident: &swc_ast::Ident) {
+        if ident.sym.as_ref() == "arguments" {
+            self.found = true;
+        }
+    }
+
+    fn visit_call_expr(&mut self, call: &swc_ast::CallExpr) {
+        // 直接 eval 可能动态引用 arguments，保守保留。
+        if let swc_ast::Callee::Expr(callee) = &call.callee
+            && let swc_ast::Expr::Ident(ident) = callee.as_ref()
+            && ident.sym.as_ref() == "eval"
+        {
+            self.found = true;
+        }
+        call.visit_children_with(self);
+    }
+
+    // 嵌套普通函数 / 方法拥有各自的 arguments，不下降。
+    // （箭头函数走默认下降路径，因其继承外层 arguments。）
+    fn visit_function(&mut self, _: &swc_ast::Function) {}
+}
 
 impl Lowerer {
     pub(crate) fn new() -> Self {
@@ -456,6 +499,62 @@ impl Lowerer {
             Self::extract_pat_bindings(std::slice::from_ref(&p.pat), &mut names);
             names.iter().any(|n| n == "arguments")
         })
+    }
+
+    /// 函数体（`BlockStmt`）是否引用了隐式 `arguments`。见 [`ArgumentsRefScan`]。
+    pub(crate) fn body_references_arguments(body: &swc_ast::BlockStmt) -> bool {
+        let mut scan = ArgumentsRefScan::default();
+        body.visit_with(&mut scan);
+        scan.found
+    }
+
+    /// 形参表（默认值 / 解构 / 计算属性等表达式）是否引用了隐式 `arguments`。
+    /// 注意：形参**绑定名**本身若叫 `arguments` 也会被 `visit_ident` 命中——这无害，
+    /// 因为那种情况已被 `current_function_has_param_arguments()` 守卫先行短路。
+    pub(crate) fn params_reference_arguments(params: &[swc_ast::Param]) -> bool {
+        let mut scan = ArgumentsRefScan::default();
+        for p in params {
+            p.visit_with(&mut scan);
+        }
+        scan.found
+    }
+
+    /// 综合判定：`swc_ast::Function` 形状的函数（形参 + 可选体）是否引用 `arguments`。
+    /// 供 `emit_arguments_init` 的 `references_arguments` 实参使用。
+    pub(crate) fn function_references_arguments(
+        params: &[swc_ast::Param],
+        body: Option<&swc_ast::BlockStmt>,
+    ) -> bool {
+        Self::params_reference_arguments(params)
+            || body.is_some_and(Self::body_references_arguments)
+    }
+
+    /// 该 `swc_ast::Function` 是否需要物化 `arguments` 对象。
+    ///
+    /// = `is_async || is_generator || function_references_arguments(...)`。
+    ///
+    /// **为何对 async / generator 一律保留**：async 函数体编译为单个 `main$async` wasm 函数 +
+    /// resume 状态机，其跨 `suspend` 的 save/restore 由后向 liveness + relooper 生成，对 IR 的
+    /// 块/值布局极其敏感（见 wjsm async 异常通道笔记）。消除 arguments 物化会改变布局并使状态机
+    /// 误编译。而 async / generator 必然 emit `new_promise` / `continuation.create`（直接 may-GC），
+    /// 永远不可能是 no-GC——对它们消除 arguments 对 Layer 3 call-spill 省略**零收益**。故安全且无损地
+    /// 将本优化限定在普通（非 async / 非 generator）函数。
+    pub(crate) fn function_needs_arguments_object(func: &swc_ast::Function) -> bool {
+        func.is_async
+            || func.is_generator
+            || Self::function_references_arguments(&func.params, func.body.as_ref())
+    }
+
+    /// 构造函数（`ParamOrTsParamProp` 形参 + 可选体）是否引用 `arguments`。
+    pub(crate) fn ctor_references_arguments(ctor: &swc_ast::Constructor) -> bool {
+        let mut scan = ArgumentsRefScan::default();
+        for p in &ctor.params {
+            p.visit_with(&mut scan);
+        }
+        if let Some(body) = &ctor.body {
+            body.visit_with(&mut scan);
+        }
+        scan.found
     }
 
     pub(crate) fn count_regular_params(params: &[swc_ast::Param]) -> u32 {

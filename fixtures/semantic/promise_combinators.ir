@@ -27,129 +27,101 @@ module {
     c24 = number(2)
     c25 = undefined
     c26 = number(3)
-    c27 = number(1)
-    c28 = functionref(@0)
-    c29 = functionref(@0)
+    c27 = functionref(@0)
+    c28 = undefined
+    c29 = undefined
     c30 = undefined
     c31 = undefined
-    c32 = undefined
+    c32 = string("first")
     c33 = undefined
-    c34 = string("first")
-    c35 = undefined
-    c36 = string("second")
-    c37 = number(1)
-    c38 = functionref(@1)
-    c39 = functionref(@1)
-    c40 = undefined
+    c34 = string("second")
+    c35 = functionref(@1)
+    c36 = undefined
+    c37 = undefined
+    c38 = undefined
+    c39 = undefined
+    c40 = string("ok")
     c41 = undefined
-    c42 = undefined
-    c43 = undefined
-    c44 = string("ok")
-    c45 = undefined
-    c46 = string("fail")
-    c47 = number(1)
-    c48 = functionref(@2)
-    c49 = number(0)
-    c50 = string("status")
-    c51 = number(1)
-    c52 = string("status")
-    c53 = functionref(@2)
-    c54 = undefined
-    c55 = undefined
+    c42 = string("fail")
+    c43 = number(0)
+    c44 = string("status")
+    c45 = number(1)
+    c46 = string("status")
+    c47 = functionref(@2)
+    c48 = undefined
+    c49 = undefined
+    c50 = undefined
+    c51 = undefined
+    c52 = string("err")
+    c53 = undefined
+    c54 = string("win")
+    c55 = functionref(@3)
     c56 = undefined
     c57 = undefined
-    c58 = string("err")
-    c59 = undefined
-    c60 = string("win")
-    c61 = number(1)
-    c62 = functionref(@3)
-    c63 = functionref(@3)
-    c64 = undefined
-    c65 = undefined
 
   fn @anon_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
     bb0:
-      %0 = collect_rest_args skip=0
-      %1 = const c27
-      %3 = const c28
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
-      store var $1.arguments, %2
-      %4 = load var $1.v
-      %5 = call builtin.console.log(%4)
-      %6 = is_exception %5
-      branch %6, bb2, bb1
+      %0 = load var $1.v
+      %1 = call builtin.console.log(%0)
+      %2 = is_exception %1
+      branch %2, bb2, bb1
     bb1:
       return
     bb2:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      %3 = call builtin.exception_value(%1)
+      throw %3
 
   fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
-      %0 = collect_rest_args skip=0
-      %1 = const c37
-      %3 = const c38
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
-      store var $2.arguments, %2
-      %4 = load var $2.v
-      %5 = call builtin.console.log(%4)
-      %6 = is_exception %5
-      branch %6, bb2, bb1
+      %0 = load var $2.v
+      %1 = call builtin.console.log(%0)
+      %2 = is_exception %1
+      branch %2, bb2, bb1
     bb1:
       return
     bb2:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      %3 = call builtin.exception_value(%1)
+      throw %3
 
   fn @anon_2 [params: $3.$env, $3.$this, $3.v] [entry=bb0]:
     bb0:
-      %0 = collect_rest_args skip=0
-      %1 = const c47
-      %3 = const c48
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
-      store var $3.arguments, %2
-      %4 = load var $3.v
-      %5 = const c49
-      %6 = get_elem %4, %5
-      %7 = const c50
-      %8 = get_prop %6, %7
-      %9 = call builtin.console.log(%8)
-      %10 = is_exception %9
-      branch %10, bb2, bb1
-    bb1:
-      %12 = load var $3.v
-      %13 = const c51
-      %14 = get_elem %12, %13
-      %15 = const c52
-      %16 = get_prop %14, %15
-      %17 = call builtin.console.log(%16)
-      %18 = is_exception %17
-      branch %18, bb4, bb3
-    bb2:
-      %11 = call builtin.exception_value(%9)
-      throw %11
-    bb3:
-      return
-    bb4:
-      %19 = call builtin.exception_value(%17)
-      throw %19
-
-  fn @anon_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
-    bb0:
-      %0 = collect_rest_args skip=0
-      %1 = const c61
-      %3 = const c62
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
-      store var $4.arguments, %2
-      %4 = load var $4.v
+      %0 = load var $3.v
+      %1 = const c43
+      %2 = get_elem %0, %1
+      %3 = const c44
+      %4 = get_prop %2, %3
       %5 = call builtin.console.log(%4)
       %6 = is_exception %5
       branch %6, bb2, bb1
     bb1:
-      return
+      %8 = load var $3.v
+      %9 = const c45
+      %10 = get_elem %8, %9
+      %11 = const c46
+      %12 = get_prop %10, %11
+      %13 = call builtin.console.log(%12)
+      %14 = is_exception %13
+      branch %14, bb4, bb3
     bb2:
       %7 = call builtin.exception_value(%5)
       throw %7
+    bb3:
+      return
+    bb4:
+      %15 = call builtin.exception_value(%13)
+      throw %15
+
+  fn @anon_3 [params: $4.$env, $4.$this, $4.v] [entry=bb0]:
+    bb0:
+      %0 = load var $4.v
+      %1 = call builtin.console.log(%0)
+      %2 = is_exception %1
+      branch %2, bb2, bb1
+    bb1:
+      return
+    bb2:
+      %3 = call builtin.exception_value(%1)
+      throw %3
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -210,29 +182,29 @@ module {
       %31 = call builtin.promise.resolve_static(%29, %30)
       call builtin.array.push(%22, %31)
       %32 = call builtin.promise.all(%21, %22)
-      %33 = const c29
-      %34 = const c30
+      %33 = const c27
+      %34 = const c28
       %35 = call builtin.create_closure(%33, %34)
-      %36 = const c31
+      %36 = const c29
       %37 = call builtin.promise.then(%32, %35, %36)
       %38 = is_exception %37
       branch %38, bb2, bb1
     bb1:
-      %40 = const c32
+      %40 = const c30
       %41 = new_array(capacity=4)
-      %42 = const c33
-      %43 = const c34
+      %42 = const c31
+      %43 = const c32
       %44 = call builtin.promise.resolve_static(%42, %43)
       call builtin.array.push(%41, %44)
-      %45 = const c35
-      %46 = const c36
+      %45 = const c33
+      %46 = const c34
       %47 = call builtin.promise.resolve_static(%45, %46)
       call builtin.array.push(%41, %47)
       %48 = call builtin.promise.race(%40, %41)
-      %49 = const c39
-      %50 = const c40
+      %49 = const c35
+      %50 = const c36
       %51 = call builtin.create_closure(%49, %50)
-      %52 = const c41
+      %52 = const c37
       %53 = call builtin.promise.then(%48, %51, %52)
       %54 = is_exception %53
       branch %54, bb4, bb3
@@ -240,21 +212,21 @@ module {
       %39 = call builtin.exception_value(%37)
       throw %39
     bb3:
-      %56 = const c42
+      %56 = const c38
       %57 = new_array(capacity=4)
-      %58 = const c43
-      %59 = const c44
+      %58 = const c39
+      %59 = const c40
       %60 = call builtin.promise.resolve_static(%58, %59)
       call builtin.array.push(%57, %60)
-      %61 = const c45
-      %62 = const c46
+      %61 = const c41
+      %62 = const c42
       %63 = call builtin.promise.reject_static(%61, %62)
       call builtin.array.push(%57, %63)
       %64 = call builtin.promise.all_settled(%56, %57)
-      %65 = const c53
-      %66 = const c54
+      %65 = const c47
+      %66 = const c48
       %67 = call builtin.create_closure(%65, %66)
-      %68 = const c55
+      %68 = const c49
       %69 = call builtin.promise.then(%64, %67, %68)
       %70 = is_exception %69
       branch %70, bb6, bb5
@@ -262,21 +234,21 @@ module {
       %55 = call builtin.exception_value(%53)
       throw %55
     bb5:
-      %72 = const c56
+      %72 = const c50
       %73 = new_array(capacity=4)
-      %74 = const c57
-      %75 = const c58
+      %74 = const c51
+      %75 = const c52
       %76 = call builtin.promise.reject_static(%74, %75)
       call builtin.array.push(%73, %76)
-      %77 = const c59
-      %78 = const c60
+      %77 = const c53
+      %78 = const c54
       %79 = call builtin.promise.resolve_static(%77, %78)
       call builtin.array.push(%73, %79)
       %80 = call builtin.promise.any(%72, %73)
-      %81 = const c63
-      %82 = const c64
+      %81 = const c55
+      %82 = const c56
       %83 = call builtin.create_closure(%81, %82)
-      %84 = const c65
+      %84 = const c57
       %85 = call builtin.promise.then(%80, %83, %84)
       %86 = is_exception %85
       branch %86, bb8, bb7
