@@ -1,4 +1,7 @@
-use crate::compiler_gc_analysis::GcAnalysis;
+// Re-exported (not just `use`d) so integration tests can assert the Layer 3 GC
+// decision directly via `GcAnalysis::call_may_trigger_gc` — see
+// tests/compiler_gc_analysis_spill.rs for why the WAT-level signal is ambiguous.
+pub use crate::compiler_gc_analysis::GcAnalysis;
 use anyhow::{Context, Result, bail};
 use std::collections::HashMap;
 use wasm_encoder::{
