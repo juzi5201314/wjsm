@@ -243,7 +243,6 @@ enum Commands {
 // ============================================================================
 
 struct PipelineResult {
-    source: Option<String>,
     ast: Option<swc_core::ecma::ast::Module>,
     program: Option<Program>,
     wasm: Option<Vec<u8>>,
@@ -788,7 +787,6 @@ fn run_pipeline(
     script: bool,
 ) -> Result<PipelineResult> {
     let mut result = PipelineResult {
-        source: Some(source.to_string()),
         ast: None,
         program: None,
         wasm: None,

@@ -1,4 +1,4 @@
-//! 可插拔 GC 框架（spec §2）。单一 canonical owner: 本模块组。
+//! 可插拔 GC 框架（spec §6）。单一 canonical owner: 本模块组。
 //!
 //! 算法以 trait 抽象（`GcAlgorithm: Allocator + Marker + Sweeper`），
 //! 默认实现 `MarkSweepCollector`（non-moving + segregated free list）。
