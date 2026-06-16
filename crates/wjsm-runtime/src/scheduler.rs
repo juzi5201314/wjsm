@@ -154,6 +154,15 @@ pub(crate) async fn run_post_main_scheduler_async(
                 // 那次 drain 里又入队了新的 microtasks。此处确保全部跑完后再退出，
                 // 否则后续 continuation 永远不会执行，console.log 等副作用丢失。
                 loop {
+                    // 先 drain 所有已到达的 completion（包括 drain 期间新到的）
+                    while let Ok(completion) = completion_rx.try_recv() {
+                        process_one_completion(store, env, completion);
+                    }
+                    drain_microtasks_async(store, env).await;
+                    // 新的 completion 可能在 drain 期间到达
+                    while let Ok(completion) = completion_rx.try_recv() {
+                        process_one_completion(store, env, completion);
+                    }
                     let has_pending = {
                         let q = store
                             .data()
@@ -162,13 +171,24 @@ pub(crate) async fn run_post_main_scheduler_async(
                             .expect("microtask queue mutex");
                         !q.is_empty()
                     };
-                    if !has_pending {
+                    let count = store
+                        .data()
+                        .async_op_counter
+                        .as_ref()
+                        .map_or(0, |c| c.count());
+                    if !has_pending && count == 0 {
                         break;
                     }
-                    drain_microtasks_async(store, env).await;
-                    // 新的 completion 可能在 drain 期间到达
-                    while let Ok(completion) = completion_rx.try_recv() {
-                        process_one_completion(store, env, completion);
+                    // 还有 microtask 或 in-flight async op：继续 drain；
+                    // 若没有 microtask 但 counter > 0，说明有在途 host async op，
+                    // 等待下一个 completion 唤醒。
+                    if !has_pending && count > 0 {
+                        if let Some(completion) = completion_rx.recv().await {
+                            process_one_completion(store, env, completion);
+                            continue;
+                        } else {
+                            break;
+                        }
                     }
                 }
                 break;
