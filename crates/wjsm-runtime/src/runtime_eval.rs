@@ -288,7 +288,7 @@ pub(crate) fn compiled_eval_import(
             return Func::wrap(
                 &mut *caller,
                 |_: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
-                    value::encode_f64(f64::from_bits(a as u64) % f64::from_bits(b as u64))
+                    value::encode_f64(value::decode_f64(a) % value::decode_f64(b))
                 },
             );
         }
@@ -296,7 +296,7 @@ pub(crate) fn compiled_eval_import(
             return Func::wrap(
                 &mut *caller,
                 |_: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
-                    value::encode_f64(f64::from_bits(a as u64).powf(f64::from_bits(b as u64)))
+                    value::encode_f64(value::decode_f64(a).powf(value::decode_f64(b)))
                 },
             );
         }
@@ -1938,7 +1938,7 @@ pub(crate) fn set_host_data_property_from_caller(
 
 pub(crate) fn eval_to_number(val: i64) -> f64 {
     if value::is_f64(val) {
-        f64::from_bits(val as u64)
+        value::decode_f64(val)
     } else if value::is_bool(val) {
         if value::decode_bool(val) { 1.0 } else { 0.0 }
     } else if value::is_null(val) {
@@ -1954,7 +1954,7 @@ pub(crate) fn eval_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) ->
             .and_then(|bytes| String::from_utf8(bytes).ok())
             .unwrap_or_default()
     } else if value::is_f64(val) {
-        let number = f64::from_bits(val as u64);
+        let number = value::decode_f64(val);
         if number.fract() == 0.0 {
             format!("{}", number as i64)
         } else {
@@ -1991,7 +1991,7 @@ pub(crate) fn scope_record_create(mut caller: Caller<'_, RuntimeState>, capacity
     let data = caller.data_mut();
     let handle = data.scope_record_next_handle;
     data.scope_record_next_handle += 1;
-    let cap = f64::from_bits(capacity as u64);
+    let cap = value::decode_f64(capacity);
     let cap = if cap.is_finite() && cap >= 0.0 {
         cap as usize
     } else {

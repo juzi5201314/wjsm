@@ -946,7 +946,7 @@ pub(crate) fn define_primitive_core(
             let limit_val = if value::is_undefined(limit) {
                 usize::MAX // undefined 表示无限制
             } else if value::is_f64(limit) {
-                let n = f64::from_bits(limit as u64);
+                let n = value::decode_f64(limit);
                 // ToUint32: NaN, Infinity → 0; 其他值应用模 2^32
                 if n.is_nan() || n.is_infinite() {
                     0

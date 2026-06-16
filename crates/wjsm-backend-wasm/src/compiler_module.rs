@@ -59,7 +59,7 @@ impl Compiler {
                     .filter(|v| {
                         value_ty
                             .and_then(|m| m.get(v))
-                            .is_none_or(|t| *t == wjsm_ir::value_ty::ValueTy::Handle)
+                            .is_none_or(|t| *t == ValueTy::Handle)
                     })
                     .count();
                 max = max.max(cnt);
@@ -613,7 +613,7 @@ impl Compiler {
         // ── GC safepoint（P2）：计算 liveness + ValueTy ──
         // 供 NewObject/NewArray/Call/CallBuiltin/SuperCall/ConstructCall 的 safepoint spill。
         // compute_liveness 返回扁平 (block_id, instr_idx) -> Set；重整为嵌套 map 便于查询。
-        let flat = wjsm_ir::liveness::compute_liveness(function);
+        let flat = crate::analysis_liveness::compute_liveness(function);
         let mut nested: HashMap<
             wjsm_ir::BasicBlockId,
             HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>,
@@ -622,7 +622,7 @@ impl Compiler {
             nested.entry(bid).or_default().insert(i, set);
         }
         self.current_fn_liveness = Some(nested);
-        self.current_fn_value_ty = Some(wjsm_ir::value_ty::infer_value_ty(module, function));
+        self.current_fn_value_ty = Some(crate::analysis_value_ty::infer_value_ty(module, function));
         self.current_emit_block_idx = 0;
         self.current_emit_instr_idx = 0;
 
@@ -876,7 +876,7 @@ impl Compiler {
         self.lower_phi_to_locals(function);
 
         // ── GC safepoint（P2）：计算 liveness + ValueTy ──
-        let flat = wjsm_ir::liveness::compute_liveness(function);
+        let flat = crate::analysis_liveness::compute_liveness(function);
         let mut nested: HashMap<
             wjsm_ir::BasicBlockId,
             HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>,
@@ -885,7 +885,7 @@ impl Compiler {
             nested.entry(bid).or_default().insert(i, set);
         }
         self.current_fn_liveness = Some(nested);
-        self.current_fn_value_ty = Some(wjsm_ir::value_ty::infer_value_ty(module, function));
+        self.current_fn_value_ty = Some(crate::analysis_value_ty::infer_value_ty(module, function));
         self.current_emit_block_idx = 0;
         self.current_emit_instr_idx = 0;
 

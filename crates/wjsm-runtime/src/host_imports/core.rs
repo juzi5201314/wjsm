@@ -62,7 +62,7 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
             read_string(caller, ptr).unwrap_or_default()
         }
     } else if value::is_f64(prop) {
-        let f = f64::from_bits(prop as u64);
+        let f = value::decode_f64(prop);
         if f.is_nan() {
             String::from("NaN")
         } else if f == 0.0 {
@@ -221,8 +221,8 @@ pub(crate) fn define_core(
     let f = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
-            let af = f64::from_bits(a as u64);
-            let bf = f64::from_bits(b as u64);
+            let af = value::decode_f64(a);
+            let bf = value::decode_f64(b);
             let result = af - bf * (af / bf).trunc();
             result.to_bits() as i64
         },
@@ -233,8 +233,8 @@ pub(crate) fn define_core(
     let f = Func::wrap(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
-            let af = f64::from_bits(a as u64);
-            let bf = f64::from_bits(b as u64);
+            let af = value::decode_f64(a);
+            let bf = value::decode_f64(b);
             let result = af.powf(bf);
             result.to_bits() as i64
         },
@@ -1084,7 +1084,7 @@ pub(crate) fn define_core(
                 // 10. BigInt == Number: 数学值比较 (ES §7.2.15)
                 if value::is_bigint(x) && value::is_f64(y) {
                     let a_handle = value::decode_bigint_handle(x) as usize;
-                    let b_f64 = f64::from_bits(y as u64);
+                    let b_f64 = value::decode_f64(y);
                     // NaN 或 ±∞ → false
                     if !b_f64.is_finite() {
                         return value::encode_bool(false);
@@ -1108,7 +1108,7 @@ pub(crate) fn define_core(
                 }
                 // 11. Number == BigInt
                 if value::is_f64(x) && value::is_bigint(y) {
-                    let a_f64 = f64::from_bits(x as u64);
+                    let a_f64 = value::decode_f64(x);
                     let b_handle = value::decode_bigint_handle(y) as usize;
                     if !a_f64.is_finite() {
                         return value::encode_bool(false);
@@ -1203,8 +1203,8 @@ pub(crate) fn define_core(
             let nb = to_number(&mut caller, pb);
 
             // 4. 若任一为 NaN → 返回 false
-            let af = f64::from_bits(na as u64);
-            let bf = f64::from_bits(nb as u64);
+            let af = value::decode_f64(na);
+            let bf = value::decode_f64(nb);
             if af.is_nan() || bf.is_nan() {
                 return value::encode_bool(false);
             }

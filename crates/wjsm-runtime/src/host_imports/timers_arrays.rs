@@ -120,7 +120,7 @@ pub(crate) fn define_timers_arrays(
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             let from_idx = if value::is_f64(from_val) {
-                f64::from_bits(from_val as u64) as i32
+                value::decode_f64(from_val) as i32
             } else {
                 0
             };
@@ -220,7 +220,7 @@ pub(crate) fn define_timers_arrays(
                 return arr;
             };
             let len = if value::is_f64(len_val) {
-                f64::from_bits(len_val as u64) as u32
+                value::decode_f64(len_val) as u32
             } else {
                 return arr;
             };

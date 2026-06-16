@@ -429,7 +429,7 @@ pub(crate) async fn drain_microtasks_async<
         let msg = if value::is_string(reason) {
             String::from("<string>")
         } else if value::is_f64(reason) {
-            format!("{}", f64::from_bits(reason as u64))
+            format!("{}", value::decode_f64(reason))
         } else if value::is_object(reason) {
             String::from("Object")
         } else {

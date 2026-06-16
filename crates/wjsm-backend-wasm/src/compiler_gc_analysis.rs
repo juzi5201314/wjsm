@@ -17,7 +17,7 @@ use wjsm_ir::{Builtin, FunctionId, Instruction, Module, ValueId};
 /// 该 builtin 是否**可能**触发 GC（分配堆对象或 reentrant 回用户 JS）。
 ///
 /// 这是 `builtin_returns_scalar` 的逻辑补集：`may_trigger_gc = !returns_scalar`。
-/// 统一由 `wjsm_ir::value_ty::builtin_returns_scalar` 维护单一白名单，
+/// 统一由 `crate::analysis_value_ty::builtin_returns_scalar` 维护单一白名单，
 /// 新增 Builtin variant 时只需更新一处，编译器自动保证两层一致性。
 ///
 /// 返回 `true` 表示该 builtin **可能**触发 GC，需要 safepoint spill；
@@ -25,7 +25,7 @@ use wjsm_ir::{Builtin, FunctionId, Instruction, Module, ValueId};
 ///
 /// **保守原则**：任何不确定的 builtin 一律返回 true（宁滥勿缺）。
 fn builtin_may_trigger_gc(b: &Builtin) -> bool {
-    !wjsm_ir::value_ty::builtin_returns_scalar(b)
+    !crate::analysis_value_ty::builtin_returns_scalar(b)
 }
 
 /// GC 分析结果。

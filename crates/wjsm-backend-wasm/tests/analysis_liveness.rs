@@ -1,4 +1,5 @@
-use wjsm_ir::liveness::compute_liveness;
+use wjsm_backend_wasm::analysis_liveness::compute_liveness;
+use wjsm_backend_wasm::analysis_value_ty::{ValueTy, infer_value_ty};
 use wjsm_ir::value::{
     TAG_ARRAY, TAG_ENUMERATOR, TAG_ITERATOR, encode_bigint_handle, encode_bool, encode_bound_idx,
     encode_closure_idx, encode_exception, encode_f64, encode_function_idx, encode_handle,
@@ -6,7 +7,6 @@ use wjsm_ir::value::{
     encode_regexp_handle, encode_runtime_string_handle, encode_scope_record_handle,
     encode_string_ptr, encode_symbol_handle, encode_undefined, tag_needs_root,
 };
-use wjsm_ir::value_ty::{ValueTy, infer_value_ty};
 use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, CompareOp, Constant, Function, Instruction, Module,
     Terminator, ValueId,

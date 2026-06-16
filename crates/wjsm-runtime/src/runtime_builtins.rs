@@ -1393,11 +1393,11 @@ fn invoke_number_primitive_method(
     match method {
         0 => {
             // toString — 复用与 number_proto_to_string 相同逻辑（radix 默认 10）
-            let x = f64::from_bits(this_val as u64);
+            let x = value::decode_f64(this_val);
             let radix = if value::is_undefined(radix_or_digits) || value::is_null(radix_or_digits) {
                 10
             } else if value::is_f64(radix_or_digits) {
-                let r = f64::from_bits(radix_or_digits as u64) as i32;
+                let r = value::decode_f64(radix_or_digits) as i32;
                 if !(2..=36).contains(&r) {
                     return store_runtime_string(caller, "NaN".to_string());
                 }
@@ -1422,12 +1422,12 @@ fn invoke_number_primitive_method(
         }
         1 => this_val,
         2 => {
-            let x = f64::from_bits(this_val as u64);
+            let x = value::decode_f64(this_val);
             let digits = if value::is_undefined(radix_or_digits) || value::is_null(radix_or_digits)
             {
                 0
             } else if value::is_f64(radix_or_digits) {
-                f64::from_bits(radix_or_digits as u64) as i32
+                value::decode_f64(radix_or_digits) as i32
             } else {
                 0
             };
@@ -1440,23 +1440,23 @@ fn invoke_number_primitive_method(
             store_runtime_string(caller, format_number_to_fixed_js(x, digits))
         }
         3 => {
-            let x = f64::from_bits(this_val as u64);
+            let x = value::decode_f64(this_val);
             let digits = if value::is_undefined(radix_or_digits) || value::is_null(radix_or_digits)
             {
                 None
             } else if value::is_f64(radix_or_digits) {
-                Some(f64::from_bits(radix_or_digits as u64) as i32)
+                Some(value::decode_f64(radix_or_digits) as i32)
             } else {
                 None
             };
             store_runtime_string(caller, format_number_to_exponential_js(x, digits))
         }
         4 => {
-            let x = f64::from_bits(this_val as u64);
+            let x = value::decode_f64(this_val);
             let precision = if value::is_undefined(radix_or_digits) {
                 None
             } else if value::is_f64(radix_or_digits) {
-                Some(f64::from_bits(radix_or_digits as u64) as i32)
+                Some(value::decode_f64(radix_or_digits) as i32)
             } else {
                 Some(-1)
             };

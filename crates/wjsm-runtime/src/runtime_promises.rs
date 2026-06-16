@@ -358,7 +358,7 @@ pub(crate) fn nanbox_to_usize(val: i64) -> usize {
     if value::is_bool(val) {
         if value::decode_bool(val) { 1 } else { 0 }
     } else {
-        f64::from_bits(val as u64) as usize
+        value::decode_f64(val) as usize
     }
 }
 
@@ -370,7 +370,7 @@ pub(crate) fn nanbox_to_bool(val: i64) -> bool {
     if value::is_bool(val) {
         value::decode_bool(val)
     } else {
-        f64::from_bits(val as u64) != 0.0
+        value::decode_f64(val) != 0.0
     }
 }
 

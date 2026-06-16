@@ -1,6 +1,37 @@
 use super::*;
 
 impl Lowerer {
+    /// 原型方法拦截的公共发射逻辑：把 `obj.method(args...)` 降为
+    /// `CallBuiltin(builtin, [this, args...])`，其中 this = obj。
+    ///
+    /// `lower_call_expr` 中 7+ 个拦截点（String/Array/Object/Number/Boolean/
+    /// SharedArrayBuffer/DataView 原型方法）此前各自重复这段「lower obj 为 this →
+    /// lower 每个实参 → 追加 CallBuiltin → 返回 dest」样板。抽成单一 helper 后，
+    /// 拦截点只保留各自的「模式识别 + receiver guard」判定，发射逻辑集中一处。
+    fn emit_proto_builtin_call(
+        &mut self,
+        builtin: Builtin,
+        obj: &swc_ast::Expr,
+        args: &[swc_ast::ExprOrSpread],
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        let this_val = self.lower_expr(obj, block)?;
+        let mut builtin_args = vec![this_val];
+        for arg in args {
+            builtin_args.push(self.lower_expr(&arg.expr, block)?);
+        }
+        let dest = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(dest),
+                builtin,
+                args: builtin_args,
+            },
+        );
+        Ok(dest)
+    }
+
     pub(crate) fn lower_call_expr(
         &mut self,
         call: &swc_ast::CallExpr,
@@ -95,21 +126,12 @@ impl Lowerer {
                         && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
                         && self.is_typedarray_binding(receiver_ident)
                     {
-                        this_val = self.lower_expr(&member_expr.obj, block)?;
-                        let mut builtin_args = vec![this_val];
-                        for arg in &call.args {
-                            builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                        }
-                        let dest = self.alloc_value();
-                        self.current_function.append_instruction(
+                        return self.emit_proto_builtin_call(
+                            ta_builtin,
+                            &member_expr.obj,
+                            &call.args,
                             block,
-                            Instruction::CallBuiltin {
-                                dest: Some(dest),
-                                builtin: ta_builtin,
-                                args: builtin_args,
-                            },
                         );
-                        return Ok(dest);
                     }
                     // SharedArrayBuffer.prototype 方法调用优化（带 receiver guard）。
                     // 必须在 String 之前，以确保 sab.slice 等优先匹配；仅当 obj 是已知 SAB 绑定时才拦截，
@@ -120,21 +142,12 @@ impl Lowerer {
                         && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
                         && self.is_sharedarraybuffer_binding(receiver_ident)
                     {
-                        this_val = self.lower_expr(&member_expr.obj, block)?;
-                        let mut builtin_args = vec![this_val];
-                        for arg in &call.args {
-                            builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                        }
-                        let dest = self.alloc_value();
-                        self.current_function.append_instruction(
+                        return self.emit_proto_builtin_call(
+                            sab_builtin,
+                            &member_expr.obj,
+                            &call.args,
                             block,
-                            Instruction::CallBuiltin {
-                                dest: Some(dest),
-                                builtin: sab_builtin,
-                                args: builtin_args,
-                            },
                         );
-                        return Ok(dest);
                     }
                     // DataView.prototype get/set 方法使用非 Type 12 的专用宿主导入；
                     // 对静态已知 DataView receiver 直连 CallBuiltin，避免通用 call_indirect 调用约定不匹配。
@@ -144,21 +157,12 @@ impl Lowerer {
                         && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
                         && self.is_dataview_binding(receiver_ident)
                     {
-                        this_val = self.lower_expr(&member_expr.obj, block)?;
-                        let mut builtin_args = vec![this_val];
-                        for arg in &call.args {
-                            builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                        }
-                        let dest = self.alloc_value();
-                        self.current_function.append_instruction(
+                        return self.emit_proto_builtin_call(
+                            dv_builtin,
+                            &member_expr.obj,
+                            &call.args,
                             block,
-                            Instruction::CallBuiltin {
-                                dest: Some(dest),
-                                builtin: dv_builtin,
-                                args: builtin_args,
-                            },
                         );
-                        return Ok(dest);
                     }
                     // String.prototype 方法调用优化（必须在 Array 之前，因为 at/slice/concat 等方法在 String 和 Array 上同名）
                     if let swc_ast::MemberProp::Ident(prop_ident) = &member_expr.prop
@@ -166,21 +170,12 @@ impl Lowerer {
                             builtin_from_string_proto_method(&prop_ident.sym)
                     {
                         let _ = builtin_call_signature(string_builtin);
-                        this_val = self.lower_expr(&member_expr.obj, block)?;
-                        let mut builtin_args = vec![this_val];
-                        for arg in &call.args {
-                            builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                        }
-                        let dest = self.alloc_value();
-                        self.current_function.append_instruction(
+                        return self.emit_proto_builtin_call(
+                            string_builtin,
+                            &member_expr.obj,
+                            &call.args,
                             block,
-                            Instruction::CallBuiltin {
-                                dest: Some(dest),
-                                builtin: string_builtin,
-                                args: builtin_args,
-                            },
                         );
-                        return Ok(dest);
                     }
 
                     // RegExp.prototype 方法调用优化：RegExp 宿主函数使用固定二参调用约定，
@@ -224,21 +219,12 @@ impl Lowerer {
                             builtin_from_array_proto_method(&prop_ident.sym)
                         {
                             // obj.method() → obj 是 this
-                            this_val = self.lower_expr(&member_expr.obj, block)?;
-                            let mut builtin_args = vec![this_val];
-                            for arg in &call.args {
-                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                            }
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
+                            return self.emit_proto_builtin_call(
+                                array_builtin,
+                                &member_expr.obj,
+                                &call.args,
                                 block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: array_builtin,
-                                    args: builtin_args,
-                                },
                             );
-                            return Ok(dest);
                         }
 
                         // TypedArray.prototype 方法调用优化：发出 CallBuiltin 代替 Call，
@@ -248,21 +234,12 @@ impl Lowerer {
                             && let swc_ast::Expr::Ident(receiver_ident) = member_expr.obj.as_ref()
                             && self.is_typedarray_binding(receiver_ident)
                         {
-                            this_val = self.lower_expr(&member_expr.obj, block)?;
-                            let mut builtin_args = vec![this_val];
-                            for arg in &call.args {
-                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                            }
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
+                            return self.emit_proto_builtin_call(
+                                ta_builtin,
+                                &member_expr.obj,
+                                &call.args,
                                 block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: ta_builtin,
-                                    args: builtin_args,
-                                },
                             );
-                            return Ok(dest);
                         }
 
                         // Function.prototype.call/apply/bind: func.call(thisArg, ...args)
@@ -372,21 +349,12 @@ impl Lowerer {
                             builtin_from_object_proto_method(&prop_ident.sym)
                         {
                             // obj.method() → obj 是 this
-                            let this_val = self.lower_expr(&member_expr.obj, block)?;
-                            let mut builtin_args = vec![this_val];
-                            for arg in &call.args {
-                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                            }
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
+                            return self.emit_proto_builtin_call(
+                                obj_proto_builtin,
+                                &member_expr.obj,
+                                &call.args,
                                 block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: obj_proto_builtin,
-                                    args: builtin_args,
-                                },
                             );
-                            return Ok(dest);
                         }
 
                         if let Some(promise_proto_builtin) =
@@ -434,41 +402,23 @@ impl Lowerer {
                                 member_expr.obj.as_ref(),
                             )
                         {
-                            this_val = self.lower_expr(&member_expr.obj, block)?;
-                            let mut builtin_args = vec![this_val];
-                            for arg in &call.args {
-                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                            }
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
+                            return self.emit_proto_builtin_call(
+                                number_proto_builtin,
+                                &member_expr.obj,
+                                &call.args,
                                 block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: number_proto_builtin,
-                                    args: builtin_args,
-                                },
                             );
-                            return Ok(dest);
                         }
 
                         if let Some(boolean_proto_builtin) =
                             builtin_from_boolean_proto_method(&prop_ident.sym)
                         {
-                            this_val = self.lower_expr(&member_expr.obj, block)?;
-                            let mut builtin_args = vec![this_val];
-                            for arg in &call.args {
-                                builtin_args.push(self.lower_expr(&arg.expr, block)?);
-                            }
-                            let dest = self.alloc_value();
-                            self.current_function.append_instruction(
+                            return self.emit_proto_builtin_call(
+                                boolean_proto_builtin,
+                                &member_expr.obj,
+                                &call.args,
                                 block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(dest),
-                                    builtin: boolean_proto_builtin,
-                                    args: builtin_args,
-                                },
                             );
-                            return Ok(dest);
                         }
                     }
 

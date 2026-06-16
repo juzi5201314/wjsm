@@ -219,7 +219,7 @@ pub(crate) fn define_timers_arrays_async(
 ) -> Result<()> {
     fn delay_ms_from(delay: i64) -> u64 {
         let delay_f64 = if value::is_f64(delay) {
-            f64::from_bits(delay as u64)
+            value::decode_f64(delay)
         } else {
             f64::NAN
         };
@@ -284,7 +284,7 @@ pub(crate) fn define_timers_arrays_async(
         |caller: Caller<'_, RuntimeState>, (timer_id,): (i64,)| {
             Box::new(async move {
                 if value::is_f64(timer_id) {
-                    let id = f64::from_bits(timer_id as u64) as u32;
+                    let id = value::decode_f64(timer_id) as u32;
                     caller
                         .data()
                         .cancelled_timers
@@ -335,7 +335,7 @@ pub(crate) fn define_timers_arrays_async(
         |caller: Caller<'_, RuntimeState>, (timer_id,): (i64,)| {
             Box::new(async move {
                 if value::is_f64(timer_id) {
-                    let id = f64::from_bits(timer_id as u64) as u32;
+                    let id = value::decode_f64(timer_id) as u32;
                     caller
                         .data()
                         .cancelled_timers
@@ -376,7 +376,7 @@ async fn sort_compare_async(
     let result = call_wasm_callback_async(caller, cmp, value::encode_undefined(), &[a, b])
         .await
         .unwrap_or(value::encode_f64(0.0));
-    let v = f64::from_bits(result as u64);
+    let v = value::decode_f64(result);
     if v > 0.0 {
         std::cmp::Ordering::Greater
     } else if v < 0.0 {
@@ -1132,7 +1132,7 @@ async fn typedarray_sort_compare_async(
     let result = call_wasm_callback_async(caller, cmp, value::encode_undefined(), &[a, b])
         .await
         .unwrap_or(value::encode_f64(0.0));
-    let v = f64::from_bits(result as u64);
+    let v = value::decode_f64(result);
     if v > 0.0 {
         std::cmp::Ordering::Greater
     } else if v < 0.0 {

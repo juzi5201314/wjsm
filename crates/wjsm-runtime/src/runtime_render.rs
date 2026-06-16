@@ -316,7 +316,7 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
         return Ok("/(?:)/".to_string()); // empty regex fallback
     }
 
-    let n = f64::from_bits(val as u64);
+    let n = value::decode_f64(val);
     if n.is_infinite() {
         return Ok(if n.is_sign_positive() {
             "Infinity".to_string()
@@ -423,7 +423,7 @@ fn json_escape_string(s: &str) -> String {
 /// Number 走 ToIntegerOrInfinity（trunc as i32）；String 按 UTF-16 code unit 截断到 10。
 fn build_space_string(caller: &mut Caller<'_, RuntimeState>, space: i64) -> String {
     if value::is_f64(space) {
-        let n = f64::from_bits(space as u64);
+        let n = value::decode_f64(space);
         let i = n.trunc() as i32;
         if i > 0 {
             let w = i.min(10).max(0) as usize;
@@ -464,7 +464,7 @@ fn build_replacer_whitelist(
             let key = if value::is_string(elem) {
                 read_runtime_string(caller, elem)
             } else {
-                let f = f64::from_bits(elem as u64);
+                let f = value::decode_f64(elem);
                 if f.is_finite() {
                     if f.fract() == 0.0 && f.abs() <= 9007199254740991.0 {
                         (f as i64).to_string()
@@ -569,7 +569,7 @@ async fn serialize_json_property_async(
         }
     }
     if value::is_f64(value) {
-        let f = f64::from_bits(value as u64);
+        let f = value::decode_f64(value);
         return if !f.is_finite() {
             "null".to_string()
         } else if f == 0.0 {

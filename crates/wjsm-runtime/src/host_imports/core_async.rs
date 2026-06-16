@@ -14,45 +14,8 @@ pub(crate) fn define_core_async(
         "env",
         "op_in",
         |mut caller: Caller<'_, RuntimeState>, (object, prop): (i64, i64)| {
-            Box::new(async move {
-                if value::is_proxy(object) {
-                    let handle = value::decode_proxy_handle(object) as usize;
-                    let entry = {
-                        let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
-                        table.get(handle).cloned()
-                    };
-                    if let Some(entry) = entry {
-                        if entry.revoked {
-                            return make_type_error_exception(
-                                &mut caller,
-                                "TypeError: Cannot perform 'has' on a proxy that has been revoked",
-                            );
-                        }
-                        if let Some(handler_ptr) = resolve_handle(&mut caller, entry.handler) {
-                            let trap =
-                                read_object_property_by_name(&mut caller, handler_ptr, "has")
-                                    .unwrap_or_else(value::encode_undefined);
-                            if !value::is_undefined(trap) && !value::is_null(trap) {
-                                let result = call_wasm_callback_async(
-                                    &mut caller,
-                                    trap,
-                                    entry.handler,
-                                    &[entry.target, prop],
-                                )
-                                .await
-                                .unwrap_or_else(|_| value::encode_bool(false));
-                                return value::encode_bool(nanbox_to_bool(result));
-                            }
-                        }
-                        if value::is_proxy(entry.target) {
-                            return Box::pin(op_in_async(&mut caller, entry.target, prop)).await;
-                        }
-                        return op_in_impl(&mut caller, entry.target, prop);
-                    }
-                    return value::encode_bool(false);
-                }
-                op_in_impl(&mut caller, object, prop)
-            })
+            // proxy has-trap 链与递归逻辑统一由下方 op_in_async 实现，避免内联重复。
+            Box::new(async move { op_in_async(&mut caller, object, prop).await })
         },
     )?;
     async fn op_in_async(caller: &mut Caller<'_, RuntimeState>, object: i64, prop: i64) -> i64 {

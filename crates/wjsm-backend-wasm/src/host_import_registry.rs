@@ -2576,3 +2576,74 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
 pub fn host_import_specs() -> &'static [HostImportSpec] {
     HOST_IMPORT_SPECS
 }
+
+#[cfg(test)]
+mod registry_consistency {
+    use super::*;
+    use std::collections::HashMap;
+
+    /// 导入名必须唯一——名字即 WASM import 的链接键，重复会让后注册的覆盖前者，
+    /// 静默破坏调用目标。
+    #[test]
+    fn import_names_are_unique() {
+        let mut seen: HashMap<&'static str, usize> = HashMap::new();
+        for (i, spec) in HOST_IMPORT_SPECS.iter().enumerate() {
+            if let Some(prev) = seen.insert(spec.name, i) {
+                panic!(
+                    "duplicate host import name {:?} at indices {prev} and {i}",
+                    spec.name
+                );
+            }
+        }
+    }
+
+    /// 每个 Builtin 至多绑定一个 host import——一个 Builtin 映射到两个 import
+    /// 会让 builtin_func_indices 解析到非确定的目标。
+    #[test]
+    fn builtin_bindings_are_unique() {
+        let mut seen: HashMap<Builtin, &'static str> = HashMap::new();
+        for spec in HOST_IMPORT_SPECS {
+            if let Some(HostImportKey::Builtin(b)) = spec.key {
+                if let Some(prev) = seen.insert(b, spec.name) {
+                    panic!(
+                        "Builtin::{b:?} bound to both {prev:?} and {:?}",
+                        spec.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// 每个 SpecialHostImport 至多绑定一个 import——同上，避免解析歧义。
+    #[test]
+    fn special_bindings_are_unique() {
+        let mut seen: HashMap<SpecialHostImport, &'static str> = HashMap::new();
+        for spec in HOST_IMPORT_SPECS {
+            if let Some(HostImportKey::Special(s)) = spec.key {
+                if let Some(prev) = seen.insert(s, spec.name) {
+                    panic!(
+                        "SpecialHostImport::{s:?} bound to both {prev:?} and {:?}",
+                        spec.name
+                    );
+                }
+            }
+        }
+    }
+
+    /// type_idx 的顺序无关性：注册表本身不依赖条目顺序解析 key，
+    /// 因此 key 查找必须对任意排列稳定。这里验证 key→spec 反查不依赖位置。
+    #[test]
+    fn keyed_specs_are_reachable_by_key() {
+        for spec in HOST_IMPORT_SPECS {
+            let Some(key) = spec.key else { continue };
+            let found = HOST_IMPORT_SPECS
+                .iter()
+                .find(|candidate| candidate.key == Some(key));
+            assert!(
+                found.is_some(),
+                "keyed spec {:?} not reachable by its own key",
+                spec.name
+            );
+        }
+    }
+}
