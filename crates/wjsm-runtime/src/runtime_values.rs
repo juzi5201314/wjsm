@@ -1571,109 +1571,88 @@ pub(crate) fn obj_spread_impl(caller: &mut Caller<'_, RuntimeState>, dest: i64, 
     }
 }
 
-// ── Caller 双参数便捷入口（委托 WasmEnv 泛型实现）────────────────────
-
-#[inline]
-pub(crate) fn resolve_handle_idx(
-    caller: &mut Caller<'_, RuntimeState>,
-    handle_idx: usize,
-) -> Option<usize> {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    resolve_handle_idx_with_env(caller, &env, handle_idx)
+// ── Caller → _with_env 薄封装宏 ───────────────────────────────────────
+macro_rules! caller_env_wrapper {
+    (
+        $(#[$meta:meta])*
+        $vis:vis fn $name:ident($($arg:ident: $ty:ty),*) -> $ret:ty =
+            $with_env:ident
+    ) => {
+        $(#[$meta])*
+        $vis fn $name(caller: &mut Caller<'_, RuntimeState>, $($arg: $ty),*) -> $ret {
+            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            $with_env(caller, &env, $($arg),*)
+        }
+    };
+    // 变体：返回单元类型（无 -> $ret）
+    (
+        $(#[$meta:meta])*
+        $vis:vis fn $name:ident($($arg:ident: $ty:ty),*) =
+            $with_env:ident
+    ) => {
+        $(#[$meta])*
+        $vis fn $name(caller: &mut Caller<'_, RuntimeState>, $($arg: $ty),*) {
+            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            $with_env(caller, &env, $($arg),*)
+        }
+    };
 }
 
-#[inline]
-pub(crate) fn resolve_array_ptr(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    resolve_array_ptr_with_env(caller, &env, val)
+caller_env_wrapper! {
+    pub(crate) fn resolve_handle_idx(handle_idx: usize) -> Option<usize> = resolve_handle_idx_with_env
 }
 
-#[inline]
-pub(crate) fn read_array_length(caller: &mut Caller<'_, RuntimeState>, ptr: usize) -> Option<u32> {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    read_array_length_with_env(caller, &env, ptr)
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn resolve_array_ptr(val: i64) -> Option<usize> = resolve_array_ptr_with_env
 }
 
-#[inline]
-pub(crate) fn write_array_length(caller: &mut Caller<'_, RuntimeState>, ptr: usize, len: u32) {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    write_array_length_with_env(caller, &env, ptr, len);
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn read_array_length(ptr: usize) -> Option<u32> = read_array_length_with_env
 }
 
-#[inline]
-pub(crate) fn read_array_elem(
-    caller: &mut Caller<'_, RuntimeState>,
-    ptr: usize,
-    index: u32,
-) -> Option<i64> {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    read_array_elem_with_env(caller, &env, ptr, index)
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn write_array_length(ptr: usize, len: u32) = write_array_length_with_env
 }
 
-#[inline]
-pub(crate) fn write_array_elem(
-    caller: &mut Caller<'_, RuntimeState>,
-    ptr: usize,
-    index: u32,
-    val: i64,
-) {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    write_array_elem_with_env(caller, &env, ptr, index, val);
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn read_array_elem(ptr: usize, index: u32) -> Option<i64> = read_array_elem_with_env
 }
 
-#[inline]
-pub(crate) fn read_array_elem_raw(
-    caller: &mut Caller<'_, RuntimeState>,
-    ptr: usize,
-    index: u32,
-) -> Option<i64> {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    read_array_elem_raw_with_env(caller, &env, ptr, index)
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn write_array_elem(ptr: usize, index: u32, val: i64) = write_array_elem_with_env
 }
 
-#[inline]
-pub(crate) fn array_elem_present(
-    caller: &mut Caller<'_, RuntimeState>,
-    ptr: usize,
-    index: u32,
-) -> bool {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    array_elem_present_with_env(caller, &env, ptr, index)
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn read_array_elem_raw(ptr: usize, index: u32) -> Option<i64> = read_array_elem_raw_with_env
 }
 
-#[inline]
-pub(crate) fn write_array_hole(caller: &mut Caller<'_, RuntimeState>, ptr: usize, index: u32) {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    write_array_hole_with_env(caller, &env, ptr, index);
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn array_elem_present(ptr: usize, index: u32) -> bool = array_elem_present_with_env
 }
 
-#[inline]
-pub(crate) fn read_object_property_by_name(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj_ptr: usize,
-    prop_name: &str,
-) -> Option<i64> {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    read_object_property_by_name_with_env(caller, &env, obj_ptr, prop_name)
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn write_array_hole(ptr: usize, index: u32) = write_array_hole_with_env
 }
 
-#[inline]
-pub(crate) fn read_object_property_by_name_proto_walk(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj_ptr: usize,
-    prop_name: &str,
-    visited: &mut std::collections::HashSet<usize>,
-) -> Option<i64> {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    read_object_property_by_name_proto_walk_with_env(caller, &env, obj_ptr, prop_name, visited)
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn read_object_property_by_name(obj_ptr: usize, prop_name: &str) -> Option<i64> = read_object_property_by_name_with_env
 }
 
-#[inline]
-pub(crate) fn find_property_slot_by_name_id(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj_ptr: usize,
-    name_id: u32,
-) -> Option<(usize, i32, i64)> {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    find_property_slot_by_name_id_with_env(caller, &env, obj_ptr, name_id)
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn read_object_property_by_name_proto_walk(obj_ptr: usize, prop_name: &str, visited: &mut std::collections::HashSet<usize>) -> Option<i64> = read_object_property_by_name_proto_walk_with_env
+}
+
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn find_property_slot_by_name_id(obj_ptr: usize, name_id: u32) -> Option<(usize, i32, i64)> = find_property_slot_by_name_id_with_env
 }

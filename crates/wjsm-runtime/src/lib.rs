@@ -13,9 +13,6 @@ use swc_core::ecma::ast as swc_ast;
 use tokio::time::Instant;
 use wasmtime::Func;
 use wasmtime::*;
-/// 影子栈大小（必须与后端保持一致）
-const SHADOW_STACK_SIZE: u32 = 65536;
-
 use wjsm_ir::{constants, value};
 mod agent_cluster;
 mod property_key;
@@ -809,6 +806,15 @@ pub async fn execute(wasm_bytes: &[u8]) -> Result<()> {
 }
 pub async fn execute_with_writer<W: Write>(wasm_bytes: &[u8], writer: W) -> Result<W> {
     execute_with_writer_shared(wasm_bytes, writer, None).await
+}
+
+/// 编译 JS/TS 源码到 WASM 字节码的共享辅助函数。
+/// 供本 crate 测试及外部集成测试（`tests/`）复用，避免重复定义
+/// `parse_module → lower_module → compile` 流程。
+pub fn compile_source(source: &str) -> Result<Vec<u8>> {
+    let module = wjsm_parser::parse_module(source)?;
+    let program = wjsm_semantic::lower_module(module, false)?;
+    wjsm_backend_wasm::compile(&program)
 }
 
 pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
@@ -2903,9 +2909,7 @@ mod tests {
     // - 验证：本注释后立即做机械类型变更，每步 cargo check --tests 确认通过
     //   （注意：当前 execute 测试因 wiring 期 pre-existing 缺失 define_get_builtin_global 无法 runtime 跑 timer fixture，此为非 Phase 5 问题，不在此 slice 修复）
     fn compile_source(source: &str) -> Result<Vec<u8>> {
-        let module = wjsm_parser::parse_module(source)?;
-        let program = wjsm_semantic::lower_module(module, false)?;
-        wjsm_backend_wasm::compile(&program)
+        super::compile_source(source)
     }
 
     #[test]

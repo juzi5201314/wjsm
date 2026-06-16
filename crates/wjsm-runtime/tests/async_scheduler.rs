@@ -1,13 +1,7 @@
 use anyhow::Result;
 use tokio::runtime::Runtime;
 
-use wjsm_runtime::execute_with_writer;
-
-fn compile_source(source: &str) -> Result<Vec<u8>> {
-    let module = wjsm_parser::parse_module(source)?;
-    let program = wjsm_semantic::lower_module(module, false)?;
-    wjsm_backend_wasm::compile(&program)
-}
+use wjsm_runtime::{compile_source, execute_with_writer};
 
 fn run_async(source: &str) -> Result<String> {
     let wasm = compile_source(source)?;
