@@ -19,7 +19,7 @@ use wjsm_ir::{
 pub mod host_import_registry;
 
 // ── Shadow Stack Constants ─────────────────────────────────────────────
-const SHADOW_STACK_SIZE: u32 = 65536; // 64KB = 8192 个 i64 槽位
+use wjsm_ir::SHADOW_STACK_SIZE;
 const EVAL_VAR_MAP_RECORD_SIZE: u32 = 20;
 
 // ── Public API ──────────────────────────────────────────────────────────
@@ -1074,6 +1074,7 @@ mod tests {
         compile(&program)
     }
 
+    /// 与 compile_source 相同，但使用 eval 语义
     fn compile_eval_source(source: &str) -> Result<Vec<u8>> {
         let module = wjsm_parser::parse_script_as_module(source)?;
         let program = wjsm_semantic::lower_eval_module(module)?;

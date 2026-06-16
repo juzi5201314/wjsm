@@ -949,6 +949,25 @@ pub struct ImportBinding {
     pub specifier: String,
 }
 
+// ── Shadow Stack Constants ──────────────────────────────────────────────
+/// 影子栈大小（64KB = 8192 个 i64 槽位）。
+/// runtime 和 backend-wasm 共享此值，编译期保证一致性。
+pub const SHADOW_STACK_SIZE: u32 = 65536;
+
+// ── Well-Known Symbol 索引 ─────────────────────────────────────────────
+/// Well-known symbol 索引常量，semantic 和 runtime 共享。
+pub mod wk_symbol {
+    pub const ITERATOR: u32 = 0;
+    pub const SPECIES: u32 = 1;
+    pub const TO_STRING_TAG: u32 = 2;
+    pub const ASYNC_ITERATOR: u32 = 3;
+    pub const HAS_INSTANCE: u32 = 4;
+    pub const TO_PRIMITIVE: u32 = 5;
+    pub const DISPOSE: u32 = 6;
+    pub const MATCH: u32 = 7;
+    pub const ASYNC_DISPOSE: u32 = 8;
+}
+
 // ── Heap type tags ──────────────────────────────────────────────────────
 /// 0x00 = object (HEAP_TYPE_OBJECT)
 pub const HEAP_TYPE_OBJECT: u8 = 0x00;

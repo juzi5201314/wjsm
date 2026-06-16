@@ -644,25 +644,12 @@ pub(crate) fn alloc_promise_all_settled_result(
     value_name: &str,
     value: i64,
 ) -> i64 {
-    let obj = alloc_object(caller, 2);
-    let _ = define_host_data_property(
-        caller,
-        obj,
-        "status",
-        store_runtime_string(caller, status.to_string()),
-    );
-    let _ = define_host_data_property(caller, obj, value_name, value);
-    obj
+    alloc_all_settled_result_from_caller(caller, status, value_name, value)
 }
 
 pub(crate) fn alloc_aggregate_error(caller: &mut Caller<'_, RuntimeState>, errors: i64) -> i64 {
-    let obj = alloc_object(caller, 3);
-    let name = store_runtime_string(caller, "AggregateError".to_string());
-    let message = store_runtime_string(caller, "All promises were rejected".to_string());
-    let _ = define_host_data_property(caller, obj, "name", name);
-    let _ = define_host_data_property(caller, obj, "message", message);
-    let _ = define_host_data_property(caller, obj, "errors", errors);
-    obj
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    alloc_heap_aggregate_error(caller, &env, errors)
 }
 // ── 辅助函数：收集属性名/值 ──────────────────────────────────────────
 pub(crate) fn collect_own_property_names(
@@ -902,11 +889,7 @@ pub(crate) fn value_to_number(arg: i64) -> f64 {
 }
 
 pub(crate) fn is_callable_in_runtime(caller: &mut Caller<'_, RuntimeState>, val: i64) -> bool {
-    if value::is_function(val)
-        || value::is_closure(val)
-        || value::is_bound(val)
-        || value::is_native_callable(val)
-    {
+    if value::is_callable(val) {
         return true;
     }
     if value::is_proxy(val) {
@@ -925,11 +908,7 @@ pub(crate) fn is_callable_in_runtime(caller: &mut Caller<'_, RuntimeState>, val:
 }
 
 pub(crate) fn is_constructor_in_runtime(caller: &mut Caller<'_, RuntimeState>, val: i64) -> bool {
-    if value::is_function(val)
-        || value::is_closure(val)
-        || value::is_bound(val)
-        || value::is_native_callable(val)
-    {
+    if value::is_callable(val) {
         return true;
     }
     if value::is_proxy(val) {
@@ -2210,10 +2189,31 @@ pub(crate) fn read_shadow_arg(
     read_shadow_arg_with_env(caller, &env, args_base, index)
 }
 
-#[inline]
-pub(crate) fn alloc_array(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    alloc_array_with_env(caller, &env, capacity)
+// ── Caller → _with_env 薄封装宏 ───────────────────────────────────────
+/// 为 `_with_env` 泛型版本生成 `Caller` 薄封装，消除重复的
+/// `let env = WasmEnv::from_caller(caller).expect("WasmEnv"); $func_with_env(caller, &env, ...)` 样板。
+macro_rules! caller_env_wrapper {
+    (
+        $(#[$meta:meta])*
+        $vis:vis fn $name:ident($($arg:ident: $ty:ty),*) -> $ret:ty =
+            $with_env:ident
+    ) => {
+        $(#[$meta])*
+        $vis fn $name(caller: &mut Caller<'_, RuntimeState>, $($arg: $ty),*) -> $ret {
+            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            $with_env(caller, &env, $($arg),*)
+        }
+    };
+}
+
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn alloc_array(capacity: u32) -> i64 = alloc_array_with_env
+}
+
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn alloc_object(capacity: u32) -> i64 = alloc_object_with_env
 }
 
 #[inline]
@@ -2227,10 +2227,14 @@ pub(crate) fn set_array_elem(
     set_array_elem_with_env(caller, &env, arr_val, index, val);
 }
 
-#[inline]
-pub(crate) fn alloc_object(caller: &mut Caller<'_, RuntimeState>, capacity: u32) -> i64 {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    alloc_object_with_env(caller, &env, capacity)
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn find_memory_c_string(name: &str) -> Option<u32> = find_memory_c_string_with_env
+}
+
+caller_env_wrapper! {
+    #[inline]
+    pub(crate) fn alloc_heap_c_string(name: &str) -> Option<u32> = alloc_heap_c_string_with_env
 }
 
 #[inline]
@@ -2247,24 +2251,6 @@ pub(crate) fn alloc_promise(caller: &mut Caller<'_, RuntimeState>, entry: Promis
         insert_promise_entry(&mut table, handle, entry);
     }
     promise
-}
-
-#[inline]
-pub(crate) fn find_memory_c_string(
-    caller: &mut Caller<'_, RuntimeState>,
-    name: &str,
-) -> Option<u32> {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    find_memory_c_string_with_env(caller, &env, name)
-}
-
-#[inline]
-pub(crate) fn alloc_heap_c_string(
-    caller: &mut Caller<'_, RuntimeState>,
-    name: &str,
-) -> Option<u32> {
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    alloc_heap_c_string_with_env(caller, &env, name)
 }
 
 #[inline]

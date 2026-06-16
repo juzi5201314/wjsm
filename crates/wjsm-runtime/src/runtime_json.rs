@@ -715,42 +715,8 @@ async fn json_parse_to_string_async(
 }
 
 fn build_wasm_value(caller: &mut Caller<'_, RuntimeState>, json_value: &JsonValue) -> i64 {
-    match json_value {
-        JsonValue::Null => value::encode_null(),
-        JsonValue::Bool(b) => value::encode_bool(*b),
-        JsonValue::Number(n) => value::encode_f64(*n),
-        JsonValue::String(s) => store_runtime_string(caller, s.clone()),
-        JsonValue::Array(elements) => {
-            let arr = alloc_array(caller, elements.len() as u32);
-            if let Some(ptr) = resolve_array_ptr(caller, arr) {
-                for (i, elem) in elements.iter().enumerate() {
-                    let elem_val = build_wasm_value(caller, elem);
-                    write_array_elem(caller, ptr, i as u32, elem_val);
-                }
-                write_array_length(caller, ptr, elements.len() as u32);
-            }
-            arr
-        }
-        JsonValue::Object(properties) => {
-            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-            let obj = alloc_host_object(caller, &env, properties.len() as u32);
-            let obj_ptr = resolve_handle(caller, obj);
-            if let Some(ptr) = obj_ptr {
-                for (key, val) in properties {
-                    let val_encoded = build_wasm_value(caller, val);
-                    let name_id = find_memory_c_string_with_env(caller, &env, key)
-                        .or_else(|| alloc_heap_c_string_with_env(caller, &env, key));
-                    if let Some(nid) = name_id {
-                        let flags = constants::FLAG_CONFIGURABLE
-                            | constants::FLAG_ENUMERABLE
-                            | constants::FLAG_WRITABLE;
-                        write_object_property_by_name_id(caller, ptr, obj, nid, val_encoded, flags);
-                    }
-                }
-            }
-            obj
-        }
-    }
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    build_wasm_value_with_env(caller, &env, json_value)
 }
 
 pub(crate) fn build_wasm_value_with_env<C: AsContextMut<Data = RuntimeState>>(
