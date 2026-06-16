@@ -14,7 +14,7 @@
 //! 每次降级要求所有上游源都是 Scalar；未被 StoreVar 的变量（函数参数、捕获变量）
 //! 不降级；Phi 任一入边 Handle 则不降级。误判（把 Handle 当 Scalar）会导致 GC
 //! 漏 root → 悬垂指针，故一律保守。
-use crate::{Builtin, Constant, Function, Instruction, Module, ValueId};
+use wjsm_ir::{Builtin, Constant, Function, Instruction, Module, ValueId};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

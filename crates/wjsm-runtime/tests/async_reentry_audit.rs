@@ -85,8 +85,8 @@ fn async_reentry_audit_forbidden_sync_patterns() {
         let allow_alive_sync = |h: &str| -> bool {
             // call_wasm_callback sync definition and its internal dispatch
             h.contains("fn call_wasm_callback(")
-            // recursive bound call inside call_wasm_callback itself
-            || h.contains("return call_wasm_callback(&mut *caller, bound_func,")
+            // recursive bound call inside sync call_wasm_callback itself（CallbackTarget::Bound 分支）
+            || h.contains("call_wasm_callback(&mut *caller, target_func, bound_this, &combined_args)")
             // func.call inside call_wasm_callback sync
             || (h.contains("func.call(") && h.contains("let call_result"))
             // call_host_function_with_args sync .call dispatch

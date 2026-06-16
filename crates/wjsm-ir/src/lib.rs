@@ -1,8 +1,6 @@
 pub mod builtin;
 pub mod constants;
-pub mod liveness;
 pub mod value;
-pub mod value_ty;
 
 pub use builtin::Builtin;
 use std::fmt::{self, Write};

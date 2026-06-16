@@ -339,7 +339,7 @@ pub(crate) fn define_array_object(
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             let start = if args_count > 0 {
-                let s_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                let s_f64 = value::decode_f64(read_shadow_arg(&mut caller, args_base, 0));
                 if s_f64.is_nan() {
                     0
                 } else if s_f64 < 0.0 {
@@ -351,7 +351,7 @@ pub(crate) fn define_array_object(
                 0
             };
             let end = if args_count > 1 {
-                let e_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
+                let e_f64 = value::decode_f64(read_shadow_arg(&mut caller, args_base, 1));
                 if e_f64.is_nan() {
                     len
                 } else if e_f64 < 0.0 {
@@ -393,7 +393,7 @@ pub(crate) fn define_array_object(
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             let start = if args_count > 1 {
-                let s_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
+                let s_f64 = value::decode_f64(read_shadow_arg(&mut caller, args_base, 1));
                 if s_f64.is_nan() {
                     0
                 } else if s_f64 < 0.0 {
@@ -405,7 +405,7 @@ pub(crate) fn define_array_object(
                 0
             };
             let end = if args_count > 2 {
-                let e_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 2) as u64);
+                let e_f64 = value::decode_f64(read_shadow_arg(&mut caller, args_base, 2));
                 if e_f64.is_nan() {
                     len
                 } else if e_f64 < 0.0 {
@@ -460,7 +460,7 @@ pub(crate) fn define_array_object(
          -> i64 {
             // 读取 depth 参数（默认 1）
             let depth = if args_count > 0 {
-                let d = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                let d = value::decode_f64(read_shadow_arg(&mut caller, args_base, 0));
                 if d.is_nan() { 0 } else { d as u32 }
             } else {
                 1
@@ -592,7 +592,7 @@ pub(crate) fn define_array_object(
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             let idx = if args_count > 0 {
-                let i_f64 = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                let i_f64 = value::decode_f64(read_shadow_arg(&mut caller, args_base, 0));
                 if i_f64.is_nan() {
                     return value::encode_undefined();
                 }
@@ -627,7 +627,7 @@ pub(crate) fn define_array_object(
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             // target
             let raw_target = if args_count > 0 {
-                let t = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                let t = value::decode_f64(read_shadow_arg(&mut caller, args_base, 0));
                 if t.is_nan() { 0 } else { t as i32 }
             } else {
                 0
@@ -639,7 +639,7 @@ pub(crate) fn define_array_object(
             };
             // start
             let raw_start = if args_count > 1 {
-                let s = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
+                let s = value::decode_f64(read_shadow_arg(&mut caller, args_base, 1));
                 if s.is_nan() { 0 } else { s as i32 }
             } else {
                 0
@@ -651,7 +651,7 @@ pub(crate) fn define_array_object(
             };
             // end
             let raw_end = if args_count > 2 {
-                let e = f64::from_bits(read_shadow_arg(&mut caller, args_base, 2) as u64);
+                let e = value::decode_f64(read_shadow_arg(&mut caller, args_base, 2));
                 if e.is_nan() { len } else { e as i32 }
             } else {
                 len
@@ -701,7 +701,7 @@ pub(crate) fn define_array_object(
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             // 读取 start
             let raw_start = if args_count > 0 {
-                let s = f64::from_bits(read_shadow_arg(&mut caller, args_base, 0) as u64);
+                let s = value::decode_f64(read_shadow_arg(&mut caller, args_base, 0));
                 if s.is_nan() { 0 } else { s as i32 }
             } else {
                 0
@@ -713,7 +713,7 @@ pub(crate) fn define_array_object(
             };
             // 读取 deleteCount
             let delete_count = if args_count > 1 {
-                let d = f64::from_bits(read_shadow_arg(&mut caller, args_base, 1) as u64);
+                let d = value::decode_f64(read_shadow_arg(&mut caller, args_base, 1));
                 if d.is_nan() { 0 } else { (d as i32).max(0) }
             } else {
                 (len - start_idx).max(0)
@@ -1223,8 +1223,8 @@ pub(crate) fn define_array_object(
                     return value::encode_bool(false);
                 }
                 // NaN == NaN (signaling NaN 区域)
-                let f1 = f64::from_bits(bits1);
-                let f2 = f64::from_bits(bits2);
+                let f1 = value::decode_f64(val1);
+                let f2 = value::decode_f64(val2);
                 if f1.is_nan() && f2.is_nan() {
                     return value::encode_bool(true);
                 }

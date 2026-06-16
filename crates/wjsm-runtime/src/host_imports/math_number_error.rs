@@ -220,7 +220,7 @@ pub(crate) fn define_math_number_error(
             let mut result = f64::NEG_INFINITY;
             for i in 0..args_count as u32 {
                 let val = read_shadow_arg(&mut caller, args_base, i);
-                let x = f64::from_bits(val as u64);
+                let x = value::decode_f64(val);
                 if x > result || (x == 0.0 && result == 0.0 && x.is_sign_positive()) {
                     result = x;
                 }
@@ -238,7 +238,7 @@ pub(crate) fn define_math_number_error(
             let mut result = f64::INFINITY;
             for i in 0..args_count as u32 {
                 let val = read_shadow_arg(&mut caller, args_base, i);
-                let x = f64::from_bits(val as u64);
+                let x = value::decode_f64(val);
                 if x < result || (x == 0.0 && result == 0.0 && x.is_sign_negative()) {
                     result = x;
                 }
@@ -360,7 +360,7 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if value::is_f64(arg) {
-                value::encode_bool(f64::from_bits(arg as u64).is_nan())
+                value::encode_bool(value::decode_f64(arg).is_nan())
             } else if value::is_undefined(arg)
                 || value::is_null(arg)
                 || value::is_bool(arg)
@@ -388,7 +388,7 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             if value::is_f64(arg) {
-                value::encode_bool(f64::from_bits(arg as u64).is_finite())
+                value::encode_bool(value::decode_f64(arg).is_finite())
             } else {
                 value::encode_bool(false)
             }
@@ -452,7 +452,7 @@ pub(crate) fn define_math_number_error(
             let radix = if value::is_undefined(radix_val) {
                 0
             } else if value::is_f64(radix_val) {
-                let r = f64::from_bits(radix_val as u64);
+                let r = value::decode_f64(radix_val);
                 if r.is_nan() || r.is_infinite() {
                     return value::encode_f64(f64::NAN);
                 }
@@ -582,11 +582,11 @@ pub(crate) fn define_math_number_error(
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
             }
-            let x = f64::from_bits(this_val as u64);
+            let x = value::decode_f64(this_val);
             let radix = if value::is_undefined(radix_val) || value::is_null(radix_val) {
                 10
             } else if value::is_f64(radix_val) {
-                let r = f64::from_bits(radix_val as u64) as i32;
+                let r = value::decode_f64(radix_val) as i32;
                 if !(2..=36).contains(&r) {
                     return store_runtime_string(&caller, "NaN".to_string());
                 }
@@ -640,11 +640,11 @@ pub(crate) fn define_math_number_error(
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
             }
-            let x = f64::from_bits(this_val as u64);
+            let x = value::decode_f64(this_val);
             let digits = if value::is_undefined(digits_val) || value::is_null(digits_val) {
                 0
             } else if value::is_f64(digits_val) {
-                f64::from_bits(digits_val as u64) as i32
+                value::decode_f64(digits_val) as i32
             } else {
                 0
             };
@@ -670,11 +670,11 @@ pub(crate) fn define_math_number_error(
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
             }
-            let x = f64::from_bits(this_val as u64);
+            let x = value::decode_f64(this_val);
             let digits = if value::is_undefined(digits_val) || value::is_null(digits_val) {
                 None
             } else if value::is_f64(digits_val) {
-                Some(f64::from_bits(digits_val as u64) as i32)
+                Some(value::decode_f64(digits_val) as i32)
             } else {
                 None
             };
@@ -694,11 +694,11 @@ pub(crate) fn define_math_number_error(
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
             }
-            let x = f64::from_bits(this_val as u64);
+            let x = value::decode_f64(this_val);
             let precision = if value::is_undefined(digits_val) {
                 None
             } else if value::is_f64(digits_val) {
-                Some(f64::from_bits(digits_val as u64) as i32)
+                Some(value::decode_f64(digits_val) as i32)
             } else {
                 Some(-1)
             };

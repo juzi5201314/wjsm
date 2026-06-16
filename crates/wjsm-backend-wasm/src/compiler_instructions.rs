@@ -52,7 +52,7 @@ impl Compiler {
                 // ValueTy 缺失（Unknown）保守当 Handle
                 value_ty
                     .and_then(|m| m.get(v))
-                    .is_none_or(|t| *t == wjsm_ir::value_ty::ValueTy::Handle)
+                    .is_none_or(|t| *t == ValueTy::Handle)
             })
             .map(|v| self.local_idx(v.0))
             .collect();

@@ -27,6 +27,7 @@ mod runtime_host_helpers;
 mod runtime_json;
 mod runtime_microtask;
 mod runtime_promises;
+mod runtime_value_adapter;
 mod shared_buffer;
 pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;

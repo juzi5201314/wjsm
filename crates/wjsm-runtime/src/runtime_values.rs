@@ -990,8 +990,8 @@ pub(crate) fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -
     match a_type {
         // f64: 注意 NaN !== NaN
         0 => {
-            let af = f64::from_bits(a as u64);
-            let bf = f64::from_bits(b as u64);
+            let af = value::decode_f64(a);
+            let bf = value::decode_f64(b);
             if af.is_nan() || bf.is_nan() {
                 return value::encode_bool(false);
             }

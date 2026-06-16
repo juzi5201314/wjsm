@@ -12,7 +12,7 @@
 //!
 //! **契约**：`compute_liveness(f)[(block_id, i)]` = 紧邻指令 `i` 执行*前*
 //! 活跃的 ValueId 集合；`(block_id, len)` = 块出口（live_out）。
-use crate::{BasicBlockId, Function, Instruction, PhiSource, Terminator, ValueId};
+use wjsm_ir::{BasicBlockId, Function, Instruction, PhiSource, Terminator, ValueId};
 use std::collections::{HashMap, HashSet};
 
 /// 计算每个 block 的后继列表。
