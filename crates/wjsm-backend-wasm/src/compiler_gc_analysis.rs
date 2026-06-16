@@ -16,61 +16,16 @@ use wjsm_ir::{Builtin, FunctionId, Instruction, Module, ValueId};
 
 /// 该 builtin 是否**可能**触发 GC（分配堆对象或 reentrant 回用户 JS）。
 ///
-/// 这是 `builtin_returns_scalar` 的反面（层 1 `wjsm-ir/src/value_ty.rs:125`）。
-/// **维护提醒**：新增 Builtin variant 时须同时检查本白名单和 `builtin_returns_scalar`，
-/// 新增的标量 builtin 若漏加到此处不会导致正确性 bug（仅多 spill），但会损失优化效果。
+/// 这是 `builtin_returns_scalar` 的逻辑补集：`may_trigger_gc = !returns_scalar`。
+/// 统一由 `wjsm_ir::value_ty::builtin_returns_scalar` 维护单一白名单，
+/// 新增 Builtin variant 时只需更新一处，编译器自动保证两层一致性。
+///
 /// 返回 `true` 表示该 builtin **可能**触发 GC，需要 safepoint spill；
 /// 返回 `false` 表示该 builtin **规范保证**不触发 GC，可省 spill。
 ///
 /// **保守原则**：任何不确定的 builtin 一律返回 true（宁滥勿缺）。
 fn builtin_may_trigger_gc(b: &Builtin) -> bool {
-    use Builtin::*;
-
-    // 层 1 白名单中的 builtin 不触发 GC，其余都保守认为可能触发。
-    !matches!(
-        b,
-        // ── 纯数值运算 ──
-        F64Mod | F64Exp
-        // ── Math.* ──
-        | MathAbs | MathAcos | MathAcosh | MathAsin | MathAsinh | MathAtan | MathAtanh
-        | MathAtan2 | MathCbrt | MathCeil | MathClz32 | MathCos | MathCosh | MathExp
-        | MathExpm1 | MathFloor | MathFround | MathHypot | MathImul | MathLog | MathLog1p
-        | MathLog10 | MathLog2 | MathMax | MathMin | MathPow | MathRandom | MathRound
-        | MathSign | MathSin | MathSinh | MathSqrt | MathTan | MathTanh | MathTrunc
-        // ── Number ──
-        | NumberConstructor | NumberParseInt | NumberParseFloat
-        | NumberIsNaN | NumberIsFinite | NumberIsInteger | NumberIsSafeInteger
-        | NumberProtoValueOf
-        // ── Boolean ──
-        | BooleanConstructor | BooleanProtoValueOf
-        // ── Array 纯查询 ──
-        | ArrayIsArray | ArrayIncludes | ArrayIndexOf | ArrayGetLength
-        // ── String 纯查询 ──
-        | StringCharCodeAt | StringCodePointAt | StringIndexOf | StringLastIndexOf
-        | StringIncludes | StringStartsWith | StringEndsWith
-        // ── BigInt 比较 ──
-        | BigIntEq | BigIntCmp
-        // ── Map/Set 查询 ──
-        | MapSetHas | MapSetDelete | MapSetGetSize
-        // ── Date 静态方法 ──
-        | DateNow | DateParse | DateUTC
-        // ── TypedArray 长度/索引查询 ──
-        | TypedArrayProtoLength | TypedArrayProtoByteLength | TypedArrayProtoByteOffset
-        | TypedArrayProtoIndexOf | TypedArrayProtoLastIndexOf | TypedArrayProtoIncludes
-        // ── SharedArrayBuffer 长度查询 ──
-        | SharedArrayBufferProtoByteLength | SharedArrayBufferProtoMaxByteLength
-        | SharedArrayBufferProtoGrowable
-        // ── 迭代器完成态查询 ──
-        | IteratorDone | EnumeratorDone
-        // ── 类型/存在性判断 ──
-        | IsCallable | IsPromise | ObjectIs
-        // ── 运算符 ──
-        | In | InstanceOf | AtomicsIsLockFree
-        // ── RegExp.test ──
-        | RegExpTest
-        // ── Reflect 查询型 ──
-        | ReflectHas | ReflectDeleteProperty | ReflectIsExtensible | ReflectPreventExtensions
-    )
+    !wjsm_ir::value_ty::builtin_returns_scalar(b)
 }
 
 /// GC 分析结果。

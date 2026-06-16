@@ -122,7 +122,10 @@ pub fn infer_value_ty(module: &Module, function: &Function) -> HashMap<ValueId, 
 /// - ArraySome/Every/Find/FindIndex/ForEach/Map/Filter/Reduce/ReduceRight/FlatMap：
 ///   host 经 `wrap_array_callback_async!` 宏调用用户 callback → reentrant。
 /// - StringFromCharCode/FromCodePoint/At/Concat/Slice/...：返回 runtime string handle。
-fn builtin_returns_scalar(b: &Builtin) -> bool {
+///
+/// 此函数同时被 Layer 1（value_ty 类型推断）和 Layer 3（GC 分析 may-trigger-gc 判定）
+/// 使用。Layer 3 的 `builtin_may_trigger_gc` 为本函数的逻辑补集（`!builtin_returns_scalar`）。
+pub fn builtin_returns_scalar(b: &Builtin) -> bool {
     use Builtin::*;
     matches!(
         b,

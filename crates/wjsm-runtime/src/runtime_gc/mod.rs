@@ -75,6 +75,7 @@ pub mod api;
 pub mod context;
 pub mod mark_bitmap;
 pub mod mark_sweep;
+pub mod native_callable_refs;
 pub mod roots;
 
 pub use api::{

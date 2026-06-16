@@ -214,37 +214,10 @@ fn resolve_value_handles(ctx: &mut GcContext, val: i64, obj_table_count: usize) 
     vec![]
 }
 
-/// 从 native_callable 表项提取其内部持有的对象引用（移植自 trace_native_callable_record）。
-/// 返回 raw i64 值列表（由 resolve_value_handles 进一步解析为 handle）。
+/// 从 native_callable 表项提取其内部持有的对象引用。
+/// 委托给 `runtime_gc::native_callable_refs` 的共享实现。
 fn collect_native_callable_refs(st: &mut crate::RuntimeState, idx: usize) -> Vec<i64> {
-    let record = match st
-        .native_callables
-        .lock()
-        .ok()
-        .and_then(|g| g.get(idx).cloned())
-    {
-        Some(r) => r,
-        None => return vec![],
-    };
-    use crate::NativeCallable;
-    match record {
-        NativeCallable::PromiseResolvingFunction { promise, .. } => vec![promise],
-        NativeCallable::PromiseCombinatorReaction { context, .. } => {
-            let (rp, ra) = st
-                .combinator_contexts
-                .lock()
-                .ok()
-                .and_then(|g| g.get(context).map(|e| (e.result_promise, e.result_array)))
-                .unwrap_or((value::encode_undefined(), value::encode_undefined()));
-            vec![rp, ra]
-        }
-        NativeCallable::AsyncGeneratorMethod { generator, .. }
-        | NativeCallable::AsyncGeneratorIdentity { generator } => vec![generator],
-        NativeCallable::EvalFunction(function) => function.scope_env.into_iter().collect(),
-        // 其余变体不持有 obj_table 引用（method dispatch 的 handle 是 side-table 索引，
-        // 由对应 side-table 的 fixed-point root 路径覆盖，T4.b3）。
-        _ => vec![],
-    }
+    crate::runtime_gc::native_callable_refs::collect_native_callable_refs(st, idx)
 }
 
 /// 读 obj_table[h] → ptr（None = 越界/空槽）。
