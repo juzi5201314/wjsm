@@ -160,6 +160,14 @@ impl Compiler {
             ],
             vec![ValType::I64],
         );
+        // Type 35: (i32, i32, i32) -> (i32) — gc_alloc_slow(size, heap_type, capacity) -> handle
+        //   None（真 OOM）时 host 内部 trap（unreachable），故返回值总有效。
+        types.ty().function(
+            vec![ValType::I32, ValType::I32, ValType::I32],
+            vec![ValType::I32],
+        );
+        // Type 36: () -> (i32) — gc_take_freed_handle() -> handle（-1 表空）
+        types.ty().function(vec![], vec![ValType::I32]);
         let mut imports = ImportSection::new();
         for spec in host_import_specs() {
             imports.import("env", spec.name, EntityType::Function(spec.type_idx));
@@ -169,7 +177,7 @@ impl Compiler {
                 "env",
                 "memory",
                 EntityType::Memory(MemoryType {
-                    minimum: 2,
+                    minimum: 4,
                     maximum: None,
                     memory64: false,
                     shared: false,
@@ -214,7 +222,7 @@ impl Compiler {
         let mut memory = MemorySection::new();
         if mode == CompileMode::Normal {
             memory.memory(MemoryType {
-                minimum: 2, // 2 pages (128KB) to accommodate shadow stack
+                minimum: 4, // 4 pages (256KB)：P4 GC obj_table 8KB + shadow stack 64KB + 对象堆
                 maximum: None,
                 memory64: false,
                 shared: false,
@@ -274,6 +282,7 @@ impl Compiler {
             string_concat_scratch_idx: 0,
             shadow_sp_global_idx: 0,
             shadow_sp_scratch_idx: 0,
+            safepoint_sp_saved_idx: 0,
             eval_var_base_local_idx: 0,
             alloc_counter_global_idx: 0,
             object_heap_start_global_idx: 6,
@@ -297,6 +306,11 @@ impl Compiler {
             mode,
             function_param_counts: Vec::new(),
             function_names: Vec::new(),
+            current_fn_liveness: None,
+            current_fn_value_ty: None,
+            current_emit_block_idx: 0,
+            current_emit_instr_idx: 0,
+            gc_analysis: None,
         }
     }
 }

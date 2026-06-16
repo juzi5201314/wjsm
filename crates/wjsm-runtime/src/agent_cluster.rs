@@ -13,7 +13,7 @@ use crate::runtime_render::read_runtime_string;
 use crate::shared_buffer::{
     SharedRuntimeState, materialize_shared_array_buffer_by_handle, read_sab_handle_from_object,
 };
-use crate::{call_wasm_callback_async, RuntimeState, WasmEnv};
+use crate::{RuntimeState, WasmEnv, call_wasm_callback_async};
 
 const BROADCAST_WAIT_MS: u64 = 60_000;
 

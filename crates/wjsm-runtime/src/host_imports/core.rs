@@ -1215,431 +1215,106 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "abstract_compare", f)?;
 
-    // ── Import 21: gc_collect(i32) → i32 ─────────────────────────────────────
-    // 标记-清除 GC：尝试回收足够空间满足 requested_size。
-    // 返回新的 heap_ptr 或 0（失败）。
+    // ── P4 GC framework: gc_alloc_slow / gc_maybe_collect / gc_take_freed_handle ──
+
+    // gc_alloc_slow(size: i32, heap_type: i32, capacity: i32) -> i32
+    //   fast-path bump 失败后的 slow-path：free list → bump → GC → grow。
+    //   返回**线性内存 ptr**（仅地址；handle 注册在 WASM $obj_new/$arr_new 中完成）。
+    //   真 OOM（无法分配）时返回 u32::MAX sentinel（调用方 unreachable trap）。
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, requested_size: i32| -> i32 {
-            // 获取全局变量
-            let heap_ptr = {
-                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-                    return 0;
-                };
-                g.get(&mut caller).i32().unwrap_or(0)
-            };
-            let obj_table_ptr = {
-                let Some(Extern::Global(g)) = caller.get_export("__obj_table_ptr") else {
-                    return 0;
-                };
-                g.get(&mut caller).i32().unwrap_or(0)
-            };
-            let obj_table_count = {
-                let Some(Extern::Global(g)) = caller.get_export("__obj_table_count") else {
-                    return 0;
-                };
-                g.get(&mut caller).i32().unwrap_or(0)
-            };
-            let object_heap_start = {
-                let Some(Extern::Global(g)) = caller.get_export("__object_heap_start") else {
-                    return 0;
-                };
-                g.get(&mut caller).i32().unwrap_or(0)
-            };
-            let num_ir_functions = {
-                let Some(Extern::Global(g)) = caller.get_export("__num_ir_functions") else {
-                    return 0;
-                };
-                g.get(&mut caller).i32().unwrap_or(0)
-            };
-            let shadow_sp = {
-                let Some(Extern::Global(g)) = caller.get_export("__shadow_sp") else {
-                    return 0;
-                };
-                g.get(&mut caller).i32().unwrap_or(0)
-            };
-
-            // 初始化/清除标记位图（在获取内存之前）
-            {
-                let mut mark_bits = caller
-                    .data()
-                    .gc_mark_bits
-                    .lock()
-                    .expect("gc_mark_bits mutex");
-                let needed_words = (obj_table_count as usize).div_ceil(64).max(mark_bits.len());
-                if mark_bits.len() < needed_words {
-                    mark_bits.resize(needed_words, 0);
-                } else {
-                    mark_bits.fill(0);
-                }
-            }
-
-            // ── 构建根集 ──
-            // 从三个来源收集根对象：
-            //   1. 影子栈帧（调用栈上的对象/函数引用）
-            //   2. 函数属性对象（前 num_ir_functions 个句柄）
-            //   3. 定时器回调
-            let mut roots: Vec<(usize, usize)> = Vec::new();
-            {
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                    return 0;
-                };
-                let data = memory.data(&caller);
-
-                let add_root = |handle_idx: usize, data: &[u8], roots: &mut Vec<(usize, usize)>| {
-                    let slot_addr = obj_table_ptr as usize + handle_idx * 4;
-                    if slot_addr + 4 <= data.len() {
-                        let obj_ptr = u32::from_le_bytes([
-                            data[slot_addr],
-                            data[slot_addr + 1],
-                            data[slot_addr + 2],
-                            data[slot_addr + 3],
-                        ]) as usize;
-                        if obj_ptr != 0 {
-                            roots.push((handle_idx, obj_ptr));
-                        }
-                    }
-                };
-
-                // 3a. 影子栈：从 shadow_stack_base 扫描到 shadow_sp
-                // shadow_sp 是栈指针，影子栈在 shadow_stack_base 处，每帧 8 字节
-                let shadow_stack_base = object_heap_start as usize - SHADOW_STACK_SIZE as usize;
-                let shadow_sp_usize = shadow_sp as usize;
-                if shadow_sp_usize > shadow_stack_base {
-                    let frame_count = (shadow_sp_usize - shadow_stack_base) / 8;
-                    for frame in 0..frame_count {
-                        let frame_addr = shadow_stack_base + frame * 8;
-                        if frame_addr + 8 <= data.len() {
-                            let val = i64::from_le_bytes([
-                                data[frame_addr],
-                                data[frame_addr + 1],
-                                data[frame_addr + 2],
-                                data[frame_addr + 3],
-                                data[frame_addr + 4],
-                                data[frame_addr + 5],
-                                data[frame_addr + 6],
-                                data[frame_addr + 7],
-                            ]);
-                            if value::is_object(val) {
-                                let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
-                                add_root(handle_idx, data, &mut roots);
-                            } else if value::is_function(val) {
-                                // Functions are stored in handle table too
-                                let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
-                                if func_idx < num_ir_functions as usize {
-                                    add_root(func_idx, data, &mut roots);
-                                }
-                            } else if value::is_closure(val) {
-                                // 闭包值的 env_obj 可能包含对象引用
-                                let closure_idx = value::decode_closure_idx(val) as usize;
-                                let closures =
-                                    caller.data().closures.lock().expect("closures mutex");
-                                if let Some(entry) = closures.get(closure_idx)
-                                    && value::is_object(entry.env_obj)
-                                {
-                                    let handle_idx =
-                                        value::decode_object_handle(entry.env_obj) as usize;
-                                    add_root(handle_idx, data, &mut roots);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 3b. 函数属性对象（前 num_ir_functions 个条目）始终标记
-                for handle_idx in 0..num_ir_functions as usize {
-                    add_root(handle_idx, data, &mut roots);
-                }
-
-                // 3c. 定时器回调
-                {
-                    let timers = caller.data().timers.lock().expect("timers mutex");
-                    for timer in timers.iter() {
-                        let val = timer.callback;
-                        if value::is_function(val) {
-                            let func_idx = (val as u64 & 0xFFFF_FFFF) as usize;
-                            if func_idx < num_ir_functions as usize {
-                                add_root(func_idx, data, &mut roots);
-                            }
-                        } else if value::is_closure(val) {
-                            // 闭包回调：将 env_obj 中的对象标记为根
-                            let closure_idx = value::decode_closure_idx(val) as usize;
-                            let closures = caller.data().closures.lock().expect("closures mutex");
-                            if let Some(entry) = closures.get(closure_idx)
-                                && value::is_object(entry.env_obj)
-                            {
-                                let handle_idx =
-                                    value::decode_object_handle(entry.env_obj) as usize;
-                                add_root(handle_idx, data, &mut roots);
-                            }
-                        }
-                    }
-                }
-
-                // 3d. 闭包表中的 env_obj
-                {
-                    let closures = caller.data().closures.lock().expect("closures mutex");
-                    for entry in closures.iter() {
-                        if value::is_object(entry.env_obj) {
-                            let handle_idx = value::decode_object_handle(entry.env_obj) as usize;
-                            add_root(handle_idx, data, &mut roots);
-                        }
-                    }
-                }
-
-                // 3e. 模块命名空间对象缓存（dynamic import 返回的命名空间对象必须保持可达）
-                {
-                    let cache = caller
-                        .data()
-                        .module_namespace_cache
-                        .lock()
-                        .expect("module namespace cache mutex");
-                    for &val in cache.values() {
-                        if value::is_object(val) {
-                            let handle_idx = value::decode_object_handle(val) as usize;
-                            add_root(handle_idx, data, &mut roots);
-                        }
-                    }
-                }
-
-                // 去重
-                roots.sort();
-                roots.dedup_by_key(|&mut (handle_idx, _)| handle_idx);
-            } // data 借用结束
-
-            // Phase 1: Mark - 递归标记所有可达对象
-            for (handle_idx, obj_ptr) in roots {
-                mark_object_recursive(
-                    &mut caller,
-                    handle_idx,
-                    obj_ptr,
-                    obj_table_ptr as usize,
-                    obj_table_count as usize,
-                );
-            }
-
-            // Phase 2: Sweep + Compact
-            // 将存活对象移动到堆开头，更新 handle table
-
-            // 首先获取标记位图的快照
-            let mark_snapshot: Vec<u64> = {
-                let mark_bits = caller
-                    .data()
-                    .gc_mark_bits
-                    .lock()
-                    .expect("gc_mark_bits mutex");
-                mark_bits.clone()
-            };
-
-            // 获取内存数据的可变引用
+        |mut caller: Caller<'_, RuntimeState>, size: i32, heap_type: i32, capacity: i32| -> i32 {
             let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return 0;
+                return u32::MAX as i32;
             };
-            let data = memory.data_mut(&mut caller);
-
-            let heap_base = object_heap_start as usize;
-
-            // 收集存活对象信息
-            let mut live_objects: Vec<(usize, usize, usize)> = Vec::new(); // (handle_idx, old_ptr, size)
-            for handle_idx in 0..obj_table_count as usize {
-                let word_idx = handle_idx / 64;
-                let bit_idx = handle_idx % 64;
-                if word_idx < mark_snapshot.len()
-                    && (mark_snapshot[word_idx] & (1u64 << bit_idx)) != 0
-                {
-                    // 存活对象
-                    let slot_addr = obj_table_ptr as usize + handle_idx * 4;
-                    if slot_addr + 4 > data.len() {
-                        continue;
-                    }
-                    let old_ptr = u32::from_le_bytes([
-                        data[slot_addr],
-                        data[slot_addr + 1],
-                        data[slot_addr + 2],
-                        data[slot_addr + 3],
-                    ]) as usize;
-                    if old_ptr == 0 {
-                        continue;
-                    }
-                    // 计算对象大小（按 heap type 选择布局）
-                    if old_ptr + 16 > data.len() {
-                        continue;
-                    }
-                    let heap_type = data[old_ptr + 4];
-                    let (capacity, elem_size) = if heap_type == wjsm_ir::HEAP_TYPE_ARRAY {
-                        (
-                            u32::from_le_bytes([
-                                data[old_ptr + 12],
-                                data[old_ptr + 13],
-                                data[old_ptr + 14],
-                                data[old_ptr + 15],
-                            ]) as usize,
-                            8usize,
-                        )
-                    } else {
-                        (
-                            u32::from_le_bytes([
-                                data[old_ptr + 8],
-                                data[old_ptr + 9],
-                                data[old_ptr + 10],
-                                data[old_ptr + 11],
-                            ]) as usize,
-                            32usize,
-                        )
-                    };
-                    let Some(payload_size) = capacity.checked_mul(elem_size) else {
-                        continue;
-                    };
-                    let Some(size) = 16usize.checked_add(payload_size) else {
-                        continue;
-                    };
-                    live_objects.push((handle_idx, old_ptr, size));
-                }
-            }
-
-            // 按旧指针排序，保持内存布局顺序
-            live_objects.sort_by_key(|&(_, old_ptr, _)| old_ptr);
-
-            // 计算新的位置
-            let mut current_ptr = heap_base;
-            for (_, _, size) in &live_objects {
-                current_ptr += size;
-            }
-            let new_heap_end = current_ptr;
-            let freed_space = heap_ptr as usize - new_heap_end;
-
-            // 检查是否释放了足够空间
-            if freed_space < requested_size as usize {
-                // 空间不足，返回失败
-                return 0;
-            }
-
-            // 实际移动对象
-            let mut current_ptr = heap_base;
-            for &(handle_idx, old_ptr, size) in &live_objects {
-                if old_ptr != current_ptr {
-                    // 移动对象（使用 ptr::copy 避免重叠问题）
-                    unsafe {
-                        std::ptr::copy(
-                            data.as_ptr().add(old_ptr),
-                            data.as_mut_ptr().add(current_ptr),
-                            size,
-                        );
-                    }
-                }
-                // 更新 handle table
-                let slot_addr = obj_table_ptr as usize + handle_idx * 4;
-                data[slot_addr..slot_addr + 4].copy_from_slice(&(current_ptr as u32).to_le_bytes());
-                current_ptr += size;
-            }
-
-            // 更新 heap_ptr 全局变量
+            let size = size.max(0) as usize;
+            let heap_type = heap_type.max(0).min(255) as u8;
+            let capacity = capacity.max(0) as u32;
+            // 算法持有在 RuntimeState.gc_algorithm（Arc<Mutex>），经 GcContext 调用。
+            // 先 clone Arc 释放 caller 不可变借用，再 lock，避免借用冲突。
+            let gc_arc = caller.data().gc_algorithm.clone();
+            // 1. alloc_slow（free list + bump）
             {
-                let Some(Extern::Global(g)) = caller.get_export("__heap_ptr") else {
-                    return 0;
-                };
-                g.set(&mut caller, Val::I32(new_heap_end as i32)).ok();
-            }
-
-            // 重置分配计数器
-            {
-                let mut counter = caller
-                    .data()
-                    .alloc_counter
-                    .lock()
-                    .expect("alloc_counter mutex");
-                *counter = 0;
-            }
-
-            // ── Process weak references (WeakRef + FinalizationRegistry) ──
-            {
-                let mark_bits = caller
-                    .data()
-                    .gc_mark_bits
-                    .lock()
-                    .expect("gc_mark_bits mutex");
-                let is_marked = |handle_idx: u32| -> bool {
-                    let word = (handle_idx as usize) / 64;
-                    let bit = (handle_idx as usize) % 64;
-                    word < mark_bits.len() && (mark_bits[word] & (1u64 << bit)) != 0
-                };
-
-                // Process WeakRef entries
-                {
-                    let mut wr_table = caller
-                        .data()
-                        .weakref_table
-                        .lock()
-                        .expect("weakref_table mutex");
-                    for entry in wr_table.iter_mut() {
-                        if entry.target_handle != 0 && !is_marked(entry.target_handle) {
-                            entry.target_handle = 0;
-                        }
-                    }
+                let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
+                let mut ctx =
+                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
+                    return ptr as i32;
                 }
-
-                // Process FinalizationRegistry entries
-                {
-                    let mut fr_table = caller
-                        .data()
-                        .finalization_registry_table
-                        .lock()
-                        .expect("fr_table mutex");
-                    for entry in fr_table.iter_mut() {
-                        // Skip if the FinalizationRegistry object itself was collected
-                        if !is_marked(entry.object_handle) {
-                            continue;
-                        }
-                        let mut held_values = Vec::new();
-                        entry.registrations.retain(|reg| {
-                            if !is_marked(reg.target_handle) {
-                                held_values.push(reg.held_value);
-                                false
-                            } else {
-                                true
-                            }
-                        });
-                        if !held_values.is_empty() {
-                            let mut pending = caller
-                                .data()
-                                .pending_cleanup_callbacks
-                                .lock()
-                                .expect("pending_cleanup_callbacks mutex");
-                            pending.push((entry.callback, held_values));
-                        }
-                    }
-                }
-            } // mark_bits lock released
-
-            // Schedule FinalizationRegistry cleanup microtasks
+            }
+            // 2. collect 后重试
             {
-                let mut pending = caller
-                    .data()
-                    .pending_cleanup_callbacks
-                    .lock()
-                    .expect("pending_cleanup_callbacks mutex");
-                let microtasks_to_schedule: Vec<(i64, Vec<i64>)> = pending.drain(..).collect();
-                drop(pending);
-
-                let mut mq = caller
-                    .data()
-                    .microtask_queue
-                    .lock()
-                    .expect("microtask_queue mutex");
-                for (callback, held_values) in microtasks_to_schedule {
-                    for held_value in held_values {
-                        mq.push_back(Microtask::CleanupFinalizationRegistry {
-                            callback,
-                            held_value,
-                        });
+                let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
+                let mut ctx =
+                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                let mut roots = crate::runtime_gc::roots::RuntimeRoots;
+                gc.collect_with_provider(&mut ctx, &mut roots as _);
+            }
+            {
+                let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
+                let mut ctx =
+                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
+                    return ptr as i32;
+                }
+            }
+            // 3. grow + 重试（真 OOM 前最后手段）
+            {
+                let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
+                let mut ctx =
+                    crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+                if ctx.grow(1).is_ok() {
+                    if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
+                        return ptr as i32;
                     }
                 }
             }
-
-            new_heap_end as i32
+            // 真 OOM：返回 sentinel（u32::MAX），调用方应 unreachable trap。
+            u32::MAX as i32
         },
     );
-    linker.define(&mut store, "env", "gc_collect", f)?;
+    linker.define(&mut store, "env", "gc_alloc_slow", f)?;
+
+    // gc_maybe_collect()：proactive GC 触发。
+    //   WASM fast-path 在每次 alloc 成功后调用。host 递增 alloc_counter，达 gc_threshold 时 collect。
+    let f = Func::wrap(&mut store, |mut caller: Caller<'_, RuntimeState>| {
+        let (should_collect, gc_arc) = {
+            let state = caller.data();
+            let mut counter = state.alloc_counter.lock().expect("alloc_counter mutex");
+            *counter += 1;
+            (*counter >= state.gc_threshold, state.gc_algorithm.clone())
+        };
+        if !should_collect {
+            return;
+        }
+        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+            return;
+        };
+        {
+            let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
+            let mut ctx =
+                crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
+            let mut roots = crate::runtime_gc::roots::RuntimeRoots;
+            gc.collect_with_provider(&mut ctx, &mut roots as _);
+        }
+        // 重置 alloc_counter（下一轮阈值窗口）。
+        if let Ok(mut c) = caller.data().alloc_counter.lock() {
+            *c = 0;
+        }
+    });
+    linker.define(&mut store, "env", "gc_maybe_collect", f)?;
+
+    // gc_take_freed_handle() -> i32：从 host handle_free_list pop 复用（fast-path take_or_alloc）。
+    //   返回 handle（≥0）或 -1（空，调用方走 count++ 分支）。
+    let f = Func::wrap(&mut store, |caller: Caller<'_, RuntimeState>| -> i32 {
+        let mut list = caller
+            .data()
+            .handle_free_list
+            .lock()
+            .expect("handle_free_list mutex");
+        list.pop().map(|h| h as i32).unwrap_or(-1)
+    });
+    linker.define(&mut store, "env", "gc_take_freed_handle", f)?;
 
     // ── Import 22: console_error(i64) → () ────────────────────────────────
     // Already created above as `console_error`.

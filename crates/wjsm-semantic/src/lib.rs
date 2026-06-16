@@ -5,8 +5,8 @@ use swc_core::ecma::ast as swc_ast;
 use thiserror::Error;
 use wjsm_ir::{
     BasicBlock, BasicBlockId, BinaryOp, Builtin, CompareOp, Constant, ConstantId, Function,
-    FunctionId, HomeObject, Instruction, Module, PhiSource, Program, SwitchCaseTarget, Terminator,
-    UnaryOp, ValueId, MODULE_ENTRY_IR_NAME,
+    FunctionId, HomeObject, Instruction, MODULE_ENTRY_IR_NAME, Module, PhiSource, Program,
+    SwitchCaseTarget, Terminator, UnaryOp, ValueId,
 };
 
 const EVAL_SCOPE_ENV_PARAM: &str = "$eval_env";
@@ -255,11 +255,10 @@ impl ScopeTree {
             }
         }
     }
-
     /// Check that this variable is not `const` before reassignment.
     /// 注意：`lower_assign` 现在使用 `lookup_for_assign` 在一次遍历中同时完成
     /// const 检查和 scope 解析，此方法保留以供未来使用。
-    
+    #[allow(dead_code)]
     fn check_mutable(&self, name: &str) -> Result<(), String> {
         let mut cursor = self.current;
         loop {
@@ -322,6 +321,9 @@ struct FunctionBuilder {
     _entry: BasicBlockId,
     blocks: Vec<BasicBlock>,
     has_eval: bool,
+    /// 该函数调用的"已知函数声明"变量名→FunctionId（Layer 3 callee 分析）。
+    /// store_function_decl_callee 填充，finalize 时转移到 IR Function。
+    known_callee_vars: std::collections::HashMap<String, wjsm_ir::FunctionId>,
 }
 
 impl FunctionBuilder {
@@ -331,6 +333,7 @@ impl FunctionBuilder {
             _entry: entry,
             blocks: vec![BasicBlock::new(entry)],
             has_eval: false,
+            known_callee_vars: std::collections::HashMap::new(),
         }
     }
 
@@ -340,6 +343,15 @@ impl FunctionBuilder {
 
     fn has_eval(&self) -> bool {
         self.has_eval
+    }
+
+    /// 记录 callee 变量（scope-qualified IR name）→ FunctionId（Layer 3）。
+    fn record_known_callee(&mut self, ir_name: String, function_id: wjsm_ir::FunctionId) {
+        self.known_callee_vars.insert(ir_name, function_id);
+    }
+
+    fn take_known_callee_vars(&mut self) -> std::collections::HashMap<String, wjsm_ir::FunctionId> {
+        std::mem::take(&mut self.known_callee_vars)
     }
 
     fn name(&self) -> &str {
@@ -410,7 +422,7 @@ impl FunctionBuilder {
         }
     }
 
-    
+    #[allow(dead_code)]
     fn finish(self) -> Function {
         let entry = self._entry;
         let mut function = Function::new(self._name, entry);
@@ -1201,9 +1213,13 @@ pub fn lower_modules(
         lowerer.finalize_async_main()?;
     } else {
         let has_eval = lowerer.current_function.has_eval();
+        let known_callees = lowerer.current_function.take_known_callee_vars();
         let blocks = lowerer.current_function.into_blocks();
         let mut function = Function::new(MODULE_ENTRY_IR_NAME, BasicBlockId(0));
         function.set_has_eval(has_eval);
+        for (ir_name, fn_id) in known_callees {
+            function.record_known_callee(ir_name, fn_id);
+        }
         for block in blocks {
             function.push_block(block);
         }
@@ -1485,37 +1501,40 @@ use eval_scan::*;
 /// 判断表达式是否为 TypedArray 构造函数调用（`new Int8Array(...)` 等形式）。
 fn is_typedarray_constructor_expr(expr: &swc_ast::Expr) -> bool {
     if let swc_ast::Expr::New(new_expr) = expr
-        && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
-            return matches!(
-                ident.sym.as_ref(),
-                "Int8Array"
-                    | "Uint8Array"
-                    | "Uint8ClampedArray"
-                    | "Int16Array"
-                    | "Uint16Array"
-                    | "Int32Array"
-                    | "Uint32Array"
-                    | "Float32Array"
-                    | "Float64Array"
-                    | "BigInt64Array"
-                    | "BigUint64Array"
-            );
-        }
+        && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref()
+    {
+        return matches!(
+            ident.sym.as_ref(),
+            "Int8Array"
+                | "Uint8Array"
+                | "Uint8ClampedArray"
+                | "Int16Array"
+                | "Uint16Array"
+                | "Int32Array"
+                | "Uint32Array"
+                | "Float32Array"
+                | "Float64Array"
+                | "BigInt64Array"
+                | "BigUint64Array"
+        );
+    }
     false
 }
 /// 判断表达式是否为 SharedArrayBuffer 构造函数调用（`new SharedArrayBuffer(...)` 形式）。
 fn is_sharedarraybuffer_constructor_expr(expr: &swc_ast::Expr) -> bool {
     if let swc_ast::Expr::New(new_expr) = expr
-        && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
-            return ident.sym.as_ref() == "SharedArrayBuffer";
-        }
+        && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref()
+    {
+        return ident.sym.as_ref() == "SharedArrayBuffer";
+    }
     false
 }
 /// 判断表达式是否为 DataView 构造函数调用（`new DataView(...)` 形式）。
 fn is_dataview_constructor_expr(expr: &swc_ast::Expr) -> bool {
     if let swc_ast::Expr::New(new_expr) = expr
-        && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref() {
-            return ident.sym.as_ref() == "DataView";
-        }
+        && let swc_ast::Expr::Ident(ident) = new_expr.callee.as_ref()
+    {
+        return ident.sym.as_ref() == "DataView";
+    }
     false
 }

@@ -1101,7 +1101,14 @@ impl Lowerer {
         let m_entry = BasicBlockId(0);
         self.emit_hoisted_var_initializers(m_entry);
 
-        let m_entry = self.emit_arguments_init(m_entry)?;
+        // 对象字面量方法/访问器始终物化 arguments（不参与惰性消除）。
+        // 原因：此路径（lower_method_to_fn / lower_method_prop_to_fn）在降级方法体时会
+        // 再入式地为内部嵌套方法/捕获闭包建 $shared_env，依赖 entry block 的指令布局；
+        // 减少 entry block 指令数（消除 arguments-init）会触发该路径既有的 block-resolution
+        // 缺陷，使方法体被截断为 unreachable（见 for-await + [Symbol.iterator] 复现）。
+        // 且对象方法必然分配（闭包/对象），恒为 may-GC，消除 arguments 对 Layer 3 零收益。
+        // 故安全且无损地保持基线行为。
+        let m_entry = self.emit_arguments_init(m_entry, true)?;
         self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 
         // 降低方法体
@@ -1221,7 +1228,8 @@ impl Lowerer {
 
         let body_entry = self.emit_param_inits(&function.params, &param_ir_names, entry)?;
 
-        let body_entry = self.emit_arguments_init(body_entry)?;
+        // 对象字面量方法始终物化 arguments（见上方 lower_method_to_fn 处的说明）。
+        let body_entry = self.emit_arguments_init(body_entry, true)?;
         self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 
         let mut inner_flow = StmtFlow::Open(body_entry);

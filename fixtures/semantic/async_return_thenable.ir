@@ -26,48 +26,41 @@ module {
     c23 = number(3)
     c24 = number(0)
     c25 = functionref(@0)
-    c26 = number(1)
-    c27 = functionref(@0)
-    c28 = undefined
-    c29 = number(99)
-    c30 = functionref(@0)
-    c31 = undefined
-    c32 = string("then")
-    c33 = number(0)
-    c34 = undefined
-    c35 = string("$0.foo")
-    c36 = string("callee")
-    c37 = functionref(@1)
-    c38 = number(4)
-    c39 = number(2)
-    c40 = number(3)
+    c26 = undefined
+    c27 = number(99)
+    c28 = functionref(@0)
+    c29 = undefined
+    c30 = string("then")
+    c31 = number(0)
+    c32 = undefined
+    c33 = string("$0.foo")
+    c34 = string("callee")
+    c35 = functionref(@1)
+    c36 = number(4)
+    c37 = number(2)
+    c38 = number(3)
+    c39 = undefined
+    c40 = number(0)
     c41 = undefined
-    c42 = number(0)
-    c43 = undefined
-    c44 = bool(false)
-    c45 = functionref(@2)
+    c42 = bool(false)
+    c43 = functionref(@2)
+    c44 = undefined
+    c45 = functionref(@3)
     c46 = undefined
-    c47 = functionref(@3)
-    c48 = undefined
 
   fn @anon_0 [params: $2.$env, $2.$this, $2.resolve] [entry=bb0]:
     bb0:
-      %0 = collect_rest_args skip=0
-      %1 = const c26
-      %3 = const c27
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
-      store var $2.arguments, %2
-      %4 = const c28
-      %5 = load var $2.resolve
-      %6 = const c29
-      %7 = call %5, this=%4, args=[%6]
-      %8 = is_exception %7
-      branch %8, bb2, bb1
+      %0 = const c26
+      %1 = load var $2.resolve
+      %2 = const c27
+      %3 = call %1, this=%0, args=[%2]
+      %4 = is_exception %3
+      branch %4, bb2, bb1
     bb1:
       return
     bb2:
-      %9 = call builtin.exception_value(%7)
-      throw %9
+      %5 = call builtin.exception_value(%3)
+      throw %5
 
   fn @foo$async [params: $1.$env, $1.$this] [entry=bb0]:
     bb0:
@@ -96,10 +89,10 @@ module {
       jump bb2
     bb2:
       %14 = new_object(capacity=4)
-      %15 = const c30
-      %16 = const c31
+      %15 = const c28
+      %16 = const c29
       %17 = call builtin.create_closure(%15, %16)
-      %18 = const c32
+      %18 = const c30
       set_prop %14, %18, %17
       %19 = load var $1.$promise
       promise_resolve %19, %14
@@ -108,27 +101,27 @@ module {
   fn @foo [params: $3.$env, $3.$this] [entry=bb0]:
     bb0:
       %0 = collect_rest_args skip=0
-      %1 = const c33
-      %3 = const c34
+      %1 = const c31
+      %3 = const c32
       %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
       store var $3.arguments, %2
       %4 = load var $env
-      %5 = const c35
+      %5 = const c33
       %6 = get_prop %4, %5
-      %7 = const c36
+      %7 = const c34
       set_prop %2, %7, %6
       %8 = new_promise
-      %9 = const c37
-      %10 = const c38
+      %9 = const c35
+      %10 = const c36
       %11 = call builtin.continuation.create(%9, %8, %10)
-      %12 = const c39
+      %12 = const c37
       call builtin.continuation.save_var(%11, %12, %8)
-      %13 = const c40
-      %14 = const c41
+      %13 = const c38
+      %14 = const c39
       call builtin.continuation.save_var(%11, %13, %14)
-      %15 = const c42
-      %16 = const c43
-      %17 = const c44
+      %15 = const c40
+      %16 = const c41
+      %17 = const c42
       call builtin.async_function.resume(%9, %11, %15, %16, %17)
       return %8
 
@@ -182,13 +175,13 @@ module {
       store var $0.$global, %19
       %20 = const c19
       store var $this, %20
-      %21 = const c45
+      %21 = const c43
       store var $0.foo, %21
-      %22 = const c46
+      %22 = const c44
       %23 = load var $0.foo
       %24 = call %23, this=%22
-      %25 = const c47
-      %26 = const c48
+      %25 = const c45
+      %26 = const c46
       %27 = call builtin.promise.then(%24, %25, %26)
       %28 = is_exception %27
       branch %28, bb2, bb1

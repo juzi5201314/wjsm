@@ -24,6 +24,7 @@ mod runtime_async_fn;
 mod runtime_builtins;
 mod runtime_combinators;
 mod runtime_eval;
+mod runtime_gc;
 mod runtime_heap;
 mod runtime_host_helpers;
 mod runtime_json;
@@ -986,6 +987,9 @@ impl Clone for RuntimeState {
             bound_objects: self.bound_objects.clone(),
             native_callables: self.native_callables.clone(),
             native_callable_free_slots: self.native_callable_free_slots.clone(),
+            handle_free_list: self.handle_free_list.clone(),
+            abandoned_regions: self.abandoned_regions.clone(),
+            gc_algorithm: self.gc_algorithm.clone(),
             continuation_free_slots: self.continuation_free_slots.clone(),
             combinator_context_free_slots: self.combinator_context_free_slots.clone(),
             eval_cache: self.eval_cache.clone(),
@@ -1048,7 +1052,6 @@ struct RuntimeState {
     /// 分配计数器：每次对象分配后递增，用于触发周期性 GC。
     alloc_counter: Arc<Mutex<u64>>,
     /// GC 触发阈值：当 alloc_counter 达到此值时触发 GC。
-    
     gc_threshold: u64,
     /// 定时器列表
     timers: Arc<Mutex<Vec<TimerEntry>>>,
@@ -1064,6 +1067,18 @@ struct RuntimeState {
     native_callables: Arc<Mutex<Vec<NativeCallable>>>,
     /// native_callable 表空闲槽位，用于复用已释放条目。
     native_callable_free_slots: Arc<Mutex<Vec<u32>>>,
+    /// GC sweep 回收的 obj_table handle 槽（供 fast-path 复用，spec #7/IMPL-10）。
+    /// runtime_gc::MarkSweepCollector::collect 把 sweep 回收的 handle push 到此；
+    /// gc_take_freed_handle host import（P4）pop 给 WASM fast-path。
+    handle_free_list: Arc<Mutex<Vec<u32>>>,
+    /// resize（grow_array/grow_object）抛弃的旧区域 (ptr, size)。
+    /// handle 的 obj_table 槽被重写到新 ptr 后，旧 ptr 区域不再被 obj_table 索引，
+    /// sweep 单独遍历 obj_table 看不到它 → 永久泄漏（INV-B vs §8.2 矛盾，P4-blocker #1）。
+    /// grow_array/grow_object 在重写前注册旧 (ptr, old_size)；sweep 读此并入 free list，sweep 结束清空。
+    abandoned_regions: Arc<Mutex<Vec<(usize, usize)>>>,
+    /// 可插拔 GC 算法实例（默认 MarkSweepCollector）。host imports gc_alloc_slow/
+    /// gc_maybe_collect 经此驱动（P4）。Arc<Mutex> 因 host fn 经 &Caller 访问需内部可变性。
+    gc_algorithm: Arc<Mutex<Box<dyn crate::runtime_gc::GcAlgorithm + Send + Sync>>>,
     /// continuation 侧表空闲槽位（handle 下标稳定，禁止 Vec::retain）。
     continuation_free_slots: Arc<Mutex<Vec<u32>>>,
     /// combinator context 侧表空闲槽位。
@@ -1175,6 +1190,30 @@ impl RuntimeState {
         state
     }
 
+    /// GC 框架访问 handle_free_list（runtime_gc::MarkSweepCollector::collect 用）。
+    /// 返回 handle_free_list 的可变引用，供 sweep 回收的 handle 入表。
+    pub(crate) fn handle_free_list_for_gc(&self) -> Option<std::sync::MutexGuard<'_, Vec<u32>>> {
+        self.handle_free_list.lock().ok()
+    }
+
+    /// 注册 resize（grow_array/grow_object）抛弃的旧区域 (ptr, old_size)。
+    /// sweeper 读此并入 free list（P4-blocker #1）。
+    pub(crate) fn abandon_region(&self, ptr: usize, size: usize) {
+        if size == 0 {
+            return;
+        }
+        if let Ok(mut list) = self.abandoned_regions.lock() {
+            list.push((ptr, size));
+        }
+    }
+
+    /// GC 框架访问 abandoned_regions（sweeper 读 + 清空）。
+    pub(crate) fn abandoned_regions_for_gc(
+        &self,
+    ) -> Option<std::sync::MutexGuard<'_, Vec<(usize, usize)>>> {
+        self.abandoned_regions.lock().ok()
+    }
+
     /// 构造一个新的 RuntimeState，所有侧表初始化为空，well-known symbols 预分配。
     pub(crate) fn new() -> Self {
         const GC_THRESHOLD: u64 = 1000;
@@ -1194,6 +1233,11 @@ impl RuntimeState {
             bound_objects: Arc::new(Mutex::new(Vec::new())),
             native_callables: Arc::new(Mutex::new(vec![NativeCallable::EvalIndirect])),
             native_callable_free_slots: Arc::new(Mutex::new(Vec::new())),
+            handle_free_list: Arc::new(Mutex::new(Vec::new())),
+            abandoned_regions: Arc::new(Mutex::new(Vec::new())),
+            gc_algorithm: Arc::new(Mutex::new(Box::new(
+                crate::runtime_gc::MarkSweepCollector::new(),
+            ))),
             continuation_free_slots: Arc::new(Mutex::new(Vec::new())),
             combinator_context_free_slots: Arc::new(Mutex::new(Vec::new())),
             eval_cache: Arc::new(Mutex::new(HashMap::new())),
@@ -1641,8 +1685,7 @@ pub(crate) fn typedarray_entry_from_value_with_env<C: AsContextMut<Data = Runtim
     }
     let handle_idx = (value_raw as u64 & 0xFFFF_FFFF) as usize;
     let ptr = resolve_handle_idx_with_env(ctx, env, handle_idx)?;
-    let handle_raw =
-        read_object_property_by_name_with_env(ctx, env, ptr, "__typedarray_handle__")?;
+    let handle_raw = read_object_property_by_name_with_env(ctx, env, ptr, "__typedarray_handle__")?;
     let handle = value::decode_f64(handle_raw) as usize;
     let mut store = ctx.as_context_mut();
     let table = store.data().typedarray_table.lock().ok()?;
@@ -2796,7 +2839,6 @@ struct ContinuationEntry {
     captured_vars: Vec<i64>,
     completed: bool,
 }
-
 
 struct AsyncGeneratorEntry {
     state: AsyncGeneratorState,

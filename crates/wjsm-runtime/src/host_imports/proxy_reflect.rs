@@ -5,7 +5,11 @@ use wasmtime::{Caller, Extern, Func, Linker, Val};
 use crate::*;
 
 /// D4: 检查 proxy 是否已撤销，返回 Some(exception) 如果已撤销，否则 None。
-pub(crate) fn check_proxy_revoked(caller: &mut Caller<'_, RuntimeState>, entry: &ProxyEntry, op: &str) -> Option<i64> {
+pub(crate) fn check_proxy_revoked(
+    caller: &mut Caller<'_, RuntimeState>,
+    entry: &ProxyEntry,
+    op: &str,
+) -> Option<i64> {
     if entry.revoked {
         Some(make_type_error_exception(
             caller,
@@ -549,10 +553,7 @@ pub(crate) async fn proxy_own_keys_trap_async(
     let keys_val = match trap_res {
         Ok(res) => res,
         Err(e) => {
-            return make_type_error_exception(
-                caller,
-                &format!("Proxy ownKeys trap failed: {}", e),
-            );
+            return make_type_error_exception(caller, &format!("Proxy ownKeys trap failed: {}", e));
         }
     };
     let keys = match extract_array_like_elements(caller, keys_val) {

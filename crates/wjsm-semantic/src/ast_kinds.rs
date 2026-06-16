@@ -20,7 +20,7 @@ pub(crate) fn assign_op_to_binary(op: swc_ast::AssignOp) -> Option<BinaryOp> {
 
 // ── Kind strings ────────────────────────────────────────────────────────
 
-
+#[allow(dead_code)]
 pub(crate) fn stmt_kind(stmt: &swc_ast::Stmt) -> &'static str {
     match stmt {
         swc_ast::Stmt::Block(_) => "block",
@@ -45,6 +45,7 @@ pub(crate) fn stmt_kind(stmt: &swc_ast::Stmt) -> &'static str {
     }
 }
 
+#[allow(dead_code)]
 pub(crate) fn decl_kind(decl: &swc_ast::Decl) -> &'static str {
     match decl {
         swc_ast::Decl::Class(_) => "class",
@@ -113,7 +114,7 @@ pub(crate) fn literal_kind(lit: &swc_ast::Lit) -> &'static str {
     }
 }
 
-
+#[allow(dead_code)]
 pub(crate) fn module_decl_kind(decl: &swc_ast::ModuleDecl) -> &'static str {
     match decl {
         swc_ast::ModuleDecl::Import(_) => "import",

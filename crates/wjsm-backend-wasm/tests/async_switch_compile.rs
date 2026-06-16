@@ -41,8 +41,8 @@ fn triple_await_async_switch_emits_three_dispatch_cases_and_suspends() {
         "expected at least 4 i64.eq for async switch, got {dispatch_eq}"
     );
 
-    let suspend_markers = wat.matches("i64.const 3\n").count()
-        + wat.matches("i64.const 3\r\n").count();
+    let suspend_markers =
+        wat.matches("i64.const 3\n").count() + wat.matches("i64.const 3\r\n").count();
     assert!(
         suspend_markers >= 2,
         "expected multiple suspend state=3 sites in WAT, got {suspend_markers}"

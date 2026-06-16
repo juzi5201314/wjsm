@@ -2,6 +2,111 @@ use super::*;
 use crate::host_import_registry::SpecialHostImport;
 
 impl Compiler {
+    /// 设置当前 emit 位置的 IR block/instruction cursor（P2 safepoint spill 用）。
+    /// 在 compile_instruction 调用前设置，使 alloc 指令能查到正确的 liveness。
+    pub(crate) fn set_emit_cursor(&mut self, block_idx: usize, instr_idx: usize) {
+        self.current_emit_block_idx = block_idx;
+        self.current_emit_instr_idx = instr_idx;
+    }
+
+    /// 判断指令是否为 GC safepoint（可能触发分配或 GC 的点）。
+    /// 这些点的 live handle locals 必须 spill 到 shadow stack，否则 GC 误回收。
+    pub(crate) fn is_safepoint(ins: &Instruction) -> bool {
+        matches!(
+            ins,
+            Instruction::NewObject { .. }
+                | Instruction::NewArray { .. }
+                | Instruction::Call { .. }
+                | Instruction::CallBuiltin { .. }
+                | Instruction::SuperCall { .. }
+                | Instruction::ConstructCall { .. }
+                // P4-b4 补全：下列指令也分配（host alloc 或 arr_new/obj_new）
+                | Instruction::ObjectSpread { .. }
+                | Instruction::CollectRestArgs { .. }
+                | Instruction::NewPromise { .. }
+                | Instruction::PromiseResolve { .. }
+                | Instruction::PromiseReject { .. }
+                | Instruction::StringConcatVa { .. }
+        )
+    }
+
+    /// 返回当前 emit 位置（紧邻当前指令执行前）需 spill 的 local idx 列表。
+    /// = live ValueId ∩ Handle 类型（保守：ValueTy 缺失当 Handle）→ local_idx。
+    /// 结果已 sort + dedup。
+    fn current_spill_locals(&self) -> Vec<u32> {
+        let Some(ref liveness) = self.current_fn_liveness else {
+            return vec![];
+        };
+        let block_map =
+            match liveness.get(&wjsm_ir::BasicBlockId(self.current_emit_block_idx as u32)) {
+                Some(m) => m,
+                None => return vec![],
+            };
+        let Some(live) = block_map.get(&self.current_emit_instr_idx) else {
+            return vec![];
+        };
+        let value_ty = self.current_fn_value_ty.as_ref();
+        let mut spill: Vec<u32> = live
+            .iter()
+            .filter(|v| {
+                // ValueTy 缺失（Unknown）保守当 Handle
+                value_ty
+                    .and_then(|m| m.get(v))
+                    .is_none_or(|t| *t == wjsm_ir::value_ty::ValueTy::Handle)
+            })
+            .map(|v| self.local_idx(v.0))
+            .collect();
+        spill.sort_unstable();
+        spill.dedup();
+        spill
+    }
+
+    /// Safepoint spill prologue：保存 spill 前 shadow_sp，把 live handle locals 写到 shadow stack 顶端，推进 shadow_sp。
+    ///
+    /// non-moving GC 关键：GC 不改 local 值，故无需 reload。epilogue 恢复 shadow_sp 到保存值。
+    /// 用独立 safepoint_sp_saved_idx（i32 local），不占用 shadow_sp_scratch_idx（Call arg-save 用），
+    /// 避免与 Call/SuperCall body 内部的 shadow_sp 操作冲突。
+    ///
+    /// 注：不能用 `shadow_sp -= n*8` 复位——SuperCall forward_args 分支会把 shadow_sp
+    /// 重置为 caller args_base（非 spill 前值），subtract 会得到错误结果。save/restore 稳健。
+    ///
+    /// **Layer 2 batch 优化（7→3 条/值）**：原方案逐值推进 shadow_sp（每值 7 条指令）。
+    /// 改用 immediate offset：先把 shadow_sp 存为 spill_base，N 个值全部写到
+    /// `base + i*8`（每值 3 条），最后一次性把 shadow_sp 推进 N*8 让 GC 扫到 spilled 值。
+    /// 总指令：2（存 base）+ 3N（写 N 值）+ 3（推进 sp）= 3N+5（vs 原 7N+2），N=35 时 110 vs 247。
+    fn emit_safepoint_spill_prologue(&mut self, spill: &[u32]) {
+        if spill.is_empty() {
+            return;
+        }
+        // 保存 spill 前 shadow_sp 到 safepoint_sp_saved（= spill_base）
+        self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
+        self.emit(WasmInstruction::LocalSet(self.safepoint_sp_saved_idx));
+        // spill each live handle local 到 base + i*8（immediate offset，无需逐值推进 sp）
+        for (i, &local) in spill.iter().enumerate() {
+            self.emit(WasmInstruction::LocalGet(self.safepoint_sp_saved_idx));
+            self.emit(WasmInstruction::LocalGet(local));
+            self.emit(WasmInstruction::I64Store(MemArg {
+                offset: (i as u64) * 8,
+                align: 3,
+                memory_index: 0,
+            }));
+        }
+        // 一次性推进 shadow_sp = base + N*8，让 GC 扫到 spilled 值
+        self.emit(WasmInstruction::LocalGet(self.safepoint_sp_saved_idx));
+        self.emit(WasmInstruction::I32Const((spill.len() * 8) as i32));
+        self.emit(WasmInstruction::I32Add);
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+    }
+
+    /// Safepoint spill epilogue：恢复 shadow_sp 到 prologue 保存的值（non-moving 无需 reload local）。
+    fn emit_safepoint_spill_epilogue(&mut self, spill_count: usize) {
+        if spill_count == 0 {
+            return;
+        }
+        self.emit(WasmInstruction::LocalGet(self.safepoint_sp_saved_idx));
+        self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
+    }
+
     pub(crate) fn compile_instruction(
         &mut self,
         module: &IrModule,
@@ -303,9 +408,14 @@ impl Compiler {
                 dest,
                 builtin,
                 args,
-            } => self
-                .compile_builtin_call(*dest, builtin, args)
-                .map(|_| false),
+            } => {
+                // GC safepoint（P2）：spill live handles 再调 builtin。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
+                self.compile_builtin_call(*dest, builtin, args)?;
+                self.emit_safepoint_spill_epilogue(spill.len());
+                Ok(false)
+            }
             Instruction::LoadVar { dest, name } => {
                 if let Some(offset) = self.var_memory_offsets.get(name).copied() {
                     self.emit_eval_var_address(offset);
@@ -349,7 +459,27 @@ impl Compiler {
                 this_val,
                 args,
             } => {
-                self.compile_call_with_new_target(dest, *callee, *this_val, args, None)?;
+                // Layer 3d: 检查 callee 是否可能触发 GC
+                // 如果 callee 是已知 no-GC 函数，可省 safepoint spill
+                let may_gc = if let Some(func_id) = self.current_function_id {
+                    if let Some(ref analysis) = self.gc_analysis {
+                        analysis.call_may_trigger_gc(func_id, *callee)
+                    } else {
+                        true // 无分析结果，保守 spill
+                    }
+                } else {
+                    true // 模块入口函数，保守 spill
+                };
+
+                if may_gc {
+                    let spill = self.current_spill_locals();
+                    self.emit_safepoint_spill_prologue(&spill);
+                    self.compile_call_with_new_target(dest, *callee, *this_val, args, None)?;
+                    self.emit_safepoint_spill_epilogue(spill.len());
+                } else {
+                    // no-GC callee: 省掉 safepoint spill
+                    self.compile_call_with_new_target(dest, *callee, *this_val, args, None)?;
+                }
                 Ok(false)
             }
             Instruction::SuperCall {
@@ -359,7 +489,11 @@ impl Compiler {
                 args,
                 forward_args,
             } => {
+                // SuperCall 保守保留 spill（构造调用几乎必分配）
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 self.compile_super_call(dest, *callee, *this_val, args, *forward_args)?;
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::ConstructCall {
@@ -367,13 +501,21 @@ impl Compiler {
                 this_val,
                 args,
             } => {
+                // ConstructCall 保守保留 spill（构造调用几乎必分配）
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 self.compile_call_with_new_target(&None, *callee, *this_val, args, Some(*callee))?;
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::NewObject { dest, capacity } => {
+                // GC safepoint（P2）：spill live handles，调 $obj_new，复位 shadow_sp。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 // Call $obj_new(capacity)
                 self.emit(WasmInstruction::I32Const(*capacity as i32));
                 self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 // Result is i32 ptr — encode as object handle.
                 // object_handle = BOX_BASE | (TAG_OBJECT << 32) | ptr
                 self.emit(WasmInstruction::I64ExtendI32U);
@@ -530,9 +672,13 @@ impl Compiler {
                 Ok(false)
             }
             Instruction::NewArray { dest, capacity } => {
+                // GC safepoint（P2）：spill live handles，调 $arr_new，复位 shadow_sp。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 // Call $arr_new(capacity) -> i32 (handle index)
                 self.emit(WasmInstruction::I32Const(*capacity as i32));
                 self.emit(WasmInstruction::Call(self.arr_new_func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 // Encode as array handle: BOX_BASE | (TAG_ARRAY << 32) | handle
                 self.emit(WasmInstruction::I64ExtendI32U);
                 let box_base = value::BOX_BASE as i64;
@@ -569,7 +715,16 @@ impl Compiler {
                 Ok(false)
             }
             Instruction::StringConcatVa { dest, parts } => {
-                self.compile_string_concat_va(dest, parts).map(|_| false)
+                // P4-b4 safepoint：string_concat_va host 产 runtime string handle（alloc）。
+                // 注：compile_string_concat_va 内部自管 shadow_sp（push parts + restore），
+                // spill prologue/epilogue 用独立 safepoint_sp_saved_idx，不冲突。
+                // spill 在 compile_string_concat_va 入口前发生，其内部 push 在 spill 之上，
+                // epilogue 在其 restore 后恢复 shadow_sp 到 spill 前。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
+                let r = self.compile_string_concat_va(dest, parts);
+                self.emit_safepoint_spill_epilogue(spill.len());
+                r.map(|_| false)
             }
             Instruction::OptionalGetProp { dest, object, key } => self
                 .compile_optional_get(dest, object, true, Some(key), false)
@@ -586,31 +741,48 @@ impl Compiler {
                 .compile_optional_call(dest, callee, this_val, args)
                 .map(|_| false),
             Instruction::ObjectSpread { dest, source } => {
-                self.compile_object_spread(dest, source).map(|_| false)
+                // P4-b4 safepoint：ObjSpread host alloc 可能触发 GC，spill live handles。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
+                let r = self.compile_object_spread(dest, source);
+                self.emit_safepoint_spill_epilogue(spill.len());
+                r.map(|_| false)
             }
             Instruction::GetSuperBase { dest } => self.compile_get_super_base(dest).map(|_| false),
             Instruction::GetSuperConstructor { dest } => {
                 self.compile_get_super_constructor(dest).map(|_| false)
             }
             Instruction::NewPromise { dest } => {
+                // P4-b4 safepoint：promise_create host alloc 可能触发 GC，spill live handles。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 let func_idx = self.builtin_func_indices[&Builtin::PromiseCreate];
                 self.emit(WasmInstruction::I64Const(0));
                 self.emit(WasmInstruction::Call(func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(false)
             }
             Instruction::PromiseResolve { promise, value } => {
+                // P4-b4 safepoint：host 可能 alloc（reaction/natives）。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 let func_idx = self.builtin_func_indices[&Builtin::PromiseInstanceResolve];
                 self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 self.emit(WasmInstruction::Call(func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::PromiseReject { promise, reason } => {
+                // P4-b4 safepoint：host 可能 alloc（reaction/natives）。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 let func_idx = self.builtin_func_indices[&Builtin::PromiseInstanceReject];
                 self.emit(WasmInstruction::LocalGet(self.local_idx(promise.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(reason.0)));
                 self.emit(WasmInstruction::Call(func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::Suspend { promise, state } => {
@@ -626,6 +798,11 @@ impl Compiler {
                 Ok(true)
             }
             Instruction::CollectRestArgs { dest, skip } => {
+                // P4-b4 safepoint：arr_new 在此 handler 内调用（alloc，可能触发 GC）。
+                // 循环内 ArrayPush 经 grow_array 分配但不主动触发 GC（无 gc_maybe_collect），
+                // 故顶层 spill 覆盖 arr_new 处的 live handle locals 即可。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 let skip_val = *skip as i32;
                 let arr_push_func_idx = self.builtin_func_indices[&Builtin::ArrayPush];
 
@@ -705,6 +882,7 @@ impl Compiler {
                 self.emit(WasmInstruction::End); // end loop
                 self.emit(WasmInstruction::End); // end block
 
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::IsException { dest, value } => {

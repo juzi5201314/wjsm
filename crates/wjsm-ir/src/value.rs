@@ -374,6 +374,33 @@ pub fn is_js_object(val: i64) -> bool {
         || is_native_callable(val)
 }
 
+/// 判定一个 NaN-boxed i64 是否持有需要 GC root 的 handle。
+/// 供 shadow stack 扫描与 ValueTy 类型推断共用（spec §11.3）。
+///
+/// - Root（返回 true）：object / array / function / closure / bound / bigint /
+///   symbol / regexp / proxy / scope_record / native_callable / runtime string
+///   handle / iterator / enumerator / exception。这些的 payload 是 GC 管理的
+///   handle/下标。
+/// - Scalar（返回 false）：f64（含 0.0）、undefined、null、bool、静态字符串
+///   指针（`encode_string_ptr`，无 runtime handle 标记）。
+pub fn tag_needs_root(val: i64) -> bool {
+    is_object(val)
+        || is_array(val)
+        || is_function(val)
+        || is_closure(val)
+        || is_bound(val)
+        || is_bigint(val)
+        || is_symbol(val)
+        || is_regexp(val)
+        || is_proxy(val)
+        || is_scope_record(val)
+        || is_native_callable(val)
+        || is_runtime_string_handle(val)
+        || is_iterator(val)
+        || is_enumerator(val)
+        || is_exception(val)
+}
+
 // ── Bound function ────────────────────────────────────────────────────
 
 pub fn encode_bound_idx(idx: u32) -> i64 {

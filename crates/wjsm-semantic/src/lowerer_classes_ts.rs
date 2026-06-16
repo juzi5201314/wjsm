@@ -100,7 +100,9 @@ impl PrivateNameValidator {
                     };
                     (m.key.name.to_string(), m.key.span, slot)
                 }
-                swc_ast::ClassMember::PrivateProp(p) => (p.key.name.to_string(), p.key.span, 0usize),
+                swc_ast::ClassMember::PrivateProp(p) => {
+                    (p.key.name.to_string(), p.key.span, 0usize)
+                }
                 _ => continue,
             };
             let entry = tally.entry(name.clone()).or_insert((0, 0, 0));
@@ -286,7 +288,10 @@ impl Lowerer {
                 let m_entry = BasicBlockId(0);
                 self.emit_hoisted_var_initializers(m_entry);
                 self.arguments_param_count = Self::count_regular_params(&pm.function.params);
-                let m_entry = self.emit_arguments_init(m_entry)?;
+                let m_entry = self.emit_arguments_init(
+                    m_entry,
+                    Self::function_needs_arguments_object(&pm.function),
+                )?;
                 self.eval_caller_has_arguments = Self::detect_param_arguments(&pm.function.params)
                     || self.scopes.lookup("arguments").is_ok();
                 let mut m_flow = StmtFlow::Open(m_entry);
@@ -431,10 +436,14 @@ impl Lowerer {
                 })
                 .unwrap_or(0) as u32;
             self.arguments_param_count = ctor_params_len;
-            let args_block = self.emit_arguments_init(match inner_flow {
-                StmtFlow::Open(b) => b,
-                _ => entry,
-            })?;
+            let ctor_refs_args = constructor.is_some_and(Self::ctor_references_arguments);
+            let args_block = self.emit_arguments_init(
+                match inner_flow {
+                    StmtFlow::Open(b) => b,
+                    _ => entry,
+                },
+                ctor_refs_args,
+            )?;
             self.eval_caller_has_arguments = if let Some(c) = constructor {
                 c.params
                     .iter()
@@ -669,7 +678,10 @@ impl Lowerer {
                             self.emit_hoisted_var_initializers(m_entry);
                             self.arguments_param_count =
                                 Self::count_regular_params(&method.function.params);
-                            let m_entry = self.emit_arguments_init(m_entry)?;
+                            let m_entry = self.emit_arguments_init(
+                                m_entry,
+                                Self::function_needs_arguments_object(&method.function),
+                            )?;
                             self.eval_caller_has_arguments =
                                 Self::detect_param_arguments(&method.function.params)
                                     || self.scopes.lookup("arguments").is_ok();
@@ -816,7 +828,10 @@ impl Lowerer {
                             self.emit_hoisted_var_initializers(m_entry);
                             self.arguments_param_count =
                                 Self::count_regular_params(&method.function.params);
-                            let m_entry = self.emit_arguments_init(m_entry)?;
+                            let m_entry = self.emit_arguments_init(
+                                m_entry,
+                                Self::function_needs_arguments_object(&method.function),
+                            )?;
                             self.eval_caller_has_arguments =
                                 Self::detect_param_arguments(&method.function.params)
                                     || self.scopes.lookup("arguments").is_ok();
@@ -912,7 +927,10 @@ impl Lowerer {
                     let m_entry = BasicBlockId(0);
                     self.emit_hoisted_var_initializers(m_entry);
                     self.arguments_param_count = 0;
-                    let m_entry = self.emit_arguments_init(m_entry)?;
+                    let m_entry = self.emit_arguments_init(
+                        m_entry,
+                        Self::body_references_arguments(&static_block.body),
+                    )?;
                     self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 
                     let mut m_flow = StmtFlow::Open(m_entry);
@@ -1115,7 +1133,10 @@ impl Lowerer {
                 let m_entry = BasicBlockId(0);
                 self.emit_hoisted_var_initializers(m_entry);
                 self.arguments_param_count = Self::count_regular_params(&pm.function.params);
-                let m_entry = self.emit_arguments_init(m_entry)?;
+                let m_entry = self.emit_arguments_init(
+                    m_entry,
+                    Self::function_needs_arguments_object(&pm.function),
+                )?;
                 self.eval_caller_has_arguments = Self::detect_param_arguments(&pm.function.params)
                     || self.scopes.lookup("arguments").is_ok();
                 let mut m_flow = StmtFlow::Open(m_entry);
@@ -1256,10 +1277,14 @@ impl Lowerer {
                 })
                 .unwrap_or(0) as u32;
             self.arguments_param_count = ctor_params_len;
-            let args_block = self.emit_arguments_init(match inner_flow {
-                StmtFlow::Open(b) => b,
-                _ => entry,
-            })?;
+            let ctor_refs_args = constructor.is_some_and(Self::ctor_references_arguments);
+            let args_block = self.emit_arguments_init(
+                match inner_flow {
+                    StmtFlow::Open(b) => b,
+                    _ => entry,
+                },
+                ctor_refs_args,
+            )?;
             self.eval_caller_has_arguments = if let Some(c) = constructor {
                 c.params
                     .iter()
@@ -1485,7 +1510,10 @@ impl Lowerer {
                         self.emit_hoisted_var_initializers(m_entry);
                         self.arguments_param_count =
                             Self::count_regular_params(&method.function.params);
-                        let m_entry = self.emit_arguments_init(m_entry)?;
+                        let m_entry = self.emit_arguments_init(
+                            m_entry,
+                            Self::function_needs_arguments_object(&method.function),
+                        )?;
                         self.eval_caller_has_arguments =
                             Self::detect_param_arguments(&method.function.params)
                                 || self.scopes.lookup("arguments").is_ok();
@@ -1627,7 +1655,10 @@ impl Lowerer {
                         self.emit_hoisted_var_initializers(m_entry);
                         self.arguments_param_count =
                             Self::count_regular_params(&method.function.params);
-                        let m_entry = self.emit_arguments_init(m_entry)?;
+                        let m_entry = self.emit_arguments_init(
+                            m_entry,
+                            Self::function_needs_arguments_object(&method.function),
+                        )?;
                         self.eval_caller_has_arguments =
                             Self::detect_param_arguments(&method.function.params)
                                 || self.scopes.lookup("arguments").is_ok();
@@ -1716,7 +1747,10 @@ impl Lowerer {
                     let m_entry = BasicBlockId(0);
                     self.emit_hoisted_var_initializers(m_entry);
                     self.arguments_param_count = 0;
-                    let m_entry = self.emit_arguments_init(m_entry)?;
+                    let m_entry = self.emit_arguments_init(
+                        m_entry,
+                        Self::body_references_arguments(&static_block.body),
+                    )?;
                     self.eval_caller_has_arguments = self.scopes.lookup("arguments").is_ok();
 
                     let mut m_flow = StmtFlow::Open(m_entry);

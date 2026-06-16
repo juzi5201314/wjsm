@@ -80,7 +80,9 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
                     if let Some(name_val) = read_object_property_by_name(caller, op, "name") {
                         let name = render_value(caller, name_val).unwrap_or_default();
                         let message = read_object_property_by_name(caller, op, "message")
-                            .map(|message_val| render_value(caller, message_val).unwrap_or_default())
+                            .map(|message_val| {
+                                render_value(caller, message_val).unwrap_or_default()
+                            })
                             .unwrap_or_default();
                         if message.is_empty() {
                             return Ok(name);

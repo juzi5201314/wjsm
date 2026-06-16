@@ -24,72 +24,51 @@ module {
     c21 = undefined
     c22 = number(42)
     c23 = undefined
-    c24 = number(1)
-    c25 = functionref(@0)
-    c26 = functionref(@0)
+    c24 = functionref(@0)
+    c25 = undefined
+    c26 = undefined
     c27 = undefined
-    c28 = undefined
-    c29 = undefined
-    c30 = string("err")
-    c31 = number(1)
-    c32 = functionref(@1)
-    c33 = functionref(@1)
-    c34 = undefined
-    c35 = number(1)
-    c36 = functionref(@2)
-    c37 = functionref(@2)
-    c38 = undefined
+    c28 = string("err")
+    c29 = functionref(@1)
+    c30 = undefined
+    c31 = functionref(@2)
+    c32 = undefined
 
   fn @anon_0 [params: $1.$env, $1.$this, $1.v] [entry=bb0]:
     bb0:
-      %0 = collect_rest_args skip=0
-      %1 = const c24
-      %3 = const c25
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
-      store var $1.arguments, %2
-      %4 = load var $1.v
-      %5 = call builtin.console.log(%4)
-      %6 = is_exception %5
-      branch %6, bb2, bb1
+      %0 = load var $1.v
+      %1 = call builtin.console.log(%0)
+      %2 = is_exception %1
+      branch %2, bb2, bb1
     bb1:
       return
     bb2:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      %3 = call builtin.exception_value(%1)
+      throw %3
 
   fn @anon_1 [params: $2.$env, $2.$this, $2.v] [entry=bb0]:
     bb0:
-      %0 = collect_rest_args skip=0
-      %1 = const c31
-      %3 = const c32
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
-      store var $2.arguments, %2
-      %4 = load var $2.v
-      %5 = call builtin.console.log(%4)
-      %6 = is_exception %5
-      branch %6, bb2, bb1
+      %0 = load var $2.v
+      %1 = call builtin.console.log(%0)
+      %2 = is_exception %1
+      branch %2, bb2, bb1
     bb1:
       return
     bb2:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      %3 = call builtin.exception_value(%1)
+      throw %3
 
   fn @anon_2 [params: $3.$env, $3.$this, $3.e] [entry=bb0]:
     bb0:
-      %0 = collect_rest_args skip=0
-      %1 = const c35
-      %3 = const c36
-      %2 = call builtin.create_mapped_arguments_object(%0, %1, %3)
-      store var $3.arguments, %2
-      %4 = load var $3.e
-      %5 = call builtin.console.log(%4)
-      %6 = is_exception %5
-      branch %6, bb2, bb1
+      %0 = load var $3.e
+      %1 = call builtin.console.log(%0)
+      %2 = is_exception %1
+      branch %2, bb2, bb1
     bb1:
       return
     bb2:
-      %7 = call builtin.exception_value(%5)
-      throw %7
+      %3 = call builtin.exception_value(%1)
+      throw %3
 
   fn @$module_main [entry=bb0]:
     bb0:
@@ -167,10 +146,10 @@ module {
       throw %31
     bb5:
       %38 = load var $0.p2
-      %39 = const c26
-      %40 = const c27
+      %39 = const c24
+      %40 = const c25
       %41 = call builtin.create_closure(%39, %40)
-      %42 = const c28
+      %42 = const c26
       %43 = call builtin.promise.then(%38, %41, %42)
       %44 = is_exception %43
       branch %44, bb8, bb7
@@ -178,8 +157,8 @@ module {
       %37 = call builtin.exception_value(%35)
       throw %37
     bb7:
-      %46 = const c29
-      %47 = const c30
+      %46 = const c27
+      %47 = const c28
       %48 = call builtin.promise.reject_static(%46, %47)
       %49 = is_exception %48
       branch %49, bb10, bb9
@@ -189,11 +168,11 @@ module {
     bb9:
       store var $0.p3, %48
       %51 = load var $0.p3
-      %52 = const c33
-      %53 = const c34
+      %52 = const c29
+      %53 = const c30
       %54 = call builtin.create_closure(%52, %53)
-      %55 = const c37
-      %56 = const c38
+      %55 = const c31
+      %56 = const c32
       %57 = call builtin.create_closure(%55, %56)
       %58 = call builtin.promise.then(%51, %54, %57)
       %59 = is_exception %58

@@ -41,7 +41,10 @@ impl Lowerer {
         let body_entry = self.emit_param_inits(&fn_decl.function.params, &param_ir_names, entry)?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
-        let body_entry = self.emit_arguments_init(body_entry)?;
+        let body_entry = self.emit_arguments_init(
+            body_entry,
+            Self::function_needs_arguments_object(&fn_decl.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
             || self.scopes.lookup("arguments").is_ok();
         // Lower the function body.
@@ -63,11 +66,12 @@ impl Lowerer {
         }
 
         // Finalize the function IR and push it to the module.
-        let old_fn = std::mem::replace(
+        let mut old_fn = std::mem::replace(
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
         let has_eval = old_fn.has_eval();
+        let known_callees = old_fn.take_known_callee_vars();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&name, BasicBlockId(0));
         ir_function.set_has_eval(has_eval);
@@ -75,6 +79,9 @@ impl Lowerer {
         // 设置捕获变量列表（逃逸分析结果）
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
+        for (ir_name, fn_id) in known_callees {
+            ir_function.record_known_callee(ir_name, fn_id);
+        }
         for block in blocks {
             ir_function.push_block(block);
         }
@@ -124,7 +131,7 @@ impl Lowerer {
             .lookup(&name)
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
         let store_block =
-            self.store_function_decl_callee(store_block, &name, scope_id, callee_val)?;
+            self.store_function_decl_callee(store_block, &name, scope_id, callee_val, function_id)?;
 
         Ok(StmtFlow::Open(store_block))
     }
@@ -135,8 +142,15 @@ impl Lowerer {
         name: &str,
         scope_id: usize,
         callee_val: ValueId,
+        callee_fn_id: wjsm_ir::FunctionId,
     ) -> Result<BasicBlockId, LoweringError> {
         let ir_name = format!("${scope_id}.{name}");
+        // 记录 callee 变量→FunctionId 映射（Layer 3 callee no-GC 分析）。
+        // 仅对函数声明（hoisted，语义不可重赋）安全；async / async-generator 的包装函数
+        // 也是通过此路径记录的（它们仍是函数声明，不是 let/const 闭包），
+        // 后端分析对该 callee 保守视其函数体 may-GC（闭包 env 可能分配）。
+        self.current_function
+            .record_known_callee(ir_name.clone(), callee_fn_id);
         self.current_function.append_instruction(
             block,
             Instruction::StoreVar {
@@ -400,7 +414,10 @@ impl Lowerer {
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
-        let after_inits = self.emit_arguments_init(after_inits)?;
+        let after_inits = self.emit_arguments_init(
+            after_inits,
+            Self::function_needs_arguments_object(&fn_decl.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
             || self.scopes.lookup("arguments").is_ok();
         let dispatch_block = self.current_function.new_block();
@@ -502,17 +519,21 @@ impl Lowerer {
                 .set_terminator(dispatch_block, Terminator::Jump { target: body_entry });
         }
 
-        let old_fn = std::mem::replace(
+        let mut old_fn = std::mem::replace(
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
         let has_eval = old_fn.has_eval();
+        let known_callees = old_fn.take_known_callee_vars();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&async_gen_name, BasicBlockId(0));
         ir_function.set_has_eval(has_eval);
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
+        for (ir_name, fn_id) in known_callees {
+            ir_function.record_known_callee(ir_name, fn_id);
+        }
         for b in blocks {
             ir_function.push_block(b);
         }
@@ -544,7 +565,10 @@ impl Lowerer {
         )?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
-        let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
+        let wrapper_after_inits = self.emit_arguments_init(
+            wrapper_after_inits,
+            Self::function_needs_arguments_object(&fn_decl.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
             || self.scopes.lookup("arguments").is_ok();
         let func_ref_const = self
@@ -749,8 +773,13 @@ impl Lowerer {
             .scopes
             .lookup(&name)
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
-        let store_block =
-            self.store_function_decl_callee(store_block, &name, scope_id, callee_val)?;
+        let store_block = self.store_function_decl_callee(
+            store_block,
+            &name,
+            scope_id,
+            callee_val,
+            wrapper_fn_id,
+        )?;
 
         Ok(StmtFlow::Open(store_block))
     }
@@ -984,7 +1013,10 @@ impl Lowerer {
             self.emit_param_inits(&fn_decl.function.params, &user_param_ir_names, entry)?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
-        let after_inits = self.emit_arguments_init(after_inits)?;
+        let after_inits = self.emit_arguments_init(
+            after_inits,
+            Self::function_needs_arguments_object(&fn_decl.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
             || self.scopes.lookup("arguments").is_ok();
         let dispatch_block = self.current_function.new_block();
@@ -1093,17 +1125,21 @@ impl Lowerer {
 
         let continuation_slot_count = self.async_next_continuation_slot;
 
-        let old_fn = std::mem::replace(
+        let mut old_fn = std::mem::replace(
             &mut self.current_function,
             FunctionBuilder::new("", BasicBlockId(0)),
         );
         let has_eval = old_fn.has_eval();
+        let known_callees = old_fn.take_known_callee_vars();
         let blocks = old_fn.into_blocks();
         let mut ir_function = Function::new(&async_name, BasicBlockId(0));
         ir_function.set_has_eval(has_eval);
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
+        for (ir_name, fn_id) in known_callees {
+            ir_function.record_known_callee(ir_name, fn_id);
+        }
         for b in blocks {
             ir_function.push_block(b);
         }
@@ -1143,7 +1179,10 @@ impl Lowerer {
         )?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_decl.function.params);
-        let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
+        let wrapper_after_inits = self.emit_arguments_init(
+            wrapper_after_inits,
+            Self::function_needs_arguments_object(&fn_decl.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_decl.function.params)
             || self.scopes.lookup("arguments").is_ok();
         let promise_val = self.alloc_value();
@@ -1385,8 +1424,13 @@ impl Lowerer {
             .scopes
             .lookup(&name)
             .map_err(|msg| self.error(fn_decl.span(), msg))?;
-        let store_block =
-            self.store_function_decl_callee(store_block, &name, scope_id, callee_val)?;
+        let store_block = self.store_function_decl_callee(
+            store_block,
+            &name,
+            scope_id,
+            callee_val,
+            wrapper_fn_id,
+        )?;
 
         Ok(StmtFlow::Open(store_block))
     }

@@ -1,6 +1,8 @@
 pub mod builtin;
 pub mod constants;
+pub mod liveness;
 pub mod value;
+pub mod value_ty;
 
 pub use builtin::Builtin;
 use std::fmt::{self, Write};
@@ -131,6 +133,11 @@ pub struct Function {
     /// 该函数捕获的外层变量名列表（闭包用）。
     /// 语义层逃逸分析后填入，后端用于 env 对象的属性名。
     captured_names: Vec<String>,
+    /// 该函数内 LoadVar 读到"已知函数声明/闭包"的变量名→FunctionId。
+    /// 语义层填充（仅对单次赋值的函数声明变量），后端用于 callee no-GC 分析（Layer 3）。
+    /// key = scope-qualified IR name（如 "$0.foo"），value = 被调用函数的 FunctionId。
+    /// 空表示该函数不调用任何已知函数声明（保守：后端对未知 callee 当 may-GC）。
+    known_callee_vars: std::collections::HashMap<String, FunctionId>,
     /// 方法的 [[HomeObject]]，用于实现 super 属性访问。
     /// 普通函数为 None；箭头函数可继承外层方法的 home object。
     pub home_object: Option<HomeObject>,
@@ -145,6 +152,7 @@ impl Function {
             blocks: Vec::new(),
             has_eval: false,
             captured_names: Vec::new(),
+            known_callee_vars: std::collections::HashMap::new(),
             home_object: None,
         }
     }
@@ -175,6 +183,17 @@ impl Function {
 
     pub fn set_captured_names(&mut self, names: Vec<String>) {
         self.captured_names = names;
+    }
+
+    /// 返回该函数调用的"已知函数声明"变量名→FunctionId 映射（Layer 3 callee 分析）。
+    pub fn known_callee_vars(&self) -> &std::collections::HashMap<String, FunctionId> {
+        &self.known_callee_vars
+    }
+
+    /// 记录一个 callee 变量（scope-qualified IR name）→ FunctionId 映射（Layer 3）。
+    /// 仅对单次赋值的函数声明安全（function 声明 hoisted 且语义不可重赋）。
+    pub fn record_known_callee(&mut self, ir_name: String, function_id: FunctionId) {
+        self.known_callee_vars.insert(ir_name, function_id);
     }
 
     pub fn entry(&self) -> BasicBlockId {
@@ -914,7 +933,6 @@ pub const MODULE_ENTRY_IR_NAME: &str = "$module_main";
 pub fn is_module_entry_ir_function(name: &str) -> bool {
     name == MODULE_ENTRY_IR_NAME
 }
-
 
 /// Import 绑定信息（用于模块系统）
 #[derive(Debug, Clone, PartialEq, Eq)]
