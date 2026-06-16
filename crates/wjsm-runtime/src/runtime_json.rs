@@ -1112,7 +1112,6 @@ mod tests {
     }
 
     #[test]
-    
     fn test_parse_numbers() {
         assert_eq!(parse("0").unwrap(), JsonValue::Number(0.0));
         assert_eq!(parse("-42").unwrap(), JsonValue::Number(-42.0));

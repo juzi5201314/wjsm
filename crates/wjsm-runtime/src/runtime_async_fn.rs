@@ -25,7 +25,10 @@ pub(crate) fn alloc_continuation_handle(
     outer_promise: i64,
     captured_var_count: usize,
 ) -> u32 {
-    let mut table = state.continuation_table.lock().expect("continuation table mutex");
+    let mut table = state
+        .continuation_table
+        .lock()
+        .expect("continuation table mutex");
     let mut free = state
         .continuation_free_slots
         .lock()
@@ -47,7 +50,10 @@ pub(crate) fn alloc_continuation_handle(
 }
 
 pub(crate) fn recycle_completed_continuations(state: &RuntimeState) {
-    let mut table = state.continuation_table.lock().expect("continuation table mutex");
+    let mut table = state
+        .continuation_table
+        .lock()
+        .expect("continuation table mutex");
     let mut free = state
         .continuation_free_slots
         .lock()
@@ -457,7 +463,10 @@ mod continuation_tests {
         let state = RuntimeState::new();
         let h0 = alloc_continuation_handle(&state, 1, value::encode_f64(1.0), 4);
         {
-            let mut table = state.continuation_table.lock().expect("continuation table mutex");
+            let mut table = state
+                .continuation_table
+                .lock()
+                .expect("continuation table mutex");
             table[h0 as usize].completed = true;
         }
         recycle_completed_continuations(&state);

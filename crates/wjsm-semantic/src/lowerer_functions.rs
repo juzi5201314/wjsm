@@ -50,7 +50,10 @@ impl Lowerer {
         let body_entry = self.emit_param_inits(&fn_expr.function.params, &param_ir_names, entry)?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_expr.function.params);
-        let body_entry = self.emit_arguments_init(body_entry)?;
+        let body_entry = self.emit_arguments_init(
+            body_entry,
+            Self::function_needs_arguments_object(&fn_expr.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_expr.function.params)
             || self.scopes.lookup("arguments").is_ok();
 
@@ -374,7 +377,10 @@ impl Lowerer {
             self.emit_param_inits(&fn_expr.function.params, &user_param_ir_names, entry)?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_expr.function.params);
-        let after_inits = self.emit_arguments_init(after_inits)?;
+        let after_inits = self.emit_arguments_init(
+            after_inits,
+            Self::function_needs_arguments_object(&fn_expr.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_expr.function.params)
             || self.scopes.lookup("arguments").is_ok();
 
@@ -529,7 +535,10 @@ impl Lowerer {
         )?;
 
         self.arguments_param_count = Self::count_regular_params(&fn_expr.function.params);
-        let wrapper_after_inits = self.emit_arguments_init(wrapper_after_inits)?;
+        let wrapper_after_inits = self.emit_arguments_init(
+            wrapper_after_inits,
+            Self::function_needs_arguments_object(&fn_expr.function),
+        )?;
         self.eval_caller_has_arguments = Self::detect_param_arguments(&fn_expr.function.params)
             || self.scopes.lookup("arguments").is_ok();
 

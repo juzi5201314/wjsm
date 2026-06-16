@@ -24,7 +24,6 @@ pub enum SpecialHostImport {
     ClosureCreate,
     ClosureGetFunc,
     ClosureGetEnv,
-    GcCollect,
     NativeCall,
     NewTargetSet,
     ObjGetByIndex,
@@ -41,6 +40,13 @@ pub enum SpecialHostImport {
     NativeCallableGetProperty,
     PrimitiveNumberGetMethod,
     TypedArraySetByIndex,
+    // ── P4 GC framework host imports ──
+    /// gc_alloc_slow(size, heap_type, capacity) -> handle：fast-path bump 失败后的 slow-path。
+    GcAllocSlow,
+    /// gc_maybe_collect()：proactive GC 触发（alloc_counter 达阈值时 WASM 调用）。
+    GcMaybeCollect,
+    /// gc_take_freed_handle() -> handle（-1 表空）：从 host handle_free_list pop 复用。
+    GcTakeFreedHandle,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -194,12 +200,6 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         name: "abstract_compare",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::AbstractCompare)),
-        group: None,
-    },
-    HostImportSpec {
-        name: "gc_collect",
-        type_idx: 7,
-        key: Some(HostImportKey::Special(SpecialHostImport::GcCollect)),
         group: None,
     },
     HostImportSpec {
@@ -2550,6 +2550,25 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         key: Some(HostImportKey::Builtin(
             Builtin::ByteLengthQueuingStrategyConstructor,
         )),
+        group: None,
+    },
+    // ── P4 GC framework host imports（顺序重要：compiler 经 special_host_import_indices 查）──
+    HostImportSpec {
+        name: "gc_alloc_slow",
+        type_idx: 35,
+        key: Some(HostImportKey::Special(SpecialHostImport::GcAllocSlow)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "gc_maybe_collect",
+        type_idx: 1,
+        key: Some(HostImportKey::Special(SpecialHostImport::GcMaybeCollect)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "gc_take_freed_handle",
+        type_idx: 36,
+        key: Some(HostImportKey::Special(SpecialHostImport::GcTakeFreedHandle)),
         group: None,
     },
 ];

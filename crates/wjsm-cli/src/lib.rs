@@ -71,6 +71,10 @@ pub struct Cli {
     /// Target backend (wasm or jit)
     #[arg(long, default_value = "wasm", global = true)]
     target: Target,
+
+    /// GC algorithm (runtime; mark-sweep is the only implementation now, generational/incremental reserved)
+    #[arg(long, default_value = "mark-sweep", global = true)]
+    gc_algorithm: GcAlgorithmChoice,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -87,6 +91,15 @@ enum ColorChoice {
 enum Target {
     Wasm,
     Jit,
+}
+
+/// GC 算法选择（运行期切换，spec §6 trait 框架）。当前仅 MarkSweep；预留 generational/incremental。
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum GcAlgorithmChoice {
+    /// Non-moving mark-sweep + segregated free list（默认实现，spec §8/§9）
+    #[value(alias = "mark_sweep")]
+    MarkSweep,
+    // 未来：Generational, Incremental（impl 新 struct，不改框架）
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -230,8 +243,6 @@ enum Commands {
 // ============================================================================
 
 struct PipelineResult {
-    
-    source: Option<String>,
     ast: Option<swc_core::ecma::ast::Module>,
     program: Option<Program>,
     wasm: Option<Vec<u8>>,
@@ -776,7 +787,6 @@ fn run_pipeline(
     script: bool,
 ) -> Result<PipelineResult> {
     let mut result = PipelineResult {
-        source: Some(source.to_string()),
         ast: None,
         program: None,
         wasm: None,

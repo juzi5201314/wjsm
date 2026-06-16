@@ -390,14 +390,9 @@ pub(crate) async fn drain_microtasks_async<
                 this_val,
                 controller,
             }) => {
-                let _ = call_host_function_with_args_async(
-                    ctx,
-                    env,
-                    callback,
-                    this_val,
-                    &[controller],
-                )
-                .await;
+                let _ =
+                    call_host_function_with_args_async(ctx, env, callback, this_val, &[controller])
+                        .await;
             }
             None => break,
         }

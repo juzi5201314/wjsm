@@ -345,14 +345,28 @@ mod tests {
         mark_combinator_settled(&state, ctx_idx);
         try_recycle_combinator_context(&state, ctx_idx);
         {
-            let contexts = state.combinator_contexts.lock().expect("combinator context mutex");
-            assert!(contexts.get(ctx_idx).is_some_and(|e| e.result_promise == sentinel));
+            let contexts = state
+                .combinator_contexts
+                .lock()
+                .expect("combinator context mutex");
+            assert!(
+                contexts
+                    .get(ctx_idx)
+                    .is_some_and(|e| e.result_promise == sentinel)
+            );
         }
         decrement_combinator_outstanding_settlements(&state, ctx_idx);
         try_recycle_combinator_context(&state, ctx_idx);
         {
-            let contexts = state.combinator_contexts.lock().expect("combinator context mutex");
-            assert!(contexts.get(ctx_idx).is_some_and(|e| e.result_promise == value::encode_undefined()));
+            let contexts = state
+                .combinator_contexts
+                .lock()
+                .expect("combinator context mutex");
+            assert!(
+                contexts
+                    .get(ctx_idx)
+                    .is_some_and(|e| e.result_promise == value::encode_undefined())
+            );
         }
     }
 }

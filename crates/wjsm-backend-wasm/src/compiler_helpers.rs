@@ -54,15 +54,24 @@ impl Compiler {
         let num_ir_functions_global = self.num_ir_functions_global_idx;
 
         // ── $obj_new (param $capacity i32) (result i32) — Type 7 ──
-        // 分配对象到堆上，将 ptr 存入 handle 表，返回 handle_idx。
-        // 属性槽格式: [name_id(4), flags(4), value(8), getter(8), setter(8)] = 32 字节
-        // GC 检查：如果 heap_ptr + size > memory.size * 64KB，调用 gc_collect
+        // P4 重写：bump fast-path + handle 复用 + proactive GC + gc_alloc_slow slow-path。
+        //   属性槽格式: [name_id(4), flags(4), value(8), getter(8), setter(8)] = 32 字节
+        //   对象布局: proto(4) type(1) pad(3) capacity(4) num_props(4) [cap*32 payload]
         {
             // local 0 = $capacity, local 1 = size, local 2 = ptr, local 3 = handle_idx
             let mut func = Function::new(vec![(3, ValType::I32)]);
-            let gc_collect_idx = self.special_host_import_indices[&SpecialHostImport::GcCollect];
+            let gc_alloc_slow_idx =
+                self.special_host_import_indices[&SpecialHostImport::GcAllocSlow];
+            let gc_maybe_collect_idx =
+                self.special_host_import_indices[&SpecialHostImport::GcMaybeCollect];
+            let gc_take_freed_handle_idx =
+                self.special_host_import_indices[&SpecialHostImport::GcTakeFreedHandle];
 
-            // size = 16 + capacity * 32 (4 proto + 1 type + 3 pad + 4 capacity + 4 num_props + cap*32)
+            // ── proactive GC：在分配前调用（GC 完成后再分配，新对象不在 GC 视野，安全）──
+            // host 递增 alloc_counter，达 gc_threshold 时 collect，重置 counter。
+            func.instruction(&WasmInstruction::Call(gc_maybe_collect_idx));
+
+            // size = 16 + capacity * 32
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32Const(32));
             func.instruction(&WasmInstruction::I32Mul);
@@ -70,50 +79,60 @@ impl Compiler {
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::LocalSet(1));
 
-            // ── OOM 检查：用 memory.grow 代替 gc_collect ──
-            // GC 不能在分配路径中触发，因为 WASM 局部变量不在影子栈上，
-            // GC 压缩堆后局部变量中的对象指针变成陈旧指针。
-            // 检查: heap_ptr + size > memory.size * 65536
+            // ── handle 复用：take_or_alloc_handle ──
+            // handle_idx = gc_take_freed_handle(); 若 == -1 则 handle_idx = obj_table_count++
+            func.instruction(&WasmInstruction::Call(gc_take_freed_handle_idx));
+            func.instruction(&WasmInstruction::LocalTee(3));
+            func.instruction(&WasmInstruction::I32Const(-1));
+            func.instruction(&WasmInstruction::I32Ne);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            // 已取到 freed handle（local 3 持有）
+            func.instruction(&WasmInstruction::Else);
+            // 新分配：handle_idx = obj_table_count; obj_table_count++
+            func.instruction(&WasmInstruction::GlobalGet(obj_table_count_global));
+            func.instruction(&WasmInstruction::LocalTee(3));
+            func.instruction(&WasmInstruction::I32Const(1));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::GlobalSet(obj_table_count_global));
+            func.instruction(&WasmInstruction::End);
+
+            // ── bump fast-path 检查：heap_ptr + size <= mem_size ──
+            // 若失败，走 gc_alloc_slow（free list → collect → grow）。
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Add);
-
-            // 计算 memory.size * 65536
             func.instruction(&WasmInstruction::MemorySize(0));
             func.instruction(&WasmInstruction::I64ExtendI32U);
             func.instruction(&WasmInstruction::I64Const(65536));
             func.instruction(&WasmInstruction::I64Mul);
             func.instruction(&WasmInstruction::I32WrapI64);
-
-            // 比较: heap_ptr + size > memory_limit
-            func.instruction(&WasmInstruction::I32GtU);
-
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            // 需要更多内存 — memory.grow(pages)
-            // pages = ceil(size / 65536) + 1
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I32Const(65535));
-            func.instruction(&WasmInstruction::I32Add);
-            func.instruction(&WasmInstruction::I32Const(65536));
-            func.instruction(&WasmInstruction::I32DivU);
-            func.instruction(&WasmInstruction::I32Const(1));
-            func.instruction(&WasmInstruction::I32Add);
-            func.instruction(&WasmInstruction::MemoryGrow(0));
-            // 检查返回值是否为 -1（失败）
-            func.instruction(&WasmInstruction::I32Const(-1));
-            func.instruction(&WasmInstruction::I32Eq);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            // OOM - unreachable
-            func.instruction(&WasmInstruction::Unreachable);
-            func.instruction(&WasmInstruction::End);
-            func.instruction(&WasmInstruction::End);
-
-            // ptr = heap_ptr; heap_ptr += size
+            func.instruction(&WasmInstruction::I32LeU);
+            func.instruction(&WasmInstruction::If(BlockType::Result(ValType::I32)));
+            // fast-path：ptr = heap_ptr; heap_ptr += size
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
             func.instruction(&WasmInstruction::LocalTee(2));
             func.instruction(&WasmInstruction::LocalGet(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::GlobalSet(heap_global));
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::Else);
+            // slow-path：gc_alloc_slow(size, HEAP_TYPE_OBJECT, capacity)
+            func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::I32Const(wjsm_ir::HEAP_TYPE_OBJECT as i32));
+            func.instruction(&WasmInstruction::LocalGet(0));
+            func.instruction(&WasmInstruction::Call(gc_alloc_slow_idx));
+            func.instruction(&WasmInstruction::LocalTee(2));
+            // gc_alloc_slow 返回 u32::MAX 表示真 OOM → unreachable trap
+            func.instruction(&WasmInstruction::I32Const(-1));
+            func.instruction(&WasmInstruction::I32Eq);
+            func.instruction(&WasmInstruction::If(BlockType::Empty));
+            func.instruction(&WasmInstruction::Unreachable);
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::LocalGet(2));
+            func.instruction(&WasmInstruction::End);
+            func.instruction(&WasmInstruction::LocalSet(2));
+
+            // ── 初始化对象 header（与旧实现一致）──
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::GlobalGet(
                 self.object_proto_handle_global_idx,
@@ -123,36 +142,24 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
+            // type byte HEAP_TYPE_OBJECT (0x00) at offset 4
             func.instruction(&WasmInstruction::LocalGet(2));
-            // Write type byte HEAP_TYPE_OBJECT (0x00)
             func.instruction(&WasmInstruction::I32Const(0));
             func.instruction(&WasmInstruction::I32Store8(MemArg {
                 offset: 4,
                 align: 0,
                 memory_index: 0,
             }));
-            // Zero pad bytes at offset 5-7
-            func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I32Const(0));
-            func.instruction(&WasmInstruction::I32Store8(MemArg {
-                offset: 5,
-                align: 0,
-                memory_index: 0,
-            }));
-            func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I32Const(0));
-            func.instruction(&WasmInstruction::I32Store8(MemArg {
-                offset: 6,
-                align: 0,
-                memory_index: 0,
-            }));
-            func.instruction(&WasmInstruction::LocalGet(2));
-            func.instruction(&WasmInstruction::I32Const(0));
-            func.instruction(&WasmInstruction::I32Store8(MemArg {
-                offset: 7,
-                align: 0,
-                memory_index: 0,
-            }));
+            // Zero pad bytes 5-7
+            for off in [5u64, 6, 7] {
+                func.instruction(&WasmInstruction::LocalGet(2));
+                func.instruction(&WasmInstruction::I32Const(0));
+                func.instruction(&WasmInstruction::I32Store8(MemArg {
+                    offset: off,
+                    align: 0,
+                    memory_index: 0,
+                }));
+            }
             // capacity at offset 8
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::LocalGet(0));
@@ -169,10 +176,9 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
-            // handle_idx = obj_table_count
-            func.instruction(&WasmInstruction::GlobalGet(obj_table_count_global));
-            func.instruction(&WasmInstruction::LocalTee(3));
-            // obj_table[handle_idx] = ptr
+
+            // ── obj_table[handle_idx] = ptr ──
+            func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::I32Const(4));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
@@ -183,11 +189,7 @@ impl Compiler {
                 align: 2,
                 memory_index: 0,
             }));
-            // obj_table_count++
-            func.instruction(&WasmInstruction::GlobalGet(obj_table_count_global));
-            func.instruction(&WasmInstruction::I32Const(1));
-            func.instruction(&WasmInstruction::I32Add);
-            func.instruction(&WasmInstruction::GlobalSet(obj_table_count_global));
+
             // 返回 handle_idx
             func.instruction(&WasmInstruction::LocalGet(3));
             func.instruction(&WasmInstruction::End);
