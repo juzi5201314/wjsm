@@ -72,7 +72,6 @@
 //! - **陈旧 handle**：指向已回收的对象，GC 会将其标记为 dead，不会访问
 //!
 //! 这允许编译器采用保守策略（宁可多 spill，也不漏 spill）。
-use crate::NativeCallable;
 use crate::runtime_gc::api::{GcContext, Handle, RootProvider};
 use wjsm_ir::value;
 
@@ -182,34 +181,10 @@ fn push_value_roots(ctx: &mut GcContext, val: i64, visit: &mut dyn FnMut(Handle)
     // runtime_string/exception/bound）：经对应 side-table fixed-point 路径或不持 obj_table 引用。
 }
 
-/// 从 native_callable 表项提取其内部持有的对象引用（移植自 trace_native_callable_record）。
+/// 从 native_callable 表项提取其内部持有的对象引用。
+/// 委托给 `runtime_gc::native_callable_refs` 的共享实现。
 fn collect_native_callable_refs(st: &mut crate::RuntimeState, idx: usize) -> Vec<i64> {
-    let record = match st
-        .native_callables
-        .lock()
-        .ok()
-        .and_then(|g| g.get(idx).cloned())
-    {
-        Some(r) => r,
-        None => return vec![],
-    };
-    match record {
-        NativeCallable::PromiseResolvingFunction { promise, .. } => vec![promise],
-        NativeCallable::PromiseCombinatorReaction { context, .. } => {
-            let (rp, ra) = st
-                .combinator_contexts
-                .lock()
-                .ok()
-                .and_then(|g| g.get(context).map(|e| (e.result_promise, e.result_array)))
-                .unwrap_or((value::encode_undefined(), value::encode_undefined()));
-            vec![rp, ra]
-        }
-        NativeCallable::AsyncGeneratorMethod { generator, .. }
-        | NativeCallable::AsyncGeneratorIdentity { generator } => vec![generator],
-        NativeCallable::EvalFunction(function) => function.scope_env.into_iter().collect(),
-        // 其余变体不直接持 obj_table 引用（method dispatch 的 handle 是 side-table 索引）。
-        _ => vec![],
-    }
+    crate::runtime_gc::native_callable_refs::collect_native_callable_refs(st, idx)
 }
 
 /// 快照所有 host 侧表持有的 raw 引用值（移植自 trace_runtime_side_table_roots_fixed_point）。
