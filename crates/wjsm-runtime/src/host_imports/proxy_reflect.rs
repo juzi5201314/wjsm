@@ -117,7 +117,7 @@ pub(crate) fn reflect_delete_property_impl(
     value::encode_bool(true)
 }
 
-pub(crate) fn extract_array_like_elements(
+pub(crate) async fn extract_array_like_elements(
     caller: &mut Caller<'_, RuntimeState>,
     arr_like: i64,
 ) -> Result<Vec<i64>, String> {
@@ -152,7 +152,8 @@ pub(crate) fn extract_array_like_elements(
         }
     } else if value::is_object(arr_like) || value::is_proxy(arr_like) {
         let len_prop = store_runtime_string(caller, "length".to_string());
-        let len_val = reflect_get_impl(caller, arr_like, len_prop);
+        let len_val =
+            reflect_get_impl_with_receiver_async(caller, arr_like, len_prop, arr_like).await;
         let len = if value::is_f64(len_val) {
             value::decode_f64(len_val) as usize
         } else {
@@ -160,7 +161,8 @@ pub(crate) fn extract_array_like_elements(
         };
         for i in 0..len {
             let idx_prop = value::encode_f64(i as f64);
-            let val = reflect_get_impl(caller, arr_like, idx_prop);
+            let val = reflect_get_impl_with_receiver_async(caller, arr_like, idx_prop, arr_like)
+                .await;
             elements.push(val);
         }
     }
@@ -213,13 +215,14 @@ pub(crate) async fn reflect_construct_impl_async(
         alloc_host_object(caller, &_wjsm_env, 4)
     };
     let proto_prop = store_runtime_string(caller, "prototype".to_string());
-    let proto_val = reflect_get_impl(caller, new_target, proto_prop);
+    let proto_val =
+        reflect_get_impl_with_receiver_async(caller, new_target, proto_prop, new_target).await;
     if value::is_object(proto_val)
         || value::is_array(proto_val)
         || value::is_proxy(proto_val)
         || value::is_null(proto_val)
     {
-        let _ = reflect_set_prototype_of_fn_impl(caller, this_obj, proto_val);
+        let _ = reflect_set_prototype_of_fn_impl(caller, this_obj, proto_val).await;
     }
 
     let shadow_sp_global = caller
@@ -277,7 +280,7 @@ pub(crate) async fn reflect_get_prototype_of_async(
     proxy_or_target_get_prototype_of_impl_async(caller, target).await
 }
 
-pub(crate) fn reflect_get_prototype_of_impl(
+pub(crate) async fn reflect_get_prototype_of_impl(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
 ) -> i64 {
@@ -295,7 +298,8 @@ pub(crate) fn reflect_get_prototype_of_impl(
                 let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
                     .unwrap_or_else(value::encode_undefined);
                 if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let res = call_wasm_callback(caller, trap, entry.handler, &[entry.target])
+                    let res = call_wasm_callback_async(caller, trap, entry.handler, &[entry.target])
+                        .await
                         .unwrap_or_else(|_| value::encode_null());
                     // 不变量检查: getPrototypeOf trap 返回值必须是 null 或对象
                     if !value::is_null(res)
@@ -314,7 +318,8 @@ pub(crate) fn reflect_get_prototype_of_impl(
                     // 不变量检查: 若 target 不可扩展，返回的原型必须与 target 原型一致
                     let ext = is_extensible_impl(caller, entry.target);
                     if !ext {
-                        let target_proto = reflect_get_prototype_of_impl(caller, entry.target);
+                        let target_proto =
+                            Box::pin(reflect_get_prototype_of_impl(caller, entry.target)).await;
                         if res != target_proto {
                             set_runtime_error(caller.data(), "TypeError: Proxy getPrototypeOf invariant violated: target is not extensible and trap returned different prototype".to_string());
                             return value::encode_null();
@@ -323,7 +328,7 @@ pub(crate) fn reflect_get_prototype_of_impl(
                     return res;
                 }
             }
-            return reflect_get_prototype_of_impl(caller, entry.target);
+            return Box::pin(reflect_get_prototype_of_impl(caller, entry.target)).await;
         }
     }
     let Some(ptr) = resolve_handle(caller, target) else {
@@ -343,7 +348,7 @@ pub(crate) fn reflect_get_prototype_of_impl(
     prototype_handle_to_value(caller, proto_handle)
 }
 
-fn is_prototype_circular_chain(
+async fn is_prototype_circular_chain(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
     proto: i64,
@@ -370,21 +375,21 @@ fn is_prototype_circular_chain(
                 break;
             }
         }
-        current = reflect_get_prototype_of_impl(caller, current);
+        current = reflect_get_prototype_of_impl(caller, current).await;
     }
     false
 }
 
-pub(crate) fn reflect_set_prototype_of_fn_impl(
+pub(crate) async fn reflect_set_prototype_of_fn_impl(
     caller: &mut Caller<'_, RuntimeState>,
     target: i64,
     proto: i64,
 ) -> i64 {
     if !is_extensible_impl(caller, target) {
-        let current_proto = reflect_get_prototype_of_impl(caller, target);
+        let current_proto = reflect_get_prototype_of_impl(caller, target).await;
         return value::encode_bool(current_proto == proto);
     }
-    if is_prototype_circular_chain(caller, target, proto) {
+    if is_prototype_circular_chain(caller, target, proto).await {
         return value::encode_bool(false);
     }
     let Some(ptr) = resolve_handle(caller, target) else {
@@ -556,7 +561,7 @@ pub(crate) async fn proxy_own_keys_trap_async(
             return make_type_error_exception(caller, &format!("Proxy ownKeys trap failed: {}", e));
         }
     };
-    let keys = match extract_array_like_elements(caller, keys_val) {
+    let keys = match extract_array_like_elements(caller, keys_val).await {
         Ok(arr) => arr,
         Err(err) => {
             return make_type_error_exception(caller, &err);
@@ -731,7 +736,7 @@ pub(crate) async fn object_enumerable_own_keys_async(
         if value::is_undefined(keys_arr) {
             return alloc_array(caller, 0);
         }
-        let keys = match extract_array_like_elements(caller, keys_arr) {
+        let keys = match extract_array_like_elements(caller, keys_arr).await {
             Ok(k) => k,
             Err(_) => return alloc_array(caller, 0),
         };
@@ -786,7 +791,7 @@ pub(crate) async fn object_get_own_property_names_async(
         if value::is_undefined(keys_arr) {
             return alloc_array(caller, 0);
         }
-        let keys = match extract_array_like_elements(caller, keys_arr) {
+        let keys = match extract_array_like_elements(caller, keys_arr).await {
             Ok(k) => k,
             Err(_) => return alloc_array(caller, 0),
         };
@@ -828,7 +833,7 @@ pub(crate) async fn object_entries_async(caller: &mut Caller<'_, RuntimeState>, 
         return alloc_array(caller, 0);
     }
     let keys_arr = object_enumerable_own_keys_async(caller, obj).await;
-    let keys = match extract_array_like_elements(caller, keys_arr) {
+    let keys = match extract_array_like_elements(caller, keys_arr).await {
         Ok(k) => k,
         Err(_) => return alloc_array(caller, 0),
     };
