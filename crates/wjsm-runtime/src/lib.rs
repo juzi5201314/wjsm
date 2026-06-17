@@ -1366,6 +1366,84 @@ mod tests {
         assert_eq!(String::from_utf8(output)?, "Hello, Async Runtime!\n");
         Ok(())
     }
+
+    // 临时 benchmark：分阶段测 execute 路径各步的耗时（消除单次噪声，每步循环取均值）。
+    #[test]
+    #[ignore]
+    fn bench_execute_phases() -> Result<()> {
+        use super::*;
+        use std::time::Instant;
+        let wasm = compile_source("")?;
+        let n = 50u32;
+
+        // engine + module（每次新建，含 Cranelift 编译）
+        let mut t = std::time::Duration::ZERO;
+        for _ in 0..n {
+            let s = Instant::now();
+            let mut config = Config::new();
+            config.epoch_interruption(true);
+            let engine = Engine::new(&config).unwrap();
+            let _m = Module::new(&engine, &wasm).unwrap();
+            t += s.elapsed();
+        }
+        eprintln!("BENCH engine+module : {:?}/each", t / n);
+
+        // linker 注册（380 个 host trampoline）— 复用同一 engine/store
+        let mut config = Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).unwrap();
+        let mut t = std::time::Duration::ZERO;
+        for _ in 0..n {
+            let mut store = Store::new(&engine, RuntimeState::new());
+            let s = Instant::now();
+            let mut linker = Linker::new(&engine);
+            register_linker(&mut linker, &mut store).unwrap();
+            register_common_bridges(&mut linker, &mut store).unwrap();
+            register_complex_bridges(&mut linker, &mut store).unwrap();
+            t += s.elapsed();
+            std::hint::black_box(&linker);
+        }
+        eprintln!("BENCH linker register: {:?}/each", t / n);
+
+        // 全程 execute
+        let rt = Runtime::new()?;
+        let mut t = std::time::Duration::ZERO;
+        rt.block_on(async {
+            for _ in 0..n {
+                let s = Instant::now();
+                let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
+                t += s.elapsed();
+            }
+        });
+        eprintln!("BENCH full execute  : {:?}/each", t / n);
+
+        // instantiate_async 单独成本（复用同一 module + 每次新 linker/store）
+        let mut config = Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).unwrap();
+        let module = Module::new(&engine, &wasm).unwrap();
+        let mut t = std::time::Duration::ZERO;
+        let mut t_inst = std::time::Duration::ZERO;
+        rt.block_on(async {
+            for _ in 0..n {
+                let mut store = Store::new(&engine, RuntimeState::new());
+                store.set_epoch_deadline(1);
+                store.epoch_deadline_async_yield_and_update(1);
+                let mut linker = Linker::new(&engine);
+                let s = Instant::now();
+                register_linker(&mut linker, &mut store).unwrap();
+                register_common_bridges(&mut linker, &mut store).unwrap();
+                register_complex_bridges(&mut linker, &mut store).unwrap();
+                t += s.elapsed();
+                let s = Instant::now();
+                let _inst = linker.instantiate_async(&mut store, &module).await.unwrap();
+                t_inst += s.elapsed();
+            }
+        });
+        eprintln!("BENCH   linker(async ctx): {:?}/each", t / n);
+        eprintln!("BENCH   instantiate_async: {:?}/each", t_inst / n);
+        Ok(())
+    }
     #[test]
     fn execute_with_writer_timer_fires_via_scheduler() -> Result<()> {
         // Phase 5 核心行为验证：async 路径下 scheduler 接管 timer loop 后必须正确 fire + 输出。

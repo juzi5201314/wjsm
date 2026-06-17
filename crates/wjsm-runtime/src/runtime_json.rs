@@ -633,25 +633,8 @@ fn json_parse_to_string(caller: &mut Caller<'_, RuntimeState>, value: i64) -> Re
     {
         return Ok(eval_to_string(caller, value));
     }
-    if value::is_js_object(value)
-        && let Some(ptr) = resolve_handle(caller, value)
-    {
-        for method_name in ["toString", "valueOf"] {
-            let method = read_object_property_by_name(caller, ptr, method_name)
-                .unwrap_or_else(value::encode_undefined);
-            if !is_callable_in_runtime(caller, method) {
-                continue;
-            }
-            let Ok(result) = call_wasm_callback(caller, method, value, &[]) else {
-                continue;
-            };
-            if value::is_exception(result) {
-                return Err(result);
-            }
-            if !value::is_js_object(result) {
-                return json_parse_to_string(caller, result);
-            }
-        }
+    if value::is_js_object(value) {
+        // 同步 ToPrimitive 不支持回调；走 async 路径或调用方传入字符串。
         return Ok("[object Object]".to_string());
     }
     Ok(eval_to_string(caller, value))
@@ -706,7 +689,7 @@ async fn json_parse_to_string_async(
                 return Err(result);
             }
             if !value::is_js_object(result) {
-                return json_parse_to_string(caller, result);
+                return Box::pin(json_parse_to_string_async(caller, result)).await;
             }
         }
         return Ok("[object Object]".to_string());
@@ -753,99 +736,6 @@ pub(crate) fn build_wasm_value_with_env<C: AsContextMut<Data = RuntimeState>>(
             obj
         }
     }
-}
-fn apply_reviver(
-    caller: &mut Caller<'_, RuntimeState>,
-    reviver: i64,
-    holder: i64,
-    key: &str,
-    val: i64,
-) -> i64 {
-    if value::is_array(val) {
-        if let Some(ptr) = resolve_array_ptr(caller, val) {
-            let len = match read_array_length(caller, ptr) {
-                Some(n) => n,
-                None => return value::encode_undefined(),
-            };
-            for i in 0..len {
-                let elem_val = match read_array_elem(caller, ptr, i) {
-                    Some(v) => v,
-                    None => continue,
-                };
-                let new_val = apply_reviver(caller, reviver, val, &i.to_string(), elem_val);
-                if value::is_undefined(new_val) {
-                    write_array_elem(caller, ptr, i, value::encode_undefined());
-                } else {
-                    write_array_elem(caller, ptr, i, new_val);
-                }
-            }
-        }
-    } else if value::is_object(val) {
-        let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-        if let Some(obj_ptr) = resolve_handle(caller, val) {
-            let mut props: Vec<(u32, i64)> = Vec::new();
-            {
-                let data = env.memory.data(&*caller);
-                if obj_ptr + 16 <= data.len() {
-                    let num_props = u32::from_le_bytes([
-                        data[obj_ptr + 12],
-                        data[obj_ptr + 13],
-                        data[obj_ptr + 14],
-                        data[obj_ptr + 15],
-                    ]) as usize;
-                    for i in 0..num_props {
-                        let slot_off = obj_ptr + 16 + i * 32;
-                        if slot_off + 32 > data.len() {
-                            continue;
-                        }
-                        let name_id = u32::from_le_bytes([
-                            data[slot_off],
-                            data[slot_off + 1],
-                            data[slot_off + 2],
-                            data[slot_off + 3],
-                        ]);
-                        let prop_val = i64::from_le_bytes([
-                            data[slot_off + 8],
-                            data[slot_off + 9],
-                            data[slot_off + 10],
-                            data[slot_off + 11],
-                            data[slot_off + 12],
-                            data[slot_off + 13],
-                            data[slot_off + 14],
-                            data[slot_off + 15],
-                        ]);
-                        props.push((name_id, prop_val));
-                    }
-                }
-            }
-            for (name_id, prop_val) in &props {
-                let name_bytes = read_string_bytes_mem(caller, &env.memory, *name_id);
-                let name = String::from_utf8_lossy(&name_bytes);
-                let new_val = apply_reviver(caller, reviver, val, &name, *prop_val);
-                if value::is_undefined(new_val) {
-                    delete_property_by_name_id(caller, &env, val, *name_id);
-                } else {
-                    let obj_ptr2 = resolve_handle(caller, val).unwrap_or(0);
-                    if obj_ptr2 != 0 {
-                        write_object_property_by_name_id(
-                            caller,
-                            obj_ptr2,
-                            val,
-                            *name_id,
-                            new_val,
-                            constants::FLAG_CONFIGURABLE
-                                | constants::FLAG_ENUMERABLE
-                                | constants::FLAG_WRITABLE,
-                        );
-                    }
-                }
-            }
-        }
-    }
-    // ES §24.5.1: Call(reviver, holder, «key, value»)
-    let key_str = store_runtime_string(caller, key.to_string());
-    call_wasm_callback(caller, reviver, holder, &[key_str, val])
-        .unwrap_or_else(|_| value::encode_undefined())
 }
 
 async fn apply_reviver_async(
@@ -1003,7 +893,7 @@ pub async fn json_parse_to_wasm_async(
     }
 }
 
-pub fn json_parse_to_wasm(caller: &mut Caller<'_, RuntimeState>, text: i64, reviver: i64) -> i64 {
+pub fn json_parse_to_wasm(caller: &mut Caller<'_, RuntimeState>, text: i64, _reviver: i64) -> i64 {
     let text_str = match json_parse_to_string(caller, text) {
         Ok(text) => text,
         Err(exception) => return exception,
@@ -1023,34 +913,7 @@ pub fn json_parse_to_wasm(caller: &mut Caller<'_, RuntimeState>, text: i64, revi
 
             let wasm_value = build_wasm_value(caller, &json_value);
 
-            if is_callable_in_runtime(caller, reviver) {
-                let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-                let root = alloc_host_object(caller, &env, 1);
-                // 设置 root[""] = wasm_value
-                let empty_name_id = find_memory_c_string_with_env(caller, &env, "")
-                    .or_else(|| alloc_heap_c_string_with_env(caller, &env, ""));
-                if let Some(nid) = empty_name_id {
-                    let root_ptr = resolve_handle(caller, root);
-                    if let Some(ptr) = root_ptr {
-                        write_object_property_by_name_id(
-                            caller,
-                            ptr,
-                            root,
-                            nid,
-                            wasm_value,
-                            constants::FLAG_CONFIGURABLE
-                                | constants::FLAG_ENUMERABLE
-                                | constants::FLAG_WRITABLE,
-                        );
-                    }
-                }
-                // ES §24.5.1: 遍历后调用 reviver("", value)，this=root
-                // 直接使用 apply_reviver 的返回值，不从 heap 重新读取
-                let result = apply_reviver(caller, reviver, root, "", wasm_value);
-                result
-            } else {
-                wasm_value
-            }
+            wasm_value
         }
         Err(error) => make_exception(caller, "SyntaxError", error),
     }

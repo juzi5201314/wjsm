@@ -1,13 +1,47 @@
-//! Source audit: async runtime paths must not use sync Wasm re-entry after retirement.
-//! Until Task 16, this test documents forbidden patterns; flip `STRICT_AUDIT` when sync helpers are deleted.
+//! Source audit: async runtime paths must not use sync Wasm re-entry.
+//!
+//! ## 作用
+//!
+//! 静态扫描 `crates/wjsm-runtime/src/**/*.rs`，禁止下列 sync 模式（doc/line 注释除外）：
+//! `call_wasm_callback(` / `resolve_and_call(` / `resolve_callable_and_call(` /
+//! `drain_microtasks_from_caller(` / `Instance::new(` / `.call(`。
+//!
+//! ## 为什么
+//!
+//! 启用 `Store::epoch_deadline_async_yield_and_update` 之后（docs/async-scheduler.md），
+//! 任何经该 Store 的 Wasm 实例化或调用都必须走 async API；否则 epoch 抢占无法 yield，
+//! 轻则丢微任务调度公平性，重则在重入路径上死锁/panic。本测试是这条架构契约的硬卡点。
+//!
+//! ## 失败时怎么做
+//!
+//! **默认假设是你写错了**——把命中的 sync helper 改成 `_async` 孪生 + `.await`，
+//! 调用栈一路 await 到 `linker.func_wrap_async` 或已有的 async 入口。多数情况存在
+//! `_async` 版本（runtime_host_helpers / runtime_eval / runtime_json / proxy_reflect 都齐了）。
+//!
+//! ## 何时可以「绕过」
+//!
+//! 仅当下面三种情况之一成立，且 reviewer 同意：
+//!
+//! 1. **误报**：新加的函数名巧合包含 `.call(`（比如 `obj.call_count` 字段、`registry.call_site()`
+//!    方法），但**不**进行 Wasm 调用。修复方式：换名（最佳）或把命中行整理成单行 doc 注释样式
+//!    让 `line_looks_like_comment` 跳过——**禁止**为此修改 `patterns` 数组放宽全局规则。
+//!
+//! 2. **真同步、绝不重入**：某 sync helper 命名仍含禁词，但路径上保证不会触达 Wasm
+//!    （例如纯内存读、句柄表查表、错误对象构造）。这种情况几乎不存在；如有，请改名以
+//!    避免与重入助手混淆。
+//!
+//! 3. **架构演进废弃本测试**：Wasmtime 模型变更或 epoch yielding 被替换。这种情况下
+//!    *删除*本测试连同 docs/async-scheduler.md 一并更新，**而不是**给某条 pattern 加白名单
+//!    或加 `#[ignore]`。曾经的临时白名单（`STRICT_AUDIT` + `allow_alive_sync`）已在
+//!    Task 16 完工时删除——不要重新引入。
+//!
+//! 出现「我先 `#[ignore]` 跑通别的再说」的冲动时，先翻 `git log` 看上一个迁移
+//! commit 是怎么做的；再决定是否真的要绕。
 
 use std::fs;
 use std::path::Path;
 
 const RUNTIME_SRC: &str = "src";
-
-/// Set true after Task 16 (sync helper retirement).
-const STRICT_AUDIT: bool = true;
 
 fn read_rust_sources(dir: &Path, out: &mut Vec<(String, String)>) -> std::io::Result<()> {
     if !dir.is_dir() {
@@ -18,12 +52,12 @@ fn read_rust_sources(dir: &Path, out: &mut Vec<(String, String)>) -> std::io::Re
         let path = entry.path();
         if path.is_dir() {
             read_rust_sources(&path, out)?;
-        } else if path.extension().is_some_and(|e| e == "rs") {
+        } else if path.extension().and_then(|s| s.to_str()) == Some("rs") {
             let rel = path
-                .strip_prefix(env!("CARGO_MANIFEST_DIR"))
+                .strip_prefix(Path::new(env!("CARGO_MANIFEST_DIR")))
                 .unwrap_or(&path)
-                .display()
-                .to_string();
+                .to_string_lossy()
+                .into_owned();
             let content = fs::read_to_string(&path)?;
             out.push((rel, content));
         }
@@ -42,13 +76,13 @@ fn line_looks_like_comment(trimmed: &str) -> bool {
 fn collect_violations(content: &str, patterns: &[(&str, &str)]) -> Vec<String> {
     let mut hits = Vec::new();
     for (line_no, line) in content.lines().enumerate() {
-        let trimmed = line.trim();
+        let trimmed = line.trim_start();
         if line_looks_like_comment(trimmed) {
             continue;
         }
         for (label, needle) in patterns {
             if line.contains(needle) {
-                hits.push(format!("{}:{}: {}", label, line_no + 1, trimmed));
+                hits.push(format!("{label}:{}: {}", line_no + 1, line.trim()));
             }
         }
     }
@@ -78,68 +112,14 @@ fn async_reentry_audit_forbidden_sync_patterns() {
 
     let mut all = Vec::new();
     for (path, content) in &files {
-        let mut hits = collect_violations(content, patterns);
-        // In strict mode: allow known alive sync code paths that are NOT re-entrant
-        // (used by the sync execute path, proxy/property helpers, eval, JSON, microtask).
-        // These will be retired when the sync execute path is fully replaced.
-        let allow_alive_sync = |h: &str| -> bool {
-            // call_wasm_callback sync definition and its internal dispatch
-            h.contains("fn call_wasm_callback(")
-            // recursive bound call inside sync call_wasm_callback itself（CallbackTarget::Bound 分支）
-            || h.contains("call_wasm_callback(&mut *caller, target_func, bound_this, &combined_args)")
-            // func.call inside call_wasm_callback sync
-            || (h.contains("func.call(") && h.contains("let call_result"))
-            // call_host_function_with_args sync .call dispatch
-            || (h.contains("func.call(") && h.contains("call_host_function_with_args"))
-            // proxy_or_target_get_prototype_of_impl sync (getPrototypeOf trap via call_wasm_callback)
-            || (h.contains("call_wasm_callback(caller, trap, entry.handler") && h.contains("getPrototypeOf"))
-            // reflect_get_impl_with_receiver sync (proxy get trap + accessor getter via call_wasm_callback)
-            || h.contains("return call_wasm_callback(")
-            || h.contains("call_wasm_callback(caller, getter, receiver, &[])")
-            // reflect_get_prototype_of_impl sync in proxy_reflect.rs
-            || h.contains("call_wasm_callback(caller, trap, entry.handler, &[entry.target])")
-            // runtime_json.rs sync call_wasm_callback (ToPrimitive + reviver)
-            || h.contains("call_wasm_callback(caller, method, value, &[])")
-            || h.contains("call_wasm_callback(caller, reviver, holder,")
-            // streams_readable.rs sync call_wasm_callback (source.start(controller) during ReadableStream construction)
-            || h.contains("call_wasm_callback(caller, start_fn, source,")
-            // agent_cluster.rs sync receiveBroadcast path; async path uses call_wasm_callback_async.
-            || h.contains("call_wasm_callback(caller, callback, value::encode_undefined(), &[sab_obj])")
-            // try_compiled_eval_from_caller sync (Instance::new + entry.call)
-            || (h.contains("Instance::new(") && h.contains("eval_module"))
-            || h.contains("Ok(entry.call(")
-            || h.contains("let result = entry.call(")
-        };
-        if STRICT_AUDIT {
-            hits.retain(|h| !allow_alive_sync(h));
-        } else {
-            // Allow sync helper definitions until retirement
-            hits.retain(|h| {
-                let allow_def = h.contains("fn call_wasm_callback(")
-                    || h.contains("async fn call_wasm_callback_async")
-                    || h.contains("fn resolve_and_call(")
-                    || h.contains("fn resolve_callable_and_call(")
-                    || h.contains("fn drain_microtasks_from_caller(")
-                    || h.contains("fn register_linker(");
-                !allow_def
-            });
-        }
-        for h in hits {
-            all.push(format!("{path}: {h}"));
+        for hit in collect_violations(content, patterns) {
+            all.push(format!("{path}: {hit}"));
         }
     }
 
-    if STRICT_AUDIT {
-        assert!(
-            all.is_empty(),
-            "forbidden sync re-entry in wjsm-runtime/src:\n{}",
-            all.join("\n")
-        );
-    } else {
-        // Informational: ensure audit runs and lists current debt when non-empty
-        eprintln!(
-            "async_reentry_audit (non-strict): {} pattern hit(s); enable STRICT_AUDIT after Task 16",
-            all.len()
-        );
-    }
+    assert!(
+        all.is_empty(),
+        "forbidden sync re-entry in wjsm-runtime/src:\n{}",
+        all.join("\n")
+    );
 }
