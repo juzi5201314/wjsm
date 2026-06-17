@@ -26,7 +26,7 @@ clap = { version = "4.6.0", features = ["derive"] }
 swc_core = { version = "62.0.0", features = ["ecma_parser", "ecma_ast", "common", "ecma_visit", "ecma_ast_serde", "ecma_codegen"] }
 thiserror = "2.0.18"
 wasm-encoder = "0.246.2"
-wasmtime = { version = "43.0.0", features = ["async"] }
+wasmtime = { version = "43.0.0", features = ["async", "cache"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -67,4 +67,8 @@ opt-level = 3
 [profile.dev.package.wasmtime-environ]
 opt-level = 3
 [profile.dev.package.wjsm-runtime]
+opt-level = 3
+# memchr 的 SIMD 子串搜索（find_memory_c_string 用）在未优化 debug 下
+# 带大量 UB 检查 + 未内联，实测占 bootstrap ~35% 指令；opt 后大幅收缩。
+[profile.dev.package.memchr]
 opt-level = 3

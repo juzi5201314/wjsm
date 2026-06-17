@@ -840,6 +840,20 @@ pub(crate) async fn execute_with_writer_shared<W: Write>(
 ) -> Result<W> {
     execute_with_writer_shared_inner(wasm_bytes, writer, shared_state, true).await
 }
+/// 进程级 wasmtime 编译缓存（按 WJSM_MODULE_CACHE 环境变量惰性初始化一次）。
+/// 返回 None 表示未开启或初始化失败（静默降级到无缓存，正确性优先）。
+fn module_compile_cache() -> Option<&'static wasmtime::Cache> {
+    use std::sync::OnceLock;
+    static CACHE: OnceLock<Option<wasmtime::Cache>> = OnceLock::new();
+    CACHE
+        .get_or_init(|| {
+            let dir = std::env::var("WJSM_MODULE_CACHE").ok()?;
+            let mut cfg = wasmtime::CacheConfig::new();
+            cfg.with_directory(dir);
+            wasmtime::Cache::new(cfg).ok()
+        })
+        .as_ref()
+}
 async fn execute_with_writer_shared_inner<W: Write>(
     wasm_bytes: &[u8],
     writer: W,
@@ -849,6 +863,12 @@ async fn execute_with_writer_shared_inner<W: Write>(
     let mut config = Config::new();
     if use_epoch_async_yield {
         config.epoch_interruption(true);
+    }
+    // 可选的跨 run 编译缓存：设 WJSM_MODULE_CACHE=<dir> 时，wasmtime 把 Cranelift
+    // 编译产物按 wasm 内容哈希缓存到磁盘。同一 wasm 第二次执行直接读缓存，跳过编译。
+    // 仅在显式开启时生效（测试加速场景），不影响生产 CLI 默认行为。
+    if let Some(cache) = module_compile_cache() {
+        config.cache(Some(cache.clone()));
     }
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
