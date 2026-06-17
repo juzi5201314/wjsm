@@ -1,0 +1,149 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = undefined
+    c20 = string("name")
+    c21 = string("dispose")
+    c22 = functionref(@0)
+    c23 = undefined
+    c24 = string("Symbol")
+    c25 = string("dispose")
+    c26 = number(6)
+    c27 = functionref(@1)
+    c28 = undefined
+    c29 = string("a")
+    c30 = string("using")
+    c31 = undefined
+    c32 = number(6)
+    c33 = string("after")
+
+  fn @anon_0 [params: $2.$env, $2.$this] [entry=bb0]:
+    bb0:
+      %0 = const c21
+      %1 = call builtin.console.log(%0)
+      %2 = is_exception %1
+      branch %2, bb2, bb1
+    bb1:
+      return
+    bb2:
+      %3 = call builtin.exception_value(%1)
+      throw %3
+
+  fn @makeDisposable [params: $1.$env, $1.$this, $1.name] [entry=bb0]:
+    bb0:
+      %0 = new_object(capacity=4)
+      %1 = load var $1.name
+      %2 = const c20
+      set_prop %0, %2, %1
+      %3 = const c22
+      %4 = const c23
+      %5 = call builtin.create_closure(%3, %4)
+      %6 = load var $0.$global
+      %7 = const c24
+      %8 = get_prop %6, %7
+      %9 = const c25
+      %11 = const c26
+      %10 = call builtin.symbol.well_known(%11)
+      set_prop %0, %10, %5
+      return %0
+
+  fn @$module_main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $this, %20
+      %21 = const c27
+      store var $0.makeDisposable, %21
+      %22 = const c28
+      %23 = load var $0.makeDisposable
+      %24 = const c29
+      %25 = call %23, this=%22, args=[%24]
+      store var $3.a, %25
+      %26 = const c30
+      %27 = call builtin.console.log(%26)
+      %28 = is_exception %27
+      branch %28, bb2, bb1
+    bb1:
+      %30 = load var $3.a
+      %32 = const c31
+      %31 = stricteq %30, %32
+      branch %31, bb3, bb4
+    bb2:
+      %29 = call builtin.exception_value(%27)
+      throw %29
+    bb3:
+      jump bb5
+    bb4:
+      %33 = const c32
+      %34 = call builtin.symbol.well_known(%33)
+      %35 = get_prop %30, %34
+      call %35, this=%30
+      jump bb5
+    bb5:
+      %36 = const c33
+      %37 = call builtin.console.log(%36)
+      %38 = is_exception %37
+      branch %38, bb7, bb6
+    bb6:
+      return
+    bb7:
+      %39 = call builtin.exception_value(%37)
+      throw %39
+}

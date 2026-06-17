@@ -1,0 +1,133 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = undefined
+    c20 = number(1)
+    c21 = string("Up")
+    c22 = string("1")
+    c23 = string("Up")
+    c24 = number(2)
+    c25 = string("Down")
+    c26 = string("2")
+    c27 = string("Down")
+    c28 = number(3)
+    c29 = string("Left")
+    c30 = string("3")
+    c31 = string("Left")
+    c32 = number(4)
+    c33 = string("Right")
+    c34 = string("4")
+    c35 = string("Right")
+    c36 = string("Up")
+    c37 = string("1")
+
+  fn @$module_main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $this, %20
+      %21 = new_object(capacity=4)
+      %22 = const c20
+      %23 = const c21
+      set_prop %21, %23, %22
+      %24 = const c22
+      %25 = const c23
+      set_prop %21, %24, %25
+      %26 = const c24
+      %27 = const c25
+      set_prop %21, %27, %26
+      %28 = const c26
+      %29 = const c27
+      set_prop %21, %28, %29
+      %30 = const c28
+      %31 = const c29
+      set_prop %21, %31, %30
+      %32 = const c30
+      %33 = const c31
+      set_prop %21, %32, %33
+      %34 = const c32
+      %35 = const c33
+      set_prop %21, %35, %34
+      %36 = const c34
+      %37 = const c35
+      set_prop %21, %36, %37
+      store var $0.Direction, %21
+      %38 = load var $0.Direction
+      %39 = const c36
+      %40 = get_prop %38, %39
+      %41 = call builtin.console.log(%40)
+      %42 = is_exception %41
+      branch %42, bb2, bb1
+    bb1:
+      %44 = load var $0.Direction
+      %45 = const c37
+      %46 = get_prop %44, %45
+      %47 = call builtin.console.log(%46)
+      %48 = is_exception %47
+      branch %48, bb4, bb3
+    bb2:
+      %43 = call builtin.exception_value(%41)
+      throw %43
+    bb3:
+      return
+    bb4:
+      %49 = call builtin.exception_value(%47)
+      throw %49
+}

@@ -584,10 +584,104 @@ fn async_closure_capture_fixture_matches_ir_snapshot() {
     assert_snapshot("async_closure_capture");
 }
 
+// ── TS/TSX snapshot tests ─────────────────────────────────────
+
+#[test]
+fn proxy_basic_fixture_matches_ir_snapshot() {
+    assert_snapshot("proxy_basic");
+}
+#[test]
+fn proxy_get_trap_fixture_matches_ir_snapshot() {
+    assert_snapshot("proxy_get_trap");
+}
+#[test]
+fn proxy_set_trap_fixture_matches_ir_snapshot() {
+    assert_snapshot("proxy_set_trap");
+}
+#[test]
+fn proxy_has_trap_fixture_matches_ir_snapshot() {
+    assert_snapshot("proxy_has_trap");
+}
+#[test]
+fn proxy_delete_trap_fixture_matches_ir_snapshot() {
+    assert_snapshot("proxy_delete_trap");
+}
+#[test]
+fn proxy_apply_trap_fixture_matches_ir_snapshot() {
+    assert_snapshot("proxy_apply_trap");
+}
+#[test]
+fn proxy_revocable_fixture_matches_ir_snapshot() {
+    assert_snapshot("proxy_revocable");
+}
+#[test]
+fn reflect_methods_fixture_matches_ir_snapshot() {
+    assert_snapshot("reflect_methods");
+}
+#[test]
+fn ts_enum_fixture_matches_ir_snapshot() {
+    assert_snapshot("ts_enum");
+}
+#[test]
+fn ts_enum_reverse_fixture_matches_ir_snapshot() {
+    assert_snapshot("ts_enum_reverse");
+}
+#[test]
+fn ts_enum_reverse2_fixture_matches_ir_snapshot() {
+    assert_snapshot("ts_enum_reverse2");
+}
+#[test]
+fn ts_interface_fixture_matches_ir_snapshot() {
+    assert_snapshot("ts_interface");
+}
+#[test]
+fn ts_namespace_fixture_matches_ir_snapshot() {
+    assert_snapshot("ts_namespace");
+}
+#[test]
+fn ts_type_alias_fixture_matches_ir_snapshot() {
+    assert_snapshot("ts_type_alias");
+}
+#[test]
+fn ts_type_assertions_fixture_matches_ir_snapshot() {
+    assert_snapshot("ts_type_assertions");
+}
+#[test]
+fn using_basic_fixture_matches_ir_snapshot() {
+    assert_snapshot("using_basic");
+}
+#[test]
+fn using_block_scope_fixture_matches_ir_snapshot() {
+    assert_snapshot("using_block_scope");
+}
+#[test]
+fn jsx_basic_fixture_matches_ir_snapshot() {
+    assert_snapshot("jsx_basic");
+}
+#[test]
+fn jsx_attrs_fixture_matches_ir_snapshot() {
+    assert_snapshot("jsx_attrs");
+}
+#[test]
+fn jsx_expr_fixture_matches_ir_snapshot() {
+    assert_snapshot("jsx_expr");
+}
+#[test]
+fn jsx_fragment_fixture_matches_ir_snapshot() {
+    assert_snapshot("jsx_fragment");
+}
+
 fn assert_snapshot(name: &str) {
     let root = workspace_root();
-    let source_path = root.join("fixtures/happy").join(format!("{name}.js"));
     let expected_path = root.join("fixtures/semantic").join(format!("{name}.ir"));
+
+    // 依次尝试 .js / .ts / .tsx
+    let source_dir = root.join("fixtures/happy");
+    let source_path = [".js", ".ts", ".tsx"]
+        .iter()
+        .map(|ext| source_dir.join(format!("{name}{ext}")))
+        .find(|p| p.exists())
+        .unwrap_or_else(|| panic!("no source file (js/ts/tsx) found for {name}"));
 
     let source = std::fs::read_to_string(&source_path)
         .unwrap_or_else(|error| panic!("failed to read {}: {error}", source_path.display()));
