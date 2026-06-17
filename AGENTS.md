@@ -328,8 +328,6 @@ Auto-update: `WJSM_UPDATE_FIXTURES=1 cargo nextest run` 写入新的 `.expected`
   - **Bug tracking**: If a regression or spec deviation is discovered that cannot be immediately fixed, create `bug.md` at the project root with the bug description, reproduction steps, workaround (if any), and tag the affected fixtures. Once the bug is fixed, remove `bug.md` and update this section.
 **Error path** (57 fixtures): undeclared_var, const_reassign, tdz, let_redeclare, redeclare combinations, unsupported statements/expressions, syntax_error, await/yield/for-await outside valid contexts, break/continue outside loop, unknown/duplicate labels, with statement, for-in/for-of bad LHS, for-of non-iterable, for-await non-iterable, bigint JSON, regex_invalid, regexp_flags_invalid, get_own_property_descriptor non-object, define_property_accessor non-callable, group_by non-callable/non-iterable, typedarray invalid length, bigint typedarray number write, weakref non-object, eval errors (strict var leak, syntax, throw, lexical redeclare, const reassign), plus recent additions (proxy invariants, JSON cycle, class TDZ/static field errors, timer non-function).
 **Module path** (52 source files across 23 scenarios): ESM (simple, default/named/re-export, alias, circular, deep chain, shared reuse, side effect, dynamic import, missing export) and CJS (simple, circular, conditional require, default export, exports alias, mixed ESM, require error, syntax error).
-### Not yet tested
-Full test262 conformance suite (via `wjsm-test262` crate). Semantic IR snapshots (96) only cover `.js` sources (TS/TSX have no `.ir` snapshots).
 ## Important Files
 
 | File | Purpose |
