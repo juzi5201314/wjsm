@@ -1,0 +1,158 @@
+module {
+  constants:
+    c0 = undefined
+    c1 = number(NaN)
+    c2 = number(inf)
+    c3 = number(2.718281828459045)
+    c4 = number(2.302585092994046)
+    c5 = number(0.6931471805599453)
+    c6 = number(0.4342944819032518)
+    c7 = number(1.4426950408889634)
+    c8 = number(3.141592653589793)
+    c9 = number(0.7071067811865476)
+    c10 = number(1.4142135623730951)
+    c11 = number(0.0000000000000002220446049250313)
+    c12 = number(179769313486231570000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000)
+    c13 = number(0.000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000022250738585072014)
+    c14 = number(9007199254740991)
+    c15 = number(-9007199254740991)
+    c16 = number(NaN)
+    c17 = number(-inf)
+    c18 = number(inf)
+    c19 = undefined
+    c20 = number(10)
+    c21 = string("x")
+    c22 = string("proxy")
+    c23 = string("revoke")
+    c24 = string("x")
+    c25 = undefined
+    c26 = string("x")
+    c27 = string("FAIL: revoked get did not throw")
+    c28 = string("revoked-get-throws")
+
+  fn @$module_main [entry=bb0]:
+    bb0:
+      %0 = const c0
+      store var $0.undefined, %0
+      %1 = const c1
+      store var $0.NaN, %1
+      %2 = const c2
+      store var $0.Infinity, %2
+      %3 = const c3
+      store var $0.Math.E, %3
+      %4 = const c4
+      store var $0.Math.LN10, %4
+      %5 = const c5
+      store var $0.Math.LN2, %5
+      %6 = const c6
+      store var $0.Math.LOG10E, %6
+      %7 = const c7
+      store var $0.Math.LOG2E, %7
+      %8 = const c8
+      store var $0.Math.PI, %8
+      %9 = const c9
+      store var $0.Math.SQRT1_2, %9
+      %10 = const c10
+      store var $0.Math.SQRT2, %10
+      %11 = const c11
+      store var $0.Number.EPSILON, %11
+      %12 = const c12
+      store var $0.Number.MAX_VALUE, %12
+      %13 = const c13
+      store var $0.Number.MIN_VALUE, %13
+      %14 = const c14
+      store var $0.Number.MAX_SAFE_INTEGER, %14
+      %15 = const c15
+      store var $0.Number.MIN_SAFE_INTEGER, %15
+      %16 = const c16
+      store var $0.Number.NaN, %16
+      %17 = const c17
+      store var $0.Number.NEGATIVE_INFINITY, %17
+      %18 = const c18
+      store var $0.Number.POSITIVE_INFINITY, %18
+      %19 = call builtin.create_global_object()
+      store var $0.$global, %19
+      %20 = const c19
+      store var $this, %20
+      %21 = new_object(capacity=4)
+      %22 = const c20
+      %23 = const c21
+      set_prop %21, %23, %22
+      store var $0.target, %21
+      %24 = new_object(capacity=4)
+      store var $0.handler, %24
+      %25 = load var $0.target
+      %26 = load var $0.handler
+      %27 = call builtin.proxy.revocable(%25, %26)
+      %28 = is_exception %27
+      branch %28, bb2, bb1
+    bb1:
+      %30 = const c22
+      %31 = get_prop %27, %30
+      store var $0.proxy, %31
+      %32 = const c23
+      %33 = get_prop %27, %32
+      store var $0.revoke, %33
+      %34 = load var $0.proxy
+      %35 = const c24
+      %36 = get_prop %34, %35
+      %37 = call builtin.console.log(%36)
+      %38 = is_exception %37
+      branch %38, bb4, bb3
+    bb2:
+      %29 = call builtin.exception_value(%27)
+      throw %29
+    bb3:
+      %40 = const c25
+      %41 = load var $0.revoke
+      %42 = call %41, this=%40
+      %43 = is_exception %42
+      branch %43, bb6, bb5
+    bb4:
+      %39 = call builtin.exception_value(%37)
+      throw %39
+    bb5:
+      jump bb7
+    bb6:
+      %44 = call builtin.exception_value(%42)
+      throw %44
+    bb7:
+      %45 = load var $0.proxy
+      %46 = const c26
+      %47 = get_prop %45, %46
+      %48 = is_exception %47
+      branch %48, bb12, bb11
+    bb8:
+      %55 = load var $tmp.0
+      store var $3.e, %55
+      %56 = const c28
+      %57 = call builtin.console.log(%56)
+      %58 = is_exception %57
+      branch %58, bb16, bb15
+    bb9:
+      unreachable
+    bb10:
+      return
+    bb11:
+      store var $2.v, %47
+      %50 = const c27
+      %51 = load var $2.v
+      %52 = call builtin.console.log(%50, %51)
+      %53 = is_exception %52
+      branch %53, bb14, bb13
+    bb12:
+      %49 = call builtin.exception_value(%47)
+      store var $tmp.0, %49
+      jump bb8
+    bb13:
+      jump bb10
+    bb14:
+      %54 = call builtin.exception_value(%52)
+      store var $tmp.0, %54
+      jump bb8
+    bb15:
+      jump bb10
+    bb16:
+      %59 = call builtin.exception_value(%57)
+      throw %59
+}
