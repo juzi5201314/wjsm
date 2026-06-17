@@ -684,19 +684,25 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
     value::encode_object_handle(obj_table_count)
 }
 
-pub(crate) fn find_memory_c_string_with_env<C: AsContext>(
-    ctx: &C,
+/// 查找 name 对应的 nul 结尾 c-string 在线性内存中的偏移（即 name_id）。
+///
+/// 性能不变量：**只扫描 [0, heap_ptr) 的已分配区间，且用 SIMD 子串搜索（memchr::memmem）。**
+/// 线性内存默认 256KB，但 bootstrap 期实际数据只占开头 ~80KB（heap_ptr 是 bump 分配上界）；
+/// 大量 builtin 属性名注定找不到（miss），若朴素 windows() 全扫整块 256KB 确认不存在，
+/// 会逐字节比掉 ~70% 的空尾部 —— 这曾是空程序执行开销的最大头（~70% 指令）。
+/// 新增按名查找属性的代码请复用本函数，切勿另写裸的全内存 windows()/逐字节扫描。
+pub(crate) fn find_memory_c_string_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
     env: &WasmEnv,
     name: &str,
 ) -> Option<u32> {
     let mut needle = Vec::with_capacity(name.len() + 1);
     needle.extend_from_slice(name.as_bytes());
     needle.push(0);
-    env.memory
-        .data(ctx)
-        .windows(needle.len())
-        .position(|window| window == needle.as_slice())
-        .map(|offset| offset as u32)
+    let heap_end = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as usize;
+    let data = env.memory.data(&*ctx);
+    let scan_end = heap_end.min(data.len());
+    memchr::memmem::find(&data[..scan_end], &needle).map(|offset| offset as u32)
 }
 
 pub(crate) fn alloc_heap_c_string_with_env<C: AsContextMut<Data = RuntimeState>>(

@@ -22,4 +22,5 @@ wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
 wjsm-parser = { path = "../wjsm-parser" }
 wjsm-semantic = { path = "../wjsm-semantic" }
 reqwest = { workspace = true }
+memchr = "2"
 [dev-dependencies]
