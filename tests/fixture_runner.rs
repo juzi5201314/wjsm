@@ -3,12 +3,37 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::sync::Once;
 
 const UPDATE_SNAPSHOTS_ENV: &str = "WJSM_UPDATE_FIXTURES";
+const MODULE_CACHE_ENV: &str = "WJSM_MODULE_CACHE";
+
+/// 进程级一次性初始化测试环境：
+/// 1. 固定时区为 UTC —— 旧子进程模型靠 `Command::env("TZ","UTC")` 保证 Date fixture 稳定；
+///    in-process 调用无子进程，需在测试进程内设置。chrono 读 TZ 决定 Local 偏移，
+///    必须在任何 Date 逻辑运行前设好。
+/// 2. 启用 wasmtime 编译缓存 —— 567 个 fixture 各编译一个 wasm，Cranelift 编译是
+///    测试 wall time 的最大头。缓存按 wasm 内容哈希复用编译产物，使热跑跳过编译。
+///    默认指向 target 下目录（gitignore），用户可用 WJSM_MODULE_CACHE 覆盖。
+static ENV_INIT: Once = Once::new();
+
+fn ensure_test_env() {
+    ENV_INIT.call_once(|| {
+        // SAFETY: 在测试初始化早期、首个 fixture 运行前设置一次；
+        // call_once 保证无并发写。后续只读。
+        unsafe {
+            env::set_var("TZ", "UTC");
+            if env::var(MODULE_CACHE_ENV).is_err() {
+                let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("target")
+                    .join("wjsm-test-module-cache");
+                env::set_var(MODULE_CACHE_ENV, dir);
+            }
+        }
+    });
+}
 
 pub struct FixtureRunner {
-    binary_path: PathBuf,
     fixtures_root: PathBuf,
     update_snapshots: bool,
 }
@@ -27,13 +52,12 @@ struct FixtureOutput {
 
 impl FixtureRunner {
     pub fn new() -> Result<Self> {
+        ensure_test_env();
         let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let fixtures_root = manifest_dir.join("fixtures");
-        let binary_path = resolve_binary_path(&manifest_dir)?;
         let update_snapshots = snapshot_updates_enabled();
 
         Ok(Self {
-            binary_path,
             fixtures_root,
             update_snapshots,
         })
@@ -151,19 +175,13 @@ impl FixtureRunner {
         {
             return Ok(());
         }
-        let output = Command::new(&self.binary_path)
-            .env("TZ", "UTC")
-            .arg("run")
-            .arg(&fixture.input_path)
-            .output()
-            .with_context(|| {
-                format!(
-                    "Failed to execute fixture binary for {}",
-                    fixture.relative_path.display()
-                )
-            })?;
-
-        let actual = FixtureOutput::from_command_output(output).snapshot();
+        let (exit_code, stdout, stderr) = wjsm_cli::run_file_in_process(&fixture.input_path);
+        let actual = FixtureOutput {
+            stdout: normalize_output(&stdout),
+            stderr: normalize_output(&stderr),
+            exit_code,
+        }
+        .snapshot();
         if !fixture.expected_path.exists() {
             fs::write(&fixture.expected_path, &actual).with_context(|| {
                 format!(
@@ -205,14 +223,6 @@ impl FixtureRunner {
 }
 
 impl FixtureOutput {
-    fn from_command_output(output: std::process::Output) -> Self {
-        Self {
-            stdout: normalize_output(&output.stdout),
-            stderr: normalize_output(&output.stderr),
-            exit_code: output.status.code().unwrap_or(-1),
-        }
-    }
-
     fn snapshot(&self) -> String {
         let mut snapshot = String::new();
         snapshot.push_str(&format!("exit_code: {}\n", self.exit_code));
@@ -230,22 +240,6 @@ impl FixtureOutput {
 
         snapshot
     }
-}
-
-fn resolve_binary_path(manifest_dir: &Path) -> Result<PathBuf> {
-    if let Ok(binary_path) = env::var("CARGO_BIN_EXE_wjsm") {
-        return Ok(PathBuf::from(binary_path));
-    }
-
-    let fallback = manifest_dir
-        .join("target")
-        .join("debug")
-        .join(binary_name());
-    if fallback.exists() {
-        return Ok(fallback);
-    }
-
-    bail!("Unable to locate wjsm binary. Build tests with cargo/nextest first.")
 }
 
 fn snapshot_updates_enabled() -> bool {
@@ -405,8 +399,4 @@ fn is_fixture_file(path: &Path) -> bool {
         path.extension().and_then(OsStr::to_str),
         Some("js") | Some("ts") | Some("tsx")
     )
-}
-
-fn binary_name() -> &'static str {
-    if cfg!(windows) { "wjsm.exe" } else { "wjsm" }
 }
