@@ -110,9 +110,8 @@ fn spawn_barrier_server(release: mpsc::Sender<()>) -> String {
             let _ = stream.read(&mut request_buf);
             // 先放行 body 服务器，再回响应：确保 barrier fetch resolve 时后续块已在途。
             let _ = release.send(());
-            let _ = stream.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
-            );
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
             let _ = stream.flush();
         }
     });
