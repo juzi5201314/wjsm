@@ -47,3 +47,24 @@ wjsm-cli = { path = "crates/wjsm-cli" }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+
+# 仅对 wasmtime/cranelift 这类编译密集型依赖启用优化，
+# 保持本仓库自身 crate 仍走快速 debug 编译。
+# 测试时每个 fixture 都会用 Cranelift 把 WASM 编译成本机码，
+# 未优化的 Cranelift 是 fixture 执行 ~290ms 开销的主因。
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 3
+[profile.dev.package.cranelift-frontend]
+opt-level = 3
+[profile.dev.package.cranelift-codegen-meta]
+opt-level = 3
+[profile.dev.package.cranelift-assembler-x64]
+opt-level = 3
+[profile.dev.package.wasmtime-internal-core]
+opt-level = 3
+[profile.dev.package.wasmtime-environ]
+opt-level = 3
+[profile.dev.package.wjsm-runtime]
+opt-level = 3
