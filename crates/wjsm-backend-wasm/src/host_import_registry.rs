@@ -2646,4 +2646,20 @@ mod registry_consistency {
             );
         }
     }
+
+    /// IR `Builtin` 变体数与 registry 中 Builtin 绑定数必须一致（见 `wjsm-ir::Builtin`）。
+    /// 新增 Builtin 时：改 enum + 在此常量加 1 + 登记 `HOST_IMPORT_SPECS`。
+    const EXPECTED_BUILTIN_REGISTRY_BINDINGS: usize = 380;
+
+    #[test]
+    fn builtin_registry_binding_count_matches_ir_contract() {
+        let n = HOST_IMPORT_SPECS
+            .iter()
+            .filter(|spec| matches!(spec.key, Some(HostImportKey::Builtin(_))))
+            .count();
+        assert_eq!(
+            n, EXPECTED_BUILTIN_REGISTRY_BINDINGS,
+            "update EXPECTED_BUILTIN_REGISTRY_BINDINGS when adding/removing Builtin host imports"
+        );
+    }
 }

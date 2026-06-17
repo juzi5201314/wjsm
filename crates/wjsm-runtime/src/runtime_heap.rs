@@ -306,4 +306,3 @@ pub(crate) fn alloc_heap_aggregate_error<C: AsContextMut<Data = RuntimeState>>(
     let _ = define_host_data_property_with_env(ctx, env, obj, "errors", errors);
     obj
 }
-

@@ -51,7 +51,7 @@ pub(crate) fn read_shadow_arg_with_env<C: AsContext>(
 // 三个 dispatch 点（native callable / bound 递归 / WASM invocation）有 sync vs
 // async 差异。下面把无差异部分抽成两个 helper，两个版本退化为薄 dispatcher。
 
-/// 解析后的回调目标。proxy 链已走完，剩下三类终态。
+/// 解析后的回调目标。proxy 链已走完，剩下终态（含 Proxy apply trap）。
 pub(crate) enum CallbackTarget {
     /// native callable —— 不走 WASM，直接 host 调用。
     Native(i64),
@@ -61,8 +61,46 @@ pub(crate) enum CallbackTarget {
         bound_this: i64,
         bound_args: Vec<i64>,
     },
+    /// Proxy `handler.apply(target, thisArg, argumentsList)`（不可当作单参数函数）。
+    ApplyTrap {
+        trap: i64,
+        handler: i64,
+        proxy_target: i64,
+    },
     /// WASM 函数表调用：func table 索引 + 闭包环境对象。
     Wasm { func_idx: u32, env_obj: i64 },
+}
+
+/// 将 args 写入影子栈（`WasmEnv` + 任意 `AsContextMut`）。返回调用前的 `shadow_sp`。
+pub(crate) fn push_args_to_shadow_stack<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    args: &[i64],
+) -> Option<i32> {
+    let saved_sp = env.shadow_sp.get(&mut *ctx).i32().unwrap_or(0);
+    let args_bytes = args.len().checked_mul(8)?;
+    {
+        let data = env.memory.data_mut(&mut *ctx);
+        let offset = saved_sp as usize;
+        if offset + args_bytes > data.len() {
+            return None;
+        }
+        for (index, arg) in args.iter().enumerate() {
+            let write_offset = offset + index * 8;
+            data[write_offset..write_offset + 8].copy_from_slice(&arg.to_le_bytes());
+        }
+    }
+    let new_sp = saved_sp + (args.len() as i32) * 8;
+    let _ = env.shadow_sp.set(&mut *ctx, Val::I32(new_sp));
+    Some(saved_sp)
+}
+
+pub(crate) fn restore_shadow_sp<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    saved_sp: i32,
+) {
+    let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
 }
 
 /// 将 args 写入影子栈并推进 `__shadow_sp`。返回 `(shadow_sp_global, 原始 shadow_sp)`，
@@ -71,37 +109,44 @@ fn prepare_callback_shadow_stack(
     caller: &mut Caller<'_, RuntimeState>,
     args: &[i64],
 ) -> anyhow::Result<(wasmtime::Global, i32)> {
+    let env = WasmEnv::from_caller(caller).ok_or_else(|| anyhow::anyhow!("WasmEnv"))?;
     let shadow_sp_global = caller
         .get_export("__shadow_sp")
         .and_then(|e| e.into_global())
         .ok_or_else(|| anyhow::anyhow!("no __shadow_sp"))?;
-    let shadow_sp = shadow_sp_global
-        .get(&mut *caller)
-        .i32()
-        .ok_or_else(|| anyhow::anyhow!("shadow_sp not i32"))?;
-    let new_shadow_sp = shadow_sp + (args.len() as i32) * 8;
-    {
-        let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-            return Err(anyhow::anyhow!("no memory"));
-        };
-        let data = memory.data_mut(&mut *caller);
-        let mut write_pos = shadow_sp as usize;
-        for &arg in args {
-            if write_pos + 8 > data.len() {
-                return Err(anyhow::anyhow!("shadow stack overflow"));
-            }
-            data[write_pos..write_pos + 8].copy_from_slice(&arg.to_le_bytes());
-            write_pos += 8;
-        }
-    }
-    shadow_sp_global.set(&mut *caller, Val::I32(new_shadow_sp))?;
-    Ok((shadow_sp_global, shadow_sp))
+    let saved_sp = push_args_to_shadow_stack(caller, &env, args)
+        .ok_or_else(|| anyhow::anyhow!("shadow stack push failed"))?;
+    Ok((shadow_sp_global, saved_sp))
+}
+
+fn resolve_handle_val_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    val: i64,
+) -> Option<usize> {
+    let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    resolve_handle_idx_with_env(ctx, env, handle_idx)
 }
 
 /// 走完 proxy apply-trap / target 链，返回最终回调目标。
-/// 与 dispatch 是否 async 无关——proxy 表读取、revoke 检查、apply trap 探测均同步。
-fn resolve_callback_target(
-    caller: &mut Caller<'_, RuntimeState>,
+/// microtask（Store）与 host reentrant（Caller）共用。
+/// 与 `resolve_callback_target_with_env` 一致：含 Proxy `apply` trap、bound、closure 等。
+pub(crate) fn is_callable_with_env<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    val: i64,
+) -> bool {
+    if value::is_callable(val) {
+        return true;
+    }
+    resolve_callback_target_with_env(ctx, env, val).is_ok()
+}
+
+pub(crate) fn resolve_callback_target_with_env<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
     func_val: i64,
 ) -> anyhow::Result<CallbackTarget> {
     let mut resolved = func_val;
@@ -118,7 +163,7 @@ fn resolve_callback_target(
         }
         let handle = value::decode_proxy_handle(resolved) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap();
+            let table = ctx.state_mut().proxy_table.lock().unwrap();
             table.get(handle).cloned()
         };
         let entry = match entry {
@@ -128,12 +173,15 @@ fn resolve_callback_target(
         if entry.revoked {
             return Err(anyhow::anyhow!("proxy has been revoked"));
         }
-        if let Some(handler_ptr) = resolve_handle(&mut *caller, entry.handler) {
-            let trap = read_object_property_by_name(&mut *caller, handler_ptr, "apply")
-                .unwrap_or_else(value::encode_undefined);
+        if let Some(handler_ptr) = resolve_handle_val_with_env(ctx, env, entry.handler) {
+            let trap = read_object_property_by_name_with_env(ctx, env, handler_ptr, "apply")
+                .unwrap_or(value::encode_undefined());
             if !value::is_undefined(trap) && !value::is_null(trap) {
-                resolved = trap;
-                continue;
+                return Ok(CallbackTarget::ApplyTrap {
+                    trap,
+                    handler: entry.handler,
+                    proxy_target: entry.target,
+                });
             }
         }
         resolved = entry.target;
@@ -143,7 +191,7 @@ fn resolve_callback_target(
     }
     if value::is_bound(resolved) {
         let bound_idx = value::decode_bound_idx(resolved) as usize;
-        let bound = caller.data().bound_objects.lock().unwrap();
+        let bound = ctx.state_mut().bound_objects.lock().unwrap();
         let record = &bound[bound_idx];
         return Ok(CallbackTarget::Bound {
             target_func: record.target_func,
@@ -153,7 +201,7 @@ fn resolve_callback_target(
     }
     if value::is_closure(resolved) {
         let idx = value::decode_closure_idx(resolved) as usize;
-        let closures = caller.data().closures.lock().unwrap();
+        let closures = ctx.state_mut().closures.lock().unwrap();
         let entry = closures
             .get(idx)
             .ok_or_else(|| anyhow::anyhow!("closure index out of range"))?;
@@ -164,70 +212,304 @@ fn resolve_callback_target(
     }
     if value::is_function(resolved) {
         return Ok(CallbackTarget::Wasm {
-            func_idx: (resolved as u64 & 0xFFFF_FFFF) as u32,
+            func_idx: value::decode_function_idx(resolved),
             env_obj: value::encode_undefined(),
         });
     }
     Err(anyhow::anyhow!("not callable"))
 }
 
-/// WASM 函数表调用的公共前置：解析 func table entry，swap new_target，返回
-/// `(func, previous_new_target)`。调用方负责实际 call/call_async 与状态恢复。
-fn lookup_callback_wasm_func(
-    caller: &mut Caller<'_, RuntimeState>,
+/// WASM 函数表调用的公共前置：swap new_target，返回 `(func, previous_new_target)`。
+fn lookup_callback_wasm_func_with_env<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
     func_idx: u32,
 ) -> anyhow::Result<(wasmtime::Func, i64)> {
-    let table = caller
-        .get_export("__table")
-        .and_then(|e| e.into_table())
-        .ok_or_else(|| anyhow::anyhow!("no __table"))?;
-    let func_ref = table
-        .get(&mut *caller, func_idx as u64)
+    let func_ref = env
+        .func_table
+        .get(&mut *ctx, func_idx as u64)
         .ok_or_else(|| anyhow::anyhow!("table get failed"))?;
     let func = func_ref
         .as_func()
         .flatten()
         .ok_or_else(|| anyhow::anyhow!("table entry not a function"))?;
-    let previous_new_target = caller
-        .data()
+    let previous_new_target = ctx
+        .state_mut()
         .new_target
         .swap(value::encode_undefined(), Ordering::Relaxed);
     Ok((*func, previous_new_target))
 }
 
-// ── 辅助函数：调用 WASM 回调函数 ────────────────────────────────
-pub(crate) fn call_wasm_callback(
-    caller: &mut Caller<'_, RuntimeState>,
-    func_val: i64,
+fn dispatch_native_callable_with_env<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    callable: i64,
+    _this_val: i64,
+    args: &[i64],
+) -> Option<i64> {
+    if !value::is_native_callable(callable) {
+        return None;
+    }
+    let idx = value::decode_native_callable_idx(callable) as usize;
+    let record = {
+        let table = ctx
+            .state_mut()
+            .native_callables
+            .lock()
+            .expect("native callable table mutex");
+        table.get(idx).cloned()
+    }?;
+    let argument = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    match record {
+        NativeCallable::PromiseResolvingFunction {
+            promise,
+            already_resolved,
+            kind,
+        } => {
+            let mut already = already_resolved.lock().expect("promise resolver mutex");
+            if *already {
+                return Some(value::encode_undefined());
+            }
+            *already = true;
+            drop(already);
+            match kind {
+                PromiseResolvingKind::Fulfill => {
+                    resolve_promise(ctx, env, promise, argument);
+                }
+                PromiseResolvingKind::Reject => {
+                    settle_promise(
+                        ctx.state_mut(),
+                        promise,
+                        PromiseSettlement::Reject(argument),
+                    );
+                }
+            }
+            Some(value::encode_undefined())
+        }
+        NativeCallable::PromiseCombinatorReaction { .. } => Some(value::encode_undefined()),
+        _ => None,
+    }
+}
+
+fn build_args_array_with_env<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    elements: &[i64],
+) -> i64 {
+    let arr = alloc_array_with_env(ctx, env, elements.len() as u32);
+    for (i, &arg) in elements.iter().enumerate() {
+        set_array_elem_with_env(ctx, env, arr, i as i32, arg);
+    }
+    arr
+}
+
+async fn invoke_proxy_apply_trap_async<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    trap: i64,
+    handler: i64,
+    proxy_target: i64,
+    this_val: i64,
+    call_args: &[i64],
+) -> anyhow::Result<i64> {
+    let arr = build_args_array_with_env(ctx, env, call_args);
+    let wasm_args = [proxy_target, this_val, arr];
+    let sp = push_args_to_shadow_stack(ctx, env, &wasm_args)
+        .ok_or_else(|| anyhow::anyhow!("shadow stack push failed"))?;
+    let inner = resolve_callback_target_with_env(ctx, env, trap)?;
+    Box::pin(dispatch_callback_target_async(
+        ctx, env, inner, handler, &wasm_args, sp,
+    ))
+    .await
+}
+
+async fn dispatch_callback_target_async<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    target: CallbackTarget,
     this_val: i64,
     args: &[i64],
+    shadow_sp: i32,
 ) -> anyhow::Result<i64> {
-    let (shadow_sp_global, shadow_sp) = prepare_callback_shadow_stack(&mut *caller, args)?;
-    match resolve_callback_target(&mut *caller, func_val)? {
+    match target {
         CallbackTarget::Native(resolved) => {
-            // 先恢复 shadow_sp，因为 native_callable 不走 WASM 调用路径
-            let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
-            call_native_callable_with_args_from_caller(
-                &mut *caller,
-                resolved,
+            restore_shadow_sp(ctx, env, shadow_sp);
+            dispatch_native_callable_with_env(ctx, env, resolved, this_val, args)
+                .ok_or_else(|| anyhow::anyhow!("native callable not supported in this context"))
+        }
+        CallbackTarget::ApplyTrap {
+            trap,
+            handler,
+            proxy_target,
+        } => {
+            restore_shadow_sp(ctx, env, shadow_sp);
+            Box::pin(invoke_proxy_apply_trap_async(
+                ctx,
+                env,
+                trap,
+                handler,
+                proxy_target,
                 this_val,
-                args.to_vec(),
-            )
-            .ok_or_else(|| anyhow::anyhow!("native callable returned None"))
+                args,
+            ))
+            .await
         }
         CallbackTarget::Bound {
             target_func,
             bound_this,
             bound_args,
         } => {
-            // 先恢复 shadow_sp，再合并 bound_args 与 args 递归
+            restore_shadow_sp(ctx, env, shadow_sp);
+            let mut combined_args = bound_args;
+            combined_args.extend_from_slice(args);
+            Box::pin(invoke_resolved_callback_async(
+                ctx,
+                env,
+                target_func,
+                bound_this,
+                &combined_args,
+            ))
+            .await
+        }
+        CallbackTarget::Wasm { func_idx, env_obj } => {
+            let (func, previous_new_target) =
+                lookup_callback_wasm_func_with_env(ctx, env, func_idx)?;
+            let mut results = [Val::I64(0)];
+            let call_result = func
+                .call_async(
+                    &mut *ctx,
+                    &[
+                        Val::I64(env_obj),
+                        Val::I64(this_val),
+                        Val::I32(shadow_sp),
+                        Val::I32(args.len() as i32),
+                    ],
+                    &mut results,
+                )
+                .await;
+            ctx.state_mut()
+                .new_target
+                .store(previous_new_target, Ordering::Relaxed);
+            restore_shadow_sp(ctx, env, shadow_sp);
+            call_result?;
+            Ok(results[0].unwrap_i64())
+        }
+    }
+}
+
+async fn invoke_resolved_callback_async<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    func_val: i64,
+    this_val: i64,
+    args: &[i64],
+) -> anyhow::Result<i64> {
+    let target = resolve_callback_target_with_env(ctx, env, func_val)?;
+    match target {
+        CallbackTarget::ApplyTrap {
+            trap,
+            handler,
+            proxy_target,
+        } => {
+            Box::pin(invoke_proxy_apply_trap_async(
+                ctx,
+                env,
+                trap,
+                handler,
+                proxy_target,
+                this_val,
+                args,
+            ))
+            .await
+        }
+        _ => {
+            let shadow_sp = push_args_to_shadow_stack(ctx, env, args)
+                .ok_or_else(|| anyhow::anyhow!("shadow stack push failed"))?;
+            dispatch_callback_target_async(ctx, env, target, this_val, args, shadow_sp).await
+        }
+    }
+}
+
+pub(crate) async fn invoke_resolved_callback_async_option<
+    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
+>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    func_val: i64,
+    this_val: i64,
+    args: &[i64],
+) -> Option<i64> {
+    match invoke_resolved_callback_async(ctx, env, func_val, this_val, args).await {
+        Ok(v) => Some(v),
+        Err(err) => {
+            set_runtime_error(
+                ctx.state_mut(),
+                format!("host function callback error: {err}"),
+            );
+            None
+        }
+    }
+}
+
+fn dispatch_callback_target_caller_sync(
+    caller: &mut Caller<'_, RuntimeState>,
+    env: &WasmEnv,
+    target: CallbackTarget,
+    this_val: i64,
+    args: &[i64],
+    shadow_sp: i32,
+    shadow_sp_global: wasmtime::Global,
+) -> anyhow::Result<i64> {
+    match target {
+        CallbackTarget::Native(resolved) => {
+            let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+            call_native_callable_with_args_from_caller(caller, resolved, this_val, args.to_vec())
+                .ok_or_else(|| anyhow::anyhow!("native callable returned None"))
+        }
+        CallbackTarget::ApplyTrap {
+            trap,
+            handler,
+            proxy_target,
+        } => {
+            let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+            let arr = alloc_array(caller, args.len() as u32);
+            for (i, &arg) in args.iter().enumerate() {
+                set_array_elem(caller, arr, i as i32, arg);
+            }
+            let wasm_args = [proxy_target, this_val, arr];
+            let inner = resolve_callback_target_with_env(caller, env, trap)?;
+            dispatch_callback_target_caller_sync(
+                caller,
+                env,
+                inner,
+                handler,
+                &wasm_args,
+                shadow_sp,
+                shadow_sp_global,
+            )
+        }
+        CallbackTarget::Bound {
+            target_func,
+            bound_this,
+            bound_args,
+        } => {
             let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
             let mut combined_args = bound_args;
             combined_args.extend_from_slice(args);
-            call_wasm_callback(&mut *caller, target_func, bound_this, &combined_args)
+            call_wasm_callback(caller, target_func, bound_this, &combined_args)
         }
         CallbackTarget::Wasm { func_idx, env_obj } => {
-            let (func, previous_new_target) = lookup_callback_wasm_func(&mut *caller, func_idx)?;
+            let (func, previous_new_target) =
+                lookup_callback_wasm_func_with_env(caller, env, func_idx)?;
             let mut results = [Val::I64(0)];
             let call_result = func.call(
                 &mut *caller,
@@ -239,7 +521,6 @@ pub(crate) fn call_wasm_callback(
                 ],
                 &mut results,
             );
-            // 恢复调用上下文（无论 call 成功与否）
             caller
                 .data()
                 .new_target
@@ -249,6 +530,27 @@ pub(crate) fn call_wasm_callback(
             Ok(results[0].unwrap_i64())
         }
     }
+}
+
+// ── 辅助函数：调用 WASM 回调函数 ────────────────────────────────
+pub(crate) fn call_wasm_callback(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_val: i64,
+    this_val: i64,
+    args: &[i64],
+) -> anyhow::Result<i64> {
+    let env = WasmEnv::from_caller(caller).ok_or_else(|| anyhow::anyhow!("WasmEnv"))?;
+    let (shadow_sp_global, shadow_sp) = prepare_callback_shadow_stack(caller, args)?;
+    let target = resolve_callback_target_with_env(caller, &env, func_val)?;
+    dispatch_callback_target_caller_sync(
+        caller,
+        &env,
+        target,
+        this_val,
+        args,
+        shadow_sp,
+        shadow_sp_global,
+    )
 }
 
 /// Phase 3 must-convert 之 host reentrant 路径（按 2026-05-31-async-scheduler-implementation-plan.md 审计条目 + 26-async-audit-refactor-design.md）：
@@ -265,19 +567,20 @@ pub(crate) fn call_wasm_callback(
 ///   在 Store::epoch_deadline_async_yield_and_update 之后，
 ///   *所有* 经由该 Store 的 Wasm 调用（主 + 回调，包括此处 host reentrant 中的 func table 调用）都必须走 async API（call_async 等）。
 ///   本文件中的 async 版本即为此准备；sync 版本仅留给未切换的 sync execute 路径。
-pub(crate) async fn call_wasm_callback_async(
+async fn dispatch_callback_target_caller_async(
     caller: &mut Caller<'_, RuntimeState>,
-    func_val: i64,
+    env: &WasmEnv,
+    target: CallbackTarget,
     this_val: i64,
     args: &[i64],
+    shadow_sp: i32,
+    shadow_sp_global: wasmtime::Global,
 ) -> anyhow::Result<i64> {
-    let (shadow_sp_global, shadow_sp) = prepare_callback_shadow_stack(&mut *caller, args)?;
-    match resolve_callback_target(&mut *caller, func_val)? {
+    match target {
         CallbackTarget::Native(resolved) => {
-            // 先恢复 shadow_sp，因为 native_callable 不走 WASM 调用路径
             let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
             Box::pin(call_native_callable_with_args_from_caller_async(
-                &mut *caller,
+                caller,
                 resolved,
                 this_val,
                 args.to_vec(),
@@ -285,17 +588,39 @@ pub(crate) async fn call_wasm_callback_async(
             .await
             .ok_or_else(|| anyhow::anyhow!("native callable returned None"))
         }
+        CallbackTarget::ApplyTrap {
+            trap,
+            handler,
+            proxy_target,
+        } => {
+            let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
+            let arr = alloc_array(caller, args.len() as u32);
+            for (i, &arg) in args.iter().enumerate() {
+                set_array_elem(caller, arr, i as i32, arg);
+            }
+            let wasm_args = [proxy_target, this_val, arr];
+            let inner = resolve_callback_target_with_env(caller, env, trap)?;
+            Box::pin(dispatch_callback_target_caller_async(
+                caller,
+                env,
+                inner,
+                handler,
+                &wasm_args,
+                shadow_sp,
+                shadow_sp_global,
+            ))
+            .await
+        }
         CallbackTarget::Bound {
             target_func,
             bound_this,
             bound_args,
         } => {
-            // 先恢复 shadow_sp，再合并 bound_args 与 args 递归
             let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
             let mut combined_args = bound_args;
             combined_args.extend_from_slice(args);
             Box::pin(call_wasm_callback_async(
-                &mut *caller,
+                caller,
                 target_func,
                 bound_this,
                 &combined_args,
@@ -303,7 +628,8 @@ pub(crate) async fn call_wasm_callback_async(
             .await
         }
         CallbackTarget::Wasm { func_idx, env_obj } => {
-            let (func, previous_new_target) = lookup_callback_wasm_func(&mut *caller, func_idx)?;
+            let (func, previous_new_target) =
+                lookup_callback_wasm_func_with_env(caller, env, func_idx)?;
             let mut results = [Val::I64(0)];
             let call_result = func
                 .call_async(
@@ -317,7 +643,6 @@ pub(crate) async fn call_wasm_callback_async(
                     &mut results,
                 )
                 .await;
-            // 恢复调用上下文（无论 call 成功与否）
             caller
                 .data()
                 .new_target
@@ -327,6 +652,27 @@ pub(crate) async fn call_wasm_callback_async(
             Ok(results[0].unwrap_i64())
         }
     }
+}
+
+pub(crate) async fn call_wasm_callback_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    func_val: i64,
+    this_val: i64,
+    args: &[i64],
+) -> anyhow::Result<i64> {
+    let env = WasmEnv::from_caller(caller).ok_or_else(|| anyhow::anyhow!("WasmEnv"))?;
+    let (shadow_sp_global, shadow_sp) = prepare_callback_shadow_stack(caller, args)?;
+    let target = resolve_callback_target_with_env(caller, &env, func_val)?;
+    dispatch_callback_target_caller_async(
+        caller,
+        &env,
+        target,
+        this_val,
+        args,
+        shadow_sp,
+        shadow_sp_global,
+    )
+    .await
 }
 
 // ── 辅助函数：分配新数组 ────────────────────────────────────────

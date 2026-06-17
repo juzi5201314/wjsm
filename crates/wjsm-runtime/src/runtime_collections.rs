@@ -1,0 +1,402 @@
+//! Collection (Map/Set/WeakMap/WeakSet) method dispatch.
+//!
+//! Extracted from runtime_builtins.rs to concentrate all collection-related
+//! logic (Map/Set operations, WeakMap/WeakSet operations).
+
+use super::*;
+
+pub(crate) fn is_object_key(key: i64) -> bool {
+    value::is_object(key) || value::is_array(key) || value::is_function(key)
+}
+
+pub(crate) fn call_weakmap_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: WeakMapMethodKind,
+    args: Vec<i64>,
+) -> i64 {
+    match kind {
+        WeakMapMethodKind::Set => {
+            let key = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            let val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Invalid value used as weak map key".to_string());
+                return this_val;
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            {
+                let mut table = caller
+                    .data()
+                    .weakmap_table
+                    .lock()
+                    .expect("weakmap_table mutex");
+                if handle < table.len() {
+                    table[handle].map.insert(key_handle, val);
+                }
+            }
+            this_val
+        }
+        WeakMapMethodKind::Get => {
+            let key = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_undefined();
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller
+                .data()
+                .weakmap_table
+                .lock()
+                .expect("weakmap_table mutex");
+            if handle < table.len()
+                && let Some(&val) = table[handle].map.get(&key_handle)
+            {
+                return val;
+            }
+            value::encode_undefined()
+        }
+        WeakMapMethodKind::Has => {
+            let key = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller
+                .data()
+                .weakmap_table
+                .lock()
+                .expect("weakmap_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].map.contains_key(&key_handle));
+            }
+            value::encode_bool(false)
+        }
+        WeakMapMethodKind::Delete => {
+            let key = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakmap_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let mut table = caller
+                .data()
+                .weakmap_table
+                .lock()
+                .expect("weakmap_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].map.remove(&key_handle).is_some());
+            }
+            value::encode_bool(false)
+        }
+    }
+}
+
+pub(crate) fn call_weakset_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: WeakSetMethodKind,
+    args: Vec<i64>,
+) -> i64 {
+    match kind {
+        WeakSetMethodKind::Add => {
+            let key = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                *caller.data().runtime_error.lock().expect("error mutex") =
+                    Some("TypeError: Invalid value used in weak set".to_string());
+                return this_val;
+            }
+            let handle = read_weakset_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            {
+                let mut table = caller
+                    .data()
+                    .weakset_table
+                    .lock()
+                    .expect("weakset_table mutex");
+                if handle < table.len() {
+                    table[handle].set.insert(key_handle);
+                }
+            }
+            this_val
+        }
+        WeakSetMethodKind::Has => {
+            let key = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakset_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let table = caller
+                .data()
+                .weakset_table
+                .lock()
+                .expect("weakset_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].set.contains(&key_handle));
+            }
+            value::encode_bool(false)
+        }
+        WeakSetMethodKind::Delete => {
+            let key = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if !is_object_key(key) {
+                return value::encode_bool(false);
+            }
+            let handle = read_weakset_handle(caller, this_val).unwrap_or(0);
+            let key_handle = value::decode_object_handle(key);
+            let mut table = caller
+                .data()
+                .weakset_table
+                .lock()
+                .expect("weakset_table mutex");
+            if handle < table.len() {
+                return value::encode_bool(table[handle].set.remove(&key_handle));
+            }
+            value::encode_bool(false)
+        }
+    }
+}
+pub(crate) fn call_map_set_method_from_caller(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    kind: MapSetMethodKind,
+    args: Vec<i64>,
+) -> i64 {
+    if !value::is_object(this_val) {
+        return value::encode_undefined();
+    }
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let Some(op) = obj_ptr else {
+        return value::encode_undefined();
+    };
+    let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
+    let set_handle = read_object_property_by_name(caller, op, "__set_handle__");
+
+    match kind {
+        MapSetMethodKind::MapSet => {
+            let key = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            let val = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            entry.values[i] = val;
+                            return this_val;
+                        }
+                    }
+                    entry.keys.push(key);
+                    entry.values.push(val);
+                }
+            }
+            this_val
+        }
+        MapSetMethodKind::MapGet => {
+            let key = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            return entry.values[i];
+                        }
+                    }
+                }
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::SetAdd => {
+            let val = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.values.len() {
+                        if same_value_zero(entry.values[i], val) {
+                            return this_val;
+                        }
+                    }
+                    entry.values.push(val);
+                }
+            }
+            this_val
+        }
+        MapSetMethodKind::Has => {
+            let key = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    let entry = &table[handle];
+                    for i in 0..entry.values.len() {
+                        if same_value_zero(entry.values[i], key) {
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            value::encode_bool(false)
+        }
+        MapSetMethodKind::Delete => {
+            let key = args
+                .first()
+                .copied()
+                .unwrap_or_else(value::encode_undefined);
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.keys.len() {
+                        if same_value_zero(entry.keys[i], key) {
+                            entry.keys.remove(i);
+                            entry.values.remove(i);
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    let entry = &mut table[handle];
+                    for i in 0..entry.values.len() {
+                        if same_value_zero(entry.values[i], key) {
+                            entry.values.remove(i);
+                            return value::encode_bool(true);
+                        }
+                    }
+                }
+                return value::encode_bool(false);
+            }
+            value::encode_bool(false)
+        }
+        MapSetMethodKind::Clear => {
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let mut table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    table[handle].keys.clear();
+                    table[handle].values.clear();
+                }
+                return value::encode_undefined();
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let mut table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    table[handle].values.clear();
+                }
+                return value::encode_undefined();
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::Size => {
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    return value::encode_f64(table[handle].keys.len() as f64);
+                }
+                return value::encode_f64(0.0);
+            }
+            if let Some(sh) = set_handle {
+                let handle = value::decode_f64(sh) as usize;
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                if handle < table.len() {
+                    return value::encode_f64(table[handle].values.len() as f64);
+                }
+                return value::encode_f64(0.0);
+            }
+            value::encode_f64(0.0)
+        }
+        MapSetMethodKind::ForEach => value::encode_undefined(),
+        MapSetMethodKind::Keys => {
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let keys = table[handle].keys.clone();
+                    drop(table);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let iter_handle = iters.len() as u32;
+                    iters.push(IteratorState::MapKeyIter { keys, index: 0 });
+                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                }
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::Values => {
+            if let Some(mh) = map_handle {
+                let handle = value::decode_f64(mh) as usize;
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if handle < table.len() {
+                    let values = table[handle].values.clone();
+                    drop(table);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let iter_handle = iters.len() as u32;
+                    iters.push(IteratorState::MapValueIter { values, index: 0 });
+                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                }
+            }
+            value::encode_undefined()
+        }
+        MapSetMethodKind::Entries => value::encode_undefined(),
+    }
+}

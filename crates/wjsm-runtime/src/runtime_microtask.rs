@@ -1,129 +1,10 @@
 use super::*;
-use std::sync::atomic::Ordering;
 pub(crate) fn clear_pending_unhandled_rejection(state: &RuntimeState, handle: usize) {
     state
         .pending_unhandled_rejections
         .lock()
         .expect("pending_unhandled_rejections mutex")
         .remove(&handle);
-}
-
-pub(crate) fn call_host_function<C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess>(
-    ctx: &mut C,
-    env: &WasmEnv,
-    handler: i64,
-    argument: i64,
-) -> Option<i64> {
-    call_host_function_with_args(ctx, env, handler, value::encode_undefined(), &[argument])
-}
-
-pub(crate) fn call_host_function_with_args<
-    C: AsContextMut<Data = RuntimeState> + RuntimeStateAccess,
->(
-    ctx: &mut C,
-    env: &WasmEnv,
-    handler: i64,
-    this_val: i64,
-    args: &[i64],
-) -> Option<i64> {
-    if value::is_bound(handler) {
-        let bound_idx = value::decode_bound_idx(handler);
-        let (target_func, bound_this, mut combined_args) = {
-            let state = ctx.state_mut();
-            let bound = state.bound_objects.lock().unwrap();
-            let record = &bound[bound_idx as usize];
-            (
-                record.target_func,
-                record.bound_this,
-                record.bound_args.clone(),
-            )
-        };
-        combined_args.extend_from_slice(args);
-        return call_host_function_with_args(ctx, env, target_func, bound_this, &combined_args);
-    }
-
-    let (func_idx, env_obj) = {
-        let state = ctx.state_mut();
-        if value::is_closure(handler) {
-            let idx = value::decode_closure_idx(handler);
-            let closures = state.closures.lock().unwrap();
-            let entry = &closures[idx as usize];
-            (entry.func_idx, entry.env_obj)
-        } else if value::is_function(handler) {
-            (
-                value::decode_function_idx(handler),
-                value::encode_undefined(),
-            )
-        } else {
-            return None;
-        }
-    };
-
-    let saved_sp = env.shadow_sp.get(&mut *ctx).i32().unwrap_or(0);
-    let args_bytes = args.len().checked_mul(8)?;
-    {
-        let data = env.memory.data_mut(&mut *ctx);
-        let offset = saved_sp as usize;
-        if offset + args_bytes > data.len() {
-            return None;
-        }
-        for (index, arg) in args.iter().enumerate() {
-            let write_offset = offset + index * 8;
-            data[write_offset..write_offset + 8].copy_from_slice(&arg.to_le_bytes());
-        }
-    }
-    let new_sp = saved_sp + (args.len() as i32) * 8;
-    let _ = env.shadow_sp.set(&mut *ctx, Val::I32(new_sp));
-
-    let func_ref = env.func_table.get(&mut *ctx, func_idx as u64);
-    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
-    let Some(func) = func else {
-        let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
-        return None;
-    };
-    let previous_new_target = ctx
-        .state_mut()
-        .new_target
-        .swap(value::encode_undefined(), Ordering::Relaxed);
-    let mut results = [Val::I64(0)];
-    let call_result = func.call(
-        &mut *ctx,
-        &[
-            Val::I64(env_obj),
-            Val::I64(this_val),
-            Val::I32(saved_sp),
-            Val::I32(args.len() as i32),
-        ],
-        &mut results,
-    );
-    ctx.state_mut()
-        .new_target
-        .store(previous_new_target, Ordering::Relaxed);
-    let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
-
-    if let Err(err) = call_result {
-        set_runtime_error(
-            ctx.state_mut(),
-            format!("host function callback error: {err}"),
-        );
-        return None;
-    }
-
-    results[0].i64()
-}
-
-#[inline]
-pub(crate) fn call_host_function_from_caller(
-    caller: &mut Caller<'_, RuntimeState>,
-    _func_table: &Table,
-    handler: i64,
-    argument: i64,
-) -> Option<i64> {
-    if value::is_native_callable(handler) {
-        return call_native_callable_from_caller(caller, handler, Some(argument));
-    }
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    call_host_function(caller, &env, handler, argument)
 }
 
 /// Phase 3 must-convert 之 drain_microtasks + call_host_function 路径（按 2026-05-31-async-scheduler-implementation-plan.md + 原始 Phase 3 audit must-convert list 顶部遗留条目 + docs/superpowers/specs/2026-05-26-async-audit-refactor-design.md + 26-async-audit-refactor.md）：
@@ -167,7 +48,7 @@ pub(crate) async fn drain_microtasks_async<
                 if handle_combinator_reaction(ctx, env, handler, argument) {
                     continue;
                 }
-                if value::is_callable(handler) {
+                if is_callable_with_env(ctx, env, handler) {
                     let call_arg = match reaction_type {
                         ReactionType::FinallyFulfill | ReactionType::FinallyReject => {
                             value::encode_undefined()
@@ -227,7 +108,7 @@ pub(crate) async fn drain_microtasks_async<
                 let _ = thenable;
             }
             Some(Microtask::MicrotaskCallback { callback }) => {
-                if value::is_callable(callback) {
+                if is_callable_with_env(ctx, env, callback) {
                     let _ = call_host_function_with_args_async(
                         ctx,
                         env,
@@ -469,118 +350,5 @@ pub(crate) async fn call_host_function_with_args_async<
     this_val: i64,
     args: &[i64],
 ) -> Option<i64> {
-    if value::is_bound(handler) {
-        let bound_idx = value::decode_bound_idx(handler);
-        let (target_func, bound_this, mut combined_args) = {
-            let state = ctx.state_mut();
-            let bound = state.bound_objects.lock().unwrap();
-            let record = &bound[bound_idx as usize];
-            (
-                record.target_func,
-                record.bound_this,
-                record.bound_args.clone(),
-            )
-        };
-        combined_args.extend_from_slice(args);
-        return Box::pin(call_host_function_with_args_async(
-            ctx,
-            env,
-            target_func,
-            bound_this,
-            &combined_args,
-        ))
-        .await;
-    }
-
-    let (func_idx, env_obj) = {
-        let state = ctx.state_mut();
-        if value::is_closure(handler) {
-            let idx = value::decode_closure_idx(handler);
-            let closures = state.closures.lock().unwrap();
-            let entry = &closures[idx as usize];
-            (entry.func_idx, entry.env_obj)
-        } else if value::is_function(handler) {
-            (
-                value::decode_function_idx(handler),
-                value::encode_undefined(),
-            )
-        } else {
-            return None;
-        }
-    };
-
-    let saved_sp = env.shadow_sp.get(&mut *ctx).i32().unwrap_or(0);
-    let args_bytes = args.len().checked_mul(8)?;
-    {
-        let data = env.memory.data_mut(&mut *ctx);
-        let offset = saved_sp as usize;
-        if offset + args_bytes > data.len() {
-            return None;
-        }
-        for (index, arg) in args.iter().enumerate() {
-            let write_offset = offset + index * 8;
-            data[write_offset..write_offset + 8].copy_from_slice(&arg.to_le_bytes());
-        }
-    }
-    let new_sp = saved_sp + (args.len() as i32) * 8;
-    let _ = env.shadow_sp.set(&mut *ctx, Val::I32(new_sp));
-
-    let func_ref = env.func_table.get(&mut *ctx, func_idx as u64);
-    let func = func_ref.as_ref().and_then(|r| r.as_func()).and_then(|f| f);
-    let Some(func) = func else {
-        let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
-        return None;
-    };
-    let previous_new_target = ctx
-        .state_mut()
-        .new_target
-        .swap(value::encode_undefined(), Ordering::Relaxed);
-    let mut results = [Val::I64(0)];
-    // 唯一差异：与本 crate 其他 Phase 3 async 转换（resume、call_wasm_callback）一致
-    let call_result = func
-        .call_async(
-            &mut *ctx,
-            &[
-                Val::I64(env_obj),
-                Val::I64(this_val),
-                Val::I32(saved_sp),
-                Val::I32(args.len() as i32),
-            ],
-            &mut results,
-        )
-        .await;
-    ctx.state_mut()
-        .new_target
-        .store(previous_new_target, Ordering::Relaxed);
-    let _ = env.shadow_sp.set(&mut *ctx, Val::I32(saved_sp));
-
-    if let Err(err) = call_result {
-        set_runtime_error(
-            ctx.state_mut(),
-            format!("host function callback error: {err}"),
-        );
-        return None;
-    }
-
-    results[0].i64()
-}
-
-#[inline]
-pub(crate) async fn call_host_function_from_caller_async(
-    caller: &mut Caller<'_, RuntimeState>,
-    _func_table: &Table,
-    handler: i64,
-    argument: i64,
-) -> Option<i64> {
-    if value::is_native_callable(handler) {
-        return call_native_callable_with_args_from_caller_async(
-            caller,
-            handler,
-            value::encode_undefined(),
-            vec![argument],
-        )
-        .await;
-    }
-    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-    call_host_function_async(caller, &env, handler, argument).await
+    invoke_resolved_callback_async_option(ctx, env, handler, this_val, args).await
 }
