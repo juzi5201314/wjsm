@@ -125,6 +125,18 @@ fn resolve_handle_val_with_env<C: AsContextMut<Data = RuntimeState>>(
     val: i64,
 ) -> Option<usize> {
     let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    // 函数值低 32 位是函数表索引；其属性对象 handle 从 __function_props_base 起算，需重定位。
+    // 与 runtime_values::handle_index_of 保持一致，避免 read/write 漂移。
+    let handle_idx = if value::is_function(val) {
+        let base = env
+            .function_props_base
+            .and_then(|g| g.get(&mut *ctx).i32())
+            .unwrap_or(0)
+            .max(0) as usize;
+        handle_idx.saturating_add(base)
+    } else {
+        handle_idx
+    };
     resolve_handle_idx_with_env(ctx, env, handle_idx)
 }
 

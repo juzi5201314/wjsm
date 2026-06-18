@@ -108,6 +108,10 @@ pub async fn execute_with_writer<W: std::io::Write>(
 cargo nextest run --workspace
 cargo nextest run -p wjsm-runtime -E 'test(async_scheduler) or test(async_reentry)'
 ```
+## Startup Snapshot 兼容性
+
+Startup snapshot（`WJSM_STARTUP_SNAPSHOT=1`，默认关闭）不保存 scheduler、worker、async host completion channel/counter 状态。Snapshot capture 在 bootstrap 后、用户 JS 前执行，此时 scheduler 尚未启动、无 timer/microtask/promise/continuation 残留（capture 时断言所有 side table 为空）。Restore 仅在 scheduler owner 上执行，恢复后由 `main()` 正常驱动调度器。详见 `docs/adr/0003-startup-snapshot-boundary.md`。
+
 ## 后续工作
 
 - 真实 async fetch、AbortController、CLI watch 原生 async（独立计划）。

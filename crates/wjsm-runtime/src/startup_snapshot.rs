@@ -6,13 +6,8 @@
 use anyhow::{Context, Result, bail};
 use wasmtime::*;
 
-use crate::types::NativeCallable;
 use crate::wasm_env::WasmEnv;
 use crate::startup_snapshot_format::*;
-use crate::{alloc_host_object, alloc_object_with_env};
-use wjsm_ir::{constants, value};
-
-use std::sync::{Arc, Mutex};
 
 // ── global read helpers ─────────────────────────────────────────────
 
@@ -182,6 +177,12 @@ fn assert_excluded_tables_clean(store: &Store<crate::RuntimeState>) -> Result<()
             bail!("capture: async_from_sync_iterators not empty");
         }
     }
+    {
+        let pcc = data.pending_cleanup_callbacks.lock().expect("pending_cleanup_callbacks");
+        if !pcc.is_empty() {
+            bail!("capture: pending_cleanup_callbacks not empty ({} entries)", pcc.len());
+        }
+    }
     Ok(())
 }
 
@@ -243,9 +244,9 @@ pub(crate) fn restore_startup_snapshot(
     let _ = env.heap_ptr.set(&mut *store, Val::I32((heap_start + heap_used) as i32));
     let _ = env.obj_table_count.set(&mut *store, Val::I32(obj_table_count as i32));
     if let Some(function_props_base) = env.function_props_base {
-        // 设 function_props_base = 当前 obj_table_count（包含所有已恢复对象），
-        // 使 __wjsm_init_function_props 从正确位置开始分配函数属性对象。
-        function_props_base.set(&mut *store, Val::I32(obj_table_count as i32))?;
+        // 使用 snapshot header 中的 function_props_base（capture 时记录的值），
+        // 而非当前 obj_table_count — 保证 primordial 原型与函数属性对象 handle 区间一致。
+        function_props_base.set(&mut *store, Val::I32(snapshot.header.function_props_base as i32))?;
     }
     if let Some(bootstrap_done) = env.bootstrap_done {
         bootstrap_done.set(&mut *store, Val::I32(1))?;

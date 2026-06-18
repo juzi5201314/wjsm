@@ -224,6 +224,8 @@ pub(crate) fn grow_array(
         g.get(&mut *caller).i32().unwrap_or(0) as usize
     };
     let new_size = 16 + new_cap as usize * 8;
+    // handle_idx 必须在 data_mut 借用前计算（handle_index_of 需 &mut caller）
+    let handle_idx = handle_index_of(caller, this_val);
     let old_size = {
         let cap = read_array_capacity(caller, ptr)?;
         16 + cap as usize * 8
@@ -237,7 +239,6 @@ pub(crate) fn grow_array(
     }
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&new_cap.to_le_bytes());
-    let handle_idx = (this_val as u64 & 0xFFFF_FFFF) as usize;
     let slot_addr = obj_table_ptr + handle_idx * 4;
     if slot_addr + 4 <= d.len() {
         d[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
@@ -271,6 +272,8 @@ pub(crate) fn grow_object(
         g.get(&mut *caller).i32().unwrap_or(0) as usize
     };
     let new_size = 16 + new_cap as usize * 32;
+    // handle_idx 必须在 data_mut 借用前计算（handle_index_of 需 &mut caller）
+    let handle_idx = handle_index_of(caller, handle_val);
     let old_cap = {
         let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
             return None;
@@ -291,7 +294,6 @@ pub(crate) fn grow_object(
     }
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&new_cap.to_le_bytes());
-    let handle_idx = (handle_val as u64 & 0xFFFF_FFFF) as usize;
     let slot_addr = obj_table_ptr + handle_idx * 4;
     if slot_addr + 4 <= d.len() {
         d[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
