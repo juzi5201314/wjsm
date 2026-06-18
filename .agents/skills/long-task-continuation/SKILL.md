@@ -46,6 +46,7 @@ Maintain artifacts under `docs/aegis/work/YYYY-MM-DD-<slug>/`:
 |----------|------|------|
 | TaskIntentDraft | `10-intent.md` and optional `task-intent-draft.json` | Start protocol |
 | BaselineReadSetHint | `10-intent.md` (inline) | Start protocol |
+| BaselineUsageDraft | `10-intent.md` (inline) and optional `baseline-usage-draft.json` | Start protocol and when baseline usage changes |
 | ImpactStatementDraft | `10-intent.md` (inline) | Start protocol |
 | TodoCheckpointDraft | `20-checkpoint.md` and optional `todo-checkpoint-draft.json` | Each checkpoint |
 | ResumeStateHint | `20-checkpoint.md` (inline) | Each pause/handoff |
@@ -54,6 +55,36 @@ Maintain artifacts under `docs/aegis/work/YYYY-MM-DD-<slug>/`:
 | Reflection | `99-reflection.md` | Completion candidate |
 
 For medium+ complexity tasks only. Low-complexity tasks skip work/.
+
+Planless Slice Lane:
+
+- Use this lane when a parent plan or parent spec already owns the long-task
+  workstream and the current micro-slice only executes or refines one bounded
+  parent task.
+- Record a compact Slice Card instead of creating another durable plan/spec:
+
+  ```text
+  Slice Card:
+  - Goal:
+  - Parent plan/spec:
+  - Files:
+  - Boundary:
+  - Verification:
+  - Stop:
+  ```
+
+- Slice Card `Goal` anchors slice-level completeness only.
+- It does not by itself grant whole-task completion.
+- Final completion still requires `verification-before-completion` Goal Closure
+  against the parent plan/spec and any active goal frame.
+
+- Do not create new plan/spec files for micro-slices that stay inside the
+  parent plan, existing compatibility boundary, and known verification path.
+- Update the existing checkpoint, evidence, and drift records when persistent
+  state is needed.
+- Escalate out of this lane only when a new owner, contract, schema, public API,
+  architecture boundary, migration, persistence, security/permission,
+  distribution/release surface, or unclear verification boundary appears.
 
 When durable architecture decisions are in scope, these work records are the
 preferred ADR Auto Backfill source. Preserve ADR signals, source refs,
@@ -85,6 +116,7 @@ available, use it for the target project workspace and lifecycle records:
 
    ```bash
    python <aegis-workspace-helper> add-checkpoint --root <target-project-root> --work YYYY-MM-DD-<slug> ...
+   python <aegis-workspace-helper> add-baseline-usage --root <target-project-root> --work YYYY-MM-DD-<slug> ...
    python <aegis-workspace-helper> add-evidence --root <target-project-root> --work YYYY-MM-DD-<slug> ...
    python <aegis-workspace-helper> add-drift-check --root <target-project-root> --work YYYY-MM-DD-<slug> ...
    ```
@@ -110,16 +142,22 @@ Before long-task execution:
    non-goals. Stop condition must allow done, blocked, needs-verification, and
    scope-exceeded outcomes.
 3. Identify baseline refs that must be read before changing files.
-4. Create or update the todo map.
-5. Create the first checkpoint:
+4. Record baseline usage state:
+   - required baseline refs
+   - optionally delivered context refs when the host can project them
+   - acknowledged before plan refs
+   - cited in plan refs
+   - missing refs
+5. Create or update the todo map.
+6. Create the first checkpoint:
    - current todo
    - active slice
    - completed todos
    - evidence refs
    - blocked-on items
    - next step
-6. If baseline refs are missing, pause in `needs-baseline-readback`.
-7. If the workspace helper is available, use `aegis-workspace.py new-work` to
+7. If baseline refs are missing, pause in `needs-baseline-readback`.
+8. If the workspace helper is available, use `aegis-workspace.py new-work` to
    create/index the first `docs/aegis/work/` files and run `check --root
    <target-project-root>` before continuing.
 
@@ -133,15 +171,19 @@ Before each work slice, restate:
 4. explicit non-edits
 5. verification command or manual check
 
+For micro-slices under an existing parent plan, use the Planless Slice Lane and
+state the Slice Card instead of opening a new planning/specification artifact.
+
 After each work slice, update:
 
 1. completed todos
 2. evidence refs
-3. blockers
-4. next step
-5. drift check
-6. helper-backed JSON sidecars through `aegis-workspace.py add-checkpoint`,
-   `aegis-workspace.py add-evidence`, and `aegis-workspace.py add-drift-check`
+3. baseline usage if newly required refs were acknowledged, cited, or found missing
+4. blockers
+5. next step
+6. drift check
+7. helper-backed JSON sidecars through `aegis-workspace.py add-checkpoint`,
+   `aegis-workspace.py add-baseline-usage`, `aegis-workspace.py add-evidence`, and `aegis-workspace.py add-drift-check`
    when available
 
 If no fresh evidence exists, the state is `needs-verification` or `partial`.
@@ -210,6 +252,7 @@ Method Pack output is verified evidence and advisory judgment only. It is not au
 Use this shape for long-task updates:
 
 - `TodoCheckpointDraft`: current todo, completed todos, active slice, next step
+- `BaselineUsageDraft`: required refs, acknowledged refs, cited refs, missing refs, decision
 - `Evidence`: commands, files, logs, or manual checks
 - `DriftCheckDraft`: scope, compatibility, retirement, decision
 - `Risk / Unknown`: unresolved blockers or missing evidence

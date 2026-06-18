@@ -146,10 +146,18 @@ escalate to the full workflow.
    `local patch` is a mitigation, not a sufficient repair, unless it is the
    canonical owner and includes a retention reason plus retirement trigger.
 
+   If the repair or retirement boundary depends on deleting old paths,
+   retaining compat for a proven external dependency, or stopping on
+   persistent-state risk, compose `anti-entropy-governance` before editing. It
+   decides the path; it does not grant destructive authority.
+
 8. **Pre-Edit Complexity Check**
 
    After root cause and canonical owner are identified, check whether the fix
    adds complexity to the wrong or overloaded place:
+
+   Use `using-aegis/references/complexity-governance.md` for shared pressure
+   signals and the meaning of `over-budget`.
 
    ```text
    Pre-Edit Complexity Check:
@@ -160,10 +168,13 @@ escalate to the full workflow.
    - Decision: edit-in-place | extract helper | add owner file | split task | pause for plan update
    ```
 
-   Use this for 800+ line files, 80+ line blocks, generic owners,
-   fallback/adapter/guard paths, or unclear root-cause ownership. Advisory only:
-   if the safer boundary changes the implementation shape, pause and update the
+   If the safer boundary changes the implementation shape, pause and update the
    plan/spec.
+
+   If the likely repair would grow an already oversized maintained artifact and
+   the slice cannot govern that growth immediately, do not present the repair as
+   a completed fix boundary. Escalate with a plan update or a visible follow-up
+   requirement.
 
 ### Phase 2: Pattern Analysis
 
