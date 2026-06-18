@@ -32,6 +32,9 @@ mod runtime_promises;
 mod runtime_typedarray;
 mod runtime_value_adapter;
 mod shared_buffer;
+mod startup_snapshot;
+mod startup_snapshot_cache;
+mod startup_snapshot_format;
 mod types;
 pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;
@@ -979,6 +982,21 @@ fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeState>) -> Was
         obj_table_count: obj_table_count_global,
         object_proto_handle: object_proto_handle_global,
         array_proto_handle: array_proto_handle_global,
+        object_heap_start: instance
+            .get_export(&mut *store, "__object_heap_start")
+            .and_then(|e| e.into_global()),
+        bootstrap_done: instance
+            .get_export(&mut *store, "__bootstrap_done")
+            .and_then(|e| e.into_global()),
+        function_props_done: instance
+            .get_export(&mut *store, "__function_props_done")
+            .and_then(|e| e.into_global()),
+        function_props_base: instance
+            .get_export(&mut *store, "__function_props_base")
+            .and_then(|e| e.into_global()),
+        num_ir_functions: instance
+            .get_export(&mut *store, "__num_ir_functions")
+            .and_then(|e| e.into_global()),
     }
 }
 
@@ -1028,6 +1046,22 @@ fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wasm_env: &Wa
     );
     store.data_mut().async_iterator_prototype = async_iterator_proto;
     store.data_mut().async_gen_prototype = async_gen_proto;
+}
+
+async fn try_restore_snapshot(
+    store: &mut Store<RuntimeState>,
+    wasm_env: &WasmEnv,
+    wasm_bytes: &[u8],
+) -> bool {
+    let snap_bytes: Arc<[u8]> = match startup_snapshot_cache::get_cached(wasm_bytes).await {
+        Some(b) => b,
+        None => return false,
+    };
+    let view = match startup_snapshot_format::decode_snapshot(&snap_bytes) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    startup_snapshot::restore_startup_snapshot(store, wasm_env, view).is_ok()
 }
 
 
@@ -1130,7 +1164,42 @@ async fn execute_with_writer_shared_inner<W: Write>(
         .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
 
     let wasm_env = extract_wasm_env(&instance, &mut store);
-    initialize_host_post_bootstrap(&mut store, &wasm_env);
+
+    // Startup snapshot: call bootstrap from Rust side (before main) so we can
+    // capture the complete primordial heap (bootstrap + host post-bootstrap)
+    // before __wjsm_init_function_props runs inside main().
+    let snapshot_restored = if startup_snapshot_enabled() {
+        try_restore_snapshot(&mut store, &wasm_env, wasm_bytes).await
+    } else {
+        false
+    };
+
+    if !snapshot_restored {
+        // Cold path: host_post_bootstrap first (handles 0..N),
+        // then bootstrap which sets function_props_base = obj_table_count (N+1),
+        // then init_function_props in main() resets count to base and allocates from there.
+        initialize_host_post_bootstrap(&mut store, &wasm_env);
+        let bootstrap_fn = instance
+            .get_typed_func::<(), i64>(&mut store, "__wjsm_bootstrap_once")
+            .ok();
+        if let Some(bootstrap_fn) = bootstrap_fn {
+            let _ = bootstrap_fn.call_async(&mut store, ()).await;
+        }
+        // Update function_props_base to current obj_table_count after bootstrap,
+        // so init_function_props starts after the primordial objects.
+        if let Some(function_props_base) = wasm_env.function_props_base {
+            let count = wasm_env.obj_table_count.get(&mut store).i32().unwrap_or(0);
+            let _ = function_props_base.set(&mut store, Val::I32(count));
+        }
+        if startup_snapshot_enabled() {
+            if let Ok(snap) = startup_snapshot::capture_startup_snapshot(&mut store, &wasm_env) {
+                let bytes = startup_snapshot_format::encode_snapshot(&snap);
+                startup_snapshot_cache::store(wasm_bytes, bytes).await;
+            }
+        }
+    }
+    // main() will now see bootstrap_done=1 → NOOP on __wjsm_bootstrap_once,
+    // but will still run __wjsm_init_function_props for current module.
 
     // 委托（Phase 6 传入 rx 供 scheduler 接收 completion）
     run_main_completion_block_async(

@@ -702,7 +702,13 @@ pub(crate) fn find_memory_c_string_with_env<C: AsContextMut<Data = RuntimeState>
     let heap_end = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as usize;
     let data = env.memory.data(&*ctx);
     let scan_end = heap_end.min(data.len());
-    memchr::memmem::find(&data[..scan_end], &needle).map(|offset| offset as u32)
+    // 必须匹配完整的 nul 结尾 c-string，而非任意子串。data section 中字符串
+    // 紧凑排布、每个串前一字节是上一个串的 nul 终止符，因此合法起点必满足
+    // `offset == 0 || data[offset-1] == 0`。否则形如 "Array" 会错误匹配进
+    // "isArray" 内部（offset+2），导致 name_id 与编译期 intern 偏移不一致。
+    memchr::memmem::find_iter(&data[..scan_end], &needle)
+        .find(|&offset| offset == 0 || data[offset - 1] == 0)
+        .map(|offset| offset as u32)
 }
 
 pub(crate) fn alloc_heap_c_string_with_env<C: AsContextMut<Data = RuntimeState>>(

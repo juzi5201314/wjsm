@@ -42,8 +42,91 @@ pub const PROMISE_CONSTRUCTOR_OFFSET: u32 = 198; // "constructor\0" (12 bytes)
 pub const ASYNC_ITERATOR_OFFSET: u32 = 210; // "asyncIterator\0" (14 bytes)
 pub const PROMISE_STRINGS_END: u32 = 224;
 
+// ── Primordial 字符串区域 ────────────────────────────────────────────────────
+// 启动 bootstrap / 函数属性 / host post-bootstrap 中引用的所有属性名字符串。
+// 固定在 data section 的固定偏移，使不同用户源码编译产物的 name_id 一致，
+// 作为 startup snapshot ABI hash 输入。
+pub const PRIMORDIAL_LENGTH_OFFSET: u32 = 224; // "length\0" (7 bytes)
+pub const PRIMORDIAL_NAME_OFFSET: u32 = 231; // "name\0" (5 bytes)
+pub const PRIMORDIAL_PROTOTYPE_OFFSET: u32 = 236; // "prototype\0" (10 bytes)
+pub const PRIMORDIAL_PUSH_OFFSET: u32 = 246; // "push\0" (5 bytes)
+pub const PRIMORDIAL_POP_OFFSET: u32 = 251; // "pop\0" (4 bytes)
+pub const PRIMORDIAL_INCLUDES_OFFSET: u32 = 255; // "includes\0" (9 bytes)
+pub const PRIMORDIAL_INDEXOF_OFFSET: u32 = 264; // "indexOf\0" (8 bytes)
+pub const PRIMORDIAL_JOIN_OFFSET: u32 = 272; // "join\0" (5 bytes)
+pub const PRIMORDIAL_CONCAT_OFFSET: u32 = 277; // "concat\0" (7 bytes)
+pub const PRIMORDIAL_SLICE_OFFSET: u32 = 284; // "slice\0" (6 bytes)
+pub const PRIMORDIAL_FILL_OFFSET: u32 = 290; // "fill\0" (5 bytes)
+pub const PRIMORDIAL_REVERSE_OFFSET: u32 = 295; // "reverse\0" (8 bytes)
+pub const PRIMORDIAL_FLAT_OFFSET: u32 = 303; // "flat\0" (5 bytes)
+pub const PRIMORDIAL_SHIFT_OFFSET: u32 = 308; // "shift\0" (6 bytes)
+pub const PRIMORDIAL_UNSHIFT_OFFSET: u32 = 314; // "unshift\0" (8 bytes)
+pub const PRIMORDIAL_SORT_OFFSET: u32 = 322; // "sort\0" (5 bytes)
+pub const PRIMORDIAL_AT_OFFSET: u32 = 327; // "at\0" (3 bytes)
+pub const PRIMORDIAL_COPYWITHIN_OFFSET: u32 = 330; // "copyWithin\0" (11 bytes)
+pub const PRIMORDIAL_FOREACH_OFFSET: u32 = 341; // "forEach\0" (8 bytes)
+pub const PRIMORDIAL_MAP_OFFSET: u32 = 349; // "map\0" (4 bytes)
+pub const PRIMORDIAL_FILTER_OFFSET: u32 = 353; // "filter\0" (7 bytes)
+pub const PRIMORDIAL_REDUCE_OFFSET: u32 = 360; // "reduce\0" (7 bytes)
+pub const PRIMORDIAL_REDUCERIGHT_OFFSET: u32 = 367; // "reduceRight\0" (12 bytes)
+pub const PRIMORDIAL_FIND_OFFSET: u32 = 379; // "find\0" (5 bytes)
+pub const PRIMORDIAL_FINDINDEX_OFFSET: u32 = 384; // "findIndex\0" (10 bytes)
+pub const PRIMORDIAL_SOME_OFFSET: u32 = 394; // "some\0" (5 bytes)
+pub const PRIMORDIAL_EVERY_OFFSET: u32 = 399; // "every\0" (6 bytes)
+pub const PRIMORDIAL_FLATMAP_OFFSET: u32 = 405; // "flatMap\0" (8 bytes)
+pub const PRIMORDIAL_SPLICE_OFFSET: u32 = 413; // "splice\0" (7 bytes)
+pub const PRIMORDIAL_ISARRAY_OFFSET: u32 = 420; // "isArray\0" (8 bytes)
+pub const PRIMORDIAL_TOSTRING_OFFSET: u32 = 428; // "toString\0" (9 bytes)
+pub const PRIMORDIAL_VALUEOF_OFFSET: u32 = 437; // "valueOf\0" (8 bytes)
+pub const PRIMORDIAL_SYMBOL_TOSTRINGTAG_OFFSET: u32 = 445; // "Symbol.toStringTag\0" (19 bytes)
+pub const PRIMORDIAL_ASYNCITERATOR_OFFSET: u32 = 464; // "AsyncIterator\0" (14 bytes)
+pub const PRIMORDIAL_ASYNCGENERATOR_OFFSET: u32 = 478; // "AsyncGenerator\0" (15 bytes)
+pub const PRIMORDIAL_STRINGS_END: u32 = 493;
+
 // ── 用户字符串起始位置 ──────────────────────────────────────────────────────
-pub const USER_STRING_START: u32 = PROMISE_STRINGS_END;
+pub const USER_STRING_START: u32 = PRIMORDIAL_STRINGS_END;
+
+/// 返回所有固定偏移的 primordial 字符串及其偏移量列表。
+/// 顺序必须与 pre-write 顺序一致，供 ABI hash 与测试使用。
+pub fn primordial_string_offsets() -> &'static [(u32, &'static str)] {
+    &[
+        (PRIMORDIAL_LENGTH_OFFSET, "length"),
+        (PRIMORDIAL_NAME_OFFSET, "name"),
+        (PRIMORDIAL_PROTOTYPE_OFFSET, "prototype"),
+        (PRIMORDIAL_PUSH_OFFSET, "push"),
+        (PRIMORDIAL_POP_OFFSET, "pop"),
+        (PRIMORDIAL_INCLUDES_OFFSET, "includes"),
+        (PRIMORDIAL_INDEXOF_OFFSET, "indexOf"),
+        (PRIMORDIAL_JOIN_OFFSET, "join"),
+        (PRIMORDIAL_CONCAT_OFFSET, "concat"),
+        (PRIMORDIAL_SLICE_OFFSET, "slice"),
+        (PRIMORDIAL_FILL_OFFSET, "fill"),
+        (PRIMORDIAL_REVERSE_OFFSET, "reverse"),
+        (PRIMORDIAL_FLAT_OFFSET, "flat"),
+        (PRIMORDIAL_SHIFT_OFFSET, "shift"),
+        (PRIMORDIAL_UNSHIFT_OFFSET, "unshift"),
+        (PRIMORDIAL_SORT_OFFSET, "sort"),
+        (PRIMORDIAL_AT_OFFSET, "at"),
+        (PRIMORDIAL_COPYWITHIN_OFFSET, "copyWithin"),
+        (PRIMORDIAL_FOREACH_OFFSET, "forEach"),
+        (PRIMORDIAL_MAP_OFFSET, "map"),
+        (PRIMORDIAL_FILTER_OFFSET, "filter"),
+        (PRIMORDIAL_REDUCE_OFFSET, "reduce"),
+        (PRIMORDIAL_REDUCERIGHT_OFFSET, "reduceRight"),
+        (PRIMORDIAL_FIND_OFFSET, "find"),
+        (PRIMORDIAL_FINDINDEX_OFFSET, "findIndex"),
+        (PRIMORDIAL_SOME_OFFSET, "some"),
+        (PRIMORDIAL_EVERY_OFFSET, "every"),
+        (PRIMORDIAL_FLATMAP_OFFSET, "flatMap"),
+        (PRIMORDIAL_SPLICE_OFFSET, "splice"),
+        (PRIMORDIAL_ISARRAY_OFFSET, "isArray"),
+        (PRIMORDIAL_TOSTRING_OFFSET, "toString"),
+        (PRIMORDIAL_VALUEOF_OFFSET, "valueOf"),
+        (PRIMORDIAL_SYMBOL_TOSTRINGTAG_OFFSET, "Symbol.toStringTag"),
+        (PRIMORDIAL_ASYNCITERATOR_OFFSET, "AsyncIterator"),
+        (PRIMORDIAL_ASYNCGENERATOR_OFFSET, "AsyncGenerator"),
+    ]
+}
 
 // ── 属性键编码 ──────────────────────────────────────────────────────────────
 // name_id 的最高位区分字符串键和 Symbol 键；低 31 位是对应表下标。

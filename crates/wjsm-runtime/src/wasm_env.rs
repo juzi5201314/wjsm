@@ -13,6 +13,11 @@ pub(crate) struct WasmEnv {
     pub obj_table_count: Global,
     pub object_proto_handle: Global,
     pub array_proto_handle: Global,
+    pub object_heap_start: Option<Global>,
+    pub bootstrap_done: Option<Global>,
+    pub function_props_done: Option<Global>,
+    pub function_props_base: Option<Global>,
+    pub num_ir_functions: Option<Global>,
 }
 
 impl WasmEnv {
@@ -25,8 +30,27 @@ impl WasmEnv {
             heap_ptr: caller.get_export("__heap_ptr")?.into_global()?,
             obj_table_ptr: caller.get_export("__obj_table_ptr")?.into_global()?,
             obj_table_count: caller.get_export("__obj_table_count")?.into_global()?,
-            object_proto_handle: caller.get_export("__object_proto_handle")?.into_global()?,
-            array_proto_handle: caller.get_export("__array_proto_handle")?.into_global()?,
+            object_proto_handle: caller
+                .get_export("__object_proto_handle")?
+                .into_global()?,
+            array_proto_handle: caller
+                .get_export("__array_proto_handle")?
+                .into_global()?,
+            object_heap_start: caller
+                .get_export("__object_heap_start")
+                .and_then(Extern::into_global),
+            bootstrap_done: caller
+                .get_export("__bootstrap_done")
+                .and_then(Extern::into_global),
+            function_props_done: caller
+                .get_export("__function_props_done")
+                .and_then(Extern::into_global),
+            function_props_base: caller
+                .get_export("__function_props_base")
+                .and_then(Extern::into_global),
+            num_ir_functions: caller
+                .get_export("__num_ir_functions")
+                .and_then(Extern::into_global),
         })
     }
 }
