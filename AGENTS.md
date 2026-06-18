@@ -73,7 +73,11 @@ tests/fixture_runner.rs                      # E2E harness
 
 **Scope tree**: `ScopeKind::Block`/`Function`, `VarKind::Var`/`Let`/`Const`. Names scope-qualified in IR as `${scope_id}.{name}` (e.g. `$0.x`); new scopes increment the prefix. Lookup walks scope chain upward.
 
-**WASM contract**: imports `env.console_log(i64)`, exports `main()` + `memory` (1 page initial). String constants in DataSection at offset 0, nul-terminated.
+**WASM contract**: imports `env.console_log(i64)`, exports `main()` + `memory` (1 page initial). String constants in DataSection at offset 0, nul-terminated. Primordial property names (Array.prototype methods, `length`, `name`, `Symbol.toStringTag`, etc.) occupy fixed offsets at 224–493; user strings start at offset 493 (`USER_STRING_START`).
+
+**Function-property handle layout**: function property objects occupy handles `function_props_base..function_props_base+num_ir_functions` (no longer `0..num_ir_functions`). GC roots must read `__function_props_base` to determine the range.
+
+**Startup snapshot** (opt-in, `WJSM_STARTUP_SNAPSHOT=1`): relocatable primordial heap snapshot — captures pre-bootstrap object heap, handle table relative offsets, runtime strings, stateless NativeCallables. Restore skips `__wjsm_bootstrap_once` in `main()`. See `docs/adr/0003-startup-snapshot-boundary.md` for format, ABI hash inputs, and current limitations.
 
 **IR dump format** (stable snapshot, not AST pretty-print):
 ```

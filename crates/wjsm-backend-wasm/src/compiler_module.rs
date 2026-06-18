@@ -391,6 +391,22 @@ impl Compiler {
                 .insert(s.to_string(), self.data_base + offset);
         }
 
+        // Pre-write primordial property names used by bootstrap, function-props,
+        // and host post-bootstrap (Array.prototype methods, length, name,
+        // toStringTag, etc.). Fixed offsets ensure name_ids are consistent
+        // across different user source compilations — required for snapshot ABI.
+        for (offset, s) in constants::primordial_string_offsets() {
+            let end = *offset as usize + s.len() + 1;
+            if self.string_data.len() < end {
+                self.string_data.resize(end, 0);
+            }
+            self.string_data[*offset as usize..*offset as usize + s.len()]
+                .copy_from_slice(s.as_bytes());
+            self.string_data[*offset as usize + s.len()] = 0;
+            self.string_ptr_cache
+                .insert(s.to_string(), self.data_base + *offset);
+        }
+
         self.data_offset = constants::USER_STRING_START;
         // 填充 string_data 到 data_offset，确保后续用户字符串追加到正确偏移量
         self.string_data.resize(self.data_offset as usize, 0);
