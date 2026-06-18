@@ -96,6 +96,8 @@ Constants: `c0, c1, …`. Basic blocks: `bb0, bb1, …`. IR identifiers: `Pascal
 - **Error handling**: `anyhow::Result` in CLI/runtime/backend (`bail!` for early exit, `.with_context()` at crate boundaries). `thiserror` in semantic (`LoweringError::Diagnostic { start, end, message }` preserves span).
 - **Single-function public API per crate**: one or two public functions, rest private.
 - **Modular lowering/backend**: `lowerer_*.rs` / `compiler_*.rs` submodules per AST/codegen category.
+- **File size**: a source file should generally fit in one screenful of code. Target ≤500 lines; anything approaching 1000+ lines is a strong signal to refactor into smaller, more focused units. When a file exceeds this threshold, prefer splitting by responsibility (e.g. per AST category, per host import family) rather than growing it further.
+- **Function size**: a function should do one thing and its name should fully describe that thing. Target ≤30 lines; anything approaching 50–100 lines is a strong signal to extract meaningful sub-functions. Length is a proxy for cohesion — if you can't summarize the body in one sentence, it's too long.
 
 ## Spec compliance (hard rules)
 
