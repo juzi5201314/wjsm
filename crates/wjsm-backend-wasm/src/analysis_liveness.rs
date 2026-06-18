@@ -324,3 +324,93 @@ pub fn compute_liveness(f: &Function) -> HashMap<(BasicBlockId, usize), HashSet<
     }
     per_instr
 }
+
+/// 计算 per-instruction **变量**活跃集（变量名粒度）。
+///
+/// 供 GC safepoint spill：变量（`let`/`const`/`var` → wasm local）持有的 handle 在
+/// per-ValueId liveness 中不可见——`StoreVar` 无 ValueId def、`LoadVar` 无 ValueId use，
+/// 故 `store var x` 与下一次 `load var x` 之间存在 liveness 空洞，handle 仅活在变量 local
+/// 里。若 safepoint 处不 spill 这些变量 local，GC root 扫不到 → 对象被 sweep → 悬垂。
+///
+/// 算法：标准 backward live-variable 分析。`LoadVar` = use、`StoreVar` = def；
+/// 变量不经 Phi、terminator 操作数是 ValueId 非变量，故无 Phi/terminator 参与。
+///
+/// 契约同 `compute_liveness`：`result[(block_id, i)]` = 紧邻指令 `i` 执行*前*活跃的变量名集合。
+pub fn compute_var_liveness(f: &Function) -> HashMap<(BasicBlockId, usize), HashSet<String>> {
+    let succ = successors(f);
+
+    // 块级 use/def：use = 块内先于任何 def 的 LoadVar（upward-exposed）；def = 块内任何 StoreVar。
+    let mut block_use: HashMap<BasicBlockId, HashSet<String>> = HashMap::new();
+    let mut block_def: HashMap<BasicBlockId, HashSet<String>> = HashMap::new();
+    for bb in f.blocks() {
+        let mut uses: HashSet<String> = HashSet::new();
+        let mut defs: HashSet<String> = HashSet::new();
+        for ins in bb.instructions() {
+            match ins {
+                Instruction::LoadVar { name, .. } => {
+                    if !defs.contains(name) {
+                        uses.insert(name.clone());
+                    }
+                }
+                Instruction::StoreVar { name, .. } => {
+                    defs.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+        block_use.insert(bb.id(), uses);
+        block_def.insert(bb.id(), defs);
+    }
+
+    // 块级 backward dataflow 到不动点。
+    let mut live_in: HashMap<BasicBlockId, HashSet<String>> = HashMap::new();
+    let mut live_out: HashMap<BasicBlockId, HashSet<String>> = HashMap::new();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for bb in f.blocks().iter().rev() {
+            let id = bb.id();
+            let mut out: HashSet<String> = HashSet::new();
+            for &s in succ.get(&id).unwrap_or(&vec![]) {
+                out.extend(live_in.get(&s).cloned().unwrap_or_default());
+            }
+            let defs = block_def.get(&id).unwrap();
+            let mut in_ = out.clone();
+            in_.retain(|v| !defs.contains(v));
+            in_.extend(block_use.get(&id).unwrap().iter().cloned());
+
+            if live_out.get(&id) != Some(&out) {
+                live_out.insert(id, out);
+                changed = true;
+            }
+            if live_in.get(&id) != Some(&in_) {
+                live_in.insert(id, in_);
+                changed = true;
+            }
+        }
+    }
+
+    // 块内 backward 细化到 per-instruction。
+    let mut per_instr: HashMap<(BasicBlockId, usize), HashSet<String>> = HashMap::new();
+    for bb in f.blocks() {
+        let id = bb.id();
+        let mut live = live_out.get(&id).cloned().unwrap_or_default();
+        let instrs = bb.instructions();
+        per_instr.insert((id, instrs.len()), live.clone());
+        for (i, ins) in instrs.iter().enumerate().rev() {
+            match ins {
+                // StoreVar：store 前该变量旧值已死（即将被覆盖）→ 从 live 移除。
+                Instruction::StoreVar { name, .. } => {
+                    live.remove(name);
+                }
+                // LoadVar：load 前该变量活跃（即将被读取）→ 加入 live。
+                Instruction::LoadVar { name, .. } => {
+                    live.insert(name.clone());
+                }
+                _ => {}
+            }
+            per_instr.insert((id, i), live.clone());
+        }
+    }
+    per_instr
+}

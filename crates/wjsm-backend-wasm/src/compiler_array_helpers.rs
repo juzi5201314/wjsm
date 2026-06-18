@@ -316,8 +316,15 @@ impl Compiler {
             func.instruction(&WasmInstruction::I64Eq);
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::Else);
+            // 普通对象的数字 key（o[5]=v）：把 i32 索引装回数字 → symbol_property_key 取
+            // 稳定 name_id（"5"），不能直接拿索引当 name_id（那是 data 偏移，会错位）。
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::LocalGet(1));
+            func.instruction(&WasmInstruction::F64ConvertI32U);
+            func.instruction(&WasmInstruction::I64ReinterpretF64);
+            func.instruction(&WasmInstruction::Call(
+                self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey],
+            ));
             func.instruction(&WasmInstruction::LocalGet(2));
             func.instruction(&WasmInstruction::Call(self.obj_set_func_idx));
             func.instruction(&WasmInstruction::End);

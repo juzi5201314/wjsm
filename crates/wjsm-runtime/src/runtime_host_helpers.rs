@@ -1201,8 +1201,13 @@ pub(crate) fn prototype_handle_to_value(
         .and_then(Extern::into_global)
         .and_then(|global| global.get(&mut *caller).i32())
         .unwrap_or(0) as u32;
-    if proto_handle < num_ir_functions {
-        value::encode_function_idx(proto_handle)
+    let function_props_base = caller
+        .get_export("__function_props_base")
+        .and_then(Extern::into_global)
+        .and_then(|global| global.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    if proto_handle >= function_props_base && proto_handle < function_props_base + num_ir_functions {
+        value::encode_function_idx(proto_handle - function_props_base)
     } else {
         value::encode_object_handle(proto_handle)
     }
@@ -1659,7 +1664,9 @@ pub(crate) fn write_new_property_to_memory(
             };
             g.get(&mut *caller).i32().unwrap_or(0) as usize
         };
-        let handle_idx = (target as u64 & 0xFFFF_FFFF) as u32;
+        // 扩容后写回 obj_table 槽：必须与上面 resolve_handle 读取的 handle 一致。
+        // 函数 target 的属性对象 handle 经 __function_props_base 重定位，故走 handle_index_of。
+        let handle_idx = crate::runtime_values::handle_index_of(caller, target) as u32;
 
         let new_capacity = if capacity == 0 { 1 } else { capacity * 2 };
         let new_size = 16 + new_capacity * 32;
