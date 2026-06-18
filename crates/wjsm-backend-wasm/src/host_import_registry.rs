@@ -37,6 +37,7 @@ pub enum SpecialHostImport {
     StringConcat,
     StringConcatVa,
     SymbolPropertyKey,
+    StringToArrayIndex,
     NativeCallableGetProperty,
     PrimitiveNumberGetMethod,
     TypedArraySetByIndex,
@@ -2478,6 +2479,12 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         name: "symbol_property_key",
         type_idx: 10,
         key: Some(HostImportKey::Special(SpecialHostImport::SymbolPropertyKey)),
+        group: None,
+    },
+    HostImportSpec {
+        name: "string_to_array_index",
+        type_idx: 10,
+        key: Some(HostImportKey::Special(SpecialHostImport::StringToArrayIndex)),
         group: None,
     },
     HostImportSpec {

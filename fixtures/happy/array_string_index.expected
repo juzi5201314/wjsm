@@ -1,0 +1,8 @@
+exit_code: 0
+--- stdout ---
+10 20 30
+undefined undefined undefined
+3 3
+99 99
+7 7
+--- stderr ---

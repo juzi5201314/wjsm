@@ -84,21 +84,25 @@ impl Compiler {
 
     /// 计算成员读取 `obj[key]` 按 key 运行期类型分派（结果 i64 留在栈上）：
     /// - key 为数字（is_f64）→ `$elem_get`（数组元素 / typedarray / 对象数字属性 via to_string）。
-    /// - key 为字符串/symbol → `symbol_property_key` → `$obj_get`（命名属性，含数组 .length / 原型 / 函数属性）。
+    /// - key 为字符串/symbol：
+    ///   - 数组 + 规范数字索引字符串（CanonicalNumericIndexString，如 "5"）→ `$elem_get`（元素）。
+    ///   - 否则 → `symbol_property_key` → `$obj_get`（命名属性，含数组 .length / 原型 / 函数属性、
+    ///     以及 "05"/"5.0"/"x" 等非索引字符串）。
     ///
-    /// 旧实现把所有 computed key `to_int32` 后只走 `$elem_get`，导致：①`a[变量]` 读到 undefined
-    /// （非数字字面量被 lowerer 误判走 GetProp，且 obj_get 无元素路径）；②`o[字符串]` 读写错位
-    /// （字符串被 to_int32 成 0）。统一为按 key 类型分派后两者皆正确。
-    /// 已知遗留小缺口：`o[5]`（纯数字 key 写普通对象）与 `a["5"]`（数字字符串索引数组）走另一分支，
-    /// 属 pre-existing 罕见场景，本次不覆盖。
+    /// 旧实现把所有 computed key `to_int32` 后只走 `$elem_get`，导致 `a[变量]` 读 undefined、
+    /// `o[字符串]` 读写错位。按 key 类型分派 + CanonicalNumericIndexString 后均正确。
+    /// 索引 scratch 复用 `safepoint_sp_saved_idx`（i32）：GetElem/SetElem 非 safepoint，
+    /// 其发射期间该 local 不被 spill 占用。
     fn emit_computed_get(&mut self, object: ValueId, key: ValueId) {
         let box_base = value::BOX_BASE as i64;
         let obj_l = self.local_idx(object.0);
         let key_l = self.local_idx(key.0);
+        let idx_scratch = self.safepoint_sp_saved_idx;
         let to_int32 = self.to_int32_func_idx;
         let elem_get = self.elem_get_func_idx;
         let obj_get = self.obj_get_func_idx;
         let sym_key = self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey];
+        let str_arr_idx = self.special_host_import_indices[&SpecialHostImport::StringToArrayIndex];
         // is_f64(key): (key & BOX_BASE) != BOX_BASE
         self.emit(WasmInstruction::LocalGet(key_l));
         self.emit(WasmInstruction::I64Const(box_base));
@@ -106,16 +110,50 @@ impl Compiler {
         self.emit(WasmInstruction::I64Const(box_base));
         self.emit(WasmInstruction::I64Ne);
         self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        // 数字 key → elem_get（数组元素 / typedarray / 对象数字属性）。
         self.emit(WasmInstruction::LocalGet(obj_l));
         self.emit(WasmInstruction::LocalGet(key_l));
         self.emit(WasmInstruction::Call(to_int32));
         self.emit(WasmInstruction::Call(elem_get));
         self.emit(WasmInstruction::Else);
+        // 字符串/symbol key：数组 + 规范数字索引 → 元素；否则命名属性。
+        self.emit_is_array(obj_l);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(key_l));
+        self.emit(WasmInstruction::Call(str_arr_idx));
+        self.emit(WasmInstruction::LocalTee(idx_scratch));
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::I32GeS);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(obj_l));
+        self.emit(WasmInstruction::LocalGet(idx_scratch));
+        self.emit(WasmInstruction::Call(elem_get));
+        self.emit(WasmInstruction::Else);
+        self.emit_named_get(obj_l, key_l, sym_key, obj_get);
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::Else);
+        self.emit_named_get(obj_l, key_l, sym_key, obj_get);
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::End);
+    }
+
+    /// 发射 is_array(boxed)：`(boxed >> 32) & 0xF == TAG_ARRAY` → i32 bool。
+    fn emit_is_array(&mut self, obj_l: u32) {
+        self.emit(WasmInstruction::LocalGet(obj_l));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_ARRAY as i64));
+        self.emit(WasmInstruction::I64Eq);
+    }
+
+    /// 发射命名属性读取：`obj_get(obj, symbol_property_key(key))`（结果 i64 留栈上）。
+    fn emit_named_get(&mut self, obj_l: u32, key_l: u32, sym_key: u32, obj_get: u32) {
         self.emit(WasmInstruction::LocalGet(obj_l));
         self.emit(WasmInstruction::LocalGet(key_l));
         self.emit(WasmInstruction::Call(sym_key));
         self.emit(WasmInstruction::Call(obj_get));
-        self.emit(WasmInstruction::End);
     }
 
     /// 计算成员写入 `obj[key] = value` 按 key 运行期类型分派（见 `emit_computed_get`）。
@@ -124,28 +162,54 @@ impl Compiler {
         let obj_l = self.local_idx(object.0);
         let key_l = self.local_idx(key.0);
         let val_l = self.local_idx(value.0);
+        let idx_scratch = self.safepoint_sp_saved_idx;
         let to_int32 = self.to_int32_func_idx;
         let elem_set = self.elem_set_func_idx;
         let obj_set = self.obj_set_func_idx;
         let sym_key = self.special_host_import_indices[&SpecialHostImport::SymbolPropertyKey];
+        let str_arr_idx = self.special_host_import_indices[&SpecialHostImport::StringToArrayIndex];
         self.emit(WasmInstruction::LocalGet(key_l));
         self.emit(WasmInstruction::I64Const(box_base));
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(box_base));
         self.emit(WasmInstruction::I64Ne);
         self.emit(WasmInstruction::If(BlockType::Empty));
+        // 数字 key → elem_set。
         self.emit(WasmInstruction::LocalGet(obj_l));
         self.emit(WasmInstruction::LocalGet(key_l));
         self.emit(WasmInstruction::Call(to_int32));
         self.emit(WasmInstruction::LocalGet(val_l));
         self.emit(WasmInstruction::Call(elem_set));
         self.emit(WasmInstruction::Else);
+        // 字符串/symbol key：数组 + 规范数字索引 → 元素写；否则命名属性写。
+        self.emit_is_array(obj_l);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::LocalGet(key_l));
+        self.emit(WasmInstruction::Call(str_arr_idx));
+        self.emit(WasmInstruction::LocalTee(idx_scratch));
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::I32GeS);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::LocalGet(obj_l));
+        self.emit(WasmInstruction::LocalGet(idx_scratch));
+        self.emit(WasmInstruction::LocalGet(val_l));
+        self.emit(WasmInstruction::Call(elem_set));
+        self.emit(WasmInstruction::Else);
+        self.emit_named_set(obj_l, key_l, val_l, sym_key, obj_set);
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::Else);
+        self.emit_named_set(obj_l, key_l, val_l, sym_key, obj_set);
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::End);
+    }
+
+    /// 发射命名属性写入：`obj_set(obj, symbol_property_key(key), value)`。
+    fn emit_named_set(&mut self, obj_l: u32, key_l: u32, val_l: u32, sym_key: u32, obj_set: u32) {
         self.emit(WasmInstruction::LocalGet(obj_l));
         self.emit(WasmInstruction::LocalGet(key_l));
         self.emit(WasmInstruction::Call(sym_key));
         self.emit(WasmInstruction::LocalGet(val_l));
         self.emit(WasmInstruction::Call(obj_set));
-        self.emit(WasmInstruction::End);
     }
 
     /// Safepoint spill prologue：保存 spill 前 shadow_sp，把 live handle locals 写到 shadow stack 顶端，推进 shadow_sp。
