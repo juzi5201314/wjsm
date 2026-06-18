@@ -49,14 +49,15 @@ pub(crate) struct StartupSnapshotOwned {
     pub native_callables: Vec<SnapshotNativeCallable>,
 }
 
-/// Zero-copy view of a decoded snapshot suitable for restore.
-#[derive(Debug, Clone, Copy)]
+/// Decoded snapshot view: `object_bytes` 安全借用输入 bytes，
+/// 其余字段 owned 以避免 `unsafe`/`leak`。
+#[derive(Debug, Clone)]
 pub(crate) struct StartupSnapshotView<'a> {
-    pub header: &'a StartupSnapshotHeader,
+    pub header: StartupSnapshotHeader,
     pub object_bytes: &'a [u8],
-    pub handle_rel_offsets: &'a [u32],
-    pub runtime_strings: &'a [&'a str],
-    pub native_callables: &'a [SnapshotNativeCallable],
+    pub handle_rel_offsets: Vec<u32>,
+    pub runtime_strings: Vec<String>,
+    pub native_callables: Vec<SnapshotNativeCallable>,
 }
 
 // ── SnapshotNativeCallable ─────────────────────────────────────────
@@ -490,9 +491,9 @@ fn append_padded(buf: &mut Vec<u8>, data: &[u8]) {
 
 // ── decode ─────────────────────────────────────────────────────────
 
-/// Decode a snapshot from bytes. Returns a view that borrows the input bytes.
-/// `runtime_strings` are interned as borrowed `&str` slices — the caller must
-/// convert to `String` when populating `RuntimeState`.
+/// Decode a snapshot from bytes. `object_bytes` 安全借用输入 bytes，
+/// 其余字段 owned；不再使用 `unsafe`/`leak`/`from_raw_parts`。
+/// `runtime_strings` 以拥有 `String` 返回，调用方直接用于 `RuntimeState`。
 pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
     if bytes.len() < 68 {
         bail!("snapshot too short: {} bytes", bytes.len());
@@ -547,14 +548,10 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
         bail!("section table truncated");
     }
 
-    // Leak the header so we can return a &'a StartupSnapshotHeader from borrowed bytes
-    let header_static: &'static StartupSnapshotHeader =
-        unsafe { std::mem::transmute(&header as *const StartupSnapshotHeader) };
-
     let mut object_bytes: &[u8] = &[];
-    let mut handle_rel_offsets: &[u32] = &[];
-    let mut runtime_strings: &[&str] = &[];
-    let mut native_callables: &[SnapshotNativeCallable] = &[];
+    let mut handle_rel_offsets: Vec<u32> = Vec::new();
+    let mut runtime_strings: Vec<String> = Vec::new();
+    let mut native_callables: Vec<SnapshotNativeCallable> = Vec::new();
 
     for i in 0..section_count {
         let off = st_start + i * 12;
@@ -574,10 +571,19 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
         match _kind {
             1 => object_bytes = data,
             2 => {
-                let len = data.len() / 4;
-                let ptr = data.as_ptr() as *const u32;
-                // Safety: data is aligned(ish) and len*4 ≤ data.len()
-                handle_rel_offsets = unsafe { std::slice::from_raw_parts(ptr, len) };
+                // handle_rel_offsets: u32 数组，按值收集避免 unsafe 对齐假设
+                handle_rel_offsets = data
+                    .chunks_exact(4)
+                    .map(|c| u32::from_le_bytes(c.try_into().unwrap_or([0; 4])))
+                    .collect();
+                // 校验：handle 数量必须与 header.obj_table_count 一致
+                if handle_rel_offsets.len() != header.obj_table_count as usize {
+                    bail!(
+                        "handle_rel_offsets count {} != header.obj_table_count {}",
+                        handle_rel_offsets.len(),
+                        header.obj_table_count
+                    );
+                }
             }
             3 => {
                 // runtime_strings: count (u32) + len-prefixed strings
@@ -585,7 +591,7 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
                     bail!("runtime_strings section too short");
                 }
                 let count = u32::from_le_bytes(data[0..4].try_into()?) as usize;
-                let mut strings: Vec<&str> = Vec::with_capacity(count);
+                let mut strings: Vec<String> = Vec::with_capacity(count);
                 let mut pos = 4usize;
                 for _ in 0..count {
                     if pos + 4 > data.len() {
@@ -597,11 +603,10 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
                         bail!("runtime_strings entry body truncated");
                     }
                     let s = std::str::from_utf8(&data[pos..pos + slen])?;
-                    strings.push(s);
+                    strings.push(s.to_string());
                     pos += slen;
                 }
-                // Leak to get &'a [&str]
-                runtime_strings = Vec::leak(strings) as &[&str];
+                runtime_strings = strings;
             }
             4 => {
                 // native_callables: count (u32) + discriminants
@@ -621,14 +626,13 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
                         .ok_or_else(|| anyhow::anyhow!("unknown native callable discriminant {}", d))?;
                     ncs.push(nc);
                 }
-                native_callables = Vec::leak(ncs) as &[SnapshotNativeCallable];
+                native_callables = ncs;
             }
             _ => {} // unknown sections ignored
         }
     }
-
     Ok(StartupSnapshotView {
-        header: header_static,
+        header,
         object_bytes,
         handle_rel_offsets,
         runtime_strings,
@@ -671,7 +675,8 @@ pub(crate) fn abi_hash() -> u64 {
     wjsm_ir::HEAP_TYPE_ARGUMENTS.hash(&mut hasher);
 
     // Primordial string table
-    for (_, s) in constants::primordial_string_offsets() {
+    for (offset, s) in constants::primordial_string_offsets() {
+        offset.hash(&mut hasher);
         s.hash(&mut hasher);
     }
 
@@ -740,8 +745,35 @@ mod tests {
         assert_eq!(view.handle_rel_offsets.len(), 10);
         assert_eq!(view.handle_rel_offsets[0], 0);
         assert_eq!(view.handle_rel_offsets[9], 144);
-        assert_eq!(view.runtime_strings, &["hello", "world"]);
+        assert_eq!(view.runtime_strings, vec!["hello", "world"]);
         assert_eq!(view.native_callables.len(), 2);
+    }
+
+    #[test]
+    fn decode_handle_count_mismatch() {
+        // 篡改 header.obj_table_count 使其不等于 handle_rel_offsets 实际数量
+        let mut snap = dummy_snapshot();
+        snap.header.obj_table_count = 99; // 实际只有 10 个
+        let bytes = encode_snapshot(&snap);
+        assert!(decode_snapshot(&bytes).is_err());
+    }
+
+    #[test]
+    fn decode_truncated_handle_section() {
+        // 截断 handle section 使其长度不是 4 的倍数 + 数量不匹配
+        let snap = dummy_snapshot();
+        let mut bytes = encode_snapshot(&snap);
+        // 找到 handle section 并截断末尾几个字节（破坏最后一个 u32）
+        // header(68) + section_table(48) = 116 是 payload 起点
+        // object_bytes section 在前（256 bytes + padding）
+        // 直接截断文件末尾，使 handle section 的数据不完整
+        // 更简单：直接删掉最后 4 字节，handle_rel_offsets 变成 9 个 ≠ obj_table_count=10
+        bytes.truncate(bytes.len() - 4);
+        // 截断后 native_callables section 也被破坏，但 decode 按顺序处理，
+        // handle section 如果数量减少会触发 count mismatch
+        // 如果截断点在 native_callables 区域，则 native_callables 会报 truncated
+        // 无论哪种都是 Err
+        assert!(decode_snapshot(&bytes).is_err());
     }
 
     #[test]

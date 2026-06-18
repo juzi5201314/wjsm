@@ -2,7 +2,7 @@
 
 - Parent plan: `docs/aegis/plans/2026-06-17-startup-snapshot.md`
 - Branch: `startup-snapshot-execution`
-- Result: P0–P8 实施完成，453 happy fixtures 通过，snapshot 为 opt-in (WJSM_STARTUP_SNAPSHOT=1)。
+- Result: P0–P7 核心实施完成，P8 文档更新完成。snapshot 为 opt-in（默认关闭，`WJSM_STARTUP_SNAPSHOT=1` 开启）。P6 计划中的 `snapshot_cache_hit_skips_builder` / `snapshot_cache_abi_mismatch_rebuilds_once` / `execute_snapshot_on_off_same_output` 集成测试尚未落地（当前由 `startup_snapshot_format` 单元测试 + happy fixtures 覆盖正确性）。
 
 ## TodoCheckpointDraft
 

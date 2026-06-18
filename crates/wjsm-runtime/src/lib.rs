@@ -895,9 +895,11 @@ fn module_compile_cache() -> Option<&'static wasmtime::Cache> {
 
 #[allow(dead_code)]
 fn startup_snapshot_enabled() -> bool {
-    !matches!(
+    // opt-in：默认关闭，显式设 WJSM_STARTUP_SNAPSHOT=1/on/true 开启。
+    // arr_proto_table_base 统一前保持关闭，避免跨模块 indirect call type mismatch。
+    matches!(
         std::env::var("WJSM_STARTUP_SNAPSHOT").as_deref(),
-        Ok("0") | Ok("false") | Ok("off")
+        Ok("1") | Ok("true") | Ok("on")
     )
 }
 

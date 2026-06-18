@@ -4,7 +4,7 @@
 //! Subsequent runs: restore from cached snapshot, skipping bootstrap.
 //! Disk cache uses atomic rename for safe concurrent access.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
@@ -12,7 +12,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::startup_snapshot_format::*;
-use crate::startup_snapshot::*;
 
 static CACHE: Mutex<Option<HashMap<u64, Arc<[u8]>>>> = Mutex::const_new(None);
 

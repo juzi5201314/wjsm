@@ -1,6 +1,6 @@
 # ADR 0003: Startup Snapshot Boundary
 
-**Status**: Accepted (opt-in default, pending arr_proto_table_base unification)
+**Status**: Accepted (opt-in default off, pending arr_proto_table_base unification)
 
 **Date**: 2026-06-18
 
@@ -18,7 +18,7 @@ wjsm 实现 **relocatable primordial heap snapshot**：
 2. 恢复时按当前模块的 `__object_heap_start` 重定位，随后执行当前模块专属的 `__wjsm_init_function_props`（幂等），再进入用户 `main`。
 3. Snapshot 格式为手写 little-endian 二进制，不走 JSON/serde 热路径。
 4. 进程内 `tokio::sync::Mutex<Option<Arc<[u8]>>>` 缓存 + 可选磁盘 cache。
-5. 默认 `WJSM_STARTUP_SNAPSHOT=1` 显式开启；因 seed 模块和用户模块 `arr_proto_table_base` 不一致导致 `indirect call type mismatch`，当前默认关闭。
+5. 默认关闭（opt-in）；显式设 `WJSM_STARTUP_SNAPSHOT=1` 开启。因 seed 模块和用户模块 `arr_proto_table_base` 不一致会导致 `indirect call type mismatch`，在统一 `arr_proto_table_base` 为 global 导出前不默认开启。
 
 ### Snapshot 内容
 
