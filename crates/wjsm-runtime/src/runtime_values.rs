@@ -1,10 +1,28 @@
 use super::*;
 use crate::wasm_env::WasmEnv;
 
-/// 通过 handle 表解析 boxed value 的真实对象指针。
-/// 支持 TAG_OBJECT 和 TAG_FUNCTION（统一走 handle 表）。
-pub(crate) fn resolve_handle(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
+/// 计算 boxed value 在 obj_table 中的 handle 索引。
+/// 函数值低 32 位是函数表索引；其属性对象 handle 从 __function_props_base 起算
+//（startup snapshot 拆分后 primordial 原型占据更低 handle）。其余值的 handle 即低 32 位。
+/// 所有"函数值 → 属性对象 handle"的解析（读/写/扩容）都必须经此函数，避免 read/write 漂移。
+pub(crate) fn handle_index_of(caller: &mut Caller<'_, RuntimeState>, val: i64) -> usize {
     let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    if value::is_function(val) {
+        let base = caller
+            .get_export("__function_props_base")
+            .and_then(Extern::into_global)
+            .and_then(|global| global.get(&mut *caller).i32())
+            .unwrap_or(0)
+            .max(0) as usize;
+        return handle_idx.saturating_add(base);
+    }
+    handle_idx
+}
+
+/// 通过 handle 表解析 boxed value 的真实对象指针。
+/// 函数值低 32 位是函数表索引；函数属性对象 handle 从 __function_props_base 起算。
+pub(crate) fn resolve_handle(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
+    let handle_idx = handle_index_of(caller, val);
     resolve_handle_idx(caller, handle_idx)
 }
 

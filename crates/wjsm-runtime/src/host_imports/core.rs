@@ -871,7 +871,11 @@ pub(crate) fn define_core(
                         };
                         g.get(&mut caller).i32().unwrap_or(0) as usize
                     };
-                    let handle_idx = (obj as u64 & 0xFFFF_FFFF) as u32;
+                    // 扩容写回 obj_table 槽：必须与上面 resolve_handle 读取的 handle 一致。
+                    // 函数 target 的属性对象 handle 经 __function_props_base 重定位，故走 handle_index_of，
+                    // 不能直接用 obj 低 32 位（那是函数表索引，会写错槽 → 扩容后读到旧对象）。
+                    let handle_idx =
+                        crate::runtime_values::handle_index_of(&mut caller, obj) as u32;
 
                     // 计算新容量和新大小
                     let new_capacity = if capacity == 0 { 1 } else { capacity * 2 };

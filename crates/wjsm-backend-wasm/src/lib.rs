@@ -150,6 +150,16 @@ struct Compiler {
     string_eq_func_idx: u32,
     /// WASM global index for Object.prototype handle.
     object_proto_handle_global_idx: u32,
+    /// WASM global index for startup bootstrap completion flag.
+    bootstrap_done_global_idx: u32,
+    /// WASM global index for function-property initialization completion flag.
+    function_props_done_global_idx: u32,
+    /// WASM global index for first function-property handle.
+    function_props_base_global_idx: u32,
+    /// WASM function index for idempotent primordial bootstrap.
+    bootstrap_func_idx: u32,
+    /// WASM function index for current-module function property initialization.
+    init_function_props_func_idx: u32,
     /// WASM global index for __eval_var_map_ptr.
     eval_var_map_ptr_global_idx: u32,
     /// WASM global index for __eval_var_map_count.
@@ -176,6 +186,12 @@ struct Compiler {
     >,
     /// 当前函数的 ValueTy（P1 已实现，crate::analysis_value_ty::infer_value_ty）。
     current_fn_value_ty: Option<HashMap<wjsm_ir::ValueId, ValueTy>>,
+    /// 当前函数的变量活跃集（变量名粒度，crate::analysis_liveness::compute_var_liveness）。
+    /// 供 GC safepoint 的变量 local spill：弥补 per-ValueId liveness 看不到变量存活的空洞。
+    current_fn_var_liveness:
+        Option<HashMap<wjsm_ir::BasicBlockId, HashMap<usize, std::collections::HashSet<String>>>>,
+    /// 当前函数的变量类型（变量名 → ValueTy）。仅 spill 可能持有 handle 的变量。
+    current_fn_var_ty: Option<HashMap<String, ValueTy>>,
     /// 当前 emit 位置的 IR block 索引（= block id，见 wjsm-ir block_by_id O(1) by index 约定）。
     current_emit_block_idx: usize,
     /// 当前 emit 位置在当前 block 内的指令下标。

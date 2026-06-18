@@ -171,10 +171,24 @@ fn register_common_bridges(
     // symbol_property_key
     let f = Func::wrap(
         &mut *store,
-        |_caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+        |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
             if let Some(name_id) = symbol_value_to_name_id(key) {
                 return name_id as i32;
             }
+            // 运行期字符串（拼接 / 模板 / String() 等）与数字 key：低 32 位是 handle 或 f64 位，
+            // 不是 data-section name_id。必须取内容（ToString）后 find-or-alloc 出稳定 name_id，
+            // 否则动态属性名（o["p"+i]）或数字 key（o[5]）会错位。
+            if value::is_runtime_string_handle(key) || value::is_f64(key) {
+                if let Ok(s) = render_value(&mut caller, key) {
+                    if let Some(id) = find_memory_c_string(&mut caller, &s)
+                        .or_else(|| alloc_heap_c_string(&mut caller, &s))
+                    {
+                        return id as i32;
+                    }
+                }
+                return 0;
+            }
+            // 编译期常量字符串：低 32 位即 data 区指针，本身就是 name_id。
             key as i32
         },
     );
@@ -854,12 +868,16 @@ fn module_compile_cache() -> Option<&'static wasmtime::Cache> {
         })
         .as_ref()
 }
-async fn execute_with_writer_shared_inner<W: Write>(
-    wasm_bytes: &[u8],
-    writer: W,
-    shared_state: Option<Arc<SharedRuntimeState>>,
-    use_epoch_async_yield: bool,
-) -> Result<W> {
+
+#[allow(dead_code)]
+fn startup_snapshot_enabled() -> bool {
+    !matches!(
+        std::env::var("WJSM_STARTUP_SNAPSHOT").as_deref(),
+        Ok("0") | Ok("false") | Ok("off")
+    )
+}
+
+fn startup_engine_config(use_epoch_async_yield: bool) -> Config {
     let mut config = Config::new();
     if use_epoch_async_yield {
         config.epoch_interruption(true);
@@ -870,6 +888,198 @@ async fn execute_with_writer_shared_inner<W: Write>(
     if let Some(cache) = module_compile_cache() {
         config.cache(Some(cache.clone()));
     }
+    config
+}
+
+fn register_startup_linker(
+    linker: &mut Linker<RuntimeState>,
+    store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    register_linker(linker, store)?;
+    register_common_bridges(linker, store)?;
+    register_complex_bridges(linker, store)?;
+    Ok(())
+}
+
+fn prepare_async_host_completion(
+    store: &mut Store<RuntimeState>,
+) -> tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion> {
+    // Phase 6: 创建 channel + counter（仅 async 路径）
+    let (host_completion_tx, host_completion_rx) = tokio::sync::mpsc::unbounded_channel();
+    store
+        .data_mut()
+        .host_completion_tx
+        .replace(host_completion_tx);
+    let counter = crate::scheduler::AsyncOpCounter::new();
+    store.data_mut().async_op_counter.replace(counter);
+    host_completion_rx
+}
+
+fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeState>) -> WasmEnv {
+    let memory = instance
+        .get_export(&mut *store, "memory")
+        .and_then(|e| e.into_memory())
+        .expect("memory");
+    let heap_ptr_global = instance
+        .get_export(&mut *store, "__heap_ptr")
+        .and_then(|e| e.into_global())
+        .expect("heap");
+    let obj_table_ptr_global = instance
+        .get_export(&mut *store, "__obj_table_ptr")
+        .and_then(|e| e.into_global())
+        .expect("obj_table_ptr");
+    let obj_table_count_global = instance
+        .get_export(&mut *store, "__obj_table_count")
+        .and_then(|e| e.into_global())
+        .expect("obj_table_count");
+    let func_table = instance
+        .get_export(&mut *store, "__table")
+        .and_then(|e| e.into_table())
+        .expect("table");
+    let shadow_sp_global = instance
+        .get_export(&mut *store, "__shadow_sp")
+        .and_then(|e| e.into_global())
+        .expect("shadow");
+    let array_proto_handle_global = instance
+        .get_export(&mut *store, "__array_proto_handle")
+        .and_then(|e| e.into_global())
+        .expect("array_proto");
+    let object_proto_handle_global = instance
+        .get_export(&mut *store, "__object_proto_handle")
+        .and_then(|e| e.into_global())
+        .expect("object_proto");
+
+    wasm_env::WasmEnv {
+        memory,
+        func_table,
+        shadow_sp: shadow_sp_global,
+        heap_ptr: heap_ptr_global,
+        obj_table_ptr: obj_table_ptr_global,
+        obj_table_count: obj_table_count_global,
+        object_proto_handle: object_proto_handle_global,
+        array_proto_handle: array_proto_handle_global,
+    }
+}
+
+fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) {
+    if wasm_env.obj_table_count.get(&mut *store).i32().unwrap_or(0) == 0 {
+        // handle 0 仍作为旧原型链 null 哨兵；host primordial 从 1 开始，避免 Object.getPrototypeOf 误判。
+        let _ = alloc_host_object(store, wasm_env, 0);
+    }
+    let async_iterator_proto = alloc_host_object(store, wasm_env, 2);
+    let async_iterator_symbol_async_iterator = {
+        let mut table = store.data().native_callables.lock().expect("native");
+        let handle = table.len() as u32;
+        table.push(NativeCallable::AsyncIteratorProtoSymbolAsyncIterator);
+        value::encode_native_callable_idx(handle)
+    };
+    let _ = define_host_data_property_by_name_id_with_env(
+        store,
+        wasm_env,
+        async_iterator_proto,
+        encode_symbol_name_id(3),
+        async_iterator_symbol_async_iterator,
+        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
+    );
+    let async_iterator_tag =
+        store_runtime_string_in_state(store.data(), "AsyncIterator".to_string());
+    let _ = define_host_data_property_with_env(
+        store,
+        wasm_env,
+        async_iterator_proto,
+        "Symbol.toStringTag",
+        async_iterator_tag,
+    );
+    let async_gen_proto = alloc_host_object(store, wasm_env, 2);
+    let async_gen_handle = value::decode_object_handle(async_gen_proto);
+    let async_iterator_handle = value::decode_object_handle(async_iterator_proto);
+    let obj_ptr =
+        resolve_handle_idx_with_env(store, wasm_env, async_gen_handle as usize).expect("obj_ptr");
+    let data = wasm_env.memory.data_mut(&mut *store);
+    data[obj_ptr..obj_ptr + 4].copy_from_slice(&async_iterator_handle.to_le_bytes());
+    let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
+    let _ = define_host_data_property_with_env(
+        store,
+        wasm_env,
+        async_gen_proto,
+        "Symbol.toStringTag",
+        async_gen_tag,
+    );
+    store.data_mut().async_iterator_prototype = async_iterator_proto;
+    store.data_mut().async_gen_prototype = async_gen_proto;
+}
+
+
+
+#[cfg(test)]
+#[derive(Default)]
+struct StartupBenchTimings {
+    engine_only: Duration,
+    module_only: Duration,
+    store_only: Duration,
+    linker_register: Duration,
+    instantiate_async: Duration,
+    bootstrap_cold: Duration,
+    host_post_bootstrap: Duration,
+}
+
+#[cfg(test)]
+async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTimings> {
+    let mut timings = StartupBenchTimings::default();
+
+    let config = startup_engine_config(true);
+    let start = std::time::Instant::now();
+    let engine = Engine::new(&config)
+        .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
+    timings.engine_only = start.elapsed();
+
+    let start = std::time::Instant::now();
+    let module = match Module::new(&engine, wasm) {
+        Ok(m) => m,
+        Err(e) => {
+            return Err(anyhow::anyhow!("WASM validation failed: {:?}", e));
+        }
+    };
+    timings.module_only = start.elapsed();
+
+    let start = std::time::Instant::now();
+    let mut store = Store::new(&engine, RuntimeState::new_with_shared(None));
+    store.set_epoch_deadline(1);
+    store.epoch_deadline_async_yield_and_update(1);
+    let _host_completion_rx = prepare_async_host_completion(&mut store);
+    timings.store_only = start.elapsed();
+
+    let mut linker = Linker::new(&engine);
+    let start = std::time::Instant::now();
+    register_startup_linker(&mut linker, &mut store)?;
+    timings.linker_register = start.elapsed();
+
+    let start = std::time::Instant::now();
+    let instance = linker
+        .instantiate_async(&mut store, &module)
+        .await
+        .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
+    timings.instantiate_async = start.elapsed();
+
+    // P0 还没有拆出 __wjsm_bootstrap_once；真正 WASM 启动成本仍在 instantiate_async 内。
+    // 这里临时记录 execute 进入 host post-bootstrap 前的环境提取成本，不能当作 snapshot 指标。
+    let start = std::time::Instant::now();
+    let wasm_env = extract_wasm_env(&instance, &mut store);
+    timings.bootstrap_cold = start.elapsed();
+
+    let start = std::time::Instant::now();
+    initialize_host_post_bootstrap(&mut store, &wasm_env);
+    timings.host_post_bootstrap = start.elapsed();
+
+    Ok(timings)
+}
+async fn execute_with_writer_shared_inner<W: Write>(
+    wasm_bytes: &[u8],
+    writer: W,
+    shared_state: Option<Arc<SharedRuntimeState>>,
+    use_epoch_async_yield: bool,
+) -> Result<W> {
+    let config = startup_engine_config(use_epoch_async_yield);
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
 
@@ -889,108 +1099,17 @@ async fn execute_with_writer_shared_inner<W: Write>(
         store.epoch_deadline_async_yield_and_update(1);
     }
 
-    // Phase 6: 创建 channel + counter（仅 async 路径）
-    let (host_completion_tx, mut host_completion_rx) = tokio::sync::mpsc::unbounded_channel();
-    store
-        .data_mut()
-        .host_completion_tx
-        .replace(host_completion_tx);
-    let counter = crate::scheduler::AsyncOpCounter::new();
-    store.data_mut().async_op_counter.replace(counter);
+    let mut host_completion_rx = prepare_async_host_completion(&mut store);
 
     let mut linker = Linker::new(&engine);
-    register_linker(&mut linker, &mut store)?;
-    register_common_bridges(&mut linker, &mut store)?;
-    register_complex_bridges(&mut linker, &mut store)?;
+    register_startup_linker(&mut linker, &mut store)?;
     let instance = linker
         .instantiate_async(&mut store, &module)
         .await
         .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
 
-    // post 原型（boring dupe 小段）
-    let memory = instance
-        .get_export(&mut store, "memory")
-        .and_then(|e| e.into_memory())
-        .expect("memory");
-    let heap_ptr_global = instance
-        .get_export(&mut store, "__heap_ptr")
-        .and_then(|e| e.into_global())
-        .expect("heap");
-    let obj_table_ptr_global = instance
-        .get_export(&mut store, "__obj_table_ptr")
-        .and_then(|e| e.into_global())
-        .expect("obj_table_ptr");
-    let obj_table_count_global = instance
-        .get_export(&mut store, "__obj_table_count")
-        .and_then(|e| e.into_global())
-        .expect("obj_table_count");
-    let func_table = instance
-        .get_export(&mut store, "__table")
-        .and_then(|e| e.into_table())
-        .expect("table");
-    let shadow_sp_global = instance
-        .get_export(&mut store, "__shadow_sp")
-        .and_then(|e| e.into_global())
-        .expect("shadow");
-    let array_proto_handle_global = instance
-        .get_export(&mut store, "__array_proto_handle")
-        .and_then(|e| e.into_global())
-        .expect("array_proto");
-    let object_proto_handle_global = instance
-        .get_export(&mut store, "__object_proto_handle")
-        .and_then(|e| e.into_global())
-        .expect("object_proto");
-    let wasm_env = wasm_env::WasmEnv {
-        memory,
-        func_table,
-        shadow_sp: shadow_sp_global,
-        heap_ptr: heap_ptr_global,
-        obj_table_ptr: obj_table_ptr_global,
-        obj_table_count: obj_table_count_global,
-        object_proto_handle: object_proto_handle_global,
-        array_proto_handle: array_proto_handle_global,
-    };
-    let async_iterator_proto = alloc_host_object(&mut store, &wasm_env, 2);
-    let async_iterator_symbol_async_iterator = {
-        let mut table = store.data().native_callables.lock().expect("native");
-        let handle = table.len() as u32;
-        table.push(NativeCallable::AsyncIteratorProtoSymbolAsyncIterator);
-        value::encode_native_callable_idx(handle)
-    };
-    let _ = define_host_data_property_by_name_id_with_env(
-        &mut store,
-        &wasm_env,
-        async_iterator_proto,
-        encode_symbol_name_id(3),
-        async_iterator_symbol_async_iterator,
-        constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
-    );
-    let async_iterator_tag =
-        store_runtime_string_in_state(store.data(), "AsyncIterator".to_string());
-    let _ = define_host_data_property_with_env(
-        &mut store,
-        &wasm_env,
-        async_iterator_proto,
-        "Symbol.toStringTag",
-        async_iterator_tag,
-    );
-    let async_gen_proto = alloc_host_object(&mut store, &wasm_env, 2);
-    let async_gen_handle = value::decode_object_handle(async_gen_proto);
-    let async_iterator_handle = value::decode_object_handle(async_iterator_proto);
-    let obj_ptr = resolve_handle_idx_with_env(&mut store, &wasm_env, async_gen_handle as usize)
-        .expect("obj_ptr");
-    let data = memory.data_mut(&mut store);
-    data[obj_ptr..obj_ptr + 4].copy_from_slice(&async_iterator_handle.to_le_bytes());
-    let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
-    let _ = define_host_data_property_with_env(
-        &mut store,
-        &wasm_env,
-        async_gen_proto,
-        "Symbol.toStringTag",
-        async_gen_tag,
-    );
-    store.data_mut().async_iterator_prototype = async_iterator_proto;
-    store.data_mut().async_gen_prototype = async_gen_proto;
+    let wasm_env = extract_wasm_env(&instance, &mut store);
+    initialize_host_post_bootstrap(&mut store, &wasm_env);
 
     // 委托（Phase 6 传入 rx 供 scheduler 接收 completion）
     run_main_completion_block_async(
@@ -1395,73 +1514,50 @@ mod tests {
         use std::time::Instant;
         let wasm = compile_source("")?;
         let n = 50u32;
-
-        // engine + module（每次新建，含 Cranelift 编译）
-        let mut t = std::time::Duration::ZERO;
-        for _ in 0..n {
-            let s = Instant::now();
-            let mut config = Config::new();
-            config.epoch_interruption(true);
-            let engine = Engine::new(&config).unwrap();
-            let _m = Module::new(&engine, &wasm).unwrap();
-            t += s.elapsed();
-        }
-        eprintln!("BENCH engine+module : {:?}/each", t / n);
-
-        // linker 注册（380 个 host trampoline）— 复用同一 engine/store
-        let mut config = Config::new();
-        config.epoch_interruption(true);
-        let engine = Engine::new(&config).unwrap();
-        let mut t = std::time::Duration::ZERO;
-        for _ in 0..n {
-            let mut store = Store::new(&engine, RuntimeState::new());
-            let s = Instant::now();
-            let mut linker = Linker::new(&engine);
-            register_linker(&mut linker, &mut store).unwrap();
-            register_common_bridges(&mut linker, &mut store).unwrap();
-            register_complex_bridges(&mut linker, &mut store).unwrap();
-            t += s.elapsed();
-            std::hint::black_box(&linker);
-        }
-        eprintln!("BENCH linker register: {:?}/each", t / n);
-
-        // 全程 execute
         let rt = Runtime::new()?;
-        let mut t = std::time::Duration::ZERO;
-        rt.block_on(async {
-            for _ in 0..n {
-                let s = Instant::now();
-                let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
-                t += s.elapsed();
-            }
-        });
-        eprintln!("BENCH full execute  : {:?}/each", t / n);
 
-        // instantiate_async 单独成本（复用同一 module + 每次新 linker/store）
-        let mut config = Config::new();
-        config.epoch_interruption(true);
-        let engine = Engine::new(&config).unwrap();
-        let module = Module::new(&engine, &wasm).unwrap();
-        let mut t = std::time::Duration::ZERO;
-        let mut t_inst = std::time::Duration::ZERO;
+        let mut startup = StartupBenchTimings::default();
         rt.block_on(async {
             for _ in 0..n {
-                let mut store = Store::new(&engine, RuntimeState::new());
-                store.set_epoch_deadline(1);
-                store.epoch_deadline_async_yield_and_update(1);
-                let mut linker = Linker::new(&engine);
-                let s = Instant::now();
-                register_linker(&mut linker, &mut store).unwrap();
-                register_common_bridges(&mut linker, &mut store).unwrap();
-                register_complex_bridges(&mut linker, &mut store).unwrap();
-                t += s.elapsed();
-                let s = Instant::now();
-                let _inst = linker.instantiate_async(&mut store, &module).await.unwrap();
-                t_inst += s.elapsed();
+                let run = instantiate_for_startup_bench(&wasm).await.unwrap();
+                startup.engine_only += run.engine_only;
+                startup.module_only += run.module_only;
+                startup.store_only += run.store_only;
+                startup.linker_register += run.linker_register;
+                startup.instantiate_async += run.instantiate_async;
+                startup.bootstrap_cold += run.bootstrap_cold;
+                startup.host_post_bootstrap += run.host_post_bootstrap;
             }
         });
-        eprintln!("BENCH   linker(async ctx): {:?}/each", t / n);
-        eprintln!("BENCH   instantiate_async: {:?}/each", t_inst / n);
+        eprintln!("BENCH engine only       : {:?}/each", startup.engine_only / n);
+        eprintln!("BENCH module only       : {:?}/each", startup.module_only / n);
+        eprintln!("BENCH store only        : {:?}/each", startup.store_only / n);
+        eprintln!(
+            "BENCH linker register   : {:?}/each",
+            startup.linker_register / n
+        );
+        eprintln!(
+            "BENCH instantiate_async : {:?}/each",
+            startup.instantiate_async / n
+        );
+        eprintln!("BENCH bootstrap cold    : {:?}/each", startup.bootstrap_cold / n);
+        eprintln!(
+            "BENCH host post-bootstrap: {:?}/each",
+            startup.host_post_bootstrap / n
+        );
+
+        let mut full_execute_cold = std::time::Duration::ZERO;
+        rt.block_on(async {
+            for _ in 0..n {
+                let start = Instant::now();
+                let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
+                full_execute_cold += start.elapsed();
+            }
+        });
+        eprintln!(
+            "BENCH full execute cold : {:?}/each",
+            full_execute_cold / n
+        );
         Ok(())
     }
     #[test]

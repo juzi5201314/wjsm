@@ -1637,33 +1637,18 @@ impl Lowerer {
                     },
                 );
             }
-            // Computed（计算属性）：数字字面量用 GetElem，其他用 GetProp
+            // Computed（计算属性）：统一走 GetElem。GetElem 在后端按 key 类型分派——
+            // 数组 + 数字 key → 元素；否则 → 命名属性（obj_get，处理对象/数组 .length/原型/函数）。
+            // 旧逻辑「仅数字字面量用 GetElem，其余用 GetProp」会让 a[变量] 漏掉数组元素路径。
             swc_ast::MemberProp::Computed(_) => {
-                // 检查 computed key 是否为数字字面量 → GetElem
-                let use_get_elem = matches!(
-                    member.prop,
-                    swc_ast::MemberProp::Computed(swc_ast::ComputedPropName { ref expr, .. })
-                        if matches!(expr.as_ref(), swc_ast::Expr::Lit(swc_ast::Lit::Num(_)))
+                self.current_function.append_instruction(
+                    *block,
+                    Instruction::GetElem {
+                        dest,
+                        object: obj_val,
+                        index: key,
+                    },
                 );
-                if use_get_elem {
-                    self.current_function.append_instruction(
-                        *block,
-                        Instruction::GetElem {
-                            dest,
-                            object: obj_val,
-                            index: key,
-                        },
-                    );
-                } else {
-                    self.current_function.append_instruction(
-                        *block,
-                        Instruction::GetProp {
-                            dest,
-                            object: obj_val,
-                            key,
-                        },
-                    );
-                }
             }
             _ => unreachable!(),
         }

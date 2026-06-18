@@ -40,6 +40,8 @@ impl Compiler {
             return 0;
         };
         let value_ty = self.current_fn_value_ty.as_ref();
+        let var_liveness = self.current_fn_var_liveness.as_ref();
+        let var_ty = self.current_fn_var_ty.as_ref();
         let mut max = 0usize;
         for (bid, instr_map) in liveness {
             let block = match function.block_by_id(*bid) {
@@ -51,21 +53,64 @@ impl Compiler {
                 if !Self::is_safepoint(ins) {
                     continue;
                 }
-                let Some(live) = instr_map.get(&i) else {
-                    continue;
-                };
-                let cnt = live
-                    .iter()
-                    .filter(|v| {
-                        value_ty
-                            .and_then(|m| m.get(v))
-                            .is_none_or(|t| *t == ValueTy::Handle)
-                    })
-                    .count();
+                let mut cnt = 0usize;
+                if let Some(live) = instr_map.get(&i) {
+                    cnt += live
+                        .iter()
+                        .filter(|v| {
+                            value_ty
+                                .and_then(|m| m.get(v))
+                                .is_none_or(|t| *t == ValueTy::Handle)
+                        })
+                        .count();
+                }
+                // 变量 spill 上界：与 current_spill_locals 一致——存活且可能持有 handle 的变量 local。
+                // 变量 local 与 SSA 值 local 索引不相交，故直接相加即精确上界。
+                if let Some(names) = var_liveness.and_then(|m| m.get(bid)).and_then(|m| m.get(&i)) {
+                    cnt += names
+                        .iter()
+                        .filter(|name| {
+                            self.var_locals.contains_key(*name)
+                                && var_ty
+                                    .and_then(|m| m.get(*name))
+                                    .is_none_or(|t| *t == ValueTy::Handle)
+                        })
+                        .count();
+                }
                 max = max.max(cnt);
             }
         }
         max * 8
+    }
+
+    /// 计算并缓存当前函数的 GC safepoint 分析：per-ValueId liveness + 变量 liveness +
+    /// 两者的 ValueTy。compile_function / compile_eval 入口各调用一次。
+    fn setup_gc_safepoint_analysis(&mut self, module: &IrModule, function: &IrFunction) {
+        // per-ValueId liveness（扁平 → 嵌套便于查询）。
+        let flat = crate::analysis_liveness::compute_liveness(function);
+        let mut nested: HashMap<
+            wjsm_ir::BasicBlockId,
+            HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>,
+        > = HashMap::new();
+        for ((bid, i), set) in flat {
+            nested.entry(bid).or_default().insert(i, set);
+        }
+        self.current_fn_liveness = Some(nested);
+
+        // 变量 liveness（弥补 per-ValueId liveness 看不到变量存活的空洞，供变量 spill）。
+        let var_flat = crate::analysis_liveness::compute_var_liveness(function);
+        let mut var_nested: HashMap<
+            wjsm_ir::BasicBlockId,
+            HashMap<usize, std::collections::HashSet<String>>,
+        > = HashMap::new();
+        for ((bid, i), set) in var_flat {
+            var_nested.entry(bid).or_default().insert(i, set);
+        }
+        self.current_fn_var_liveness = Some(var_nested);
+
+        let (value_ty, var_ty) = crate::analysis_value_ty::infer_value_and_var_ty(module, function);
+        self.current_fn_value_ty = Some(value_ty);
+        self.current_fn_var_ty = Some(var_ty);
     }
 
     /// call_env_obj scratch local (i64) — 存放解析后的闭包环境对象
@@ -250,6 +295,27 @@ impl Compiler {
         }
         self.arr_proto_table_base = arr_proto_base;
 
+        if self.mode == CompileMode::Normal {
+            // Startup snapshot 边界：把 primordial bootstrap 与当前模块函数属性初始化拆成可单独调用的阶段。
+            self.bootstrap_func_idx = self._next_import_func;
+            self.functions.function(4); // () -> i64
+            self._next_import_func += 1;
+
+            self.init_function_props_func_idx = self._next_import_func;
+            self.functions.function(4); // () -> i64
+            self._next_import_func += 1;
+            self.exports.export(
+                "__wjsm_bootstrap_once",
+                ExportKind::Func,
+                self.bootstrap_func_idx,
+            );
+            self.exports.export(
+                "__wjsm_init_function_props",
+                ExportKind::Func,
+                self.init_function_props_func_idx,
+            );
+        }
+
         // Pre-write typeof type strings to data segment start (nul-terminated)
         // 必须在编译用户函数之前设置，否则 encode_constant 会从 offset 0 开始分配字符串，
         // 随后 typeof 字符串会覆盖用户字符串数据。
@@ -341,6 +407,9 @@ impl Compiler {
         self.object_proto_handle_global_idx = 10;
         self.eval_var_map_ptr_global_idx = 11;
         self.eval_var_map_count_global_idx = 12;
+        self.bootstrap_done_global_idx = 13;
+        self.function_props_done_global_idx = 14;
+        self.function_props_base_global_idx = 15;
 
         // Record user function base index (after all imports + helpers)
         self.user_func_base_idx = self._next_import_func;
@@ -361,6 +430,10 @@ impl Compiler {
         self.compile_object_helpers();
         // 编译数组辅助函数
         self.compile_array_helpers();
+        if self.mode == CompileMode::Normal {
+            self.compile_bootstrap_once_function();
+            self.compile_init_function_props_function();
+        }
         self.table.table(TableType {
             element_type: RefType::FUNCREF,
             minimum: self.function_table.len() as u64,
@@ -548,6 +621,46 @@ impl Compiler {
                 ExportKind::Global,
                 self.eval_var_map_count_global_idx,
             );
+            // Global 13/14/15: startup snapshot bootstrap/function-property phase state.
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(0),
+            );
+            self.exports.export(
+                "__bootstrap_done",
+                ExportKind::Global,
+                self.bootstrap_done_global_idx,
+            );
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(0),
+            );
+            self.exports.export(
+                "__function_props_done",
+                ExportKind::Global,
+                self.function_props_done_global_idx,
+            );
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: true,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(0),
+            );
+            self.exports.export(
+                "__function_props_base",
+                ExportKind::Global,
+                self.function_props_base_global_idx,
+            );
         } else {
             self.exports.export("__func_props", ExportKind::Global, 0);
             self.exports.export("__heap_ptr", ExportKind::Global, 1);
@@ -589,6 +702,189 @@ impl Compiler {
         Ok(())
     }
 
+    fn emit_startup_phase_call(&mut self, func_idx: u32) {
+        self.emit(WasmInstruction::Call(func_idx));
+        self.emit(WasmInstruction::LocalTee(self.string_concat_scratch_idx));
+        self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I32WrapI64);
+        self.emit(WasmInstruction::I32Const(value::TAG_EXCEPTION as i32));
+        self.emit(WasmInstruction::I32Eq);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::LocalGet(self.string_concat_scratch_idx));
+        self.emit_eval_var_frame_exit();
+        self.emit(WasmInstruction::Return);
+        self.emit(WasmInstruction::End);
+    }
+
+    fn compile_bootstrap_once_function(&mut self) {
+        let previous_shadow_sp_scratch_idx = self.shadow_sp_scratch_idx;
+        self.shadow_sp_scratch_idx = 0;
+        self.current_func = Some(Function::new(vec![(1, ValType::I32)]));
+
+        self.emit(WasmInstruction::GlobalGet(self.bootstrap_done_global_idx));
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::I32Ne);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::Return);
+        self.emit(WasmInstruction::End);
+
+        // ── 初始化 Array.prototype ──
+        self.emit(WasmInstruction::I32Const(64));
+        self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+        self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::GlobalSet(
+            self.array_proto_handle_global_idx,
+        ));
+        let method_names: [(u32, &str); 27] = [
+            (0, "push"),
+            (1, "pop"),
+            (2, "includes"),
+            (3, "indexOf"),
+            (4, "join"),
+            (5, "concat"),
+            (6, "slice"),
+            (7, "fill"),
+            (8, "reverse"),
+            (9, "flat"),
+            (10, "shift"),
+            (11, "unshift"),
+            (12, "sort"),
+            (13, "at"),
+            (14, "copyWithin"),
+            (15, "forEach"),
+            (16, "map"),
+            (17, "filter"),
+            (18, "reduce"),
+            (19, "reduceRight"),
+            (20, "find"),
+            (21, "findIndex"),
+            (22, "some"),
+            (23, "every"),
+            (24, "flatMap"),
+            (25, "splice"),
+            (26, "isArray"),
+        ];
+        for (offset, name) in &method_names {
+            let name_id = self.intern_data_string(name);
+            let table_idx = self.arr_proto_table_base + offset;
+            self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+            self.emit(WasmInstruction::I64ExtendI32U);
+            let box_base = value::BOX_BASE as i64;
+            let tag_object = (value::TAG_OBJECT << 32) as i64;
+            self.emit(WasmInstruction::I64Const(box_base | tag_object));
+            self.emit(WasmInstruction::I64Or);
+            self.emit(WasmInstruction::I32Const(name_id as i32));
+            self.emit(WasmInstruction::I64Const(value::encode_function_idx(
+                table_idx,
+            )));
+            self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+        }
+
+        // ── 初始化 Object.prototype ──
+        self.emit(WasmInstruction::GlobalGet(
+            self.object_proto_handle_global_idx,
+        ));
+        self.emit(WasmInstruction::I32Const(-1));
+        self.emit(WasmInstruction::I32Eq);
+        self.emit(WasmInstruction::If(BlockType::Empty));
+        self.emit(WasmInstruction::I32Const(64));
+        self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+        self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::GlobalSet(
+            self.object_proto_handle_global_idx,
+        ));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I64ExtendI32U);
+        let object_tag = value::BOX_BASE as i64 | ((value::TAG_OBJECT << 32) as i64);
+        self.emit(WasmInstruction::I64Const(object_tag));
+        self.emit(WasmInstruction::I64Or);
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ObjectProtoInit],
+        ));
+        self.emit(WasmInstruction::Drop);
+        self.emit(WasmInstruction::End);
+
+        self.emit(WasmInstruction::GlobalGet(self.obj_table_count_global_idx));
+        self.emit(WasmInstruction::GlobalSet(self.function_props_base_global_idx));
+        self.emit(WasmInstruction::I32Const(1));
+        self.emit(WasmInstruction::GlobalSet(self.bootstrap_done_global_idx));
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::End);
+
+        self.codes.function(
+            self.current_func
+                .as_ref()
+                .expect("bootstrap function should be initialized"),
+        );
+        self.current_func = None;
+        self.shadow_sp_scratch_idx = previous_shadow_sp_scratch_idx;
+    }
+
+    fn compile_init_function_props_function(&mut self) {
+        let previous_shadow_sp_scratch_idx = self.shadow_sp_scratch_idx;
+        self.shadow_sp_scratch_idx = 0;
+        self.current_func = Some(Function::new(vec![(1, ValType::I32)]));
+
+        if self.mode == CompileMode::Normal {
+            self.emit(WasmInstruction::GlobalGet(self.function_props_done_global_idx));
+            self.emit(WasmInstruction::I32Const(0));
+            self.emit(WasmInstruction::I32Ne);
+            self.emit(WasmInstruction::If(BlockType::Empty));
+            self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+            self.emit(WasmInstruction::Return);
+            self.emit(WasmInstruction::End);
+
+            self.emit(WasmInstruction::GlobalGet(self.function_props_base_global_idx));
+            self.emit(WasmInstruction::GlobalSet(self.obj_table_count_global_idx));
+        }
+
+        let length_name_id = self.intern_data_string("length");
+        let name_name_id = self.intern_data_string("name");
+        let box_base = value::BOX_BASE as i64;
+        let tag_object = (value::TAG_OBJECT << 32) as i64;
+        for i in 0..self.num_ir_functions as usize {
+            self.emit(WasmInstruction::I32Const(8));
+            self.emit(WasmInstruction::Call(self.obj_new_func_idx));
+            self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
+            self.emit(WasmInstruction::I64ExtendI32U);
+            self.emit(WasmInstruction::I64Const(box_base | tag_object));
+            self.emit(WasmInstruction::I64Or);
+            self.emit(WasmInstruction::I32Const(length_name_id as i32));
+            let param_count = self.function_param_counts[i];
+            self.emit(WasmInstruction::I64Const(value::encode_f64(
+                param_count as f64,
+            )));
+            self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+            self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+            self.emit(WasmInstruction::I64ExtendI32U);
+            self.emit(WasmInstruction::I64Const(box_base | tag_object));
+            self.emit(WasmInstruction::I64Or);
+            self.emit(WasmInstruction::I32Const(name_name_id as i32));
+            let func_name = self.function_names[i].clone();
+            let name_ptr = self.intern_data_string(&func_name);
+            self.emit(WasmInstruction::I64Const(value::encode_string_ptr(name_ptr)));
+            self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+        }
+
+        if self.mode == CompileMode::Normal {
+            self.emit(WasmInstruction::I32Const(1));
+            self.emit(WasmInstruction::GlobalSet(self.function_props_done_global_idx));
+        }
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::End);
+
+        self.codes.function(
+            self.current_func
+                .as_ref()
+                .expect("function props initializer should be initialized"),
+        );
+        self.current_func = None;
+        self.shadow_sp_scratch_idx = previous_shadow_sp_scratch_idx;
+    }
+
     pub(crate) fn compile_function(
         &mut self,
         module: &IrModule,
@@ -610,19 +906,9 @@ impl Compiler {
         // Pass 3: lower Phi to dedicated locals after variable locals to avoid index overlap.
         self.lower_phi_to_locals(function);
 
-        // ── GC safepoint（P2）：计算 liveness + ValueTy ──
+        // ── GC safepoint（P2）：计算 liveness + ValueTy（per-ValueId + 变量）──
         // 供 NewObject/NewArray/Call/CallBuiltin/SuperCall/ConstructCall 的 safepoint spill。
-        // compute_liveness 返回扁平 (block_id, instr_idx) -> Set；重整为嵌套 map 便于查询。
-        let flat = crate::analysis_liveness::compute_liveness(function);
-        let mut nested: HashMap<
-            wjsm_ir::BasicBlockId,
-            HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>,
-        > = HashMap::new();
-        for ((bid, i), set) in flat {
-            nested.entry(bid).or_default().insert(i, set);
-        }
-        self.current_fn_liveness = Some(nested);
-        self.current_fn_value_ty = Some(crate::analysis_value_ty::infer_value_ty(module, function));
+        self.setup_gc_safepoint_analysis(module, function);
         self.current_emit_block_idx = 0;
         self.current_emit_instr_idx = 0;
 
@@ -655,122 +941,9 @@ impl Compiler {
         // spill_upper_bound = 本函数所有 safepoint 的最大 live handle local 数 × 8。
         self.emit_safepoint_capacity_check(module, function);
 
-        // 预分配函数属性对象：为每个 IR 函数调用 $obj_new(8)，将返回的 handle_idx
-        // 对应 obj_table[0..num_functions-1]，存储函数属性对象的 ptr。
-        // 这样后续 GetProp/SetProp 可以通过 obj_table 统一查找。
-        if is_module_entry_ir_function(function.name()) {
-            let length_name_id = self.intern_data_string("length");
-            let name_name_id = self.intern_data_string("name");
-            let box_base = value::BOX_BASE as i64;
-            let tag_object = (value::TAG_OBJECT << 32) as i64;
-            for i in 0..self.num_ir_functions as usize {
-                self.emit(WasmInstruction::I32Const(8));
-                self.emit(WasmInstruction::Call(self.obj_new_func_idx));
-                self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
-                self.emit(WasmInstruction::I64ExtendI32U);
-                self.emit(WasmInstruction::I64Const(box_base | tag_object));
-                self.emit(WasmInstruction::I64Or);
-                self.emit(WasmInstruction::I32Const(length_name_id as i32));
-                let param_count = self.function_param_counts[i];
-                self.emit(WasmInstruction::I64Const(value::encode_f64(
-                    param_count as f64,
-                )));
-                self.emit(WasmInstruction::Call(self.obj_set_func_idx));
-                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
-                self.emit(WasmInstruction::I64ExtendI32U);
-                self.emit(WasmInstruction::I64Const(box_base | tag_object));
-                self.emit(WasmInstruction::I64Or);
-                self.emit(WasmInstruction::I32Const(name_name_id as i32));
-                let func_name = self.function_names[i].clone();
-                let name_ptr = self.intern_data_string(&func_name);
-                self.emit(WasmInstruction::I64Const(value::encode_string_ptr(
-                    name_ptr,
-                )));
-                self.emit(WasmInstruction::Call(self.obj_set_func_idx));
-            }
-            // ── 初始化 Array.prototype ──
-            // 复用 shadow_sp_scratch_idx 作为 proto handle 的临时存储（proto_init_scratch）。
-            // 创建 Array.prototype 对象（容量 64），存储 handle 到 Global 9
-            self.emit(WasmInstruction::I32Const(64));
-            self.emit(WasmInstruction::Call(self.obj_new_func_idx));
-            self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
-            self.emit(WasmInstruction::GlobalSet(
-                self.array_proto_handle_global_idx,
-            ));
-            // 为每个原型方法在 Array.prototype 上设置属性
-            let method_names: [(u32, &str); 27] = [
-                (0, "push"),
-                (1, "pop"),
-                (2, "includes"),
-                (3, "indexOf"),
-                (4, "join"),
-                (5, "concat"),
-                (6, "slice"),
-                (7, "fill"),
-                (8, "reverse"),
-                (9, "flat"),
-                (10, "shift"),
-                (11, "unshift"),
-                (12, "sort"),
-                (13, "at"),
-                (14, "copyWithin"),
-                (15, "forEach"),
-                (16, "map"),
-                (17, "filter"),
-                (18, "reduce"),
-                (19, "reduceRight"),
-                (20, "find"),
-                (21, "findIndex"),
-                (22, "some"),
-                (23, "every"),
-                (24, "flatMap"),
-                (25, "splice"),
-                (26, "isArray"),
-            ];
-            for (offset, name) in &method_names {
-                let name_id = self.intern_data_string(name);
-                let table_idx = self.arr_proto_table_base + offset;
-                // 推入 boxed proto handle (i64)
-                self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
-                self.emit(WasmInstruction::I64ExtendI32U);
-                let box_base = value::BOX_BASE as i64;
-                let tag_object = (value::TAG_OBJECT << 32) as i64;
-                self.emit(WasmInstruction::I64Const(box_base | tag_object));
-                self.emit(WasmInstruction::I64Or);
-                // 推入 name_id (i32)
-                self.emit(WasmInstruction::I32Const(name_id as i32));
-                // 推入编码后的函数表索引 (i64)
-                self.emit(WasmInstruction::I64Const(value::encode_function_idx(
-                    table_idx,
-                )));
-                // 调用 $obj_set(proto, name_id, func_value)
-                self.emit(WasmInstruction::Call(self.obj_set_func_idx));
-            }
-
-            // ── 初始化 Object.prototype ──
-            // main 开始前创建 Object.prototype，并安装 toString/valueOf 原生方法。
-            self.emit(WasmInstruction::GlobalGet(
-                self.object_proto_handle_global_idx,
-            ));
-            self.emit(WasmInstruction::I32Const(-1));
-            self.emit(WasmInstruction::I32Eq);
-            self.emit(WasmInstruction::If(BlockType::Empty));
-            self.emit(WasmInstruction::I32Const(64));
-            self.emit(WasmInstruction::Call(self.obj_new_func_idx));
-            self.emit(WasmInstruction::LocalTee(self.shadow_sp_scratch_idx));
-            self.emit(WasmInstruction::GlobalSet(
-                self.object_proto_handle_global_idx,
-            ));
-            self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
-            self.emit(WasmInstruction::I64ExtendI32U);
-            let object_tag = value::BOX_BASE as i64 | ((value::TAG_OBJECT << 32) as i64);
-            self.emit(WasmInstruction::I64Const(object_tag));
-            self.emit(WasmInstruction::I64Or);
-            self.emit(WasmInstruction::Call(
-                self.special_host_import_indices[&SpecialHostImport::ObjectProtoInit],
-            ));
-            self.emit(WasmInstruction::Drop);
-            self.emit(WasmInstruction::End);
+        if is_module_entry_ir_function(function.name()) && self.mode == CompileMode::Normal {
+            self.emit_startup_phase_call(self.bootstrap_func_idx);
+            self.emit_startup_phase_call(self.init_function_props_func_idx);
         }
 
         let cfg = Cfg::from_function(function);
@@ -802,6 +975,8 @@ impl Compiler {
         self.current_function_has_eval = false;
         self.current_fn_liveness = None;
         self.current_fn_value_ty = None;
+        self.current_fn_var_liveness = None;
+        self.current_fn_var_ty = None;
 
         Ok(())
     }
@@ -875,17 +1050,8 @@ impl Compiler {
         }
         self.lower_phi_to_locals(function);
 
-        // ── GC safepoint（P2）：计算 liveness + ValueTy ──
-        let flat = crate::analysis_liveness::compute_liveness(function);
-        let mut nested: HashMap<
-            wjsm_ir::BasicBlockId,
-            HashMap<usize, std::collections::HashSet<wjsm_ir::ValueId>>,
-        > = HashMap::new();
-        for ((bid, i), set) in flat {
-            nested.entry(bid).or_default().insert(i, set);
-        }
-        self.current_fn_liveness = Some(nested);
-        self.current_fn_value_ty = Some(crate::analysis_value_ty::infer_value_ty(module, function));
+        // ── GC safepoint（P2）：计算 liveness + ValueTy（per-ValueId + 变量）──
+        self.setup_gc_safepoint_analysis(module, function);
         self.current_emit_block_idx = 0;
         self.current_emit_instr_idx = 0;
 
@@ -1017,6 +1183,8 @@ impl Compiler {
         self.current_function_id = None;
         self.current_fn_liveness = None;
         self.current_fn_value_ty = None;
+        self.current_fn_var_liveness = None;
+        self.current_fn_var_ty = None;
 
         Ok(())
     }

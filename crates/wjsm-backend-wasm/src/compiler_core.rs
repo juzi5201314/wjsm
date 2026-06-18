@@ -197,6 +197,12 @@ impl Compiler {
             import_eval_global(&mut imports, "__object_proto_handle", ValType::I32, true);
             import_eval_global(&mut imports, "__eval_var_map_ptr", ValType::I32, false);
             import_eval_global(&mut imports, "__eval_var_map_count", ValType::I32, false);
+            // Startup snapshot 阶段全局（索引 13/14/15，与 Normal 模式一致）。eval 共享父模块
+            // 的 obj_table，函数属性对象按父模块的 __function_props_base 重定位，故必须导入它；
+            // bootstrap_done / function_props_done 仅为保持全局索引对齐而一并导入。
+            import_eval_global(&mut imports, "__bootstrap_done", ValType::I32, true);
+            import_eval_global(&mut imports, "__function_props_done", ValType::I32, true);
+            import_eval_global(&mut imports, "__function_props_base", ValType::I32, true);
         }
         let mut builtin_func_indices = HashMap::new();
         let mut special_host_import_indices = HashMap::new();
@@ -294,6 +300,11 @@ impl Compiler {
             string_eq_func_idx: 0,
             function_id_to_wasm_idx: HashMap::new(),
             object_proto_handle_global_idx: 0,
+            bootstrap_done_global_idx: 13,
+            function_props_done_global_idx: 14,
+            function_props_base_global_idx: 15,
+            bootstrap_func_idx: 0,
+            init_function_props_func_idx: 0,
             eval_var_map_ptr_global_idx: 11,
             eval_var_map_count_global_idx: 12,
             eval_var_map_records: Vec::new(),
@@ -308,6 +319,8 @@ impl Compiler {
             function_names: Vec::new(),
             current_fn_liveness: None,
             current_fn_value_ty: None,
+            current_fn_var_liveness: None,
+            current_fn_var_ty: None,
             current_emit_block_idx: 0,
             current_emit_instr_idx: 0,
             gc_analysis: None,
