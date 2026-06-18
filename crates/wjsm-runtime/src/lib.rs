@@ -193,6 +193,27 @@ fn register_common_bridges(
         },
     );
     linker.define(&mut *store, "env", "symbol_property_key", f)?;
+    // string_to_array_index：key 为「规范数字索引字符串」（CanonicalNumericIndexString，
+    // 范围 [0, 2^31)）时返回该索引，否则 -1。用于 a["5"] 这类字符串键索引数组——
+    // "5"→5（元素），"05"/"5.0"/"x"/" 5"/"length"→-1（命名属性）。
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+            if !value::is_string(key) {
+                return -1;
+            }
+            let Ok(s) = render_value(&mut caller, key) else {
+                return -1;
+            };
+            match s.parse::<u32>() {
+                // 规范性：解析值回写字符串须与原串完全相等（排除前导零、空白、符号、小数点）；
+                // 限 < i32::MAX（elem_get 用 i32 索引，且远超任何真实数组长度）。
+                Ok(n) if (n as i64) < i32::MAX as i64 && n.to_string() == s => n as i32,
+                _ => -1,
+            }
+        },
+    );
+    linker.define(&mut *store, "env", "string_to_array_index", f)?;
     // native_callable_get_property
     let f = Func::wrap(
         &mut *store,
