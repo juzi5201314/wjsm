@@ -1,6 +1,6 @@
 # Slice Card: P3 - 固定 primordial 字符串表
 
-- **Goal**: 将 Array.prototype 方法名等 34 个 primordial 字符串固定在 data section 固定偏移，使不同编译产物的 name_id 一致，作为 snapshot ABI hash 输入。
+- **Goal**: 将 Array.prototype 方法名等 **35** 个 primordial 字符串固定在 data section 固定偏移，使不同编译产物的 name_id 一致，作为 snapshot ABI hash 输入。
 - **Parent plan**: `docs/aegis/plans/2026-06-17-startup-snapshot.md` P3
 - **Files**:
   - modify: `crates/wjsm-ir/src/constants.rs` — 新增所有 primordial string 偏移常量，更新 `USER_STRING_START`

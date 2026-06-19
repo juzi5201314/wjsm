@@ -207,14 +207,38 @@ pub(crate) fn restore_startup_snapshot(
     let heap_used = snapshot.header.heap_used;
     let obj_table_count = snapshot.header.obj_table_count;
 
-    // 确保 memory 足够
-    let required_bytes = heap_start + heap_used;
-    let data = env.memory.data(&*store);
-    if data.len() < required_bytes as usize {
+    if snapshot.object_bytes.len() != heap_used as usize {
+        bail!(
+            "restore: object_bytes len {} != heap_used {}",
+            snapshot.object_bytes.len(),
+            heap_used
+        );
+    }
+
+    let obj_table_base = env.obj_table_ptr.get(&mut *store).i32().unwrap_or(0) as u32;
+    let table_end = obj_table_base
+        .checked_add(obj_table_count.saturating_mul(4))
+        .ok_or_else(|| anyhow::anyhow!("restore: obj_table range overflow"))?;
+    let mem_len = env.memory.data(&*store).len() as u32;
+    if table_end > mem_len {
+        bail!(
+            "restore: obj_table [{}..{}) exceeds memory size {}",
+            obj_table_base,
+            table_end,
+            mem_len
+        );
+    }
+
+    let required_bytes = heap_start
+        .checked_add(heap_used)
+        .ok_or_else(|| anyhow::anyhow!("restore: heap range overflow"))?;
+    if required_bytes as usize > mem_len as usize {
         let pages_needed = ((required_bytes as u64 + 65535) / 65536) as u64;
-        let current_pages = data.len() as u64 / 65536;
+        let current_pages = mem_len as u64 / 65536;
         if pages_needed > current_pages {
-            env.memory.grow(&mut *store, pages_needed - current_pages)?;
+            env.memory
+                .grow(&mut *store, pages_needed - current_pages)
+                .map_err(|e| anyhow::anyhow!("restore: memory.grow: {e:?}"))?;
         }
     }
 

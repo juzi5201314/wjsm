@@ -552,6 +552,10 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
     let mut handle_rel_offsets: Vec<u32> = Vec::new();
     let mut runtime_strings: Vec<String> = Vec::new();
     let mut native_callables: Vec<SnapshotNativeCallable> = Vec::new();
+    let mut seen_object = false;
+    let mut seen_handles = false;
+    let mut seen_strings = false;
+    let mut seen_native = false;
 
     for i in 0..section_count {
         let off = st_start + i * 12;
@@ -569,14 +573,22 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
         let data = &bytes[sect_off..sect_off + sect_len];
 
         match _kind {
-            1 => object_bytes = data,
-            2 => {
-                // handle_rel_offsets: u32 数组，按值收集避免 unsafe 对齐假设
+            SK_OBJECT_BYTES => {
+                if seen_object {
+                    bail!("duplicate section kind {}", _kind);
+                }
+                seen_object = true;
+                object_bytes = data;
+            }
+            SK_HANDLE_OFFSETS => {
+                if seen_handles {
+                    bail!("duplicate section kind {}", _kind);
+                }
+                seen_handles = true;
                 handle_rel_offsets = data
                     .chunks_exact(4)
                     .map(|c| u32::from_le_bytes(c.try_into().unwrap_or([0; 4])))
                     .collect();
-                // 校验：handle 数量必须与 header.obj_table_count 一致
                 if handle_rel_offsets.len() != header.obj_table_count as usize {
                     bail!(
                         "handle_rel_offsets count {} != header.obj_table_count {}",
@@ -585,8 +597,11 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
                     );
                 }
             }
-            3 => {
-                // runtime_strings: count (u32) + len-prefixed strings
+            SK_RUNTIME_STRINGS => {
+                if seen_strings {
+                    bail!("duplicate section kind {}", _kind);
+                }
+                seen_strings = true;
                 if data.len() < 4 {
                     bail!("runtime_strings section too short");
                 }
@@ -608,8 +623,11 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
                 }
                 runtime_strings = strings;
             }
-            4 => {
-                // native_callables: count (u32) + discriminants
+            SK_NATIVE_CALLABLES => {
+                if seen_native {
+                    bail!("duplicate section kind {}", _kind);
+                }
+                seen_native = true;
                 if data.len() < 4 {
                     bail!("native_callables section too short");
                 }
@@ -619,16 +637,42 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
                 }
                 let mut ncs: Vec<SnapshotNativeCallable> = Vec::with_capacity(count);
                 for j in 0..count {
-                    let d = u32::from_le_bytes(
-                        data[4 + j * 4..8 + j * 4].try_into()?,
-                    );
-                    let nc = SnapshotNativeCallable::from_discriminant(d)
-                        .ok_or_else(|| anyhow::anyhow!("unknown native callable discriminant {}", d))?;
+                    let d = u32::from_le_bytes(data[4 + j * 4..8 + j * 4].try_into()?);
+                    let nc = SnapshotNativeCallable::from_discriminant(d).ok_or_else(|| {
+                        anyhow::anyhow!("unknown native callable discriminant {}", d)
+                    })?;
                     ncs.push(nc);
                 }
                 native_callables = ncs;
             }
-            _ => {} // unknown sections ignored
+            _ => bail!("unknown snapshot section kind {}", _kind),
+        }
+    }
+
+    if !seen_object || !seen_handles || !seen_strings || !seen_native {
+        bail!(
+            "missing required snapshot sections (object={}, handles={}, strings={}, native={})",
+            seen_object,
+            seen_handles,
+            seen_strings,
+            seen_native
+        );
+    }
+    if object_bytes.len() != heap_used as usize {
+        bail!(
+            "object_bytes len {} != header.heap_used {}",
+            object_bytes.len(),
+            heap_used
+        );
+    }
+    for (i, &rel) in handle_rel_offsets.iter().enumerate() {
+        if rel != NULL_HANDLE_REL && rel >= heap_used {
+            bail!(
+                "handle_rel_offsets[{}] rel {} >= heap_used {}",
+                i,
+                rel,
+                heap_used
+            );
         }
     }
     Ok(StartupSnapshotView {
@@ -653,7 +697,9 @@ pub(crate) fn abi_hash() -> u64 {
     value::TAG_UNDEFINED.hash(&mut hasher);
     value::TAG_NULL.hash(&mut hasher);
     value::TAG_BOOL.hash(&mut hasher);
-    value::TAG_EXCEPTION.hash(&mut hasher);
+    value::TAG_ITERATOR.hash(&mut hasher);
+    value::TAG_ENUMERATOR.hash(&mut hasher);
+    value::TAG_NATIVE_CALLABLE.hash(&mut hasher);
     value::TAG_OBJECT.hash(&mut hasher);
     value::TAG_FUNCTION.hash(&mut hasher);
     value::TAG_CLOSURE.hash(&mut hasher);
@@ -713,7 +759,7 @@ mod tests {
                 magic: SNAPSHOT_MAGIC,
                 format_version: SNAPSHOT_FORMAT_VERSION,
                 abi_hash: abi_hash(),
-                heap_used: 1024,
+                heap_used: 256,
                 obj_table_count: 10,
                 function_props_base: 5,
                 object_proto_handle: 1,
@@ -738,7 +784,7 @@ mod tests {
         let bytes = encode_snapshot(&snap);
         let view = decode_snapshot(&bytes).expect("decode");
 
-        assert_eq!(view.header.heap_used, 1024);
+        assert_eq!(view.header.heap_used, 256);
         assert_eq!(view.header.obj_table_count, 10);
         assert_eq!(view.header.function_props_base, 5);
         assert_eq!(view.object_bytes, &[0xAA; 256]);
@@ -747,6 +793,40 @@ mod tests {
         assert_eq!(view.handle_rel_offsets[9], 144);
         assert_eq!(view.runtime_strings, vec!["hello", "world"]);
         assert_eq!(view.native_callables.len(), 2);
+    }
+
+    #[test]
+    fn decode_rejects_corrupt_magic() {
+        let snap = dummy_snapshot();
+        let mut bytes = encode_snapshot(&snap);
+        for b in bytes.iter_mut().take(8) {
+            *b = 0;
+        }
+        assert!(decode_snapshot(&bytes).is_err());
+    }
+
+    #[test]
+    fn decode_rejects_object_bytes_length_mismatch() {
+        let mut snap = dummy_snapshot();
+        // 让 header.heap_used 与 object_bytes.len 不一致，decode 必须 bail。
+        snap.header.heap_used = 128;
+        let bytes = encode_snapshot(&snap);
+        let err = decode_snapshot(&bytes).expect_err("expected length mismatch");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("object_bytes len") || msg.contains("heap_used"),
+            "diagnostic mentions length: {msg}"
+        );
+    }
+
+    #[test]
+    fn decode_rejects_out_of_range_handle_rel() {
+        let mut snap = dummy_snapshot();
+        // 让某个 handle rel 越过 heap_used，decode 必须 bail。
+        snap.handle_rel_offsets[0] = snap.header.heap_used + 4;
+        let bytes = encode_snapshot(&snap);
+        let err = decode_snapshot(&bytes).expect_err("expected rel-bounds bail");
+        assert!(format!("{err}").contains("handle_rel_offsets"));
     }
 
     #[test]
