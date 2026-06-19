@@ -895,8 +895,7 @@ fn module_compile_cache() -> Option<&'static wasmtime::Cache> {
 
 #[allow(dead_code)]
 fn startup_snapshot_enabled() -> bool {
-    // opt-in：默认关闭，显式设 WJSM_STARTUP_SNAPSHOT=1/on/true 开启。
-    // arr_proto_table_base 统一前保持关闭，避免跨模块 indirect call type mismatch。
+    // opt-in：默认关闭，显式设 WJSM_STARTUP_SNAPSHOT=1/on/true 开启；默认策略等性能验收再切换。
     matches!(
         std::env::var("WJSM_STARTUP_SNAPSHOT").as_deref(),
         Ok("1") | Ok("true") | Ok("on")
@@ -999,6 +998,15 @@ fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeState>) -> Was
         num_ir_functions: instance
             .get_export(&mut *store, "__num_ir_functions")
             .and_then(|e| e.into_global()),
+        arr_proto_table_base: instance
+            .get_export(&mut *store, "__arr_proto_table_base")
+            .and_then(|e| e.into_global()),
+        arr_proto_table_len: instance
+            .get_export(&mut *store, "__arr_proto_table_len")
+            .and_then(|e| e.into_global()),
+        arr_proto_table_hash: instance
+            .get_export(&mut *store, "__arr_proto_table_hash")
+            .and_then(|e| e.into_global()),
     }
 }
 
@@ -1090,10 +1098,7 @@ async fn instantiate_execute_bundle(
     })
 }
 
-async fn run_startup_cold_path(
-    bundle: &mut ExecuteInstanceBundle,
-    wasm_bytes: &[u8],
-) -> Result<()> {
+async fn run_startup_cold_path(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
     // Cold 路径单一编排：Rust 显式跑 host post-bootstrap → __wjsm_bootstrap_once，
     // 后者末尾自己写 `function_props_base = obj_table_count` 与 `bootstrap_done = 1`。
     // 之后 main() 里的 emit_startup_phase_call(bootstrap_func) 因 bootstrap_done=1 跳过，
@@ -1112,7 +1117,7 @@ async fn run_startup_cold_path(
         match startup_snapshot::capture_startup_snapshot(&mut bundle.store, &bundle.wasm_env) {
             Ok(snap) => {
                 let bytes = startup_snapshot_format::encode_snapshot(&snap);
-                startup_snapshot_cache::store(wasm_bytes, bytes).await;
+                startup_snapshot_cache::store(bytes).await;
             }
             Err(e) => {
                 eprintln!("startup snapshot capture failed: {e:#}");
@@ -1122,11 +1127,8 @@ async fn run_startup_cold_path(
     Ok(())
 }
 
-async fn try_restore_snapshot(
-    bundle: &mut ExecuteInstanceBundle,
-    wasm_bytes: &[u8],
-) -> bool {
-    let snap_bytes: Arc<[u8]> = match startup_snapshot_cache::get_cached(wasm_bytes).await {
+async fn try_restore_snapshot(bundle: &mut ExecuteInstanceBundle) -> bool {
+    let snap_bytes: Arc<[u8]> = match startup_snapshot_cache::get_cached().await {
         Some(b) => b,
         None => return false,
     };
@@ -1134,7 +1136,7 @@ async fn try_restore_snapshot(
         Ok(v) => v,
         Err(e) => {
             eprintln!("startup snapshot decode failed: {e:#}");
-            startup_snapshot_cache::evict(wasm_bytes).await;
+            startup_snapshot_cache::evict().await;
             return false;
         }
     };
@@ -1142,13 +1144,11 @@ async fn try_restore_snapshot(
         Ok(()) => true,
         Err(e) => {
             eprintln!("startup snapshot restore failed: {e:#}");
-            startup_snapshot_cache::evict(wasm_bytes).await;
+            startup_snapshot_cache::evict().await;
             false
         }
     }
 }
-
-
 
 #[cfg(test)]
 #[derive(Default)]
@@ -1261,12 +1261,17 @@ async fn execute_with_writer_shared_inner<W: Write>(
         }
     };
 
-    let mut bundle =
-        instantiate_execute_bundle(&engine, &module, shared_state.clone(), use_epoch_async_yield).await?;
+    let mut bundle = instantiate_execute_bundle(
+        &engine,
+        &module,
+        shared_state.clone(),
+        use_epoch_async_yield,
+    )
+    .await?;
 
     let mut snapshot_restored = false;
     if startup_snapshot_enabled() {
-        snapshot_restored = try_restore_snapshot(&mut bundle, wasm_bytes).await;
+        snapshot_restored = try_restore_snapshot(&mut bundle).await;
         if !snapshot_restored {
             bundle = instantiate_execute_bundle(
                 &engine,
@@ -1279,7 +1284,7 @@ async fn execute_with_writer_shared_inner<W: Write>(
     }
 
     if !snapshot_restored {
-        run_startup_cold_path(&mut bundle, wasm_bytes).await?;
+        run_startup_cold_path(&mut bundle).await?;
     }
 
     run_main_completion_block_async(
@@ -1702,19 +1707,51 @@ mod tests {
                 startup.snapshot_restore += run.snapshot_restore;
             }
         });
-        eprintln!("BENCH engine only            : {:?}/each", startup.engine_only / n);
-        eprintln!("BENCH module only            : {:?}/each", startup.module_only / n);
-        eprintln!("BENCH store only             : {:?}/each", startup.store_only / n);
-        eprintln!("BENCH linker register        : {:?}/each", startup.linker_register / n);
-        eprintln!("BENCH instantiate_async      : {:?}/each", startup.instantiate_async / n);
-        eprintln!("BENCH bootstrap cold         : {:?}/each", startup.bootstrap_cold / n);
-        eprintln!("BENCH host post-bootstrap    : {:?}/each", startup.host_post_bootstrap / n);
-        eprintln!("BENCH snapshot build cold    : {:?}/each", startup.snapshot_build / n);
-        eprintln!("BENCH snapshot decode        : {:?}/each", startup.snapshot_decode / n);
-        eprintln!("BENCH snapshot restore       : {:?}/each", startup.snapshot_restore / n);
+        eprintln!(
+            "BENCH engine only            : {:?}/each",
+            startup.engine_only / n
+        );
+        eprintln!(
+            "BENCH module only            : {:?}/each",
+            startup.module_only / n
+        );
+        eprintln!(
+            "BENCH store only             : {:?}/each",
+            startup.store_only / n
+        );
+        eprintln!(
+            "BENCH linker register        : {:?}/each",
+            startup.linker_register / n
+        );
+        eprintln!(
+            "BENCH instantiate_async      : {:?}/each",
+            startup.instantiate_async / n
+        );
+        eprintln!(
+            "BENCH bootstrap cold         : {:?}/each",
+            startup.bootstrap_cold / n
+        );
+        eprintln!(
+            "BENCH host post-bootstrap    : {:?}/each",
+            startup.host_post_bootstrap / n
+        );
+        eprintln!(
+            "BENCH snapshot build cold    : {:?}/each",
+            startup.snapshot_build / n
+        );
+        eprintln!(
+            "BENCH snapshot decode        : {:?}/each",
+            startup.snapshot_decode / n
+        );
+        eprintln!(
+            "BENCH snapshot restore       : {:?}/each",
+            startup.snapshot_restore / n
+        );
 
         // SAFETY: 单测内独占 env 窗口；勿与其它读 WJSM_STARTUP_SNAPSHOT 的测试并行。
-        unsafe { std::env::set_var("WJSM_STARTUP_SNAPSHOT", "0"); }
+        unsafe {
+            std::env::set_var("WJSM_STARTUP_SNAPSHOT", "0");
+        }
         let mut full_execute_off = std::time::Duration::ZERO;
         rt.block_on(async {
             for _ in 0..n {
@@ -1723,9 +1760,14 @@ mod tests {
                 full_execute_off += start.elapsed();
             }
         });
-        eprintln!("BENCH full execute off       : {:?}/each", full_execute_off / n);
+        eprintln!(
+            "BENCH full execute off       : {:?}/each",
+            full_execute_off / n
+        );
 
-        unsafe { std::env::set_var("WJSM_STARTUP_SNAPSHOT", "1"); }
+        unsafe {
+            std::env::set_var("WJSM_STARTUP_SNAPSHOT", "1");
+        }
         // 第一次预热 cache，再循环测 warm execute。
         rt.block_on(async {
             let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
@@ -1738,8 +1780,13 @@ mod tests {
                 full_execute_warm += start.elapsed();
             }
         });
-        unsafe { std::env::remove_var("WJSM_STARTUP_SNAPSHOT"); }
-        eprintln!("BENCH full execute on warm   : {:?}/each", full_execute_warm / n);
+        unsafe {
+            std::env::remove_var("WJSM_STARTUP_SNAPSHOT");
+        }
+        eprintln!(
+            "BENCH full execute on warm   : {:?}/each",
+            full_execute_warm / n
+        );
 
         Ok(())
     }
@@ -1755,7 +1802,6 @@ mod tests {
         let _guard = counter.begin();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AsyncHostCompletion>();
-
 
         // 手动 enqueue SettleValue（模拟 worker 发简单值）
         tx.send(AsyncHostCompletion::SettleValue {

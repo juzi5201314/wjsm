@@ -56,7 +56,9 @@ fn startup_snapshot_off_on_warm_parity() -> Result<()> {
     let off_output = run(FIXTURE)?;
     assert_eq!(off_output, EXPECTED);
 
-    unsafe { std::env::set_var("WJSM_STARTUP_SNAPSHOT", "1"); }
+    unsafe {
+        std::env::set_var("WJSM_STARTUP_SNAPSHOT", "1");
+    }
     let on_cold = run(FIXTURE)?;
     let on_warm = run(FIXTURE)?;
     unsafe {
@@ -105,5 +107,44 @@ fn snapshot_cache_hit_persists_file_between_runs() -> Result<()> {
         assert_eq!(p1, p2);
         assert_eq!(b1, b2, "warm run must not rewrite cache bytes");
     }
+    Ok(())
+}
+
+#[test]
+fn startup_snapshot_cache_rebases_array_methods_between_modules() -> Result<()> {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = isolated_cache_dir("cross-module");
+    unsafe {
+        std::env::set_var("WJSM_STARTUP_SNAPSHOT_CACHE", cache.as_os_str());
+        std::env::set_var("WJSM_STARTUP_SNAPSHOT", "1");
+    }
+
+    let _ = run("")?;
+    let cache_files_after_seed = fs::read_dir(&cache)?.count();
+    let output = run(r#"
+function a(x) { return x; }
+function b(x) { return x; }
+function c(x) { return x; }
+function d(x) { return x; }
+function e(x) { return x; }
+const arr = [1, 2, 3];
+console.log(arr.push(4), arr.length);
+"#)?;
+    let cache_files_after_user = fs::read_dir(&cache)?.count();
+
+    unsafe {
+        std::env::remove_var("WJSM_STARTUP_SNAPSHOT");
+        std::env::remove_var("WJSM_STARTUP_SNAPSHOT_CACHE");
+    }
+
+    assert_eq!(output, "4 4\n");
+    assert_eq!(
+        cache_files_after_seed, 1,
+        "seed run must create one snapshot"
+    );
+    assert_eq!(
+        cache_files_after_seed, cache_files_after_user,
+        "user module must reuse the seed snapshot file"
+    );
     Ok(())
 }

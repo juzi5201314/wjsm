@@ -1,6 +1,6 @@
 # ADR 0003: Startup Snapshot Boundary
 
-**Status**: Accepted (opt-in default off, pending arr_proto_table_base unification)
+**Status**: Accepted (opt-in default off; Array.prototype table ABI-checked restore remap implemented)
 
 **Date**: 2026-06-18
 
@@ -17,12 +17,12 @@ wjsm 实现 **relocatable primordial heap snapshot**：
 1. **不捕获 Wasmtime Instance/Store**。Snapshot 仅保存 wasm 线性内存中对象堆片段 + handle 表相对偏移 + runtime strings + 无状态 NativeCallable 表项。
 2. 恢复时按当前模块的 `__object_heap_start` 重定位，随后执行当前模块专属的 `__wjsm_init_function_props`（幂等），再进入用户 `main`。
 3. Snapshot 格式为手写 little-endian 二进制，不走 JSON/serde 热路径。
-4. 进程内 `tokio::sync::Mutex<Option<Arc<[u8]>>>` 缓存 + 可选磁盘 cache。
-5. 默认关闭（opt-in）；显式设 `WJSM_STARTUP_SNAPSHOT=1` 开启。因 seed 模块和用户模块 `arr_proto_table_base` 不一致会导致 `indirect call type mismatch`，在统一 `arr_proto_table_base` 为 global 导出前不默认开启。
+4. 进程内 cache 按 cache 目录 + ABI hash 共享 primordial snapshot；磁盘 cache 使用同一 ABI 级文件。
+5. 默认关闭（opt-in）；显式设 `WJSM_STARTUP_SNAPSHOT=1` 开启。默认开启仍等待性能验收。
 
 ### Snapshot 内容
 
-- **header**: magic `WJSMSNP\0`, format version, ABI hash, heap range, handle count, prototype handles, 三个 `i64` 原型字段
+- **header**: magic `WJSMSNP\0`, format version, ABI hash, heap range, handle count, prototype handles, `arr_proto_table_base`/length/table ABI hash, 三个 `i64` 原型字段
 - **object_bytes**: `memory[object_heap_start..heap_ptr]` 的原始拷贝
 - **handle_rel_offsets**: `obj_table[0..count]` 中每个 entry → `entry - object_heap_start`；`obj_table[i]==0` 的 null 槽编码为 `NULL_HANDLE_REL`（`u32::MAX`），与 `rel == 0`（句柄在 heap 起点）区分
 - **runtime_strings**: 计数 + 长度前缀字符串列表
@@ -54,6 +54,9 @@ wjsm 实现 **relocatable primordial heap snapshot**：
 - `__bootstrap_done: mutable i32`
 - `__function_props_done: mutable i32`
 - `__function_props_base: mutable i32`
+- `__arr_proto_table_base: immutable i32`
+- `__arr_proto_table_len: immutable i32`
+- `__arr_proto_table_hash: immutable i64`
 
 ### Data section 新增
 
@@ -78,13 +81,13 @@ Snapshot 不保存 scheduler、worker、async host completion channel/counter。
 
 ### Negative / Risks
 
-- **Seed module arr_proto_table_base 不一致**（当前关闭原因）：空源码编译的 `function_table` 与用户模块大小不同，导致 Array.prototype 方法指向错误索引。需要将 `arr_proto_table_base` 从编译期常量改为通过 global 导出并在 capture/restore 中处理，或改为 per-module snapshot keying。
-- 新增 builtin/NativeCallable/primordial string 时必须更新 ABI hash 输入表，否则 snapshot 会静默不匹配。
+- **函数表索引是模块局部值**：snapshot header 记录 seed 模块 `arr_proto_table_base`、表长度和表 ABI hash；restore 先校验当前模块 `__arr_proto_table_len`/`__arr_proto_table_hash`，再把 Array.prototype 方法函数值重定位到当前模块 `__arr_proto_table_base`。
+- 新增 builtin/NativeCallable/primordial string 时必须更新 ABI hash 输入表，否则 snapshot 会静默不匹配；Array.prototype 方法顺序/集合由 backend host import registry 的 `ArrayPrototypeMethod` 分组和导出的表 ABI hash 负责。
 
 ## Alternatives Considered
 
 - **Wasmtime Instance/Store snapshot**：绑定了特定编译产物的 linear memory 布局，不可跨模块重定位，且 wasmtime snapshot API 不稳定。
-- **Per-module snapshot (单模块缓存)**：`indirect call type mismatch` 问题可通过以 wasm bytes hash 为 key 解决，但会失去跨模块共享的缓存优势。未来可做两层：global seed（空模块）→ 单模块预热。
+- **Per-module snapshot (单模块缓存)**：曾可绕开 `indirect call type mismatch`，但会失去跨模块共享收益；现由 `arr_proto_table_base` 导出 + restore 重定位替代。
 - **JSON/serde 序列化**：较简单的格式，但 restore 热路径的解析和分配开销大。
 
 ## References
