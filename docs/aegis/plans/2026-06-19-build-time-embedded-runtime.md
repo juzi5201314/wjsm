@@ -1,5 +1,14 @@
 # Build-Time Embedded Runtime 实施计划
 
+> **修订记录**：
+> - rev1（初版）
+> - rev2（自审修正 10 项）
+> - rev3（反向验证后再修正 4 项）：
+>   1. P1.1 直接复用现有 `compile_source`（lib.rs:861），不重写
+>   2. P1.1/P3.0 builtin JS 走 seed concat + 正常 main()，不用 `try_compiled_eval_from_caller_async`（无 Caller 上下文）
+>   3. P2.2 user wasm import memory 后**再 export** 同一份，避免 100+ host 函数改动
+>   4. P1.2 `Arc<[u8]>::from(&'static [u8])` 是合法 Rust（克隆/分配）；统一为 `&[u8]` 是为了省 alloc，不是因为不合法
+
 **Goal**：把 wjsm 出厂后不变的全部 runtime 制品在 `cargo build` 期固化进二进制：startup snapshot 字节、共享 wasm helper 模块、内部 builtin JS 扩展。运行时再不为这些"分发后稳定"的内容付任何编译/初始化代价；用户 JS 编译产物完全不缓存。
 
 **Architecture**：
@@ -364,22 +373,25 @@ Plan-Time Complexity Check:
 **Why**：snapshot 必须在 cargo build 期就生成，使 first-run 直接 restore。`wjsm-runtime-snapshot` 通过 `[build-dependencies]` 依赖 `wjsm-runtime`（cargo 把 build-deps 当独立图，无 cycle），`wjsm-runtime` 暴露 `pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>>`。
 
 **实现细节**：
-- `Program = wjsm_ir::Module`（`crates/wjsm-ir/src/lib.rs:15`）
-- `wjsm_semantic::lower_module(swc_ast::Module, bool) -> Result<Program, LoweringError>`（第二个参数 `script: false` = ES module）
-- `wjsm_backend_wasm::compile(&Program) -> Result<Vec<u8>>`
-- wjsm-runtime 已有 parser/semantic/backend 在 `[dependencies]`
+- `wjsm-runtime` 已有公开 helper `pub fn compile_source(source: &str) -> Result<Vec<u8>>`（`crates/wjsm-runtime/src/lib.rs:861`）：内部就是 `parse_module → lower_module(_, false) → compile`。直接复用，不要重写。
+- `Program = wjsm_ir::Module`（`crates/wjsm-ir/src/lib.rs:15`）。
 
 ```rust
 pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>> {
-    let source = "";
-    let ast = wjsm_parser::parse_module(source)?;
-    let program = wjsm_semantic::lower_module(ast, false)?;
-    let wasm_bytes = wjsm_backend_wasm::compile(&program)?;
-    let snap = capture_startup_after_bootstrap(&wasm_bytes)?;
+    // builtin JS 拼接为 seed source；空 manifest 时为 ""
+    let seed = concat_builtin_js_sources();
+    let wasm_bytes = compile_source(&seed)?;
+    let snap = capture_embedded_startup_state(&wasm_bytes)?;
     Ok(wjsm_snapshot_format::encode_snapshot(&snap))
 }
 
-fn capture_startup_after_bootstrap(wasm_bytes: &[u8]) -> Result<wjsm_snapshot_format::StartupSnapshotOwned> {
+/// builtin JS 作为 seed 时，capture 时机后移到 main() 完成后；
+/// 空 builtin JS 时与现有行为一致（main() 是 no-op）。
+/// 必须在 capture 前断言 timer/promise/microtask/fetch/stream 等动态 side table
+/// 仍为空（startup_snapshot::assert_capturable_state 已存在；如缺则一并新增）。
+fn capture_embedded_startup_state(
+    wasm_bytes: &[u8],
+) -> Result<wjsm_snapshot_format::StartupSnapshotOwned> {
     let config = startup_engine_config(true);
     let engine = Engine::new(&config)?;
     let module = Module::new(&engine, wasm_bytes)?;
@@ -387,6 +399,13 @@ fn capture_startup_after_bootstrap(wasm_bytes: &[u8]) -> Result<wjsm_snapshot_fo
     rt.block_on(async {
         let mut bundle = instantiate_execute_bundle(&engine, &module, None, true).await?;
         run_startup_cold_path(&mut bundle).await?;
+        // builtin JS 走正常 main()：让其在已 bootstrap 的 heap 上设置 globalThis 等
+        run_main_completion_block_async(
+            &bundle.instance, bundle.store, bundle.wasm_env,
+            bundle.output, bundle.runtime_error, Vec::new(),
+            &mut bundle.host_completion_rx,
+        ).await?;
+        startup_snapshot::assert_capturable_state(&bundle.store)?;
         startup_snapshot::capture_startup_snapshot(&mut bundle.store, &bundle.wasm_env)
     })
 }
@@ -682,34 +701,30 @@ fn capture_startup_after_bootstrap(wasm_bytes: &[u8]) -> Result<wjsm_snapshot_fo
 
 **Why**：让 user wasm 与 support module 共用同一个线性内存与函数表。
 
-**WasmEnv 改造步骤**（此步骤最关键）：
+**WasmEnv 改造关键点**（修正自第一版）：当前 `WasmEnv::from_caller` 通过 `caller.get_export("memory")` 从 user instance 提取 memory/globals。如果 user wasm 完全不 export memory，所有 host 函数会失败。
 
-当前 `WasmEnv` 所有字段通过 `instance.get_export("memory")` 等从 user instance 提取。P2.2 后改为：
-- runtime 在 instantiate 前用 `wasmtime::Memory::new` / `Table::new` / `Global::new` 创建共享资源
-- `WasmEnv` 改为持有这些 handle（Copy 类型，无生命周期问题）
-- `extract_wasm_env` 从 user instance 提取改为从 runtime-created 资源构造
-- 约 100+ 个 host 函数中 `wasm_env.memory.data_mut(&mut *store)` 等调用不变（handle 语义一致）
+**最小代价方案**：user wasm 在 `import "env" "memory"` 之后**再 export 同一份 memory**（wasm 允许 re-export 自身的 import；wasm-encoder 一行写法）。globals 同理。这样：
+- runtime 创建 memory + globals + table 一次
+- 通过 Linker 提供给 support module 与 user module
+- user module re-export memory + globals 后，`WasmEnv::from_caller` 不需要任何修改即可继续工作
+- 100+ host 函数零改动
+
+如此 P2.2 的 wasm_env.rs 仅需调整：构造时验证 memory identity 与 runtime 创建的一致（debug_assert 即可），不需要重写。
 
 **Files**：
 - modify: `crates/wjsm-runtime/src/lib.rs`：
   - 新增 `pub fn install_embedded_support(cwasm: &'static [u8])`
   - 新增 `instantiate_with_support(engine, user_module, store) -> ExecuteInstanceBundle`
-- modify: `crates/wjsm-runtime/src/wasm_env.rs`：`WasmEnv` 构造改为接受 runtime-created handles；`from_caller` 改 `from_instance_or_shared`
+- modify: `crates/wjsm-backend-wasm/src/compiler_module.rs`：在 import 段写 `import "env" "memory"`，并在 export 段保留 `export "memory"`（re-export 同一 memory ref）；globals 同样 import + re-export
+- modify: `crates/wjsm-runtime/src/wasm_env.rs`：保留 `from_caller`（仍走 user instance export）；构造时 debug_assert memory identity 与 runtime 创建一致
 
 **Steps**：
 
-- [ ] 加 `install_embedded_support` + `OnceLock<&'static [u8]>`。
-- [ ] 重构 `instantiate_execute_bundle`：当 support cwasm 已安装 → 走新路径，否则走旧路径（兼容）。
-- [ ] 新路径：
-  1. `let memory = Memory::new(&mut store, MemoryType::new(1, None))?;`
-  2. 创建 14 个 env globals（用 `Global::new` + 初值）+ `Table::new`
-  3. `linker.define(&mut store, "env", "memory", memory)?;` 等
-  4. `let support_module = unsafe { Module::deserialize(&engine, cwasm) }?;`
-  5. `let support_instance = linker.instantiate_async(&mut store, &support_module).await?;`
-  6. 把 support_instance exports 通过 linker 注册到 `"wjsm_support"` namespace
-  7. `let user_instance = linker.instantiate_async(&mut store, user_module).await?;`
-- [ ] 单测：仅 support module 自己 instantiate 无错。
-- [ ] 单测：最小 user wasm（仅 import env + wjsm_support，body 调一次 obj_new）→ 双 instance 链接 + 调用成功。
+- [ ] 加 `install_embedded_support` + `OnceLock<&'static [u8]>`
+- [ ] backend：user wasm import + re-export memory + 14 个 globals
+- [ ] runtime: 创建 shared memory/table/globals → linker.define("env", ...) → instantiate support → 把 support exports 注册到 "wjsm_support" namespace → instantiate user
+- [ ] 单测：support module 自己 instantiate 无错
+- [ ] 单测：最小 user wasm（import env + wjsm_support，body 调一次 obj_new）→ 双 instance 链接 + 调用成功
 - [ ] 提交：`feat(runtime): instantiate user module with shared support module`
 
 ## P2.3 切换 object helpers（obj_new/obj_get/obj_set/obj_delete）
@@ -792,25 +807,32 @@ fn capture_startup_after_bootstrap(wasm_bytes: &[u8]) -> Result<wjsm_snapshot_fo
 
 ## P3.0 框架：builtin_js 目录 + manifest
 
-**eval 路径选择**：`build_embedded_startup_snapshot_bytes` 在 capture 之前需要 eval builtin JS 源。wjsm-runtime 内部有 `runtime_eval::try_compiled_eval_from_caller_async`（`crates/wjsm-runtime/src/runtime_eval.rs:45`），它接受 `&mut Caller<'_, RuntimeState>`。snapshot capture 时 store 尚未释放，可以直接从 bundle.store 构造 Caller。**实现路径**：在 `capture_startup_after_bootstrap` 中，`run_startup_cold_path` 之后、`capture_startup_snapshot` 之前，依次对每个 builtin JS 源调用 eval。
+**eval 路径选择**：build.rs 上下文里没有 `Caller<'_, RuntimeState>`（Caller 只在 host 函数被 wasm 调用时存在），所以 `try_compiled_eval_from_caller_async` 不可用。正确做法：把 builtin JS 拼接为单一 ES module seed，复用 P1.1 的 `compile_source` + `capture_embedded_startup_state`，让正常 `main()` 跑完后再 capture。无需新 eval 机制。
 
 **Files**：
 - create: `crates/wjsm-runtime/builtin_js/manifest.rs`
-- modify: `crates/wjsm-runtime/src/lib.rs::capture_startup_after_bootstrap`：加 eval loop
+- modify: `crates/wjsm-runtime/src/lib.rs::concat_builtin_js_sources`（已在 P1.1 占位为空，P3.0 落地）
 - modify: `crates/wjsm-snapshot-format/src/lib.rs::abi_hash`：输入加 builtin js bundle SHA-256
 
 **Steps**：
 
-- [ ] 加 `crates/wjsm-runtime/builtin_js/manifest.rs`（空列表）：
+- [ ] 加 `crates/wjsm-runtime/builtin_js/manifest.rs`：
   ```rust
   pub static BUILTIN_JS_FILES: &[(&str, &str)] = &[];
   ```
-- [ ] 在 `capture_startup_after_bootstrap` 流程：
-  1. 编译空 user JS → wasm
-  2. instantiate + `run_startup_cold_path`
-  3. **新增**：对 `BUILTIN_JS_FILES` 中每个 `(name, source)`，调用 eval
-  4. `capture_startup_snapshot`
-- [ ] ABI hash 输入：`SHA-256(concat sorted by path of all BUILTIN_JS_FILES contents)`
+- [ ] 在 wjsm-runtime/src/lib.rs 加：
+  ```rust
+  fn concat_builtin_js_sources() -> String {
+      // 通过 manifest 模块导入；保持空 manifest 时返回空字符串
+      crate::builtin_js::manifest::BUILTIN_JS_FILES
+          .iter()
+          .map(|(_, src)| *src)
+          .collect::<Vec<_>>()
+          .join("\n;\n")
+  }
+  ```
+  并 `mod builtin_js { pub mod manifest { include!("../builtin_js/manifest.rs"); } }`。
+- [ ] 把 `BUILTIN_JS_FILES` 排序后内容 SHA-256 接入 `wjsm-snapshot-format::abi_hash`：用 P2.0 的 `register_abi_hash_external_input` 通道；为避免 OnceLock 单次写约束，改 `register_abi_hash_external_inputs(values: &[u64])` 一次性注入。
 - [ ] 单测：
   ```rust
   #[test]
