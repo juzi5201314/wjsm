@@ -27,6 +27,7 @@
 | 2026-06-13 | Fetch/Streams Streaming Completion | [plans/2026-06-13-fetch-streams-completion.md](plans/2026-06-13-fetch-streams-completion.md) |
 | 2026-06-14 | Pluggable GC Framework | [plans/2026-06-14-pluggable-gc-framework.md](plans/2026-06-14-pluggable-gc-framework.md) |
 | 2026-06-17 | Startup Snapshot | [plans/2026-06-17-startup-snapshot.md](plans/2026-06-17-startup-snapshot.md) |
+| 2026-06-19 | Build-Time Embedded Runtime | [plans/2026-06-19-build-time-embedded-runtime.md](plans/2026-06-19-build-time-embedded-runtime.md) |
 
 ## Baselines
 
