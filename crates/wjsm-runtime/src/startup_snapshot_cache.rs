@@ -58,7 +58,7 @@ fn cache_key() -> CacheKey {
     }
 }
 
-/// 校验解码结果与当前 ABI 一致；内存/磁盘命中路径均须经过此检查。
+/// 校验解码结果与当前 ABI 一致；磁盘载入路径必须经过此检查，内存条目只在 insert 前校验或由本进程 capture 产生。
 fn validate_cached_bytes(bytes: &[u8]) -> Option<StartupSnapshotView<'_>> {
     let view = decode_snapshot(bytes).ok()?;
     if view.header.abi_hash != abi_hash() {
@@ -75,9 +75,7 @@ pub(crate) async fn get_cached() -> Option<Arc<[u8]>> {
         let guard = CACHE.lock().await;
         if let Some(map) = &*guard {
             if let Some(bytes) = map.get(&key) {
-                if validate_cached_bytes(bytes).is_some() {
-                    return Some(Arc::clone(bytes));
-                }
+                return Some(Arc::clone(bytes));
             }
         }
     }
@@ -115,7 +113,11 @@ pub(crate) async fn store(bytes: Vec<u8>) {
     map.insert(key, Arc::clone(&arc));
     drop(guard);
 
-    let _ = write_to_disk(&arc);
+    if let Err(e) = write_to_disk(&arc) {
+        if crate::startup_snapshot_debug_enabled() {
+            eprintln!("startup snapshot cache write failed: {e:#}");
+        }
+    }
 }
 
 fn read_from_disk() -> Option<Arc<[u8]>> {

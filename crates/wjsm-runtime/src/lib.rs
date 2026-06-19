@@ -893,11 +893,17 @@ fn module_compile_cache() -> Option<&'static wasmtime::Cache> {
         .as_ref()
 }
 
-#[allow(dead_code)]
 fn startup_snapshot_enabled() -> bool {
-    // opt-in：默认关闭，显式设 WJSM_STARTUP_SNAPSHOT=1/on/true 开启；默认策略等性能验收再切换。
-    matches!(
+    // 默认开启；显式设 WJSM_STARTUP_SNAPSHOT=0/off/false 可关闭。
+    !matches!(
         std::env::var("WJSM_STARTUP_SNAPSHOT").as_deref(),
+        Ok("0") | Ok("false") | Ok("off")
+    )
+}
+
+fn startup_snapshot_debug_enabled() -> bool {
+    matches!(
+        std::env::var("WJSM_STARTUP_SNAPSHOT_DEBUG").as_deref(),
         Ok("1") | Ok("true") | Ok("on")
     )
 }
@@ -1120,22 +1126,22 @@ async fn run_startup_cold_path(bundle: &mut ExecuteInstanceBundle) -> Result<()>
                 startup_snapshot_cache::store(bytes).await;
             }
             Err(e) => {
-                eprintln!("startup snapshot capture failed: {e:#}");
+                if startup_snapshot_debug_enabled() {
+                    eprintln!("startup snapshot capture failed: {e:#}");
+                }
             }
         }
     }
     Ok(())
 }
 
-async fn try_restore_snapshot(bundle: &mut ExecuteInstanceBundle) -> bool {
-    let snap_bytes: Arc<[u8]> = match startup_snapshot_cache::get_cached().await {
-        Some(b) => b,
-        None => return false,
-    };
+async fn try_restore_snapshot(bundle: &mut ExecuteInstanceBundle, snap_bytes: Arc<[u8]>) -> bool {
     let view = match startup_snapshot_format::decode_snapshot(&snap_bytes) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("startup snapshot decode failed: {e:#}");
+            if startup_snapshot_debug_enabled() {
+                eprintln!("startup snapshot decode failed: {e:#}");
+            }
             startup_snapshot_cache::evict().await;
             return false;
         }
@@ -1143,7 +1149,9 @@ async fn try_restore_snapshot(bundle: &mut ExecuteInstanceBundle) -> bool {
     match startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view) {
         Ok(()) => true,
         Err(e) => {
-            eprintln!("startup snapshot restore failed: {e:#}");
+            if startup_snapshot_debug_enabled() {
+                eprintln!("startup snapshot restore failed: {e:#}");
+            }
             startup_snapshot_cache::evict().await;
             false
         }
@@ -1163,6 +1171,12 @@ struct StartupBenchTimings {
     snapshot_build: Duration,
     snapshot_decode: Duration,
     snapshot_restore: Duration,
+    cache_lookup: Duration,
+    cache_decode_real: Duration,
+    cache_restore_real: Duration,
+    startup_path: Duration,
+    main_completion: Duration,
+    total_execute_path: Duration,
 }
 
 #[cfg(test)]
@@ -1203,20 +1217,20 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
         .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
     timings.instantiate_async = start.elapsed();
 
-    // bench 也走 cold 路径单一编排：bootstrap_once 末尾自己写 function_props_base，
-    // Rust 端不再重复 set；snapshot 各阶段都基于这一致状态测量。
-    let start = std::time::Instant::now();
+    // bench 也走 cold 路径单一编排：Rust 显式跑 host post-bootstrap → bootstrap_once。
     let wasm_env = extract_wasm_env(&instance, &mut store);
+
+    let start = std::time::Instant::now();
+    initialize_host_post_bootstrap(&mut store, &wasm_env);
+    timings.host_post_bootstrap = start.elapsed();
+
+    let start = std::time::Instant::now();
     if let Ok(bootstrap_fn) =
         instance.get_typed_func::<(), i64>(&mut store, "__wjsm_bootstrap_once")
     {
         let _ = bootstrap_fn.call_async(&mut store, ()).await;
     }
     timings.bootstrap_cold = start.elapsed();
-
-    let start = std::time::Instant::now();
-    initialize_host_post_bootstrap(&mut store, &wasm_env);
-    timings.host_post_bootstrap = start.elapsed();
 
     // snapshot build = capture + encode；解码与恢复在新 instance 上重测一次。
     let start = std::time::Instant::now();
@@ -1244,6 +1258,70 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
     timings.snapshot_restore = start.elapsed();
     Ok(timings)
 }
+
+#[cfg(test)]
+async fn execute_for_startup_bench(
+    wasm_bytes: &[u8],
+    snapshot_enabled: bool,
+) -> Result<StartupBenchTimings> {
+    let mut timings = StartupBenchTimings::default();
+    let total_start = std::time::Instant::now();
+    let config = startup_engine_config(true);
+
+    let start = std::time::Instant::now();
+    let engine = Engine::new(&config)
+        .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
+    timings.engine_only = start.elapsed();
+
+    let start = std::time::Instant::now();
+    let module = Module::new(&engine, wasm_bytes)
+        .map_err(|e| anyhow::anyhow!("WASM validation failed: {:?}", e))?;
+    timings.module_only = start.elapsed();
+
+    let snapshot_bytes = if snapshot_enabled {
+        let start = std::time::Instant::now();
+        let bytes = startup_snapshot_cache::get_cached().await;
+        timings.cache_lookup = start.elapsed();
+        bytes
+    } else {
+        None
+    };
+
+    let mut bundle = instantiate_execute_bundle(&engine, &module, None, true).await?;
+
+    let startup_start = std::time::Instant::now();
+    let mut snapshot_restored = false;
+    if let Some(snap_bytes) = snapshot_bytes {
+        let start = std::time::Instant::now();
+        let view = startup_snapshot_format::decode_snapshot(&snap_bytes)?;
+        timings.cache_decode_real = start.elapsed();
+
+        let start = std::time::Instant::now();
+        startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view)?;
+        timings.cache_restore_real = start.elapsed();
+        snapshot_restored = true;
+    }
+
+    if !snapshot_restored {
+        run_startup_cold_path(&mut bundle).await?;
+    }
+    timings.startup_path = startup_start.elapsed();
+
+    let start = std::time::Instant::now();
+    let _out = run_main_completion_block_async(
+        &bundle.instance,
+        bundle.store,
+        bundle.wasm_env,
+        bundle.output,
+        bundle.runtime_error,
+        Vec::new(),
+        &mut bundle.host_completion_rx,
+    )
+    .await?;
+    timings.main_completion = start.elapsed();
+    timings.total_execute_path = total_start.elapsed();
+    Ok(timings)
+}
 async fn execute_with_writer_shared_inner<W: Write>(
     wasm_bytes: &[u8],
     writer: W,
@@ -1261,6 +1339,12 @@ async fn execute_with_writer_shared_inner<W: Write>(
         }
     };
 
+    let snapshot_bytes = if startup_snapshot_enabled() {
+        startup_snapshot_cache::get_cached().await
+    } else {
+        None
+    };
+
     let mut bundle = instantiate_execute_bundle(
         &engine,
         &module,
@@ -1270,8 +1354,8 @@ async fn execute_with_writer_shared_inner<W: Write>(
     .await?;
 
     let mut snapshot_restored = false;
-    if startup_snapshot_enabled() {
-        snapshot_restored = try_restore_snapshot(&mut bundle).await;
+    if let Some(bytes) = snapshot_bytes {
+        snapshot_restored = try_restore_snapshot(&mut bundle, bytes).await;
         if !snapshot_restored {
             bundle = instantiate_execute_bundle(
                 &engine,
@@ -1686,7 +1770,6 @@ mod tests {
     #[ignore]
     fn bench_execute_phases() -> Result<()> {
         use super::*;
-        use std::time::Instant;
         let wasm = compile_source("")?;
         let n = 50u32;
         let rt = Runtime::new()?;
@@ -1755,7 +1838,7 @@ mod tests {
         let mut full_execute_off = std::time::Duration::ZERO;
         rt.block_on(async {
             for _ in 0..n {
-                let start = Instant::now();
+                let start = std::time::Instant::now();
                 let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
                 full_execute_off += start.elapsed();
             }
@@ -1763,6 +1846,38 @@ mod tests {
         eprintln!(
             "BENCH full execute off       : {:?}/each",
             full_execute_off / n
+        );
+
+        let mut execute_off = StartupBenchTimings::default();
+        rt.block_on(async {
+            for _ in 0..n {
+                let run = execute_for_startup_bench(&wasm, false).await.unwrap();
+                execute_off.engine_only += run.engine_only;
+                execute_off.module_only += run.module_only;
+                execute_off.startup_path += run.startup_path;
+                execute_off.main_completion += run.main_completion;
+                execute_off.total_execute_path += run.total_execute_path;
+            }
+        });
+        eprintln!(
+            "BENCH real off engine        : {:?}/each",
+            execute_off.engine_only / n
+        );
+        eprintln!(
+            "BENCH real off module        : {:?}/each",
+            execute_off.module_only / n
+        );
+        eprintln!(
+            "BENCH real off startup       : {:?}/each",
+            execute_off.startup_path / n
+        );
+        eprintln!(
+            "BENCH real off main          : {:?}/each",
+            execute_off.main_completion / n
+        );
+        eprintln!(
+            "BENCH real off total         : {:?}/each",
+            execute_off.total_execute_path / n
         );
 
         unsafe {
@@ -1775,7 +1890,7 @@ mod tests {
         let mut full_execute_warm = std::time::Duration::ZERO;
         rt.block_on(async {
             for _ in 0..n {
-                let start = Instant::now();
+                let start = std::time::Instant::now();
                 let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
                 full_execute_warm += start.elapsed();
             }
@@ -1786,6 +1901,62 @@ mod tests {
         eprintln!(
             "BENCH full execute on warm   : {:?}/each",
             full_execute_warm / n
+        );
+
+        unsafe {
+            std::env::set_var("WJSM_STARTUP_SNAPSHOT", "1");
+        }
+        rt.block_on(async {
+            let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
+        });
+        let mut execute_on = StartupBenchTimings::default();
+        rt.block_on(async {
+            for _ in 0..n {
+                let run = execute_for_startup_bench(&wasm, true).await.unwrap();
+                execute_on.engine_only += run.engine_only;
+                execute_on.module_only += run.module_only;
+                execute_on.cache_lookup += run.cache_lookup;
+                execute_on.cache_decode_real += run.cache_decode_real;
+                execute_on.cache_restore_real += run.cache_restore_real;
+                execute_on.startup_path += run.startup_path;
+                execute_on.main_completion += run.main_completion;
+                execute_on.total_execute_path += run.total_execute_path;
+            }
+        });
+        unsafe {
+            std::env::remove_var("WJSM_STARTUP_SNAPSHOT");
+        }
+        eprintln!(
+            "BENCH real on engine         : {:?}/each",
+            execute_on.engine_only / n
+        );
+        eprintln!(
+            "BENCH real on module         : {:?}/each",
+            execute_on.module_only / n
+        );
+        eprintln!(
+            "BENCH real on cache lookup   : {:?}/each",
+            execute_on.cache_lookup / n
+        );
+        eprintln!(
+            "BENCH real on decode         : {:?}/each",
+            execute_on.cache_decode_real / n
+        );
+        eprintln!(
+            "BENCH real on restore        : {:?}/each",
+            execute_on.cache_restore_real / n
+        );
+        eprintln!(
+            "BENCH real on startup        : {:?}/each",
+            execute_on.startup_path / n
+        );
+        eprintln!(
+            "BENCH real on main           : {:?}/each",
+            execute_on.main_completion / n
+        );
+        eprintln!(
+            "BENCH real on total          : {:?}/each",
+            execute_on.total_execute_path / n
         );
 
         Ok(())

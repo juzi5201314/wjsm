@@ -3,9 +3,7 @@ use wjsm_ir::constants;
 #[test]
 fn primordial_string_offsets_consistent_across_compilations() {
     let wasm1 = compile("console.log('hello primordial');");
-    let wasm2 = compile(
-        r#"const x = "compile2_unique_string_identifier_for_test";"#,
-    );
+    let wasm2 = compile(r#"const x = "compile2_unique_string_identifier_for_test";"#);
 
     let data1 = extract_active_data_bytes(&wasm1);
     let data2 = extract_active_data_bytes(&wasm2);
@@ -14,12 +12,16 @@ fn primordial_string_offsets_consistent_across_compilations() {
         let needle = s.as_bytes();
         let end = *offset as usize + s.len();
         assert!(
-            data1.get(*offset as usize..end).map_or(false, |b| b == needle),
+            data1
+                .get(*offset as usize..end)
+                .map_or(false, |b| b == needle),
             "primordial string \"{s}\" missing/wrong at offset {offset} in compilation 1 (data len={})",
             data1.len(),
         );
         assert!(
-            data2.get(*offset as usize..end).map_or(false, |b| b == needle),
+            data2
+                .get(*offset as usize..end)
+                .map_or(false, |b| b == needle),
             "primordial string \"{s}\" missing/wrong at offset {offset} in compilation 2 (data len={})",
             data2.len(),
         );
@@ -44,7 +46,8 @@ fn primordial_strings_start_before_user_region() {
         let needle = s.as_bytes();
         let end = *offset as usize + s.len();
         assert!(
-            data.get(*offset as usize..end).map_or(false, |b| b == needle),
+            data.get(*offset as usize..end)
+                .map_or(false, |b| b == needle),
             "primordial string \"{s}\" missing at offset {offset}"
         );
         assert!(

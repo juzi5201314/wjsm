@@ -1,6 +1,6 @@
-//! Startup snapshot on/off 一致性测试 + cache 行为专项测试。
+//! Startup snapshot default/on/off 一致性测试 + cache 行为专项测试。
 //!
-//! 三个测试共享 env（WJSM_STARTUP_SNAPSHOT[/_CACHE]），单测内串行 + 进程内静态 Mutex
+//! 本模块测试共享 env（WJSM_STARTUP_SNAPSHOT[/_CACHE]），单测内串行 + 进程内静态 Mutex
 //! 保证彼此不抢 env；同时不改 nextest worker 数。
 
 use anyhow::Result;
@@ -42,6 +42,100 @@ fn isolated_cache_dir(tag: &str) -> PathBuf {
     let _ = fs::remove_dir_all(&p);
     fs::create_dir_all(&p).expect("mkdir cache");
     p
+}
+
+fn collect_cache_entries(cache: &PathBuf) -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    let mut entries: Vec<(PathBuf, Vec<u8>)> = fs::read_dir(cache)?
+        .filter_map(|e| e.ok())
+        .map(|e| (e.path(), fs::read(e.path()).unwrap_or_default()))
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(entries)
+}
+
+#[test]
+fn startup_snapshot_defaults_on_and_writes_cache() -> Result<()> {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let cache = isolated_cache_dir("default-on");
+    unsafe {
+        std::env::set_var("WJSM_STARTUP_SNAPSHOT_CACHE", cache.as_os_str());
+        std::env::remove_var("WJSM_STARTUP_SNAPSHOT");
+    }
+
+    let output = run("console.log(3)")?;
+    let entries = collect_cache_entries(&cache)?;
+
+    unsafe {
+        std::env::remove_var("WJSM_STARTUP_SNAPSHOT_CACHE");
+    }
+
+    assert_eq!(output, "3\n");
+    assert_eq!(entries.len(), 1, "default-on run must create one snapshot");
+    Ok(())
+}
+
+#[test]
+fn startup_snapshot_explicit_off_values_do_not_write_cache() -> Result<()> {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    for value in ["0", "false", "off"] {
+        let cache = isolated_cache_dir(value);
+        unsafe {
+            std::env::set_var("WJSM_STARTUP_SNAPSHOT_CACHE", cache.as_os_str());
+            std::env::set_var("WJSM_STARTUP_SNAPSHOT", value);
+        }
+
+        let output = run("console.log(4)")?;
+        let entries = collect_cache_entries(&cache)?;
+
+        assert_eq!(output, "4\n");
+        assert!(
+            entries.is_empty(),
+            "explicit off value {value:?} must not create snapshot files"
+        );
+    }
+    unsafe {
+        std::env::remove_var("WJSM_STARTUP_SNAPSHOT");
+        std::env::remove_var("WJSM_STARTUP_SNAPSHOT_CACHE");
+    }
+    Ok(())
+}
+
+#[test]
+fn startup_snapshot_corrupt_disk_cache_rebuilds() -> Result<()> {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let seed_cache = isolated_cache_dir("corrupt-seed");
+    unsafe {
+        std::env::set_var("WJSM_STARTUP_SNAPSHOT_CACHE", seed_cache.as_os_str());
+        std::env::remove_var("WJSM_STARTUP_SNAPSHOT");
+    }
+    let _ = run("console.log(5)")?;
+    let seed_entries = collect_cache_entries(&seed_cache)?;
+    assert_eq!(seed_entries.len(), 1, "seed run must create one snapshot");
+
+    let corrupt_cache = isolated_cache_dir("corrupt-read");
+    let corrupt_path = corrupt_cache.join(
+        seed_entries[0]
+            .0
+            .file_name()
+            .expect("snapshot filename must exist"),
+    );
+    fs::write(&corrupt_path, b"not a snapshot")?;
+    unsafe {
+        std::env::set_var("WJSM_STARTUP_SNAPSHOT_CACHE", corrupt_cache.as_os_str());
+    }
+
+    let output = run("console.log(5)")?;
+    let rebuilt_entries = collect_cache_entries(&corrupt_cache)?;
+
+    unsafe {
+        std::env::remove_var("WJSM_STARTUP_SNAPSHOT");
+        std::env::remove_var("WJSM_STARTUP_SNAPSHOT_CACHE");
+    }
+
+    assert_eq!(output, "5\n");
+    assert_eq!(rebuilt_entries.len(), 1, "corrupt cache must be rebuilt");
+    assert_ne!(rebuilt_entries[0].1, b"not a snapshot");
+    Ok(())
 }
 
 #[test]
