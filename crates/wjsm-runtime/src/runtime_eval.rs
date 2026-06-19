@@ -283,7 +283,6 @@ pub(crate) fn compiled_eval_import(
     )
 }
 
-
 pub(crate) async fn perform_eval_from_caller_async(
     caller: &mut Caller<'_, RuntimeState>,
     code_value: i64,
@@ -1486,7 +1485,6 @@ pub(crate) fn create_eval_function(state: &RuntimeState, function: EvalFunction)
     table.push(NativeCallable::EvalFunction(function));
     value::encode_native_callable_idx(handle)
 }
-
 
 pub(crate) async fn call_eval_function_from_caller_async(
     caller: &mut Caller<'_, RuntimeState>,

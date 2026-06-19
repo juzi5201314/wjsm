@@ -161,8 +161,8 @@ pub(crate) async fn extract_array_like_elements(
         };
         for i in 0..len {
             let idx_prop = value::encode_f64(i as f64);
-            let val = reflect_get_impl_with_receiver_async(caller, arr_like, idx_prop, arr_like)
-                .await;
+            let val =
+                reflect_get_impl_with_receiver_async(caller, arr_like, idx_prop, arr_like).await;
             elements.push(val);
         }
     }
@@ -298,9 +298,10 @@ pub(crate) async fn reflect_get_prototype_of_impl(
                 let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
                     .unwrap_or_else(value::encode_undefined);
                 if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let res = call_wasm_callback_async(caller, trap, entry.handler, &[entry.target])
-                        .await
-                        .unwrap_or_else(|_| value::encode_null());
+                    let res =
+                        call_wasm_callback_async(caller, trap, entry.handler, &[entry.target])
+                            .await
+                            .unwrap_or_else(|_| value::encode_null());
                     // 不变量检查: getPrototypeOf trap 返回值必须是 null 或对象
                     if !value::is_null(res)
                         && !value::is_object(res)

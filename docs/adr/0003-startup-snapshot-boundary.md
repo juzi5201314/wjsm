@@ -1,6 +1,6 @@
 # ADR 0003: Startup Snapshot Boundary
 
-**Status**: Accepted (opt-in default off; Array.prototype table ABI-checked restore remap implemented)
+**Status**: Accepted (default on; opt-out env; Array.prototype table ABI-checked restore remap implemented)
 
 **Date**: 2026-06-18
 
@@ -18,7 +18,7 @@ wjsm 实现 **relocatable primordial heap snapshot**：
 2. 恢复时按当前模块的 `__object_heap_start` 重定位，随后执行当前模块专属的 `__wjsm_init_function_props`（幂等），再进入用户 `main`。
 3. Snapshot 格式为手写 little-endian 二进制，不走 JSON/serde 热路径。
 4. 进程内 cache 按 cache 目录 + ABI hash 共享 primordial snapshot；磁盘 cache 使用同一 ABI 级文件。
-5. 默认关闭（opt-in）；显式设 `WJSM_STARTUP_SNAPSHOT=1` 开启。默认开启仍等待性能验收。
+5. 默认开启；显式设 `WJSM_STARTUP_SNAPSHOT=0`/`false`/`off` 关闭。可恢复 cache miss / 损坏 / ABI mismatch 走 cold bootstrap rebuild，不污染默认 stderr；`WJSM_STARTUP_SNAPSHOT_DEBUG=1` 输出诊断。
 
 ### Snapshot 内容
 
@@ -78,6 +78,7 @@ Snapshot 不保存 scheduler、worker、async host completion channel/counter。
 - 固定 primordial 字符串表使不同用户源码编译产物的 name_id 一致，为 snapshot ABI 提供确定性
 - Bootstrap 拆分使 restore 后 main 可以直接跳过 `__wjsm_bootstrap_once`
 - format/capture/restore 均为独立 owner 模块，不增长 lib.rs 热点块
+- 默认开启前的 P7 release bench 显示 warm snapshot 端到端快于关闭路径（`full execute off` 3.92–4.47ms/each，`full execute on warm` 3.75–3.94ms/each），且 cache miss 不再重复 instantiate。
 
 ### Negative / Risks
 

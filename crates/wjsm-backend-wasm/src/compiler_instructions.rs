@@ -69,9 +69,7 @@ impl Compiler {
                 let is_handle = var_ty
                     .and_then(|m| m.get(name))
                     .is_none_or(|t| *t == ValueTy::Handle);
-                if is_handle
-                    && let Some(&local) = self.var_locals.get(name)
-                {
+                if is_handle && let Some(&local) = self.var_locals.get(name) {
                     spill.push(local);
                 }
             }
@@ -808,7 +806,9 @@ impl Compiler {
                 self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
                 self.emit(WasmInstruction::LocalGet(obj_local));
                 self.emit(WasmInstruction::I32WrapI64);
-                self.emit(WasmInstruction::GlobalGet(self.function_props_base_global_idx));
+                self.emit(WasmInstruction::GlobalGet(
+                    self.function_props_base_global_idx,
+                ));
                 self.emit(WasmInstruction::I32Add);
                 self.emit(WasmInstruction::Else);
                 self.emit(WasmInstruction::LocalGet(obj_local));
@@ -834,7 +834,9 @@ impl Compiler {
                 self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
                 self.emit(WasmInstruction::LocalGet(val_local));
                 self.emit(WasmInstruction::I32WrapI64);
-                self.emit(WasmInstruction::GlobalGet(self.function_props_base_global_idx));
+                self.emit(WasmInstruction::GlobalGet(
+                    self.function_props_base_global_idx,
+                ));
                 self.emit(WasmInstruction::I32Add);
                 self.emit(WasmInstruction::Else);
                 self.emit(WasmInstruction::LocalGet(val_local));

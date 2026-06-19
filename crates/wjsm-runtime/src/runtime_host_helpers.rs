@@ -1224,7 +1224,8 @@ pub(crate) fn prototype_handle_to_value(
         .and_then(Extern::into_global)
         .and_then(|global| global.get(&mut *caller).i32())
         .unwrap_or(0) as u32;
-    if proto_handle >= function_props_base && proto_handle < function_props_base + num_ir_functions {
+    if proto_handle >= function_props_base && proto_handle < function_props_base + num_ir_functions
+    {
         value::encode_function_idx(proto_handle - function_props_base)
     } else {
         value::encode_object_handle(proto_handle)
@@ -2099,7 +2100,6 @@ async fn define_property_on_target_async(
 
     define_property_on_normal_object(caller, target, name_id, desc)
 }
-
 
 pub(crate) async fn reflect_get_impl_with_receiver_async(
     caller: &mut Caller<'_, RuntimeState>,
