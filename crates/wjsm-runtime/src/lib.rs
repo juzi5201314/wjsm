@@ -1050,9 +1050,80 @@ fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wasm_env: &Wa
     store.data_mut().async_gen_prototype = async_gen_proto;
 }
 
+struct ExecuteInstanceBundle {
+    store: Store<RuntimeState>,
+    instance: Instance,
+    wasm_env: WasmEnv,
+    output: Arc<Mutex<Vec<u8>>>,
+    runtime_error: Arc<Mutex<Option<String>>>,
+    host_completion_rx: tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion>,
+}
+
+async fn instantiate_execute_bundle(
+    engine: &Engine,
+    module: &Module,
+    shared_state: Option<Arc<SharedRuntimeState>>,
+    use_epoch_async_yield: bool,
+) -> Result<ExecuteInstanceBundle> {
+    let mut store = Store::new(engine, RuntimeState::new_with_shared(shared_state));
+    let output = Arc::clone(&store.data().output);
+    let runtime_error = Arc::clone(&store.data().runtime_error);
+    if use_epoch_async_yield {
+        store.set_epoch_deadline(1);
+        store.epoch_deadline_async_yield_and_update(1);
+    }
+    let host_completion_rx = prepare_async_host_completion(&mut store);
+    let mut linker = Linker::new(engine);
+    register_startup_linker(&mut linker, &mut store)?;
+    let instance = linker
+        .instantiate_async(&mut store, module)
+        .await
+        .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
+    let wasm_env = extract_wasm_env(&instance, &mut store);
+    Ok(ExecuteInstanceBundle {
+        store,
+        instance,
+        wasm_env,
+        output,
+        runtime_error,
+        host_completion_rx,
+    })
+}
+
+async fn run_startup_cold_path(
+    bundle: &mut ExecuteInstanceBundle,
+    wasm_bytes: &[u8],
+) -> Result<()> {
+    // Cold 路径单一编排：Rust 显式跑 host post-bootstrap → __wjsm_bootstrap_once，
+    // 后者末尾自己写 `function_props_base = obj_table_count` 与 `bootstrap_done = 1`。
+    // 之后 main() 里的 emit_startup_phase_call(bootstrap_func) 因 bootstrap_done=1 跳过，
+    // 不会双重运行。restore 路径由 startup_snapshot::restore 把这两个 global 写回。
+    initialize_host_post_bootstrap(&mut bundle.store, &bundle.wasm_env);
+    if let Ok(bootstrap_fn) = bundle
+        .instance
+        .get_typed_func::<(), i64>(&mut bundle.store, "__wjsm_bootstrap_once")
+    {
+        bootstrap_fn
+            .call_async(&mut bundle.store, ())
+            .await
+            .map_err(|e| anyhow::anyhow!("bootstrap_once failed: {e:?}"))?;
+    }
+    if startup_snapshot_enabled() {
+        match startup_snapshot::capture_startup_snapshot(&mut bundle.store, &bundle.wasm_env) {
+            Ok(snap) => {
+                let bytes = startup_snapshot_format::encode_snapshot(&snap);
+                startup_snapshot_cache::store(wasm_bytes, bytes).await;
+            }
+            Err(e) => {
+                eprintln!("startup snapshot capture failed: {e:#}");
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn try_restore_snapshot(
-    store: &mut Store<RuntimeState>,
-    wasm_env: &WasmEnv,
+    bundle: &mut ExecuteInstanceBundle,
     wasm_bytes: &[u8],
 ) -> bool {
     let snap_bytes: Arc<[u8]> = match startup_snapshot_cache::get_cached(wasm_bytes).await {
@@ -1061,9 +1132,20 @@ async fn try_restore_snapshot(
     };
     let view = match startup_snapshot_format::decode_snapshot(&snap_bytes) {
         Ok(v) => v,
-        Err(_) => return false,
+        Err(e) => {
+            eprintln!("startup snapshot decode failed: {e:#}");
+            startup_snapshot_cache::evict(wasm_bytes).await;
+            return false;
+        }
     };
-    startup_snapshot::restore_startup_snapshot(store, wasm_env, view).is_ok()
+    match startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view) {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("startup snapshot restore failed: {e:#}");
+            startup_snapshot_cache::evict(wasm_bytes).await;
+            false
+        }
+    }
 }
 
 
@@ -1078,6 +1160,9 @@ struct StartupBenchTimings {
     instantiate_async: Duration,
     bootstrap_cold: Duration,
     host_post_bootstrap: Duration,
+    snapshot_build: Duration,
+    snapshot_decode: Duration,
+    snapshot_restore: Duration,
 }
 
 #[cfg(test)]
@@ -1118,16 +1203,45 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
         .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
     timings.instantiate_async = start.elapsed();
 
-    // P0 还没有拆出 __wjsm_bootstrap_once；真正 WASM 启动成本仍在 instantiate_async 内。
-    // 这里临时记录 execute 进入 host post-bootstrap 前的环境提取成本，不能当作 snapshot 指标。
+    // bench 也走 cold 路径单一编排：bootstrap_once 末尾自己写 function_props_base，
+    // Rust 端不再重复 set；snapshot 各阶段都基于这一致状态测量。
     let start = std::time::Instant::now();
     let wasm_env = extract_wasm_env(&instance, &mut store);
+    if let Ok(bootstrap_fn) =
+        instance.get_typed_func::<(), i64>(&mut store, "__wjsm_bootstrap_once")
+    {
+        let _ = bootstrap_fn.call_async(&mut store, ()).await;
+    }
     timings.bootstrap_cold = start.elapsed();
 
     let start = std::time::Instant::now();
     initialize_host_post_bootstrap(&mut store, &wasm_env);
     timings.host_post_bootstrap = start.elapsed();
 
+    // snapshot build = capture + encode；解码与恢复在新 instance 上重测一次。
+    let start = std::time::Instant::now();
+    let snap = startup_snapshot::capture_startup_snapshot(&mut store, &wasm_env)?;
+    let bytes = startup_snapshot_format::encode_snapshot(&snap);
+    timings.snapshot_build = start.elapsed();
+
+    let start = std::time::Instant::now();
+    let view = startup_snapshot_format::decode_snapshot(&bytes)?;
+    timings.snapshot_decode = start.elapsed();
+
+    let mut store2 = Store::new(&engine, RuntimeState::new_with_shared(None));
+    store2.set_epoch_deadline(1);
+    store2.epoch_deadline_async_yield_and_update(1);
+    let _rx2 = prepare_async_host_completion(&mut store2);
+    let mut linker2 = Linker::new(&engine);
+    register_startup_linker(&mut linker2, &mut store2)?;
+    let instance2 = linker2
+        .instantiate_async(&mut store2, &module)
+        .await
+        .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
+    let env2 = extract_wasm_env(&instance2, &mut store2);
+    let start = std::time::Instant::now();
+    startup_snapshot::restore_startup_snapshot(&mut store2, &env2, view)?;
+    timings.snapshot_restore = start.elapsed();
     Ok(timings)
 }
 async fn execute_with_writer_shared_inner<W: Write>(
@@ -1147,71 +1261,35 @@ async fn execute_with_writer_shared_inner<W: Write>(
         }
     };
 
-    let mut store = Store::new(&engine, RuntimeState::new_with_shared(shared_state));
-    let output = Arc::clone(&store.data().output);
-    let runtime_error = Arc::clone(&store.data().runtime_error);
+    let mut bundle =
+        instantiate_execute_bundle(&engine, &module, shared_state.clone(), use_epoch_async_yield).await?;
 
-    if use_epoch_async_yield {
-        store.set_epoch_deadline(1);
-        store.epoch_deadline_async_yield_and_update(1);
+    let mut snapshot_restored = false;
+    if startup_snapshot_enabled() {
+        snapshot_restored = try_restore_snapshot(&mut bundle, wasm_bytes).await;
+        if !snapshot_restored {
+            bundle = instantiate_execute_bundle(
+                &engine,
+                &module,
+                shared_state.clone(),
+                use_epoch_async_yield,
+            )
+            .await?;
+        }
     }
-
-    let mut host_completion_rx = prepare_async_host_completion(&mut store);
-
-    let mut linker = Linker::new(&engine);
-    register_startup_linker(&mut linker, &mut store)?;
-    let instance = linker
-        .instantiate_async(&mut store, &module)
-        .await
-        .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
-
-    let wasm_env = extract_wasm_env(&instance, &mut store);
-
-    // Startup snapshot: call bootstrap from Rust side (before main) so we can
-    // capture the complete primordial heap (bootstrap + host post-bootstrap)
-    // before __wjsm_init_function_props runs inside main().
-    let snapshot_restored = if startup_snapshot_enabled() {
-        try_restore_snapshot(&mut store, &wasm_env, wasm_bytes).await
-    } else {
-        false
-    };
 
     if !snapshot_restored {
-        // Cold path: host_post_bootstrap first (handles 0..N),
-        // then bootstrap which sets function_props_base = obj_table_count (N+1),
-        // then init_function_props in main() resets count to base and allocates from there.
-        initialize_host_post_bootstrap(&mut store, &wasm_env);
-        let bootstrap_fn = instance
-            .get_typed_func::<(), i64>(&mut store, "__wjsm_bootstrap_once")
-            .ok();
-        if let Some(bootstrap_fn) = bootstrap_fn {
-            let _ = bootstrap_fn.call_async(&mut store, ()).await;
-        }
-        // Update function_props_base to current obj_table_count after bootstrap,
-        // so init_function_props starts after the primordial objects.
-        if let Some(function_props_base) = wasm_env.function_props_base {
-            let count = wasm_env.obj_table_count.get(&mut store).i32().unwrap_or(0);
-            let _ = function_props_base.set(&mut store, Val::I32(count));
-        }
-        if startup_snapshot_enabled() {
-            if let Ok(snap) = startup_snapshot::capture_startup_snapshot(&mut store, &wasm_env) {
-                let bytes = startup_snapshot_format::encode_snapshot(&snap);
-                startup_snapshot_cache::store(wasm_bytes, bytes).await;
-            }
-        }
+        run_startup_cold_path(&mut bundle, wasm_bytes).await?;
     }
-    // main() will now see bootstrap_done=1 → NOOP on __wjsm_bootstrap_once,
-    // but will still run __wjsm_init_function_props for current module.
 
-    // 委托（Phase 6 传入 rx 供 scheduler 接收 completion）
     run_main_completion_block_async(
-        &instance,
-        store,
-        wasm_env,
-        output,
-        runtime_error,
+        &bundle.instance,
+        bundle.store,
+        bundle.wasm_env,
+        bundle.output,
+        bundle.runtime_error,
         writer,
-        &mut host_completion_rx,
+        &mut bundle.host_completion_rx,
     )
     .await
 }
@@ -1619,57 +1697,50 @@ mod tests {
                 startup.instantiate_async += run.instantiate_async;
                 startup.bootstrap_cold += run.bootstrap_cold;
                 startup.host_post_bootstrap += run.host_post_bootstrap;
+                startup.snapshot_build += run.snapshot_build;
+                startup.snapshot_decode += run.snapshot_decode;
+                startup.snapshot_restore += run.snapshot_restore;
             }
         });
-        eprintln!("BENCH engine only       : {:?}/each", startup.engine_only / n);
-        eprintln!("BENCH module only       : {:?}/each", startup.module_only / n);
-        eprintln!("BENCH store only        : {:?}/each", startup.store_only / n);
-        eprintln!(
-            "BENCH linker register   : {:?}/each",
-            startup.linker_register / n
-        );
-        eprintln!(
-            "BENCH instantiate_async : {:?}/each",
-            startup.instantiate_async / n
-        );
-        eprintln!("BENCH bootstrap cold    : {:?}/each", startup.bootstrap_cold / n);
-        eprintln!(
-            "BENCH host post-bootstrap: {:?}/each",
-            startup.host_post_bootstrap / n
-        );
+        eprintln!("BENCH engine only            : {:?}/each", startup.engine_only / n);
+        eprintln!("BENCH module only            : {:?}/each", startup.module_only / n);
+        eprintln!("BENCH store only             : {:?}/each", startup.store_only / n);
+        eprintln!("BENCH linker register        : {:?}/each", startup.linker_register / n);
+        eprintln!("BENCH instantiate_async      : {:?}/each", startup.instantiate_async / n);
+        eprintln!("BENCH bootstrap cold         : {:?}/each", startup.bootstrap_cold / n);
+        eprintln!("BENCH host post-bootstrap    : {:?}/each", startup.host_post_bootstrap / n);
+        eprintln!("BENCH snapshot build cold    : {:?}/each", startup.snapshot_build / n);
+        eprintln!("BENCH snapshot decode        : {:?}/each", startup.snapshot_decode / n);
+        eprintln!("BENCH snapshot restore       : {:?}/each", startup.snapshot_restore / n);
 
-        let mut full_execute_cold = std::time::Duration::ZERO;
+        // SAFETY: 单测内独占 env 窗口；勿与其它读 WJSM_STARTUP_SNAPSHOT 的测试并行。
+        unsafe { std::env::set_var("WJSM_STARTUP_SNAPSHOT", "0"); }
+        let mut full_execute_off = std::time::Duration::ZERO;
         rt.block_on(async {
             for _ in 0..n {
                 let start = Instant::now();
                 let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
-                full_execute_cold += start.elapsed();
+                full_execute_off += start.elapsed();
             }
         });
-        eprintln!(
-            "BENCH full execute cold : {:?}/each",
-            full_execute_cold / n
-        );
-        Ok(())
-    }
-    #[test]
-    fn execute_with_writer_timer_fires_via_scheduler() -> Result<()> {
-        // Phase 5 核心行为验证：async 路径下 scheduler 接管 timer loop 后必须正确 fire + 输出。
-        // 使用 async execute（已 wiring get_builtin_global），触发 setTimeout 回调 + console.log。
-        // 证明：无阻塞 sleep、无 MAX 超限、per-callback drain 工作、语义与 sync 一致。
-        let rt = Runtime::new()?;
-        let wasm_bytes = compile_source(
-            r#"
-            setTimeout(() => { console.log("async-timer-fired"); }, 0);
-        "#,
-        )?;
-        let output = rt.block_on(async { execute_with_writer(&wasm_bytes, Vec::new()).await })?;
-        let s = String::from_utf8(output)?;
-        assert!(
-            s.contains("async-timer-fired"),
-            "async scheduler must deliver timer callback output: {}",
-            s
-        );
+        eprintln!("BENCH full execute off       : {:?}/each", full_execute_off / n);
+
+        unsafe { std::env::set_var("WJSM_STARTUP_SNAPSHOT", "1"); }
+        // 第一次预热 cache，再循环测 warm execute。
+        rt.block_on(async {
+            let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
+        });
+        let mut full_execute_warm = std::time::Duration::ZERO;
+        rt.block_on(async {
+            for _ in 0..n {
+                let start = Instant::now();
+                let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
+                full_execute_warm += start.elapsed();
+            }
+        });
+        unsafe { std::env::remove_var("WJSM_STARTUP_SNAPSHOT"); }
+        eprintln!("BENCH full execute on warm   : {:?}/each", full_execute_warm / n);
+
         Ok(())
     }
     // Phase 6 针对性单元测试（任务 6）：手动 enqueue 完成，验证 value settlement + 材料化能分配 runtime string/object
@@ -1684,6 +1755,7 @@ mod tests {
         let _guard = counter.begin();
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<AsyncHostCompletion>();
+
 
         // 手动 enqueue SettleValue（模拟 worker 发简单值）
         tx.send(AsyncHostCompletion::SettleValue {

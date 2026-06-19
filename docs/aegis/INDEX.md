@@ -30,5 +30,4 @@
 
 ## Baselines
 
-| Date | Title | File |
-|------|-------|------|
+| 2026-06-18 | Startup Snapshot Boundary (ADR 0003) | [../../docs/adr/0003-startup-snapshot-boundary.md](../../docs/adr/0003-startup-snapshot-boundary.md) |

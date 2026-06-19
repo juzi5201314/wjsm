@@ -24,9 +24,9 @@ wjsm 实现 **relocatable primordial heap snapshot**：
 
 - **header**: magic `WJSMSNP\0`, format version, ABI hash, heap range, handle count, prototype handles, 三个 `i64` 原型字段
 - **object_bytes**: `memory[object_heap_start..heap_ptr]` 的原始拷贝
-- **handle_rel_offsets**: `obj_table[0..count]` 中每个 entry → `entry - object_heap_start`（零槽写 0）
+- **handle_rel_offsets**: `obj_table[0..count]` 中每个 entry → `entry - object_heap_start`；`obj_table[i]==0` 的 null 槽编码为 `NULL_HANDLE_REL`（`u32::MAX`），与 `rel == 0`（句柄在 heap 起点）区分
 - **runtime_strings**: 计数 + 长度前缀字符串列表
-- **native_callables**: 54 个无状态 `SnapshotNativeCallable` 变体的判别式表
+- **native_callables**: 58 个无状态 `SnapshotNativeCallable` 变体的判别式表（`abi_hash` 对 discriminant `0..=57` 哈希）
 
 ### Snapshot 排除项
 
@@ -37,8 +37,8 @@ wjsm 实现 **relocatable primordial heap snapshot**：
 - format version
 - NaN-box 常量 (`BOX_BASE`, tag 位掩码, 各类型 tag)
 - heap type tags (`HEAP_TYPE_OBJECT` 等)
-- 35 个 primordial string offsets
-- 54 个 `SnapshotNativeCallable` discriminants
+- 35 个 primordial 字符串的固定偏移 **与字符串内容**
+- 58 个 `SnapshotNativeCallable` discriminants
 - Property slot 常量 (`PROP_SLOT_SIZE`, `FLAG_*`)
 
 ### 函数属性 handle 布局变更
