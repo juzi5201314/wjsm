@@ -23,6 +23,9 @@ fn startup_bootstrap_exports_are_present() {
         "__function_props_base",
         "__bootstrap_done",
         "__function_props_done",
+        "__arr_proto_table_base",
+        "__arr_proto_table_len",
+        "__arr_proto_table_hash",
     ] {
         assert!(exports.contains(required), "missing export {required}");
     }

@@ -1,5 +1,8 @@
 use super::*;
-use crate::host_import_registry::{SpecialHostImport, host_import_specs};
+use crate::host_import_registry::{
+    SpecialHostImport, array_proto_method_specs, array_proto_property_name, array_proto_table_hash,
+    array_proto_table_len,
+};
 
 impl Compiler {
     /// Convert an IR ValueId to a WASM local index, accounting for ssa_local_base.
@@ -66,7 +69,10 @@ impl Compiler {
                 }
                 // 变量 spill 上界：与 current_spill_locals 一致——存活且可能持有 handle 的变量 local。
                 // 变量 local 与 SSA 值 local 索引不相交，故直接相加即精确上界。
-                if let Some(names) = var_liveness.and_then(|m| m.get(bid)).and_then(|m| m.get(&i)) {
+                if let Some(names) = var_liveness
+                    .and_then(|m| m.get(bid))
+                    .and_then(|m| m.get(&i))
+                {
                     cnt += names
                         .iter()
                         .filter(|name| {
@@ -286,12 +292,8 @@ impl Compiler {
         self._next_import_func += 1;
         // Register array prototype method imports in function table
         let arr_proto_base = self.function_table.len() as u32;
-        for (idx, spec) in host_import_specs().iter().enumerate() {
-            if spec.group
-                == Some(crate::host_import_registry::HostImportGroup::ArrayPrototypeMethod)
-            {
-                self.push_func_table(idx as u32);
-            }
+        for (idx, _) in array_proto_method_specs() {
+            self.push_func_table(idx as u32);
         }
         self.arr_proto_table_base = arr_proto_base;
 
@@ -426,6 +428,9 @@ impl Compiler {
         self.bootstrap_done_global_idx = 13;
         self.function_props_done_global_idx = 14;
         self.function_props_base_global_idx = 15;
+        self.arr_proto_table_base_global_idx = 16;
+        self.arr_proto_table_len_global_idx = 17;
+        self.arr_proto_table_hash_global_idx = 18;
 
         // Record user function base index (after all imports + helpers)
         self.user_func_base_idx = self._next_import_func;
@@ -637,7 +642,7 @@ impl Compiler {
                 ExportKind::Global,
                 self.eval_var_map_count_global_idx,
             );
-            // Global 13/14/15: startup snapshot bootstrap/function-property phase state.
+            // Global 13..18: startup snapshot bootstrap/function-property/table metadata state.
             self.globals.global(
                 GlobalType {
                     val_type: ValType::I32,
@@ -677,6 +682,45 @@ impl Compiler {
                 ExportKind::Global,
                 self.function_props_base_global_idx,
             );
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: false,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(self.arr_proto_table_base as i32),
+            );
+            self.exports.export(
+                "__arr_proto_table_base",
+                ExportKind::Global,
+                self.arr_proto_table_base_global_idx,
+            );
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I32,
+                    mutable: false,
+                    shared: false,
+                },
+                &ConstExpr::i32_const(array_proto_table_len() as i32),
+            );
+            self.exports.export(
+                "__arr_proto_table_len",
+                ExportKind::Global,
+                self.arr_proto_table_len_global_idx,
+            );
+            self.globals.global(
+                GlobalType {
+                    val_type: ValType::I64,
+                    mutable: false,
+                    shared: false,
+                },
+                &ConstExpr::i64_const(array_proto_table_hash() as i64),
+            );
+            self.exports.export(
+                "__arr_proto_table_hash",
+                ExportKind::Global,
+                self.arr_proto_table_hash_global_idx,
+            );
         } else {
             self.exports.export("__func_props", ExportKind::Global, 0);
             self.exports.export("__heap_ptr", ExportKind::Global, 1);
@@ -706,6 +750,21 @@ impl Compiler {
                 "__eval_var_map_count",
                 ExportKind::Global,
                 self.eval_var_map_count_global_idx,
+            );
+            self.exports.export(
+                "__arr_proto_table_base",
+                ExportKind::Global,
+                self.arr_proto_table_base_global_idx,
+            );
+            self.exports.export(
+                "__arr_proto_table_len",
+                ExportKind::Global,
+                self.arr_proto_table_len_global_idx,
+            );
+            self.exports.export(
+                "__arr_proto_table_hash",
+                ExportKind::Global,
+                self.arr_proto_table_hash_global_idx,
             );
         }
         if !self.string_data.is_empty() {
@@ -754,38 +813,10 @@ impl Compiler {
         self.emit(WasmInstruction::GlobalSet(
             self.array_proto_handle_global_idx,
         ));
-        let method_names: [(u32, &str); 27] = [
-            (0, "push"),
-            (1, "pop"),
-            (2, "includes"),
-            (3, "indexOf"),
-            (4, "join"),
-            (5, "concat"),
-            (6, "slice"),
-            (7, "fill"),
-            (8, "reverse"),
-            (9, "flat"),
-            (10, "shift"),
-            (11, "unshift"),
-            (12, "sort"),
-            (13, "at"),
-            (14, "copyWithin"),
-            (15, "forEach"),
-            (16, "map"),
-            (17, "filter"),
-            (18, "reduce"),
-            (19, "reduceRight"),
-            (20, "find"),
-            (21, "findIndex"),
-            (22, "some"),
-            (23, "every"),
-            (24, "flatMap"),
-            (25, "splice"),
-            (26, "isArray"),
-        ];
-        for (offset, name) in &method_names {
-            let name_id = self.intern_data_string(name);
-            let table_idx = self.arr_proto_table_base + offset;
+        for (offset, (_, spec)) in array_proto_method_specs().enumerate() {
+            let name = array_proto_property_name(spec.name).expect("array prototype import name");
+            let name_id = self.intern_data_string(&name);
+            let table_idx = self.arr_proto_table_base + offset as u32;
             self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
             self.emit(WasmInstruction::I64ExtendI32U);
             let box_base = value::BOX_BASE as i64;
@@ -824,7 +855,9 @@ impl Compiler {
         self.emit(WasmInstruction::End);
 
         self.emit(WasmInstruction::GlobalGet(self.obj_table_count_global_idx));
-        self.emit(WasmInstruction::GlobalSet(self.function_props_base_global_idx));
+        self.emit(WasmInstruction::GlobalSet(
+            self.function_props_base_global_idx,
+        ));
         self.emit(WasmInstruction::I32Const(1));
         self.emit(WasmInstruction::GlobalSet(self.bootstrap_done_global_idx));
         self.emit(WasmInstruction::I64Const(value::encode_undefined()));
@@ -845,7 +878,9 @@ impl Compiler {
         self.current_func = Some(Function::new(vec![(1, ValType::I32)]));
 
         if self.mode == CompileMode::Normal {
-            self.emit(WasmInstruction::GlobalGet(self.function_props_done_global_idx));
+            self.emit(WasmInstruction::GlobalGet(
+                self.function_props_done_global_idx,
+            ));
             self.emit(WasmInstruction::I32Const(0));
             self.emit(WasmInstruction::I32Ne);
             self.emit(WasmInstruction::If(BlockType::Empty));
@@ -853,7 +888,9 @@ impl Compiler {
             self.emit(WasmInstruction::Return);
             self.emit(WasmInstruction::End);
 
-            self.emit(WasmInstruction::GlobalGet(self.function_props_base_global_idx));
+            self.emit(WasmInstruction::GlobalGet(
+                self.function_props_base_global_idx,
+            ));
             self.emit(WasmInstruction::GlobalSet(self.obj_table_count_global_idx));
         }
 
@@ -881,13 +918,17 @@ impl Compiler {
             self.emit(WasmInstruction::I32Const(name_name_id as i32));
             let func_name = self.function_names[i].clone();
             let name_ptr = self.intern_data_string(&func_name);
-            self.emit(WasmInstruction::I64Const(value::encode_string_ptr(name_ptr)));
+            self.emit(WasmInstruction::I64Const(value::encode_string_ptr(
+                name_ptr,
+            )));
             self.emit(WasmInstruction::Call(self.obj_set_func_idx));
         }
 
         if self.mode == CompileMode::Normal {
             self.emit(WasmInstruction::I32Const(1));
-            self.emit(WasmInstruction::GlobalSet(self.function_props_done_global_idx));
+            self.emit(WasmInstruction::GlobalSet(
+                self.function_props_done_global_idx,
+            ));
         }
         self.emit(WasmInstruction::I64Const(value::encode_undefined()));
         self.emit(WasmInstruction::End);

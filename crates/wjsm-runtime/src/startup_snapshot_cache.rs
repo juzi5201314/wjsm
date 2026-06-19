@@ -1,4 +1,4 @@
-//! Process-wide startup snapshot cache, keyed by wasm bytes hash + current ABI hash.
+//! Process-wide startup snapshot cache, keyed by cache directory + current ABI hash.
 //!
 //! First run of a module: executes __wjsm_bootstrap_once + host post-bootstrap + capture.
 //! Subsequent runs: restore from cached snapshot, skipping bootstrap.
@@ -15,7 +15,7 @@ use crate::startup_snapshot_format::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct CacheKey {
-    wasm_hash: u64,
+    cache_dir_hash: u64,
     abi: u64,
 }
 
@@ -31,14 +31,17 @@ fn cache_dir() -> PathBuf {
     p
 }
 
-fn cache_file_path(wasm_hash: u64) -> PathBuf {
+fn cache_file_path() -> PathBuf {
     let mut p = cache_dir();
-    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
     let fname = format!(
-        "wjsm-startup-snapshot-v{}-{:016x}-{:016x}-{}-{}.bin",
+        "wjsm-startup-snapshot-v{}-{:016x}-{}-{}.bin",
         SNAPSHOT_FORMAT_VERSION,
         abi_hash(),
-        wasm_hash,
         std::env::consts::ARCH,
         profile,
     );
@@ -46,15 +49,11 @@ fn cache_file_path(wasm_hash: u64) -> PathBuf {
     p
 }
 
-pub(crate) fn wasm_bytes_hash(wasm: &[u8]) -> u64 {
+fn cache_key() -> CacheKey {
     let mut h = DefaultHasher::new();
-    wasm.hash(&mut h);
-    h.finish()
-}
-
-fn cache_key(wasm_bytes: &[u8]) -> CacheKey {
+    cache_dir().hash(&mut h);
     CacheKey {
-        wasm_hash: wasm_bytes_hash(wasm_bytes),
+        cache_dir_hash: h.finish(),
         abi: abi_hash(),
     }
 }
@@ -68,9 +67,9 @@ fn validate_cached_bytes(bytes: &[u8]) -> Option<StartupSnapshotView<'_>> {
     Some(view)
 }
 
-/// Look up cached snapshot bytes for this module.
-pub(crate) async fn get_cached(wasm_bytes: &[u8]) -> Option<Arc<[u8]>> {
-    let key = cache_key(wasm_bytes);
+/// Look up cached primordial snapshot bytes.
+pub(crate) async fn get_cached() -> Option<Arc<[u8]>> {
+    let key = cache_key();
 
     {
         let guard = CACHE.lock().await;
@@ -83,7 +82,7 @@ pub(crate) async fn get_cached(wasm_bytes: &[u8]) -> Option<Arc<[u8]>> {
         }
     }
 
-    if let Some(bytes) = read_from_disk(key.wasm_hash) {
+    if let Some(bytes) = read_from_disk() {
         let mut guard = CACHE.lock().await;
         let map = guard.get_or_insert_with(HashMap::new);
         map.insert(key, Arc::clone(&bytes));
@@ -93,22 +92,22 @@ pub(crate) async fn get_cached(wasm_bytes: &[u8]) -> Option<Arc<[u8]>> {
     None
 }
 
-/// 丢弃当前模块（wasm hash + 当前 ABI）的内存与磁盘缓存条目。
-pub(crate) async fn evict(wasm_bytes: &[u8]) {
-    let key = cache_key(wasm_bytes);
+/// 丢弃当前 cache 目录（当前 ABI）的内存与磁盘缓存条目。
+pub(crate) async fn evict() {
+    let key = cache_key();
     {
         let mut guard = CACHE.lock().await;
         if let Some(map) = &mut *guard {
             map.remove(&key);
         }
     }
-    let path = cache_file_path(key.wasm_hash);
+    let path = cache_file_path();
     let _ = std::fs::remove_file(path);
 }
 
-/// Store a newly captured snapshot for this module.
-pub(crate) async fn store(wasm_bytes: &[u8], bytes: Vec<u8>) {
-    let key = cache_key(wasm_bytes);
+/// Store a newly captured primordial snapshot.
+pub(crate) async fn store(bytes: Vec<u8>) {
+    let key = cache_key();
     let arc: Arc<[u8]> = Arc::from(bytes.into_boxed_slice());
 
     let mut guard = CACHE.lock().await;
@@ -116,11 +115,11 @@ pub(crate) async fn store(wasm_bytes: &[u8], bytes: Vec<u8>) {
     map.insert(key, Arc::clone(&arc));
     drop(guard);
 
-    let _ = write_to_disk(key.wasm_hash, &arc);
+    let _ = write_to_disk(&arc);
 }
 
-fn read_from_disk(wasm_hash: u64) -> Option<Arc<[u8]>> {
-    let path = cache_file_path(wasm_hash);
+fn read_from_disk() -> Option<Arc<[u8]>> {
+    let path = cache_file_path();
     let data = std::fs::read(&path).ok()?;
     if validate_cached_bytes(&data).is_none() {
         let _ = std::fs::remove_file(&path);
@@ -129,10 +128,10 @@ fn read_from_disk(wasm_hash: u64) -> Option<Arc<[u8]>> {
     Some(Arc::from(data.into_boxed_slice()))
 }
 
-fn write_to_disk(wasm_hash: u64, bytes: &[u8]) -> Result<()> {
+fn write_to_disk(bytes: &[u8]) -> Result<()> {
     let dir = cache_dir();
     std::fs::create_dir_all(&dir)?;
-    let final_path = cache_file_path(wasm_hash);
+    let final_path = cache_file_path();
     let tmp_path = final_path.with_extension("tmp");
     std::fs::write(&tmp_path, bytes)?;
     std::fs::rename(&tmp_path, &final_path)?;

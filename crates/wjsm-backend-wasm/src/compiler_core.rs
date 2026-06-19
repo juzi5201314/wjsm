@@ -197,12 +197,14 @@ impl Compiler {
             import_eval_global(&mut imports, "__object_proto_handle", ValType::I32, true);
             import_eval_global(&mut imports, "__eval_var_map_ptr", ValType::I32, false);
             import_eval_global(&mut imports, "__eval_var_map_count", ValType::I32, false);
-            // Startup snapshot 阶段全局（索引 13/14/15，与 Normal 模式一致）。eval 共享父模块
-            // 的 obj_table，函数属性对象按父模块的 __function_props_base 重定位，故必须导入它；
-            // bootstrap_done / function_props_done 仅为保持全局索引对齐而一并导入。
+            // Startup snapshot 阶段全局（索引 13..18，与 Normal 模式一致）。eval 共享父模块
+            // 的 obj_table，函数属性对象与 Array.prototype 方法表都按父模块 metadata 重定位。
             import_eval_global(&mut imports, "__bootstrap_done", ValType::I32, true);
             import_eval_global(&mut imports, "__function_props_done", ValType::I32, true);
             import_eval_global(&mut imports, "__function_props_base", ValType::I32, true);
+            import_eval_global(&mut imports, "__arr_proto_table_base", ValType::I32, false);
+            import_eval_global(&mut imports, "__arr_proto_table_len", ValType::I32, false);
+            import_eval_global(&mut imports, "__arr_proto_table_hash", ValType::I64, false);
         }
         let mut builtin_func_indices = HashMap::new();
         let mut special_host_import_indices = HashMap::new();
@@ -296,6 +298,9 @@ impl Compiler {
             shadow_stack_end_global_idx: 8,
             array_proto_handle_global_idx: 0,
             arr_proto_table_base: 0,
+            arr_proto_table_base_global_idx: 16,
+            arr_proto_table_len_global_idx: 17,
+            arr_proto_table_hash_global_idx: 18,
             get_proto_from_ctor_func_idx: 0,
             string_eq_func_idx: 0,
             function_id_to_wasm_idx: HashMap::new(),

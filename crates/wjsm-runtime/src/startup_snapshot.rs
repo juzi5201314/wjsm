@@ -5,21 +5,43 @@
 
 use anyhow::{Context, Result, bail};
 use wasmtime::*;
+use wjsm_ir::value;
 
-use crate::wasm_env::WasmEnv;
 use crate::startup_snapshot_format::*;
+use crate::wasm_env::WasmEnv;
 
 // ── global read helpers ─────────────────────────────────────────────
 
 fn read_i32_global(store: &mut Store<crate::RuntimeState>, global: Option<Global>) -> i32 {
-    global
-        .and_then(|g| g.get(&mut *store).i32())
-        .unwrap_or(0)
+    global.and_then(|g| g.get(&mut *store).i32()).unwrap_or(0)
 }
 
-fn write_i32_global(store: &mut Store<crate::RuntimeState>, global: Global, val: i32) -> Result<()> {
-    global.set(&mut *store, Val::I32(val))?;
-    Ok(())
+fn read_required_u32_global(
+    store: &mut Store<crate::RuntimeState>,
+    global: Option<Global>,
+    name: &str,
+) -> Result<u32> {
+    let global = global.ok_or_else(|| anyhow::anyhow!("{name} export missing"))?;
+    let value = global
+        .get(&mut *store)
+        .i32()
+        .ok_or_else(|| anyhow::anyhow!("{name} export is not i32"))?;
+    if value < 0 {
+        bail!("{name} export is negative: {value}");
+    }
+    Ok(value as u32)
+}
+
+fn read_required_u64_global(
+    store: &mut Store<crate::RuntimeState>,
+    global: Option<Global>,
+    name: &str,
+) -> Result<u64> {
+    let global = global.ok_or_else(|| anyhow::anyhow!("{name} export missing"))?;
+    Ok(global
+        .get(&mut *store)
+        .i64()
+        .ok_or_else(|| anyhow::anyhow!("{name} export is not i64"))? as u64)
 }
 
 // ── capture ─────────────────────────────────────────────────────────
@@ -35,6 +57,12 @@ pub(crate) fn capture_startup_snapshot(
     let function_props_base = read_i32_global(store, env.function_props_base) as usize;
     let object_proto_handle = env.object_proto_handle.get(&mut *store).i32().unwrap_or(-1) as u32;
     let array_proto_handle = env.array_proto_handle.get(&mut *store).i32().unwrap_or(-1) as u32;
+    let arr_proto_table_base =
+        read_required_u32_global(store, env.arr_proto_table_base, "__arr_proto_table_base")?;
+    let arr_proto_table_len =
+        read_required_u32_global(store, env.arr_proto_table_len, "__arr_proto_table_len")?;
+    let arr_proto_table_hash =
+        read_required_u64_global(store, env.arr_proto_table_hash, "__arr_proto_table_hash")?;
 
     let data = env.memory.data(&*store);
     if heap_start == 0 || heap_ptr < heap_start {
@@ -73,13 +101,21 @@ pub(crate) fn capture_startup_snapshot(
 
     // 保存 runtime_strings
     let runtime_strings: Vec<String> = {
-        let strings = store.data().runtime_strings.lock().expect("runtime strings mutex");
+        let strings = store
+            .data()
+            .runtime_strings
+            .lock()
+            .expect("runtime strings mutex");
         strings.clone()
     };
 
     // 保存 native_callables
     let native_callables: Vec<SnapshotNativeCallable> = {
-        let table = store.data().native_callables.lock().expect("native callables mutex");
+        let table = store
+            .data()
+            .native_callables
+            .lock()
+            .expect("native callables mutex");
         table
             .iter()
             .map(|nc| SnapshotNativeCallable::try_from_native_callable(nc))
@@ -92,7 +128,10 @@ pub(crate) fn capture_startup_snapshot(
 
     let async_iterator_prototype = store.data().async_iterator_prototype;
     let async_gen_prototype = store.data().async_gen_prototype;
-    let array_proto_values = store.data().array_proto_values.load(std::sync::atomic::Ordering::Relaxed);
+    let array_proto_values = store
+        .data()
+        .array_proto_values
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     let header = StartupSnapshotHeader {
         magic: SNAPSHOT_MAGIC,
@@ -103,6 +142,9 @@ pub(crate) fn capture_startup_snapshot(
         function_props_base: function_props_base as u32,
         object_proto_handle,
         array_proto_handle,
+        arr_proto_table_base,
+        arr_proto_table_len,
+        arr_proto_table_hash,
         async_iterator_prototype,
         async_gen_prototype,
         array_proto_values,
@@ -117,6 +159,35 @@ pub(crate) fn capture_startup_snapshot(
     })
 }
 
+fn remap_array_proto_function_indices(
+    data: &mut [u8],
+    snapshot_base: u32,
+    table_len: u32,
+    current_base: u32,
+) -> Result<()> {
+    if snapshot_base == current_base {
+        return Ok(());
+    }
+
+    let snapshot_end = snapshot_base
+        .checked_add(table_len)
+        .ok_or_else(|| anyhow::anyhow!("restore: Array.prototype table range overflow"))?;
+    for chunk in data.chunks_exact_mut(8) {
+        let raw = i64::from_le_bytes(chunk.try_into().expect("8-byte chunk"));
+        if !value::is_function(raw) {
+            continue;
+        }
+        let table_idx = value::decode_function_idx(raw);
+        if table_idx < snapshot_base || table_idx >= snapshot_end {
+            continue;
+        }
+        let offset = table_idx - snapshot_base;
+        let remapped = value::encode_function_idx(current_base + offset);
+        chunk.copy_from_slice(&remapped.to_le_bytes());
+    }
+    Ok(())
+}
+
 fn assert_excluded_tables_clean(store: &Store<crate::RuntimeState>) -> Result<()> {
     let data = store.data();
     macro_rules! check_empty {
@@ -129,36 +200,82 @@ fn assert_excluded_tables_clean(store: &Store<crate::RuntimeState>) -> Result<()
     {
         let t = data.timers.lock().expect("timers");
         let c = data.cancelled_timers.lock().expect("ctimers");
-        if !t.is_empty() { bail!("capture: timers not empty ({} entries)", t.len()); }
-        if !c.is_empty() { bail!("capture: cancelled_timers not empty"); }
+        if !t.is_empty() {
+            bail!("capture: timers not empty ({} entries)", t.len());
+        }
+        if !c.is_empty() {
+            bail!("capture: cancelled_timers not empty");
+        }
     }
     check_empty!(*data.microtask_queue.lock().expect("m"), "microtask_queue");
     check_empty!(*data.promise_table.lock().expect("p"), "promise_table");
-    check_empty!(*data.continuation_table.lock().expect("c"), "continuation_table");
-    check_empty!(*data.async_generator_table.lock().expect("ag"), "async_generator_table");
+    check_empty!(
+        *data.continuation_table.lock().expect("c"),
+        "continuation_table"
+    );
+    check_empty!(
+        *data.async_generator_table.lock().expect("ag"),
+        "async_generator_table"
+    );
     check_empty!(*data.error_table.lock().expect("e"), "error_table");
     check_empty!(*data.map_table.lock().expect("map"), "map_table");
     check_empty!(*data.set_table.lock().expect("set"), "set_table");
     check_empty!(*data.weakmap_table.lock().expect("wm"), "weakmap_table");
     check_empty!(*data.weakset_table.lock().expect("ws"), "weakset_table");
     check_empty!(*data.weakref_table.lock().expect("wr"), "weakref_table");
-    check_empty!(*data.finalization_registry_table.lock().expect("fr"), "finalization_registry");
+    check_empty!(
+        *data.finalization_registry_table.lock().expect("fr"),
+        "finalization_registry"
+    );
     check_empty!(*data.proxy_table.lock().expect("px"), "proxy_table");
-    check_empty!(*data.arraybuffer_table.lock().expect("ab"), "arraybuffer_table");
+    check_empty!(
+        *data.arraybuffer_table.lock().expect("ab"),
+        "arraybuffer_table"
+    );
     check_empty!(*data.dataview_table.lock().expect("dv"), "dataview_table");
-    check_empty!(*data.typedarray_table.lock().expect("ta"), "typedarray_table");
+    check_empty!(
+        *data.typedarray_table.lock().expect("ta"),
+        "typedarray_table"
+    );
     check_empty!(*data.headers_table.lock().expect("hdr"), "headers_table");
-    check_empty!(*data.fetch_response_table.lock().expect("fr"), "fetch_response_table");
-    check_empty!(*data.fetch_request_table.lock().expect("frq"), "fetch_request_table");
-    check_empty!(*data.abort_signal_table.lock().expect("as"), "abort_signal_table");
-    check_empty!(*data.http_response_table.lock().expect("http"), "http_response_table");
-    check_empty!(*data.readable_stream_table.lock().expect("rs"), "readable_stream_table");
+    check_empty!(
+        *data.fetch_response_table.lock().expect("fr"),
+        "fetch_response_table"
+    );
+    check_empty!(
+        *data.fetch_request_table.lock().expect("frq"),
+        "fetch_request_table"
+    );
+    check_empty!(
+        *data.abort_signal_table.lock().expect("as"),
+        "abort_signal_table"
+    );
+    check_empty!(
+        *data.http_response_table.lock().expect("http"),
+        "http_response_table"
+    );
+    check_empty!(
+        *data.readable_stream_table.lock().expect("rs"),
+        "readable_stream_table"
+    );
     check_empty!(*data.reader_table.lock().expect("rdr"), "reader_table");
-    check_empty!(*data.stream_controller_table.lock().expect("ctrl"), "stream_controller_table");
-    check_empty!(*data.byob_request_table.lock().expect("byob"), "byob_request_table");
-    check_empty!(*data.writable_stream_table.lock().expect("ws"), "writable_stream_table");
+    check_empty!(
+        *data.stream_controller_table.lock().expect("ctrl"),
+        "stream_controller_table"
+    );
+    check_empty!(
+        *data.byob_request_table.lock().expect("byob"),
+        "byob_request_table"
+    );
+    check_empty!(
+        *data.writable_stream_table.lock().expect("ws"),
+        "writable_stream_table"
+    );
     check_empty!(*data.writer_table.lock().expect("wrt"), "writer_table");
-    check_empty!(*data.transform_stream_table.lock().expect("ts"), "transform_stream_table");
+    check_empty!(
+        *data.transform_stream_table.lock().expect("ts"),
+        "transform_stream_table"
+    );
     {
         let ec = data.eval_cache.lock().expect("eval_cache");
         if !ec.is_empty() {
@@ -178,9 +295,15 @@ fn assert_excluded_tables_clean(store: &Store<crate::RuntimeState>) -> Result<()
         }
     }
     {
-        let pcc = data.pending_cleanup_callbacks.lock().expect("pending_cleanup_callbacks");
+        let pcc = data
+            .pending_cleanup_callbacks
+            .lock()
+            .expect("pending_cleanup_callbacks");
         if !pcc.is_empty() {
-            bail!("capture: pending_cleanup_callbacks not empty ({} entries)", pcc.len());
+            bail!(
+                "capture: pending_cleanup_callbacks not empty ({} entries)",
+                pcc.len()
+            );
         }
     }
     Ok(())
@@ -206,6 +329,27 @@ pub(crate) fn restore_startup_snapshot(
     let heap_start = read_i32_global(store, env.object_heap_start) as u32;
     let heap_used = snapshot.header.heap_used;
     let obj_table_count = snapshot.header.obj_table_count;
+    let current_arr_proto_table_base =
+        read_required_u32_global(store, env.arr_proto_table_base, "__arr_proto_table_base")?;
+    let current_arr_proto_table_len =
+        read_required_u32_global(store, env.arr_proto_table_len, "__arr_proto_table_len")?;
+    let current_arr_proto_table_hash =
+        read_required_u64_global(store, env.arr_proto_table_hash, "__arr_proto_table_hash")?;
+
+    if snapshot.header.arr_proto_table_len != current_arr_proto_table_len {
+        bail!(
+            "restore: Array.prototype table length mismatch: snapshot={} current={}",
+            snapshot.header.arr_proto_table_len,
+            current_arr_proto_table_len
+        );
+    }
+    if snapshot.header.arr_proto_table_hash != current_arr_proto_table_hash {
+        bail!(
+            "restore: Array.prototype table hash mismatch: snapshot={:#018x} current={:#018x}",
+            snapshot.header.arr_proto_table_hash,
+            current_arr_proto_table_hash
+        );
+    }
 
     if snapshot.object_bytes.len() != heap_used as usize {
         bail!(
@@ -242,10 +386,17 @@ pub(crate) fn restore_startup_snapshot(
         }
     }
 
-    // 恢复 object_bytes
+    // 恢复 object_bytes，并把 seed 模块内的 Array.prototype 方法表索引重定位到当前模块。
     let data = env.memory.data_mut(&mut *store);
-    data[heap_start as usize..heap_start as usize + heap_used as usize]
-        .copy_from_slice(snapshot.object_bytes);
+    let heap_start_usize = heap_start as usize;
+    let heap_end = heap_start_usize + heap_used as usize;
+    data[heap_start_usize..heap_end].copy_from_slice(snapshot.object_bytes);
+    remap_array_proto_function_indices(
+        &mut data[heap_start_usize..heap_end],
+        snapshot.header.arr_proto_table_base,
+        snapshot.header.arr_proto_table_len,
+        current_arr_proto_table_base,
+    )?;
 
     // 恢复 handle table
     let obj_table_base = env.obj_table_ptr.get(&mut *store).i32().unwrap_or(0) as usize;
@@ -265,12 +416,19 @@ pub(crate) fn restore_startup_snapshot(
     }
 
     // 写回 globals
-    let _ = env.heap_ptr.set(&mut *store, Val::I32((heap_start + heap_used) as i32));
-    let _ = env.obj_table_count.set(&mut *store, Val::I32(obj_table_count as i32));
+    let _ = env
+        .heap_ptr
+        .set(&mut *store, Val::I32((heap_start + heap_used) as i32));
+    let _ = env
+        .obj_table_count
+        .set(&mut *store, Val::I32(obj_table_count as i32));
     if let Some(function_props_base) = env.function_props_base {
         // 使用 snapshot header 中的 function_props_base（capture 时记录的值），
         // 而非当前 obj_table_count — 保证 primordial 原型与函数属性对象 handle 区间一致。
-        function_props_base.set(&mut *store, Val::I32(snapshot.header.function_props_base as i32))?;
+        function_props_base.set(
+            &mut *store,
+            Val::I32(snapshot.header.function_props_base as i32),
+        )?;
     }
     if let Some(bootstrap_done) = env.bootstrap_done {
         bootstrap_done.set(&mut *store, Val::I32(1))?;
@@ -290,8 +448,11 @@ pub(crate) fn restore_startup_snapshot(
     // 重建 RuntimeState
     {
         let state = store.data_mut();
-        *state.runtime_strings.lock().expect("runtime strings") =
-            snapshot.runtime_strings.iter().map(|s| s.to_string()).collect();
+        *state.runtime_strings.lock().expect("runtime strings") = snapshot
+            .runtime_strings
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
         let mut ncs = state.native_callables.lock().expect("native");
         ncs.clear();
         for snap_nc in snapshot.native_callables {
@@ -299,7 +460,10 @@ pub(crate) fn restore_startup_snapshot(
         }
         state.async_iterator_prototype = snapshot.header.async_iterator_prototype;
         state.async_gen_prototype = snapshot.header.async_gen_prototype;
-        state.array_proto_values.store(snapshot.header.array_proto_values, std::sync::atomic::Ordering::Relaxed);
+        state.array_proto_values.store(
+            snapshot.header.array_proto_values,
+            std::sync::atomic::Ordering::Relaxed,
+        );
     }
 
     Ok(())

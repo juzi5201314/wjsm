@@ -1,5 +1,8 @@
 use std::collections::HashSet;
-use wjsm_backend_wasm::host_import_registry::{HostImportGroup, HostImportKey, host_import_specs};
+use wjsm_backend_wasm::host_import_registry::{
+    HostImportGroup, HostImportKey, array_proto_method_specs, array_proto_property_name,
+    array_proto_table_hash, array_proto_table_len, host_import_specs,
+};
 use wjsm_ir::Builtin;
 
 #[test]
@@ -49,15 +52,25 @@ fn no_host_imports_are_unkeyed() {
 #[test]
 fn array_prototype_group_is_explicit_not_range_based() {
     let specs = host_import_specs();
-    let names: Vec<_> = specs
+    let grouped: Vec<_> = array_proto_method_specs().map(|(_, spec)| spec).collect();
+    let names: Vec<_> = grouped.iter().map(|spec| spec.name).collect();
+    let properties: Vec<_> = grouped
         .iter()
-        .filter(|spec| spec.group == Some(HostImportGroup::ArrayPrototypeMethod))
-        .map(|spec| spec.name)
+        .map(|spec| array_proto_property_name(spec.name).expect("array prototype property name"))
         .collect();
 
     assert!(names.starts_with(&["arr_proto_push", "arr_proto_pop"]));
     assert!(names.ends_with(&["arr_proto_splice", "arr_proto_is_array"]));
-    assert_eq!(names.len(), 27);
+    assert_eq!(array_proto_table_len() as usize, names.len());
+    assert_eq!(properties.first().map(String::as_str), Some("push"));
+    assert_eq!(properties.last().map(String::as_str), Some("isArray"));
+    assert_ne!(array_proto_table_hash(), 0);
+
+    let filter_count = specs
+        .iter()
+        .filter(|spec| spec.group == Some(HostImportGroup::ArrayPrototypeMethod))
+        .count();
+    assert_eq!(filter_count, names.len());
 }
 
 #[test]

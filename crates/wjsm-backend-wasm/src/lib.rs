@@ -145,6 +145,12 @@ struct Compiler {
     /// WASM global index for array prototype handle.
     array_proto_handle_global_idx: u32,
     arr_proto_table_base: u32,
+    /// WASM global index for Array.prototype method table base.
+    arr_proto_table_base_global_idx: u32,
+    /// WASM global index for Array.prototype method table length.
+    arr_proto_table_len_global_idx: u32,
+    /// WASM global index for Array.prototype method table ABI hash.
+    arr_proto_table_hash_global_idx: u32,
     get_proto_from_ctor_func_idx: u32,
     /// WASM function index for nul-terminated string equality helper.
     string_eq_func_idx: u32,

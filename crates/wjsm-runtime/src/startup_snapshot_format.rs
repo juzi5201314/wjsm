@@ -4,7 +4,7 @@
 //! The format is designed so that the hot path can bounds-check + slice-copy
 //! directly without heap allocations or JSON parsing.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
@@ -13,14 +13,16 @@ use wjsm_ir::constants;
 use wjsm_ir::value;
 
 pub(crate) const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMSNP\0";
-/// 格式版本：obj_table 槽编码方式变化（v1 用 0 区分 null 与 heap_start，v2 用
-/// `NULL_HANDLE_REL` 哨兵）。任何 wire 改动必须递增。
-pub(crate) const SNAPSHOT_FORMAT_VERSION: u32 = 2;
+/// 格式版本：v4 记录 Array.prototype 方法表基址、长度与表 ABI hash。
+/// 任何 wire 改动必须递增。
+pub(crate) const SNAPSHOT_FORMAT_VERSION: u32 = 4;
 
 /// `handle_rel_offsets[i]` 的 null 槽哨兵：表示 `obj_table[i] == 0`。
 /// 选 `u32::MAX` 因实际 heap 偏移远小于它（heap_used 受 wasm32 线性内存限制），
 /// 不会与合法 rel 值碰撞，并显式区分「rel == 0（heap 起点）」与「null 句柄」。
 pub(crate) const NULL_HANDLE_REL: u32 = u32::MAX;
+
+const HEADER_LEN: usize = 84;
 
 // ── snapshot data types ────────────────────────────────────────────
 
@@ -34,6 +36,9 @@ pub(crate) struct StartupSnapshotHeader {
     pub function_props_base: u32,
     pub object_proto_handle: u32,
     pub array_proto_handle: u32,
+    pub arr_proto_table_base: u32,
+    pub arr_proto_table_len: u32,
+    pub arr_proto_table_hash: u64,
     pub async_iterator_prototype: i64,
     pub async_gen_prototype: i64,
     pub array_proto_values: i64,
@@ -225,7 +230,9 @@ impl SnapshotNativeCallable {
             Self::WeakMapConstructor => NativeCallable::WeakMapConstructor,
             Self::WeakSetConstructor => NativeCallable::WeakSetConstructor,
             Self::WeakRefConstructor => NativeCallable::WeakRefConstructor,
-            Self::FinalizationRegistryConstructor => NativeCallable::FinalizationRegistryConstructor,
+            Self::FinalizationRegistryConstructor => {
+                NativeCallable::FinalizationRegistryConstructor
+            }
             Self::DateConstructorGlobal => NativeCallable::DateConstructorGlobal,
             Self::PromiseConstructor => NativeCallable::PromiseConstructor,
             Self::ArrayBufferConstructorGlobal => NativeCallable::ArrayBufferConstructorGlobal,
@@ -250,22 +257,20 @@ impl SnapshotNativeCallable {
             Self::ReadableStreamConstructor => NativeCallable::ReadableStreamConstructor,
             Self::WritableStreamConstructor => NativeCallable::WritableStreamConstructor,
             Self::TransformStreamConstructor => NativeCallable::TransformStreamConstructor,
-            Self::CountQueuingStrategyConstructor => NativeCallable::CountQueuingStrategyConstructor,
+            Self::CountQueuingStrategyConstructor => {
+                NativeCallable::CountQueuingStrategyConstructor
+            }
             Self::ByteLengthQueuingStrategyConstructor => {
                 NativeCallable::ByteLengthQueuingStrategyConstructor
             }
             Self::StubGlobal => NativeCallable::StubGlobal(()),
-            Self::NumberPrimitiveMethod => {
-                NativeCallable::NumberPrimitiveMethod { method: 0 }
-            }
+            Self::NumberPrimitiveMethod => NativeCallable::NumberPrimitiveMethod { method: 0 },
             Self::ArgumentsStrictCalleeGetter => NativeCallable::ArgumentsStrictCalleeGetter,
             Self::TypedArrayConstructor => NativeCallable::TypedArrayConstructor(()),
         }
     }
 
-    pub(crate) fn try_from_native_callable(
-        nc: &NativeCallable,
-    ) -> Result<Self> {
+    pub(crate) fn try_from_native_callable(nc: &NativeCallable) -> Result<Self> {
         let result = match nc {
             NativeCallable::EvalIndirect => Self::EvalIndirect,
             NativeCallable::AsyncIteratorProtoSymbolAsyncIterator => {
@@ -331,9 +336,7 @@ impl SnapshotNativeCallable {
             }
             NativeCallable::StubGlobal(()) => Self::StubGlobal,
             NativeCallable::ArgumentsStrictCalleeGetter => Self::ArgumentsStrictCalleeGetter,
-            NativeCallable::NumberPrimitiveMethod { method: _ } => {
-                Self::NumberPrimitiveMethod
-            }
+            NativeCallable::NumberPrimitiveMethod { method: _ } => Self::NumberPrimitiveMethod,
             NativeCallable::TypedArrayConstructor(()) => Self::TypedArrayConstructor,
             // 禁止捕获含运行态 handle 的变体
             NativeCallable::EvalFunction(_)
@@ -368,9 +371,7 @@ impl SnapshotNativeCallable {
             | NativeCallable::WritableStreamDefaultControllerMethod { .. }
             | NativeCallable::TransformStreamMethod { .. }
             | NativeCallable::QueuingStrategySize { .. } => {
-                bail!(
-                    "SnapshotNativeCallable: unsupported runtime-state-carrying variant"
-                )
+                bail!("SnapshotNativeCallable: unsupported runtime-state-carrying variant")
             }
         };
         Ok(result)
@@ -393,8 +394,8 @@ pub(crate) fn encode_snapshot(snapshot: &StartupSnapshotOwned) -> Vec<u8> {
     let (obj_payload, ho_payload, rs_payload, nc_payload) = build_section_payloads(snapshot);
 
     // compute offsets
-    let header_size = header_bytes.len() as u32; // 68
-    let st_start = align_up(header_size, 4); // 72
+    let header_size = header_bytes.len() as u32;
+    let st_start = align_up(header_size, 4);
     let st_size = (SECTION_COUNT * 12) as u32; // 48
     let payload_start = align_up(st_start + st_size, 4);
 
@@ -416,10 +417,30 @@ pub(crate) fn encode_snapshot(snapshot: &StartupSnapshotOwned) -> Vec<u8> {
     }
 
     // section table
-    write_section_entry(&mut buf, SK_OBJECT_BYTES, obj_start, obj_payload.len() as u32);
-    write_section_entry(&mut buf, SK_HANDLE_OFFSETS, ho_start, ho_payload.len() as u32);
-    write_section_entry(&mut buf, SK_RUNTIME_STRINGS, rs_start, rs_payload.len() as u32);
-    write_section_entry(&mut buf, SK_NATIVE_CALLABLES, nc_start, nc_payload.len() as u32);
+    write_section_entry(
+        &mut buf,
+        SK_OBJECT_BYTES,
+        obj_start,
+        obj_payload.len() as u32,
+    );
+    write_section_entry(
+        &mut buf,
+        SK_HANDLE_OFFSETS,
+        ho_start,
+        ho_payload.len() as u32,
+    );
+    write_section_entry(
+        &mut buf,
+        SK_RUNTIME_STRINGS,
+        rs_start,
+        rs_payload.len() as u32,
+    );
+    write_section_entry(
+        &mut buf,
+        SK_NATIVE_CALLABLES,
+        nc_start,
+        nc_payload.len() as u32,
+    );
 
     while (buf.len() as u32) < payload_start {
         buf.push(0);
@@ -435,7 +456,7 @@ pub(crate) fn encode_snapshot(snapshot: &StartupSnapshotOwned) -> Vec<u8> {
 }
 
 fn build_header_bytes(header: &StartupSnapshotHeader) -> Vec<u8> {
-    let mut b = Vec::with_capacity(68);
+    let mut b = Vec::with_capacity(HEADER_LEN);
     b.extend_from_slice(&header.magic);
     b.extend_from_slice(&header.format_version.to_le_bytes());
     b.extend_from_slice(&header.abi_hash.to_le_bytes());
@@ -444,6 +465,9 @@ fn build_header_bytes(header: &StartupSnapshotHeader) -> Vec<u8> {
     b.extend_from_slice(&header.function_props_base.to_le_bytes());
     b.extend_from_slice(&header.object_proto_handle.to_le_bytes());
     b.extend_from_slice(&header.array_proto_handle.to_le_bytes());
+    b.extend_from_slice(&header.arr_proto_table_base.to_le_bytes());
+    b.extend_from_slice(&header.arr_proto_table_len.to_le_bytes());
+    b.extend_from_slice(&header.arr_proto_table_hash.to_le_bytes());
     b.extend_from_slice(&header.async_iterator_prototype.to_le_bytes());
     b.extend_from_slice(&header.async_gen_prototype.to_le_bytes());
     b.extend_from_slice(&header.array_proto_values.to_le_bytes());
@@ -495,7 +519,7 @@ fn append_padded(buf: &mut Vec<u8>, data: &[u8]) {
 /// 其余字段 owned；不再使用 `unsafe`/`leak`/`from_raw_parts`。
 /// `runtime_strings` 以拥有 `String` 返回，调用方直接用于 `RuntimeState`。
 pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
-    if bytes.len() < 68 {
+    if bytes.len() < HEADER_LEN {
         bail!("snapshot too short: {} bytes", bytes.len());
     }
 
@@ -519,11 +543,14 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
     let function_props_base = u32::from_le_bytes(bytes[28..32].try_into()?);
     let object_proto_handle = u32::from_le_bytes(bytes[32..36].try_into()?);
     let array_proto_handle = u32::from_le_bytes(bytes[36..40].try_into()?);
-    let async_iterator_prototype = i64::from_le_bytes(bytes[40..48].try_into()?);
-    let async_gen_prototype = i64::from_le_bytes(bytes[48..56].try_into()?);
-    let array_proto_values = i64::from_le_bytes(bytes[56..64].try_into()?);
+    let arr_proto_table_base = u32::from_le_bytes(bytes[40..44].try_into()?);
+    let arr_proto_table_len = u32::from_le_bytes(bytes[44..48].try_into()?);
+    let arr_proto_table_hash = u64::from_le_bytes(bytes[48..56].try_into()?);
+    let async_iterator_prototype = i64::from_le_bytes(bytes[56..64].try_into()?);
+    let async_gen_prototype = i64::from_le_bytes(bytes[64..72].try_into()?);
+    let array_proto_values = i64::from_le_bytes(bytes[72..80].try_into()?);
 
-    let section_count = u32::from_le_bytes(bytes[64..68].try_into()?) as usize;
+    let section_count = u32::from_le_bytes(bytes[80..84].try_into()?) as usize;
     if section_count > 16 {
         bail!("too many sections: {}", section_count);
     }
@@ -537,13 +564,16 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
         function_props_base,
         object_proto_handle,
         array_proto_handle,
+        arr_proto_table_base,
+        arr_proto_table_len,
+        arr_proto_table_hash,
         async_iterator_prototype,
         async_gen_prototype,
         array_proto_values,
     };
 
-    // section table starts at offset 68 (header_bytes = 68, already 4-byte aligned)
-    let st_start = 68;
+    // section table starts after the fixed-size header.
+    let st_start = HEADER_LEN;
     if bytes.len() < st_start + section_count * 12 {
         bail!("section table truncated");
     }
@@ -562,7 +592,10 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
         let _kind = u32::from_le_bytes(bytes[off..off + 4].try_into()?);
         let sect_off = u32::from_le_bytes(bytes[off + 4..off + 8].try_into()?) as usize;
         let sect_len = u32::from_le_bytes(bytes[off + 8..off + 12].try_into()?) as usize;
-        if sect_off.checked_add(sect_len).map_or(true, |e| e > bytes.len()) {
+        if sect_off
+            .checked_add(sect_len)
+            .map_or(true, |e| e > bytes.len())
+        {
             bail!(
                 "section {} offset={} len={} out of bounds",
                 i,
@@ -764,6 +797,9 @@ mod tests {
                 function_props_base: 5,
                 object_proto_handle: 1,
                 array_proto_handle: 2,
+                arr_proto_table_base: 11,
+                arr_proto_table_len: 27,
+                arr_proto_table_hash: 0x1234,
                 async_iterator_prototype: wjsm_ir::value::encode_undefined(),
                 async_gen_prototype: wjsm_ir::value::encode_undefined(),
                 array_proto_values: wjsm_ir::value::encode_undefined(),
@@ -899,8 +935,8 @@ mod tests {
         for d in 0..=57u32 {
             if let Some(snap_nc) = SnapshotNativeCallable::from_discriminant(d) {
                 let native = snap_nc.into_native_callable();
-                let back = SnapshotNativeCallable::try_from_native_callable(&native)
-                    .expect("roundtrip");
+                let back =
+                    SnapshotNativeCallable::try_from_native_callable(&native).expect("roundtrip");
                 assert_eq!(snap_nc, back, "discriminant {d} roundtrip failed");
             }
         }
