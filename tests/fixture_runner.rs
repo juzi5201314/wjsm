@@ -7,10 +7,11 @@ use std::sync::Once;
 
 const UPDATE_SNAPSHOTS_ENV: &str = "WJSM_UPDATE_FIXTURES";
 
-/// 进程级一次性初始化测试环境：固定时区为 UTC。
+/// 进程级一次性初始化测试环境：固定时区为 UTC，设置 wasm 编译缓存目录。
 /// 旧子进程模型靠 `Command::env("TZ","UTC")` 保证 Date fixture 稳定；
 /// in-process 调用无子进程，需在测试进程内设置。chrono 读 TZ 决定 Local 偏移，
 /// 必须在任何 Date 逻辑运行前设好。
+/// wasmtime 编译缓存指向 /tmp，避免相同 wasm bytes 的重复 Cranelift 编译。
 static ENV_INIT: Once = Once::new();
 
 fn ensure_test_env() {
@@ -19,6 +20,7 @@ fn ensure_test_env() {
         // call_once 保证无并发写。后续只读。
         unsafe {
             env::set_var("TZ", "UTC");
+            env::set_var("WJSM_CACHE_DIR", "/tmp/wjsm-test-cache");
         }
     });
 }
