@@ -1,0 +1,15 @@
+[package]
+name = "wjsm-runtime-snapshot"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["embedded"]
+embedded = []
+
+[dependencies]
+
+[build-dependencies]
+wjsm-runtime = { path = "../wjsm-runtime" }
+wjsm-snapshot-format = { path = "../wjsm-snapshot-format" }
+anyhow = { workspace = true }

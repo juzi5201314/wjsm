@@ -279,6 +279,16 @@ impl PipelineTimings {
 // ============================================================================
 
 pub fn main_entry() -> ExitCode {
+    // Install embedded startup snapshot + support cwasm at CLI startup.
+    // Both are produced at `cargo build` time via wjsm-runtime-snapshot/
+    // wjsm-runtime-support build.rs and `include_bytes!`'d into the binary.
+    if let Some(bytes) = wjsm_runtime_snapshot::EMBEDDED_STARTUP_SNAPSHOT {
+        wjsm_runtime::install_embedded_startup_snapshot(bytes);
+    }
+    if let Some(bytes) = wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM {
+        wjsm_runtime::install_embedded_support_cwasm(bytes);
+    }
+
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(e) => {

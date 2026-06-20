@@ -17,6 +17,9 @@ use wjsm_ir::{
 };
 
 pub mod host_import_registry;
+mod shared_types;
+pub mod support_module;
+pub use support_module::emit_support_module;
 
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 use wjsm_ir::SHADOW_STACK_SIZE;
@@ -162,6 +165,8 @@ struct Compiler {
     function_props_done_global_idx: u32,
     /// WASM global index for first function-property handle.
     function_props_base_global_idx: u32,
+    /// WASM function index for globals initialization (P2.2).
+    init_globals_func_idx: u32,
     /// WASM function index for idempotent primordial bootstrap.
     bootstrap_func_idx: u32,
     /// WASM function index for current-module function property initialization.
@@ -205,6 +210,27 @@ struct Compiler {
     // ── Layer 3: callee no-GC 分析 ──
     /// 模块级 GC 分析结果。compile_module 入口计算一次，用于 Call safepoint 省略判断。
     gc_analysis: Option<GcAnalysis>,
+    /// P2.2: Normal mode 下 globals 的编译期初始值，用于 main prologue 的 global.set 初始化。
+    /// Eval mode 下为 None（globals 由父模块初始化）。
+    normal_init_values: Option<NormalGlobalsInit>,
+}
+
+/// Normal mode 下需要初始化的 globals 编译期值。
+/// 这些值依赖编译期计算的 heap 布局，无法通过 import 的 ConstExpr 设置，
+/// 必须在 main prologue 中用 global.set 写入。
+#[derive(Debug, Clone, Copy)]
+struct NormalGlobalsInit {
+    heap_ptr: i32,
+    obj_table_ptr: i32,
+    shadow_sp: i32,
+    object_heap_start: i32,
+    num_ir_functions: i32,
+    shadow_stack_end: i32,
+    eval_var_map_ptr: i32,
+    eval_var_map_count: i32,
+    arr_proto_table_base: i32,
+    arr_proto_table_len: i32,
+    arr_proto_table_hash: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

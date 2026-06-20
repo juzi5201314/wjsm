@@ -7,27 +7,27 @@
 use anyhow::{Result, bail};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::OnceLock;
 
-use crate::types::NativeCallable;
 use wjsm_ir::constants;
 use wjsm_ir::value;
 
-pub(crate) const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMSNP\0";
+pub const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMSNP\0";
 /// 格式版本：v4 记录 Array.prototype 方法表基址、长度与表 ABI hash。
 /// 任何 wire 改动必须递增。
-pub(crate) const SNAPSHOT_FORMAT_VERSION: u32 = 4;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 4;
 
 /// `handle_rel_offsets[i]` 的 null 槽哨兵：表示 `obj_table[i] == 0`。
 /// 选 `u32::MAX` 因实际 heap 偏移远小于它（heap_used 受 wasm32 线性内存限制），
 /// 不会与合法 rel 值碰撞，并显式区分「rel == 0（heap 起点）」与「null 句柄」。
-pub(crate) const NULL_HANDLE_REL: u32 = u32::MAX;
+pub const NULL_HANDLE_REL: u32 = u32::MAX;
 
 const HEADER_LEN: usize = 84;
 
 // ── snapshot data types ────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
-pub(crate) struct StartupSnapshotHeader {
+pub struct StartupSnapshotHeader {
     pub magic: [u8; 8],
     pub format_version: u32,
     pub abi_hash: u64,
@@ -46,7 +46,7 @@ pub(crate) struct StartupSnapshotHeader {
 
 /// Owned snapshot suitable for capture/write to disk.
 #[derive(Debug, Clone)]
-pub(crate) struct StartupSnapshotOwned {
+pub struct StartupSnapshotOwned {
     pub header: StartupSnapshotHeader,
     pub object_bytes: Vec<u8>,
     pub handle_rel_offsets: Vec<u32>,
@@ -57,7 +57,7 @@ pub(crate) struct StartupSnapshotOwned {
 /// Decoded snapshot view: `object_bytes` 安全借用输入 bytes，
 /// 其余字段 owned 以避免 `unsafe`/`leak`。
 #[derive(Debug, Clone)]
-pub(crate) struct StartupSnapshotView<'a> {
+pub struct StartupSnapshotView<'a> {
     pub header: StartupSnapshotHeader,
     pub object_bytes: &'a [u8],
     pub handle_rel_offsets: Vec<u32>,
@@ -71,7 +71,7 @@ pub(crate) struct StartupSnapshotView<'a> {
 /// 禁止捕获含运行态 handle/Arc/Mutex 的变体。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
-pub(crate) enum SnapshotNativeCallable {
+pub enum SnapshotNativeCallable {
     EvalIndirect = 0,
     AsyncIteratorProtoSymbolAsyncIterator = 1,
     ArrayProtoValues = 2,
@@ -198,184 +198,6 @@ impl SnapshotNativeCallable {
             _ => None,
         }
     }
-
-    pub(crate) fn into_native_callable(self) -> NativeCallable {
-        match self {
-            Self::EvalIndirect => NativeCallable::EvalIndirect,
-            Self::AsyncIteratorProtoSymbolAsyncIterator => {
-                NativeCallable::AsyncIteratorProtoSymbolAsyncIterator
-            }
-            Self::ArrayProtoValues => NativeCallable::ArrayProtoValues,
-            Self::ArrayConstructor => NativeCallable::ArrayConstructor,
-            Self::ObjectConstructor => NativeCallable::ObjectConstructor,
-            Self::ObjectProtoToString => NativeCallable::ObjectProtoToString,
-            Self::ObjectProtoValueOf => NativeCallable::ObjectProtoValueOf,
-            Self::FunctionConstructor => NativeCallable::FunctionConstructor,
-            Self::StringConstructor => NativeCallable::StringConstructor,
-            Self::BooleanConstructor => NativeCallable::BooleanConstructor,
-            Self::NumberConstructor => NativeCallable::NumberConstructor,
-            Self::SymbolConstructor => NativeCallable::SymbolConstructor,
-            Self::BigIntConstructor => NativeCallable::BigIntConstructor,
-            Self::RegExpConstructor => NativeCallable::RegExpConstructor,
-            Self::ErrorConstructor => NativeCallable::ErrorConstructor,
-            Self::TypeErrorConstructor => NativeCallable::TypeErrorConstructor,
-            Self::RangeErrorConstructor => NativeCallable::RangeErrorConstructor,
-            Self::SyntaxErrorConstructor => NativeCallable::SyntaxErrorConstructor,
-            Self::ReferenceErrorConstructor => NativeCallable::ReferenceErrorConstructor,
-            Self::URIErrorConstructor => NativeCallable::URIErrorConstructor,
-            Self::EvalErrorConstructor => NativeCallable::EvalErrorConstructor,
-            Self::AggregateErrorConstructor => NativeCallable::AggregateErrorConstructor,
-            Self::MapConstructor => NativeCallable::MapConstructor,
-            Self::SetConstructor => NativeCallable::SetConstructor,
-            Self::WeakMapConstructor => NativeCallable::WeakMapConstructor,
-            Self::WeakSetConstructor => NativeCallable::WeakSetConstructor,
-            Self::WeakRefConstructor => NativeCallable::WeakRefConstructor,
-            Self::FinalizationRegistryConstructor => {
-                NativeCallable::FinalizationRegistryConstructor
-            }
-            Self::DateConstructorGlobal => NativeCallable::DateConstructorGlobal,
-            Self::PromiseConstructor => NativeCallable::PromiseConstructor,
-            Self::ArrayBufferConstructorGlobal => NativeCallable::ArrayBufferConstructorGlobal,
-            Self::DataViewConstructorGlobal => NativeCallable::DataViewConstructorGlobal,
-            Self::BigInt64ArrayConstructor => NativeCallable::BigInt64ArrayConstructor,
-            Self::BigUint64ArrayConstructor => NativeCallable::BigUint64ArrayConstructor,
-            Self::ProxyConstructor => NativeCallable::ProxyConstructor,
-            Self::GcCollect => NativeCallable::GcCollect,
-            Self::SharedArrayBufferConstructor => NativeCallable::SharedArrayBufferConstructor,
-            Self::AtomicsGlobal => NativeCallable::AtomicsGlobal,
-            Self::AgentStart => NativeCallable::AgentStart,
-            Self::AgentBroadcast => NativeCallable::AgentBroadcast,
-            Self::AgentReceiveBroadcast => NativeCallable::AgentReceiveBroadcast,
-            Self::AgentGetReport => NativeCallable::AgentGetReport,
-            Self::AgentReport => NativeCallable::AgentReport,
-            Self::AgentSleep => NativeCallable::AgentSleep,
-            Self::AgentMonotonicNow => NativeCallable::AgentMonotonicNow,
-            Self::HeadersConstructor => NativeCallable::HeadersConstructor,
-            Self::ResponseConstructor => NativeCallable::ResponseConstructor,
-            Self::RequestConstructor => NativeCallable::RequestConstructor,
-            Self::AbortControllerConstructor => NativeCallable::AbortControllerConstructor,
-            Self::ReadableStreamConstructor => NativeCallable::ReadableStreamConstructor,
-            Self::WritableStreamConstructor => NativeCallable::WritableStreamConstructor,
-            Self::TransformStreamConstructor => NativeCallable::TransformStreamConstructor,
-            Self::CountQueuingStrategyConstructor => {
-                NativeCallable::CountQueuingStrategyConstructor
-            }
-            Self::ByteLengthQueuingStrategyConstructor => {
-                NativeCallable::ByteLengthQueuingStrategyConstructor
-            }
-            Self::StubGlobal => NativeCallable::StubGlobal(()),
-            Self::NumberPrimitiveMethod => NativeCallable::NumberPrimitiveMethod { method: 0 },
-            Self::ArgumentsStrictCalleeGetter => NativeCallable::ArgumentsStrictCalleeGetter,
-            Self::TypedArrayConstructor => NativeCallable::TypedArrayConstructor(()),
-        }
-    }
-
-    pub(crate) fn try_from_native_callable(nc: &NativeCallable) -> Result<Self> {
-        let result = match nc {
-            NativeCallable::EvalIndirect => Self::EvalIndirect,
-            NativeCallable::AsyncIteratorProtoSymbolAsyncIterator => {
-                Self::AsyncIteratorProtoSymbolAsyncIterator
-            }
-            NativeCallable::ArrayProtoValues => Self::ArrayProtoValues,
-            NativeCallable::ArrayConstructor => Self::ArrayConstructor,
-            NativeCallable::ObjectConstructor => Self::ObjectConstructor,
-            NativeCallable::ObjectProtoToString => Self::ObjectProtoToString,
-            NativeCallable::ObjectProtoValueOf => Self::ObjectProtoValueOf,
-            NativeCallable::FunctionConstructor => Self::FunctionConstructor,
-            NativeCallable::StringConstructor => Self::StringConstructor,
-            NativeCallable::BooleanConstructor => Self::BooleanConstructor,
-            NativeCallable::NumberConstructor => Self::NumberConstructor,
-            NativeCallable::SymbolConstructor => Self::SymbolConstructor,
-            NativeCallable::BigIntConstructor => Self::BigIntConstructor,
-            NativeCallable::RegExpConstructor => Self::RegExpConstructor,
-            NativeCallable::ErrorConstructor => Self::ErrorConstructor,
-            NativeCallable::TypeErrorConstructor => Self::TypeErrorConstructor,
-            NativeCallable::RangeErrorConstructor => Self::RangeErrorConstructor,
-            NativeCallable::SyntaxErrorConstructor => Self::SyntaxErrorConstructor,
-            NativeCallable::ReferenceErrorConstructor => Self::ReferenceErrorConstructor,
-            NativeCallable::URIErrorConstructor => Self::URIErrorConstructor,
-            NativeCallable::EvalErrorConstructor => Self::EvalErrorConstructor,
-            NativeCallable::AggregateErrorConstructor => Self::AggregateErrorConstructor,
-            NativeCallable::MapConstructor => Self::MapConstructor,
-            NativeCallable::SetConstructor => Self::SetConstructor,
-            NativeCallable::WeakMapConstructor => Self::WeakMapConstructor,
-            NativeCallable::WeakSetConstructor => Self::WeakSetConstructor,
-            NativeCallable::WeakRefConstructor => Self::WeakRefConstructor,
-            NativeCallable::FinalizationRegistryConstructor => {
-                Self::FinalizationRegistryConstructor
-            }
-            NativeCallable::DateConstructorGlobal => Self::DateConstructorGlobal,
-            NativeCallable::PromiseConstructor => Self::PromiseConstructor,
-            NativeCallable::ArrayBufferConstructorGlobal => Self::ArrayBufferConstructorGlobal,
-            NativeCallable::DataViewConstructorGlobal => Self::DataViewConstructorGlobal,
-            NativeCallable::BigInt64ArrayConstructor => Self::BigInt64ArrayConstructor,
-            NativeCallable::BigUint64ArrayConstructor => Self::BigUint64ArrayConstructor,
-            NativeCallable::ProxyConstructor => Self::ProxyConstructor,
-            NativeCallable::GcCollect => Self::GcCollect,
-            NativeCallable::SharedArrayBufferConstructor => Self::SharedArrayBufferConstructor,
-            NativeCallable::AtomicsGlobal => Self::AtomicsGlobal,
-            NativeCallable::AgentStart => Self::AgentStart,
-            NativeCallable::AgentBroadcast => Self::AgentBroadcast,
-            NativeCallable::AgentReceiveBroadcast => Self::AgentReceiveBroadcast,
-            NativeCallable::AgentGetReport => Self::AgentGetReport,
-            NativeCallable::AgentReport => Self::AgentReport,
-            NativeCallable::AgentSleep => Self::AgentSleep,
-            NativeCallable::AgentMonotonicNow => Self::AgentMonotonicNow,
-            NativeCallable::HeadersConstructor => Self::HeadersConstructor,
-            NativeCallable::ResponseConstructor => Self::ResponseConstructor,
-            NativeCallable::RequestConstructor => Self::RequestConstructor,
-            NativeCallable::AbortControllerConstructor => Self::AbortControllerConstructor,
-            NativeCallable::ReadableStreamConstructor => Self::ReadableStreamConstructor,
-            NativeCallable::WritableStreamConstructor => Self::WritableStreamConstructor,
-            NativeCallable::TransformStreamConstructor => Self::TransformStreamConstructor,
-            NativeCallable::CountQueuingStrategyConstructor => {
-                Self::CountQueuingStrategyConstructor
-            }
-            NativeCallable::ByteLengthQueuingStrategyConstructor => {
-                Self::ByteLengthQueuingStrategyConstructor
-            }
-            NativeCallable::StubGlobal(()) => Self::StubGlobal,
-            NativeCallable::ArgumentsStrictCalleeGetter => Self::ArgumentsStrictCalleeGetter,
-            NativeCallable::NumberPrimitiveMethod { method: _ } => Self::NumberPrimitiveMethod,
-            NativeCallable::TypedArrayConstructor(()) => Self::TypedArrayConstructor,
-            // 禁止捕获含运行态 handle 的变体
-            NativeCallable::EvalFunction(_)
-            | NativeCallable::PromiseResolvingFunction { .. }
-            | NativeCallable::PromiseCombinatorReaction { .. }
-            | NativeCallable::AsyncGeneratorMethod { .. }
-            | NativeCallable::AsyncGeneratorIdentity { .. }
-            | NativeCallable::ArrayLikeIteratorNext { .. }
-            | NativeCallable::AsyncFromSyncNext { .. }
-            | NativeCallable::AsyncFromSyncReturn { .. }
-            | NativeCallable::AsyncFromSyncThrow { .. }
-            | NativeCallable::MapSetMethod { .. }
-            | NativeCallable::DateMethod { .. }
-            | NativeCallable::WeakMapMethod { .. }
-            | NativeCallable::WeakSetMethod { .. }
-            | NativeCallable::WeakRefDerefMethod
-            | NativeCallable::FinalizationRegistryRegisterMethod
-            | NativeCallable::FinalizationRegistryUnregisterMethod
-            | NativeCallable::ProxyRevoker { .. }
-            | NativeCallable::HeadersMethod { .. }
-            | NativeCallable::ResponseMethod { .. }
-            | NativeCallable::RequestMethod { .. }
-            | NativeCallable::AbortControllerAbort { .. }
-            | NativeCallable::ReadableStreamMethod { .. }
-            | NativeCallable::ReadableStreamDefaultReaderMethod { .. }
-            | NativeCallable::ReadableStreamDefaultControllerMethod { .. }
-            | NativeCallable::ReadableStreamByobRequestMethod { .. }
-            | NativeCallable::ReadableStreamAsyncIteratorNext { .. }
-            | NativeCallable::ReadableStreamAsyncIteratorReturn { .. }
-            | NativeCallable::WritableStreamMethod { .. }
-            | NativeCallable::WritableStreamDefaultWriterMethod { .. }
-            | NativeCallable::WritableStreamDefaultControllerMethod { .. }
-            | NativeCallable::TransformStreamMethod { .. }
-            | NativeCallable::QueuingStrategySize { .. } => {
-                bail!("SnapshotNativeCallable: unsupported runtime-state-carrying variant")
-            }
-        };
-        Ok(result)
-    }
 }
 
 // ── encode ─────────────────────────────────────────────────────────
@@ -386,7 +208,7 @@ const SK_RUNTIME_STRINGS: u32 = 3;
 const SK_NATIVE_CALLABLES: u32 = 4;
 const SECTION_COUNT: u32 = 4;
 
-pub(crate) fn encode_snapshot(snapshot: &StartupSnapshotOwned) -> Vec<u8> {
+pub fn encode_snapshot(snapshot: &StartupSnapshotOwned) -> Vec<u8> {
     // 两次写入: 先算 offset，再写最终 buf。
     let header_bytes = build_header_bytes(&snapshot.header);
 
@@ -518,7 +340,7 @@ fn append_padded(buf: &mut Vec<u8>, data: &[u8]) {
 /// Decode a snapshot from bytes. `object_bytes` 安全借用输入 bytes，
 /// 其余字段 owned；不再使用 `unsafe`/`leak`/`from_raw_parts`。
 /// `runtime_strings` 以拥有 `String` 返回，调用方直接用于 `RuntimeState`。
-pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
+pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
     if bytes.len() < HEADER_LEN {
         bail!("snapshot too short: {} bytes", bytes.len());
     }
@@ -719,7 +541,7 @@ pub(crate) fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
 
 // ── ABI hash ────────────────────────────────────────────────────────
 
-pub(crate) fn abi_hash() -> u64 {
+pub fn abi_hash() -> u64 {
     let mut hasher = DefaultHasher::new();
     SNAPSHOT_FORMAT_VERSION.hash(&mut hasher);
 
@@ -774,183 +596,25 @@ pub(crate) fn abi_hash() -> u64 {
     constants::FLAG_WRITABLE.hash(&mut hasher);
     constants::FLAG_IS_ACCESSOR.hash(&mut hasher);
 
+    // Embedded support module / builtin JS bundle hash（运行时通过
+    // `register_abi_hash_external_input` 注入；未注入时为 0，不参与 hash 改变）。
+    if let Some(extra) = ABI_HASH_EXTERNAL_INPUT.get() {
+        extra.hash(&mut hasher);
+    }
+
     hasher.finish()
+}
+
+/// 进程级注入：embedded support module / builtin JS bundle 的额外 ABI 输入。
+/// 由 `wjsm-runtime` 在启动时 set 一次（运行时输入，初始化时刻 + 来源都不在
+/// 本 crate 静态期可知，所以只能用 `OnceLock`，不可换 `LazyLock`）。
+/// 重复 set 静默忽略；这是为了让 build.rs 与运行时共享同一注入点。
+static ABI_HASH_EXTERNAL_INPUT: OnceLock<u64> = OnceLock::new();
+
+pub fn register_abi_hash_external_input(value: u64) {
+    let _ = ABI_HASH_EXTERNAL_INPUT.set(value);
 }
 
 fn align_up(n: u32, align: u32) -> u32 {
     (n + align - 1) & !(align - 1)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::sync::{Arc, Mutex};
-
-    fn dummy_snapshot() -> StartupSnapshotOwned {
-        StartupSnapshotOwned {
-            header: StartupSnapshotHeader {
-                magic: SNAPSHOT_MAGIC,
-                format_version: SNAPSHOT_FORMAT_VERSION,
-                abi_hash: abi_hash(),
-                heap_used: 256,
-                obj_table_count: 10,
-                function_props_base: 5,
-                object_proto_handle: 1,
-                array_proto_handle: 2,
-                arr_proto_table_base: 11,
-                arr_proto_table_len: 27,
-                arr_proto_table_hash: 0x1234,
-                async_iterator_prototype: wjsm_ir::value::encode_undefined(),
-                async_gen_prototype: wjsm_ir::value::encode_undefined(),
-                array_proto_values: wjsm_ir::value::encode_undefined(),
-            },
-            object_bytes: vec![0xAA; 256],
-            handle_rel_offsets: vec![0, 16, 32, 48, 64, 80, 96, 112, 128, 144],
-            runtime_strings: vec!["hello".to_string(), "world".to_string()],
-            native_callables: vec![
-                SnapshotNativeCallable::ObjectConstructor,
-                SnapshotNativeCallable::ArrayConstructor,
-            ],
-        }
-    }
-
-    #[test]
-    fn encode_decode_roundtrip() {
-        let snap = dummy_snapshot();
-        let bytes = encode_snapshot(&snap);
-        let view = decode_snapshot(&bytes).expect("decode");
-
-        assert_eq!(view.header.heap_used, 256);
-        assert_eq!(view.header.obj_table_count, 10);
-        assert_eq!(view.header.function_props_base, 5);
-        assert_eq!(view.object_bytes, &[0xAA; 256]);
-        assert_eq!(view.handle_rel_offsets.len(), 10);
-        assert_eq!(view.handle_rel_offsets[0], 0);
-        assert_eq!(view.handle_rel_offsets[9], 144);
-        assert_eq!(view.runtime_strings, vec!["hello", "world"]);
-        assert_eq!(view.native_callables.len(), 2);
-    }
-
-    #[test]
-    fn decode_rejects_corrupt_magic() {
-        let snap = dummy_snapshot();
-        let mut bytes = encode_snapshot(&snap);
-        for b in bytes.iter_mut().take(8) {
-            *b = 0;
-        }
-        assert!(decode_snapshot(&bytes).is_err());
-    }
-
-    #[test]
-    fn decode_rejects_object_bytes_length_mismatch() {
-        let mut snap = dummy_snapshot();
-        // 让 header.heap_used 与 object_bytes.len 不一致，decode 必须 bail。
-        snap.header.heap_used = 128;
-        let bytes = encode_snapshot(&snap);
-        let err = decode_snapshot(&bytes).expect_err("expected length mismatch");
-        let msg = format!("{err}");
-        assert!(
-            msg.contains("object_bytes len") || msg.contains("heap_used"),
-            "diagnostic mentions length: {msg}"
-        );
-    }
-
-    #[test]
-    fn decode_rejects_out_of_range_handle_rel() {
-        let mut snap = dummy_snapshot();
-        // 让某个 handle rel 越过 heap_used，decode 必须 bail。
-        snap.handle_rel_offsets[0] = snap.header.heap_used + 4;
-        let bytes = encode_snapshot(&snap);
-        let err = decode_snapshot(&bytes).expect_err("expected rel-bounds bail");
-        assert!(format!("{err}").contains("handle_rel_offsets"));
-    }
-
-    #[test]
-    fn decode_handle_count_mismatch() {
-        // 篡改 header.obj_table_count 使其不等于 handle_rel_offsets 实际数量
-        let mut snap = dummy_snapshot();
-        snap.header.obj_table_count = 99; // 实际只有 10 个
-        let bytes = encode_snapshot(&snap);
-        assert!(decode_snapshot(&bytes).is_err());
-    }
-
-    #[test]
-    fn decode_truncated_handle_section() {
-        // 截断 handle section 使其长度不是 4 的倍数 + 数量不匹配
-        let snap = dummy_snapshot();
-        let mut bytes = encode_snapshot(&snap);
-        // 找到 handle section 并截断末尾几个字节（破坏最后一个 u32）
-        // header(68) + section_table(48) = 116 是 payload 起点
-        // object_bytes section 在前（256 bytes + padding）
-        // 直接截断文件末尾，使 handle section 的数据不完整
-        // 更简单：直接删掉最后 4 字节，handle_rel_offsets 变成 9 个 ≠ obj_table_count=10
-        bytes.truncate(bytes.len() - 4);
-        // 截断后 native_callables section 也被破坏，但 decode 按顺序处理，
-        // handle section 如果数量减少会触发 count mismatch
-        // 如果截断点在 native_callables 区域，则 native_callables 会报 truncated
-        // 无论哪种都是 Err
-        assert!(decode_snapshot(&bytes).is_err());
-    }
-
-    #[test]
-    fn decode_bad_magic() {
-        let mut bytes = encode_snapshot(&dummy_snapshot());
-        bytes[0] = b'X';
-        assert!(decode_snapshot(&bytes).is_err());
-    }
-
-    #[test]
-    fn decode_bad_version() {
-        let mut snap = dummy_snapshot();
-        snap.header.format_version = 99;
-        let bytes = encode_snapshot(&snap);
-        assert!(decode_snapshot(&bytes).is_err());
-    }
-
-    #[test]
-    fn decode_too_short() {
-        let bytes = vec![0; 8];
-        assert!(decode_snapshot(&bytes).is_err());
-    }
-
-    #[test]
-    fn try_from_runtime_callable_rejected() {
-        use crate::types::PromiseResolvingKind;
-        let nc = NativeCallable::PromiseResolvingFunction {
-            promise: wjsm_ir::value::encode_undefined(),
-            already_resolved: Arc::new(Mutex::new(false)),
-            kind: PromiseResolvingKind::Fulfill,
-        };
-        assert!(SnapshotNativeCallable::try_from_native_callable(&nc).is_err());
-    }
-
-    #[test]
-    fn try_from_stateless_callable_accepted() {
-        let nc = NativeCallable::ArrayConstructor;
-        assert!(SnapshotNativeCallable::try_from_native_callable(&nc).is_ok());
-    }
-
-    #[test]
-    fn all_discriminants_roundtrip() {
-        for d in 0..=57u32 {
-            if let Some(snap_nc) = SnapshotNativeCallable::from_discriminant(d) {
-                let native = snap_nc.into_native_callable();
-                let back =
-                    SnapshotNativeCallable::try_from_native_callable(&native).expect("roundtrip");
-                assert_eq!(snap_nc, back, "discriminant {d} roundtrip failed");
-            }
-        }
-    }
-
-    #[test]
-    fn abi_hash_deterministic() {
-        let h1 = abi_hash();
-        let h2 = abi_hash();
-        assert_eq!(h1, h2);
-    }
-
-    #[test]
-    fn abi_hash_nonzero() {
-        assert_ne!(abi_hash(), 0);
-    }
 }

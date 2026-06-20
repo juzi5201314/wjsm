@@ -6,15 +6,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Once;
 
 const UPDATE_SNAPSHOTS_ENV: &str = "WJSM_UPDATE_FIXTURES";
-const MODULE_CACHE_ENV: &str = "WJSM_MODULE_CACHE";
 
-/// 进程级一次性初始化测试环境：
-/// 1. 固定时区为 UTC —— 旧子进程模型靠 `Command::env("TZ","UTC")` 保证 Date fixture 稳定；
-///    in-process 调用无子进程，需在测试进程内设置。chrono 读 TZ 决定 Local 偏移，
-///    必须在任何 Date 逻辑运行前设好。
-/// 2. 启用 wasmtime 编译缓存 —— 567 个 fixture 各编译一个 wasm，Cranelift 编译是
-///    测试 wall time 的最大头。缓存按 wasm 内容哈希复用编译产物，使热跑跳过编译。
-///    默认指向 target 下目录（gitignore），用户可用 WJSM_MODULE_CACHE 覆盖。
+/// 进程级一次性初始化测试环境：固定时区为 UTC。
+/// 旧子进程模型靠 `Command::env("TZ","UTC")` 保证 Date fixture 稳定；
+/// in-process 调用无子进程，需在测试进程内设置。chrono 读 TZ 决定 Local 偏移，
+/// 必须在任何 Date 逻辑运行前设好。
 static ENV_INIT: Once = Once::new();
 
 fn ensure_test_env() {
@@ -23,12 +19,6 @@ fn ensure_test_env() {
         // call_once 保证无并发写。后续只读。
         unsafe {
             env::set_var("TZ", "UTC");
-            if env::var(MODULE_CACHE_ENV).is_err() {
-                let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("target")
-                    .join("wjsm-test-module-cache");
-                env::set_var(MODULE_CACHE_ENV, dir);
-            }
         }
     });
 }

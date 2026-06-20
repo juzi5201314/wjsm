@@ -230,6 +230,28 @@ pub(crate) fn compiled_eval_import(
                 },
             );
         }
+        "new_target" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, _dummy: i64| {
+                    caller
+                        .data()
+                        .new_target
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                },
+            );
+        }
+        "new_target_set" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, new_target: i64| {
+                    caller
+                        .data()
+                        .new_target
+                        .swap(new_target, std::sync::atomic::Ordering::Relaxed)
+                },
+            );
+        }
         "create_unmapped_arguments_object" => {
             return Func::wrap(
                 &mut *caller,
@@ -247,6 +269,112 @@ pub(crate) fn compiled_eval_import(
                  func_ref: i64|
                  -> i64 {
                     create_mapped_arguments_object(&mut caller, args_array, param_count, func_ref)
+                },
+            );
+        }
+        "scope_record_create" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, capacity: i64| {
+                    scope_record_create(caller, capacity)
+                },
+            );
+        }
+        "scope_record_add_binding" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>,
+                 record: i64,
+                 name: i64,
+                 val: i64,
+                 is_tdz: i64,
+                 is_const: i64|
+                 -> i64 {
+                    scope_record_add_binding(caller, record, name, val, is_tdz, is_const)
+                },
+            );
+        }
+        "eval_get_binding" => {
+            return Func::wrap(
+                &mut *caller,
+                |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+                    eval_get_binding(&mut caller, record, name)
+                },
+            );
+        }
+        "eval_set_binding" => {
+            return Func::wrap(
+                &mut *caller,
+                |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64| -> i64 {
+                    eval_set_binding(&mut caller, record, name, val)
+                },
+            );
+        }
+        "eval_has_binding" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+                    eval_has_binding(caller, record, name)
+                },
+            );
+        }
+        "eval_super_base" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, record: i64| eval_super_base(caller, record),
+            );
+        }
+        "scope_record_set_meta" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, record: i64, key: i64, val: i64| -> i64 {
+                    scope_record_set_meta(caller, record, key, val)
+                },
+            );
+        }
+        "scope_record_destroy" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, record: i64| {
+                    scope_record_destroy(caller, record)
+                },
+            );
+        }
+        "symbol_property_key" => {
+            return Func::wrap(
+                &mut *caller,
+                |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+                    if let Some(name_id) = symbol_value_to_name_id(key) {
+                        return name_id as i32;
+                    }
+                    if value::is_runtime_string_handle(key) || value::is_f64(key) {
+                        if let Ok(s) = render_value(&mut caller, key) {
+                            if let Some(id) = find_memory_c_string(&mut caller, &s)
+                                .or_else(|| alloc_heap_c_string(&mut caller, &s))
+                            {
+                                return id as i32;
+                            }
+                        }
+                        return 0;
+                    }
+                    key as i32
+                },
+            );
+        }
+        "string_to_array_index" => {
+            return Func::wrap(
+                &mut *caller,
+                |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+                    if !value::is_string(key) {
+                        return -1;
+                    }
+                    let Ok(s) = render_value(&mut caller, key) else {
+                        return -1;
+                    };
+                    match s.parse::<u32>() {
+                        Ok(n) if (n as i64) < i32::MAX as i64 && n.to_string() == s => n as i32,
+                        _ => -1,
+                    }
                 },
             );
         }
