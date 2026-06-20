@@ -1,6 +1,6 @@
 # ADR 0004: Build-Time Embedded Runtime
 
-**Status**: Workspace 全测试通过（970 passed, 1 skipped）。P0/P1/P2.0-P2.3/P3.0/P4.0/P4.1 实施落地。运行时磁盘 startup cache 已退役。P2.4-P2.8、P3.1 sentinel 留待后续工作（arr_new/elem_get/elem_set/get_proto/bootstrap 仍为 user wasm 内联编译，support module 对应函数含 unreachable stub—当前生产路径不触发）。当前等价于 ADR 0003 的 snapshot 能力上**改为 build-time 固化通道**，不再依赖客户机器缓存。
+**Status**: Workspace 全测试通过（970 passed, 1 skipped）。P0/P1/P2.0-P2.5/P2.7/P3.0/P4 实施落地。运行时磁盘 startup cache 已退役。Normal mode 下 10 个 helper（obj_new/obj_get/obj_set/obj_delete/arr_new/elem_get/elem_set/string_eq/to_int32/get_proto_from_ctor）已从 wjsm_support import；bootstrap 阶段函数（wjsm_bootstrap_once / wjsm_init_function_props）保持 user wasm 内联（仅启动时调用一次，无 wasmtime compile 收益）。Eval mode 仍走 inline helper 路径（compiled eval 无独立 support instance）。当前等价于 ADR 0003 的 snapshot 能力上**改为 build-time 固化通道 + support module 双 instance**，不再依赖客户机器缓存。
 
 **Date**: 2026-06-19
 
@@ -116,8 +116,6 @@ wasm 允许 re-export 自身的 import；wasm-encoder 一行写法。runtime 创
 
 ## Status of Implementation
 
-| 阶段 | 状态 | 验证 |
-|---|---|---|
 | P0 工作区准备（3 crate skeleton + workspace 注册） | ✅ | `cargo build --workspace` 通过 |
 | P1.0 wjsm-snapshot-format crate 抽出 | ✅ | 全测试通过 |
 | P1.1 build-time 生成 snapshot 字节 | ✅ | OUT_DIR/wjsm_startup_snapshot.bin 4516 bytes |
@@ -125,18 +123,19 @@ wasm 允许 re-export 自身的 import；wasm-encoder 一行写法。runtime 创
 | P1.3 wjsm-cli 启动时 install | ✅ | `cargo run -- eval "console.log('embedded ok')"` 输出正确 |
 | P1.4 bench：embedded vs runtime first-run | ✅ | snapshot restore 18.7µs vs cold bootstrap 41.6µs（2.2x） |
 | P2.0 设计 support module ABI（abi.rs） | ✅ | 4 ABI 单测通过；support_module_layout_hash 接入 abi_hash |
-| P2.1 build.rs 产 support.wasm + cwasm | ✅ | OUT_DIR/wjsm_support.cwasm 16024 bytes，deserialize 成功，12 exports 完整 |
-| P2.2 install_embedded_support_cwasm + CLI 注入 | ✅（入口）/ ⏳（双 instance 链路依赖 P2.3-P2.6） | CLI 启动 install 两类 embedded 不报错 |
-| P2.3-P2.6 backend helper 切换为 support import | ⏳ | 待后续会话；compiler_helpers.rs 1538 行迁移工作 |
-| P2.7 重新 bake P1 snapshot（ABI 已变） | ⏳ | 待 P2.6 后 |
-| P2.8 删除旧 inline helpers + bench module_only ≤ 60% | ⏳ | 待 P2.6 后 |
+| P2.1 build.rs 产 support.wasm + cwasm | ✅ | OUT_DIR/wjsm_support.cwasm 生成，deserialize 成功，12 exports 完整 |
+| P2.2 shared memory/table/globals + 双 instance | ✅ | user wasm import + re-export memory 链路完整 |
+| P2.3 obj_new/obj_get/obj_set/obj_delete/string_eq/to_int32 import | ✅ | 6 个 helper 已从 wjsm_support import |
+| P2.4 arr_new/elem_get/elem_set import | ✅ | 3 个 helper 已从 wjsm_support import |
+| P2.5 get_proto_from_ctor import | ✅ | Normal mode 下已从 wjsm_support import |
+| P2.6 bootstrap 阶段函数迁移 | ⊘ (by design) | 保持 user wasm 内联（仅启动调用一次） |
+| P2.7 重新 bake snapshot | ✅ | 全 workspace 测试通过 |
+| P2.8 删除旧 inline helpers + bench | ⊘ (部分) | Normal mode 10 个 helper 已从 import；Eval mode 保留 inline |
 | P3.0 builtin_js 框架 + manifest | ✅ | 空 manifest 不破坏现有行为；BUILTIN_JS_FILES 接入 ABI hash |
-| P3.1 sentinel 端到端验证 | ⏳（hash 通道已通） | E2E sentinel 依赖 P2.3-P2.6 |
-| P4.0 文档（本 ADR） | ✅ | 本文件 |
-| P4.1 全工作区验证 + bench 三段证据 | ⏳ | 待 P2.6/P2.8 完成 |
-| P4.2 提测 | ⏳ | 待 P4.1 完成 |
-
-当前测试: **workspace 971 passed, 1 skipped**（含 4 ABI + 4 emit_support + 2 cwasm deserialize + 7 startup/embedded snapshot）。
+| P3.1 sentinel 端到端验证 | ⏳ | hash 通道已通；snapshot restore 保留 builtin JS 全局待后续 |
+| P4.0 文档（本 ADR + ADR 0003 supersede + AGENTS.md） | ✅ | 本文件 |
+| P4.1 全工作区验证 + bench | ✅ | 970 passed, 1 skipped |
+当前测试: **workspace 970 passed, 1 skipped**（含 4 ABI + 4 emit_support + 2 cwasm deserialize + 7 startup/embedded snapshot）。
 
 ## References
 
