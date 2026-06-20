@@ -155,3 +155,70 @@ P2.4-P2.6（arr_new/elem_get/elem_set/get_proto_from_ctor/wjsm_bootstrap_once/wj
 - **嵌入式 snapshot 首次真正命中**：restore 34.5µs 与 full execute embedded (6.27ms) ≈ full execute off (6.33ms) 持平
 - module_only 2.26ms 占 full execute ~36%，仍是最大热点（因 P2.4-P2.6 未迁移，user wasm 仍内联 helpers）
 - snapshot restore 7.8µs（单独 bench）vs cold bootstrap 41.1µs（startup-cold=13.7+27.4=41.1µs）≈ **5.3× 加速**
+
+## P2.4-P2.5 Completion (2026-06-20)
+
+### Completed
+
+| 阶段 | 状态 | 验证 |
+|---|---|---|
+| P2.4 arr_new/elem_get/elem_set import | ✅ | 570 fixture tests passed；support module arr_*/elem_* bodies 已实现 |
+| P2.5 get_proto_from_ctor import | ✅ | 570 fixture tests passed；support module get_proto_from_ctor body 已实现 |
+| P2.6 bootstrap migration | ⊘ (by design) | bootstrap/init_function_props 仅启动时调用一次，保持 user wasm 内联 |
+| P2.7 rebake snapshot | ✅ | workspace 970 passed, 1 skipped |
+| P2.8 final bench | ✅ | 数据见下 |
+
+### Normal Mode Helper Migration Status (final)
+
+| Helper | 状态 |
+|---|---|
+| obj_new | ✅ import from wjsm_support |
+| obj_get | ✅ import |
+| obj_set | ✅ import |
+| obj_delete | ✅ import |
+| arr_new | ✅ import |
+| elem_get | ✅ import |
+| elem_set | ✅ import |
+| string_eq | ✅ import |
+| to_int32 | ✅ import |
+| get_proto_from_ctor | ✅ import |
+| wjsm_bootstrap_once | ⊘ inline (by design) |
+| wjsm_init_function_props | ⊘ inline (by design) |
+
+### P2.8 Final Benchmark (2026-06-20)
+
+运行：`target/release/deps/wjsm_runtime-<hash> bench_execute_phases --ignored --nocapture`（n=50）。
+
+| 阶段 | 耗时 |
+|------|------|
+| engine only | 153.9µs |
+| module only | 3.35ms |
+| store only | 14.6µs |
+| linker register | 482.6µs |
+| instantiate_async | 120.5µs |
+| bootstrap cold | 30.0µs |
+| host post-bootstrap | 12.1µs |
+| snapshot build cold | 13.1µs |
+| snapshot decode | 501ns |
+| snapshot restore | 14.0µs |
+
+| 模式 | 总耗时 |
+|------|--------|
+| Full execute OFF (cold bootstrap) | 3.78ms/each |
+| Full execute ON warm (embedded snapshot) | 4.56ms/each |
+
+注：module_only 3.35ms vs 旧 baseline 2.84ms — 未达到 60% 下降目标。user wasm
+import 形态将 10 个 helper 从内联替换为 import，但 module_only 时间未显著下降，
+说明 wasmtime compile 瓶颈可能不在 helper 函数体本身，而在 import/type 解析阶段。
+P2.6 bootstrap 迁移（仅启动时调用一次）不会改善此指标。
+
+### Artifact Sizes (post-P2.5)
+
+| 制品 | 大小 |
+|---|---|
+| OUT_DIR/wjsm_startup_snapshot.bin | 4516 bytes |
+| OUT_DIR/wjsm_support.cwasm | ~16KB（10 个真实 body + 2 个 stub） |
+
+### Test Status
+
+cargo nextest run --workspace: **970 passed, 1 skipped** (bench_execute_phases)
