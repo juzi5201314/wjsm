@@ -252,13 +252,10 @@ impl Compiler {
             self.elem_set_func_idx = support_import_base + 6;
             self.string_eq_func_idx = support_import_base + 7;
             self.to_int32_func_idx = support_import_base + 8;
-            for i in 0..9u32 {
+            self.get_proto_from_ctor_func_idx = support_import_base + 9;
+            for i in 0..10u32 {
                 self.push_func_table(support_import_base + i);
             }
-            self.get_proto_from_ctor_func_idx = self._next_import_func;
-            self.functions.function(3);
-            self.push_func_table(self._next_import_func);
-            self._next_import_func += 1;
         } else {
             self.obj_new_func_idx = self._next_import_func;
             self.functions.function(7);
@@ -514,7 +511,9 @@ impl Compiler {
         if self.mode == CompileMode::Eval {
             self.compile_array_helpers();
         }
-        self.compile_get_proto_from_ctor();
+        if self.mode == CompileMode::Eval {
+            self.compile_get_proto_from_ctor();
+        }
         if self.mode == CompileMode::Normal {
             self.compile_init_globals_function();
             self.compile_bootstrap_once_function();

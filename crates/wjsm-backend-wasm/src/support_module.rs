@@ -5,10 +5,9 @@
 //!
 //! ABI 边界来源：`wjsm-runtime-support::abi`（不直接依赖以避免循环）。
 //!
-//! 迁移状态（P2.2+P2.3 合并后）：
 //! - `obj_new`/`obj_get`/`obj_set`/`obj_delete`/`string_eq`/`to_int32`：✅ 真实 body
-//! - `arr_new`/`elem_get`/`elem_set`/`get_proto_from_ctor`/`wjsm_bootstrap_once`/
-//!   `wjsm_init_function_props`：占位 `unreachable`，待 P2.4-P2.6 迁移
+//! - `arr_new`/`elem_get`/`elem_set`/`get_proto_from_ctor`：✅ 真实 body（P2.4+P2.5 完成）
+//! - `wjsm_bootstrap_once`/`wjsm_init_function_props`：占位 `unreachable`，待 P2.6 迁移
 //!
 //! support module 的 global 索引与 user wasm 完全对齐（0..18），
 //! 使 helper body 移植时 GlobalGet/GlobalSet 索引无需修改。
@@ -257,7 +256,7 @@ pub fn emit_support_module() -> Result<Vec<u8>> {
     codes.function(&emit_elem_set());
     codes.function(&emit_string_eq());
     codes.function(&emit_to_int32());
-    codes.function(&emit_stub_unreachable()); // get_proto_from_ctor
+    codes.function(&emit_get_proto_from_ctor());
     codes.function(&emit_stub_unreachable()); // wjsm_bootstrap_once
     codes.function(&emit_stub_unreachable()); // wjsm_init_function_props
     module.section(&codes);
@@ -875,6 +874,88 @@ fn emit_elem_set() -> Function {
     func.instruction(&WasmInstruction::Call(FN_OBJ_SET));
     func.instruction(&WasmInstruction::End);
     func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::End);
+    func
+}
+
+// ── get_proto_from_ctor (param $ctor i64) (result i64) — Type 3 ──
+// GetPrototypeFromConstructor(F): 读取 F.prototype，若非 Object 类型则回退到 Object.prototype
+fn emit_get_proto_from_ctor() -> Function {
+    // local 0 = $ctor (i64), local 1 = $proto (i64)
+    let mut func = Function::new(vec![(1, ValType::I64)]);
+    // 调用 obj_get(ctor, "prototype") — "prototype" 的 name_id 在 support module
+    // 是硬编码的 primordial 偏移 236（PRIMORDIAL_PROTOTYPE_OFFSET）
+    func.instruction(&WasmInstruction::LocalGet(0));
+    func.instruction(&WasmInstruction::I32Const(236));
+    func.instruction(&WasmInstruction::Call(FN_OBJ_GET));
+    func.instruction(&WasmInstruction::LocalSet(1));
+    // 检查 TAG_OBJECT (0x8)
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I64Const(32));
+    func.instruction(&WasmInstruction::I64ShrU);
+    func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+    func.instruction(&WasmInstruction::I64And);
+    func.instruction(&WasmInstruction::I64Const(value::TAG_OBJECT as i64));
+    func.instruction(&WasmInstruction::I64Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    // 检查 TAG_FUNCTION (0x9)
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I64Const(32));
+    func.instruction(&WasmInstruction::I64ShrU);
+    func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+    func.instruction(&WasmInstruction::I64And);
+    func.instruction(&WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
+    func.instruction(&WasmInstruction::I64Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    // 检查 TAG_CLOSURE (0xA)
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I64Const(32));
+    func.instruction(&WasmInstruction::I64ShrU);
+    func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+    func.instruction(&WasmInstruction::I64And);
+    func.instruction(&WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
+    func.instruction(&WasmInstruction::I64Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    // 检查 TAG_ARRAY (0xB)
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I64Const(32));
+    func.instruction(&WasmInstruction::I64ShrU);
+    func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+    func.instruction(&WasmInstruction::I64And);
+    func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
+    func.instruction(&WasmInstruction::I64Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    // 检查 TAG_BOUND (0xC)
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::I64Const(32));
+    func.instruction(&WasmInstruction::I64ShrU);
+    func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+    func.instruction(&WasmInstruction::I64And);
+    func.instruction(&WasmInstruction::I64Const(value::TAG_BOUND as i64));
+    func.instruction(&WasmInstruction::I64Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::LocalGet(1));
+    func.instruction(&WasmInstruction::Return);
+    func.instruction(&WasmInstruction::End);
+    // 回退：返回 Object.prototype (Global 10)
+    func.instruction(&WasmInstruction::GlobalGet(G_OBJECT_PROTO_HANDLE));
+    func.instruction(&WasmInstruction::I64ExtendI32U);
+    let box_base = value::BOX_BASE as i64;
+    let tag_object = (value::TAG_OBJECT << 32) as i64;
+    func.instruction(&WasmInstruction::I64Const(box_base | tag_object));
+    func.instruction(&WasmInstruction::I64Or);
     func.instruction(&WasmInstruction::End);
     func
 }
