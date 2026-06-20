@@ -1019,6 +1019,64 @@ fn startup_snapshot_debug_enabled() -> bool {
         Ok("1") | Ok("true") | Ok("on")
     )
 }
+/// 解析编译缓存目录。WJSM_CACHE_DIR 优先；未设置时默认 $HOME/.cache/wjsm。
+/// 返回 None 表示缓存禁用（WJSM_CACHE_DIR 为空字符串，或 HOME 未设置）。
+fn module_cache_dir() -> Option<std::path::PathBuf> {
+    std::env::var("WJSM_CACHE_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .filter(|h| !h.is_empty())
+                .map(|h| std::path::PathBuf::from(h).join(".cache").join("wjsm"))
+        })
+}
+
+/// 编译或从缓存加载 WASM 模块。
+///
+/// 缓存 key 是 wasm bytes 的 SipHash，不受二进制 mtime 影响
+/// （与 wasmtime 内置 cache 的 debug_assertions mtime keying 不同）。
+/// 命中时走 `Module::deserialize`（mmap + 直接加载），跳过 Cranelift 编译。
+/// 未命中时 `Module::new` 编译，再 `precompile_module` 持久化到磁盘。
+fn compile_or_load_cached(engine: &Engine, wasm_bytes: &[u8]) -> Result<Module> {
+    let Some(cache_dir) = module_cache_dir() else {
+        return Module::new(engine, wasm_bytes)
+            .map_err(|e| anyhow::anyhow!("WASM validation failed: {:?}", e));
+    };
+
+    let mut hasher = DefaultHasher::new();
+    // wasmtime 版本纳入 hash，避免跨版本缓存冲突
+    "wasmtime-43".hash(&mut hasher);
+    wasm_bytes.hash(&mut hasher);
+    let key = format!("{:016x}", hasher.finish());
+
+    let cache_path = cache_dir.join(&key);
+
+    // 尝试从缓存加载（deserialize_file 走 mmap，零拷贝）
+    if cache_path.exists() {
+        match unsafe { Module::deserialize_file(engine, &cache_path) } {
+            Ok(module) => return Ok(module),
+            Err(_) => {
+                // 缓存文件损坏或 engine 配置不匹配，删除后重新编译
+                let _ = std::fs::remove_file(&cache_path);
+            }
+        }
+    }
+
+    // 编译
+    let module = Module::new(engine, wasm_bytes)
+        .map_err(|e| anyhow::anyhow!("WASM validation failed: {:?}", e))?;
+
+    // 持久化到缓存（best-effort，失败不影响执行）
+    if let Ok(cwasm) = engine.precompile_module(wasm_bytes) {
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let _ = std::fs::write(&cache_path, &cwasm);
+    }
+
+    Ok(module)
+}
 
 fn startup_engine_config(use_epoch_async_yield: bool) -> Config {
     let mut config = Config::new();
@@ -1710,12 +1768,7 @@ async fn execute_with_writer_shared_inner<W: Write>(
     let engine = Engine::new(&config)
         .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
 
-    let module = match Module::new(&engine, wasm_bytes) {
-        Ok(m) => m,
-        Err(e) => {
-            return Err(anyhow::anyhow!("WASM validation failed: {:?}", e));
-        }
-    };
+    let module = compile_or_load_cached(&engine, wasm_bytes)?;
     let snapshot_bytes = if startup_snapshot_enabled() {
         embedded_startup_snapshot_view()
     } else {
