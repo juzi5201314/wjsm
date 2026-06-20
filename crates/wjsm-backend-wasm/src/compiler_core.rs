@@ -124,8 +124,8 @@ impl Compiler {
             import_eval_global(&mut imports, "__arr_proto_table_len", ValType::I32, true);
             import_eval_global(&mut imports, "__arr_proto_table_hash", ValType::I64, true);
 
-            // P2.4+: import obj_*/arr_*/elem_*/string_eq/to_int32 from wjsm_support。
-            // 9 个 helper imports 替代原来的 inline 函数定义。
+            // P2.5+: import obj_*/arr_*/elem_*/string_eq/to_int32/get_proto_from_ctor from wjsm_support。
+            // 10 个 helper imports 替代原来的 inline 函数定义。
             imports.import("wjsm_support", "obj_new", EntityType::Function(7));
             imports.import("wjsm_support", "obj_get", EntityType::Function(8));
             imports.import("wjsm_support", "obj_set", EntityType::Function(9));
@@ -135,6 +135,7 @@ impl Compiler {
             imports.import("wjsm_support", "elem_set", EntityType::Function(9));
             imports.import("wjsm_support", "string_eq", EntityType::Function(26));
             imports.import("wjsm_support", "to_int32", EntityType::Function(10));
+            imports.import("wjsm_support", "get_proto_from_ctor", EntityType::Function(3));
         }
         let mut builtin_func_indices = HashMap::new();
         let mut special_host_import_indices = HashMap::new();
@@ -178,9 +179,9 @@ impl Compiler {
         // Normal mode 不再定义自己的 memory（已 import）；Eval mode 也不定义。
         let memory = MemorySection::new();
 
-        // Function import count: host funcs (+ Normal mode 的 6 support helper imports)
+        // Function import count: host funcs (+ Normal mode 的 10 support helper imports)
         let actual_import_count = if mode == CompileMode::Normal {
-            host_import_specs().len() as u32 + 9
+            host_import_specs().len() as u32 + 10
         } else {
             host_import_specs().len() as u32
         };
