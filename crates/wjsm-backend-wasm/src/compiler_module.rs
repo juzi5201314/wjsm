@@ -242,73 +242,65 @@ impl Compiler {
 
         // Reserve indices for object helper functions (so they're known during user function compilation).
         if self.mode == CompileMode::Normal {
-            // P2.3: obj_new/get/set/delete/string_eq/to_int32 已从 wjsm_support import
-            // （在 new_with_data_base 中追加），直接使用 import 索引。
             let support_import_base = host_import_specs().len() as u32;
             self.obj_new_func_idx = support_import_base + 0;
             self.obj_get_func_idx = support_import_base + 1;
             self.obj_set_func_idx = support_import_base + 2;
             self.obj_delete_func_idx = support_import_base + 3;
-            self.string_eq_func_idx = support_import_base + 4;
-            self.to_int32_func_idx = support_import_base + 5;
-            // 这些 import 函数也需登记到 function table（call_indirect 可能引用）
-            for i in 0..6u32 {
+            self.arr_new_func_idx = support_import_base + 4;
+            self.elem_get_func_idx = support_import_base + 5;
+            self.elem_set_func_idx = support_import_base + 6;
+            self.string_eq_func_idx = support_import_base + 7;
+            self.to_int32_func_idx = support_import_base + 8;
+            for i in 0..9u32 {
                 self.push_func_table(support_import_base + i);
             }
+            self.get_proto_from_ctor_func_idx = self._next_import_func;
+            self.functions.function(3);
+            self.push_func_table(self._next_import_func);
+            self._next_import_func += 1;
         } else {
-            // Eval mode：helpers 仍为 inline 定义
             self.obj_new_func_idx = self._next_import_func;
             self.functions.function(7);
             self.push_func_table(self._next_import_func);
             self._next_import_func += 1;
-
             self.obj_get_func_idx = self._next_import_func;
             self.functions.function(8);
             self.push_func_table(self._next_import_func);
             self._next_import_func += 1;
-
             self.obj_set_func_idx = self._next_import_func;
             self.functions.function(9);
             self.push_func_table(self._next_import_func);
             self._next_import_func += 1;
-
             self.obj_delete_func_idx = self._next_import_func;
-            self.functions.function(8); // Type 8: (i64, i32) -> (i64)
+            self.functions.function(8);
             self.push_func_table(self._next_import_func);
             self._next_import_func += 1;
-
             self.to_int32_func_idx = self._next_import_func;
-            self.functions.function(10); // Type 10: (i64) -> (i32)
+            self.functions.function(10);
             self.push_func_table(self._next_import_func);
             self._next_import_func += 1;
-
             self.string_eq_func_idx = self._next_import_func;
-            self.functions.function(26); // Type 26: (i32, i32) -> i32
+            self.functions.function(26);
+            self.push_func_table(self._next_import_func);
+            self._next_import_func += 1;
+            self.arr_new_func_idx = self._next_import_func;
+            self.functions.function(7);
+            self.push_func_table(self._next_import_func);
+            self._next_import_func += 1;
+            self.elem_get_func_idx = self._next_import_func;
+            self.functions.function(8);
+            self.push_func_table(self._next_import_func);
+            self._next_import_func += 1;
+            self.elem_set_func_idx = self._next_import_func;
+            self.functions.function(9);
+            self.push_func_table(self._next_import_func);
+            self._next_import_func += 1;
+            self.get_proto_from_ctor_func_idx = self._next_import_func;
+            self.functions.function(3);
             self.push_func_table(self._next_import_func);
             self._next_import_func += 1;
         }
-
-        // arr_new/elem_get/elem_set/get_proto_from_ctor 仍为 inline 定义（P2.4-P2.5 迁移）
-        self.arr_new_func_idx = self._next_import_func;
-        self.functions.function(7); // Type 7: (i32) -> i32
-        self.push_func_table(self._next_import_func);
-        self._next_import_func += 1;
-
-        self.elem_get_func_idx = self._next_import_func;
-        self.functions.function(8); // Type 8: (i64, i32) -> i64
-        self.push_func_table(self._next_import_func);
-        self._next_import_func += 1;
-
-        self.elem_set_func_idx = self._next_import_func;
-        self.functions.function(9); // Type 9: (i64, i32, i64) -> ()
-        self.push_func_table(self._next_import_func);
-        self._next_import_func += 1;
-
-        self.get_proto_from_ctor_func_idx = self._next_import_func;
-        self.functions.function(3); // Type 3: (i64) -> (i64)
-        self.push_func_table(self._next_import_func);
-        self._next_import_func += 1;
-        // Register array prototype method imports in function table
         let arr_proto_base = self.function_table.len() as u32;
         for (idx, _) in array_proto_method_specs() {
             self.push_func_table(idx as u32);
@@ -516,13 +508,13 @@ impl Compiler {
         }
 
         // Pass 3: Compile helper functions.
-        // Normal mode: obj_new/get/set/delete/string_eq/to_int32 已从 wjsm_support import，
-        // 不再 inline 生成。Eval mode: 仍需全部 inline。
         if self.mode == CompileMode::Eval {
             self.compile_object_helpers();
         }
-        // 编译数组辅助函数（arr_new/elem_get/elem_set 仍为 inline）
-        self.compile_array_helpers();
+        if self.mode == CompileMode::Eval {
+            self.compile_array_helpers();
+        }
+        self.compile_get_proto_from_ctor();
         if self.mode == CompileMode::Normal {
             self.compile_init_globals_function();
             self.compile_bootstrap_once_function();

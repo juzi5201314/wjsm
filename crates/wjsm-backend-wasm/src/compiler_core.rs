@@ -124,19 +124,16 @@ impl Compiler {
             import_eval_global(&mut imports, "__arr_proto_table_len", ValType::I32, true);
             import_eval_global(&mut imports, "__arr_proto_table_hash", ValType::I64, true);
 
-            // P2.3: import obj_*/string_eq/to_int32 from wjsm_support。
-            // 6 个 helper imports 替代原来的 inline 函数定义。
-            // Type 7: (i32) -> i32 — obj_new
+            // P2.4+: import obj_*/arr_*/elem_*/string_eq/to_int32 from wjsm_support。
+            // 9 个 helper imports 替代原来的 inline 函数定义。
             imports.import("wjsm_support", "obj_new", EntityType::Function(7));
-            // Type 8: (i64, i32) -> i64 — obj_get
             imports.import("wjsm_support", "obj_get", EntityType::Function(8));
-            // Type 9: (i64, i32, i64) -> () — obj_set
             imports.import("wjsm_support", "obj_set", EntityType::Function(9));
-            // Type 8: (i64, i32) -> i64 — obj_delete
             imports.import("wjsm_support", "obj_delete", EntityType::Function(8));
-            // Type 26: (i32, i32) -> i32 — string_eq
+            imports.import("wjsm_support", "arr_new", EntityType::Function(7));
+            imports.import("wjsm_support", "elem_get", EntityType::Function(8));
+            imports.import("wjsm_support", "elem_set", EntityType::Function(9));
             imports.import("wjsm_support", "string_eq", EntityType::Function(26));
-            // Type 10: (i64) -> i32 — to_int32
             imports.import("wjsm_support", "to_int32", EntityType::Function(10));
         }
         let mut builtin_func_indices = HashMap::new();
@@ -183,7 +180,7 @@ impl Compiler {
 
         // Function import count: host funcs (+ Normal mode 的 6 support helper imports)
         let actual_import_count = if mode == CompileMode::Normal {
-            host_import_specs().len() as u32 + 6 // obj_new/get/set/delete/string_eq/to_int32
+            host_import_specs().len() as u32 + 9
         } else {
             host_import_specs().len() as u32
         };
