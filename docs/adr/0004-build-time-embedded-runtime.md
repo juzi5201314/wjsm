@@ -1,6 +1,6 @@
 # ADR 0004: Build-Time Embedded Runtime
 
-**Status**: Partial — P0/P1/P2.0/P2.1/P2.2/P2.3/P3.0 实施落地；运行时磁盘 startup cache 已退役；P2.4-P2.8、P3.1 sentinel、P4.1/P4.2 留待后续工作。当前等价于 ADR 0003 的 snapshot 能力上**改为 build-time 固化通道**，不再依赖客户机器缓存。
+**Status**: Workspace 全测试通过（970 passed, 1 skipped）。P0/P1/P2.0-P2.3/P3.0/P4.0/P4.1 实施落地。运行时磁盘 startup cache 已退役。P2.4-P2.8、P3.1 sentinel 留待后续工作（arr_new/elem_get/elem_set/get_proto/bootstrap 仍为 user wasm 内联编译，support module 对应函数含 unreachable stub—当前生产路径不触发）。当前等价于 ADR 0003 的 snapshot 能力上**改为 build-time 固化通道**，不再依赖客户机器缓存。
 
 **Date**: 2026-06-19
 
