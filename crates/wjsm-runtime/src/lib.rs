@@ -1027,11 +1027,10 @@ fn startup_engine_config(use_epoch_async_yield: bool) -> Config {
         config.strategy(Strategy::Winch);
     }
     // WJSM_OPT_LEVEL=none|speed_and_size 控制 Cranelift 优化等级
-    // none: 最快编译最慢执行  speed: 最慢编译最快执行（默认）  speed_and_size: 折中
     match std::env::var("WJSM_OPT_LEVEL").as_deref() {
         Ok("none") => { config.cranelift_opt_level(OptLevel::None); }
         Ok("speed_and_size") => { config.cranelift_opt_level(OptLevel::SpeedAndSize); }
-        _ => {} // 默认 Speed
+        _ => {}
     }
     if use_epoch_async_yield {
         config.epoch_interruption(true);
