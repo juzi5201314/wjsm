@@ -333,95 +333,79 @@ impl Compiler {
             self.codes.function(&func);
         }
 
-        // ── $get_prototype_from_constructor (param $ctor i64) (result i64) — Type 3 ──
-        // GetPrototypeFromConstructor(F): 读取 F.prototype，若非 Object 类型则回退到 Object.prototype
-        {
-            // local 0 = $ctor (i64), local 1 = $proto (i64)
-            let mut func = Function::new(vec![(1, ValType::I64)]);
+    }
 
-            // 获取 "prototype" 的 name_id
-            let proto_name_id = self.intern_data_string("prototype");
-
-            // 调用 $obj_get(ctor, "prototype") — 遍历原型链
-            func.instruction(&WasmInstruction::LocalGet(0));
-            func.instruction(&WasmInstruction::I32Const(proto_name_id as i32));
-            func.instruction(&WasmInstruction::Call(self.obj_get_func_idx));
-            func.instruction(&WasmInstruction::LocalSet(1)); // $proto
-
-            // 检查结果是否为 TAG_OBJECT (0x8)
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I64Const(32));
-            func.instruction(&WasmInstruction::I64ShrU);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
-            func.instruction(&WasmInstruction::I64And);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_OBJECT as i64));
-            func.instruction(&WasmInstruction::I64Eq);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Return);
-            func.instruction(&WasmInstruction::End);
-
-            // 检查结果是否为 TAG_FUNCTION (0x9)
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I64Const(32));
-            func.instruction(&WasmInstruction::I64ShrU);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
-            func.instruction(&WasmInstruction::I64And);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
-            func.instruction(&WasmInstruction::I64Eq);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Return);
-            func.instruction(&WasmInstruction::End);
-            // 检查是否为 TAG_CLOSURE (0xA)
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I64Const(32));
-            func.instruction(&WasmInstruction::I64ShrU);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
-            func.instruction(&WasmInstruction::I64And);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
-            func.instruction(&WasmInstruction::I64Eq);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Return);
-            func.instruction(&WasmInstruction::End);
-            // 检查是否为 TAG_ARRAY (0xB)
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I64Const(32));
-            func.instruction(&WasmInstruction::I64ShrU);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
-            func.instruction(&WasmInstruction::I64And);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
-            func.instruction(&WasmInstruction::I64Eq);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Return);
-            func.instruction(&WasmInstruction::End);
-            // 检查是否为 TAG_BOUND (0xC)
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::I64Const(32));
-            func.instruction(&WasmInstruction::I64ShrU);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
-            func.instruction(&WasmInstruction::I64And);
-            func.instruction(&WasmInstruction::I64Const(value::TAG_BOUND as i64));
-            func.instruction(&WasmInstruction::I64Eq);
-            func.instruction(&WasmInstruction::If(BlockType::Empty));
-            func.instruction(&WasmInstruction::LocalGet(1));
-            func.instruction(&WasmInstruction::Return);
-            func.instruction(&WasmInstruction::End);
-
-            // 回退：返回 Object.prototype (Global 10)
-            func.instruction(&WasmInstruction::GlobalGet(
-                self.object_proto_handle_global_idx,
-            ));
-            func.instruction(&WasmInstruction::I64ExtendI32U);
-            let box_base = value::BOX_BASE as i64;
-            let tag_object = (value::TAG_OBJECT << 32) as i64;
-            func.instruction(&WasmInstruction::I64Const(box_base | tag_object));
-            func.instruction(&WasmInstruction::I64Or);
-
-            func.instruction(&WasmInstruction::End);
-            self.codes.function(&func);
-        }
+    pub(crate) fn compile_get_proto_from_ctor(&mut self) {
+        // local 0 = $ctor (i64), local 1 = $proto (i64)
+        let mut func = Function::new(vec![(1, ValType::I64)]);
+        let proto_name_id = self.intern_data_string("prototype");
+        func.instruction(&WasmInstruction::LocalGet(0));
+        func.instruction(&WasmInstruction::I32Const(proto_name_id as i32));
+        func.instruction(&WasmInstruction::Call(self.obj_get_func_idx));
+        func.instruction(&WasmInstruction::LocalSet(1));
+        // Tag checks and fallback...
+        func.instruction(&WasmInstruction::LocalGet(1));
+        func.instruction(&WasmInstruction::I64Const(32));
+        func.instruction(&WasmInstruction::I64ShrU);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+        func.instruction(&WasmInstruction::I64And);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_OBJECT as i64));
+        func.instruction(&WasmInstruction::I64Eq);
+        func.instruction(&WasmInstruction::If(BlockType::Empty));
+        func.instruction(&WasmInstruction::LocalGet(1));
+        func.instruction(&WasmInstruction::Return);
+        func.instruction(&WasmInstruction::End);
+        func.instruction(&WasmInstruction::LocalGet(1));
+        func.instruction(&WasmInstruction::I64Const(32));
+        func.instruction(&WasmInstruction::I64ShrU);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+        func.instruction(&WasmInstruction::I64And);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_FUNCTION as i64));
+        func.instruction(&WasmInstruction::I64Eq);
+        func.instruction(&WasmInstruction::If(BlockType::Empty));
+        func.instruction(&WasmInstruction::LocalGet(1));
+        func.instruction(&WasmInstruction::Return);
+        func.instruction(&WasmInstruction::End);
+        func.instruction(&WasmInstruction::LocalGet(1));
+        func.instruction(&WasmInstruction::I64Const(32));
+        func.instruction(&WasmInstruction::I64ShrU);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+        func.instruction(&WasmInstruction::I64And);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
+        func.instruction(&WasmInstruction::I64Eq);
+        func.instruction(&WasmInstruction::If(BlockType::Empty));
+        func.instruction(&WasmInstruction::LocalGet(1));
+        func.instruction(&WasmInstruction::Return);
+        func.instruction(&WasmInstruction::End);
+        func.instruction(&WasmInstruction::LocalGet(1));
+        func.instruction(&WasmInstruction::I64Const(32));
+        func.instruction(&WasmInstruction::I64ShrU);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+        func.instruction(&WasmInstruction::I64And);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
+        func.instruction(&WasmInstruction::I64Eq);
+        func.instruction(&WasmInstruction::If(BlockType::Empty));
+        func.instruction(&WasmInstruction::LocalGet(1));
+        func.instruction(&WasmInstruction::Return);
+        func.instruction(&WasmInstruction::End);
+        func.instruction(&WasmInstruction::LocalGet(1));
+        func.instruction(&WasmInstruction::I64Const(32));
+        func.instruction(&WasmInstruction::I64ShrU);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
+        func.instruction(&WasmInstruction::I64And);
+        func.instruction(&WasmInstruction::I64Const(value::TAG_BOUND as i64));
+        func.instruction(&WasmInstruction::I64Eq);
+        func.instruction(&WasmInstruction::If(BlockType::Empty));
+        func.instruction(&WasmInstruction::LocalGet(1));
+        func.instruction(&WasmInstruction::Return);
+        func.instruction(&WasmInstruction::End);
+        func.instruction(&WasmInstruction::GlobalGet(self.object_proto_handle_global_idx));
+        func.instruction(&WasmInstruction::I64ExtendI32U);
+        let box_base = value::BOX_BASE as i64;
+        let tag_object = (value::TAG_OBJECT << 32) as i64;
+        func.instruction(&WasmInstruction::I64Const(box_base | tag_object));
+        func.instruction(&WasmInstruction::I64Or);
+        func.instruction(&WasmInstruction::End);
+        self.codes.function(&func);
     }
 }
