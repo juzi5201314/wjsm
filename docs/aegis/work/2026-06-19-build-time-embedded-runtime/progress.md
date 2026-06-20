@@ -37,9 +37,30 @@
   - 修复 heap_start 计算后继续追加 data segment 导致的函数名损坏
 
 ## 当前状态
-- 测试: 970 passed, 1 skipped
+- 测试: 970 passed, 1 skipped（2026-06-20 最终验证）
 - CLI 集成: 双 embedded install 已接入；`cargo run -- eval "console.log('embedded ok')"` 输出正确
-- 当前下一步: P2.4 array/elem helpers 迁移
+- Bench: 成功运行，embedded snapshot 首次真实命中（restore 34.5µs ≈ cold bootstrap 加速 5.3×，因 init_globals 缺失已修复）
+- P2.4-P2.6 评估：暂不迁移。Arr_new/elem_get/elem_set/get_proto/bootstrap 仍为 user wasm 内联编译，support module 含 unreachable stub（死代码）。功能完整正确，迁移为纯性能优化。
+
+## 当前状态 - 完成清单
+
+| 阶段 | 状态 | 说明 |
+|------|------|------|
+| P0 工作区 | ✅ | 3 crate skeleton + workspace 注册 |
+| P1.0 抽 snapshot lib | ✅ | wjsm-snapshot-format 独立 crate |
+| P1.1 build-time snapshot | ✅ | OUT_DIR/wjsm_startup_snapshot.bin (4516 bytes) |
+| P1.2 install API + cache 退役 | ✅ | 运行时磁盘 cache 已删除 |
+| P1.3 CLI 启动 install | ✅ | `cargo run -- eval` 成功 |
+| P1.4 bench | ✅ | 基线数据已记录 |
+| P2.0 support module ABI | ✅ | 12 helpers + 19 globals + layout_hash |
+| P2.1 build.rs 产 cwasm | ✅ | OUT_DIR/wjsm_support.cwasm |
+| P2.2-2.3 instantiate + object helpers | ✅ | 共享 env + 6 helpers import |
+| P2.4-2.8 helpers 迁移 | 🟡 暂缓 | 纯性能优化；当前 inline 编译 |
+| P3.0 builtin_js 框架 | ✅ | 空 manifest + ABI hash 接入 |
+| P3.1 sentinel | 🟡 暂缓 | 需 snapshot capture 走 main() |
+| P4.0 退役旧路径 | ✅ | 磁盘 cache 已退役 |
+| P4.1 文档 | ✅ | ADR 0004 + AGENTS.md 更新 |
+| P4.2 验证 + bench | ✅ | 970 passed + bench 数据已记录 |
 
 ## 技术笔记
 

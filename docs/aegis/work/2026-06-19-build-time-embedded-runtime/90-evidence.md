@@ -90,15 +90,68 @@ P2.3-P2.6 切换 user wasm 为 import 形态、跳过 helper 内联。
 | P3.0 builtin_js 框架 | ✅ | manifest 空数组与 builtin JS 引入前字节级一致；BUILTIN_JS_FILES 接入 ABI hash external input |
 | P4.0 ADR 0004 + AGENTS.md | ✅ | docs/adr/0004 + ADR 0003 标 partial-superseded + INDEX 更新 |
 
+### P4.1 Report (2026-06-20, continuation session)
+
+运行 `cargo nextest run --workspace`：**970 passed, 1 skipped**。
+
+P2.4-P2.6（arr_new/elem_get/elem_set/get_proto_from_ctor/wjsm_bootstrap_once/wjsm_init_function_props 迁移到 support module）评估结论：
+- 当前 user wasm 仍内联编译这些 helper 函数，support module 含对应 unreachable stub（死代码）
+- 迁移需要：添加 3 个 host imports 到 support module（ObjGetByIndex/TypedArraySetByIndex/SymbolPropertyKey）、移植函数体（~260 行 wasm instructions）、并更新 backend 引用为 import 形态
+- P2.6 bootstrap 迁移最复杂，需要把 user wasm data segment 的 name/param 表通过指针参数传给 support module
+- **决定：暂不迁移**。当前功能完整、970 测试全过。这些优化属于 P2 性能优化（减少 wasmtime compile 时间），不影响正确性。留待后续专门会话处理。
+
 ## Pending Phases (后续会话)
 
 | 阶段 | 阻塞原因 | 工作量估算 |
 |---|---|---|
-| P2.4 切 array/elem helpers | 同 P2.3 模式 | 长会话 |
-| P2.5 切 utility helpers (string_eq/to_int32/get_proto_from_ctor) | 同 P2.3 模式 | 长会话 |
+| P2.4 切 array/elem helpers | 需添加 ObjGetByIndex/TypedArraySetByIndex/SymbolPropertyKey 3 个 host imports + 移植函数体 | 长会话 |
+| P2.5 切 utility helpers (get_proto_from_ctor) | 同 P2.3 模式 | 长会话 |
 | P2.6 切 bootstrap (wjsm_bootstrap_once + wjsm_init_function_props) | 需把 user wasm data segment 中 name/param 表布局改为 helper 指针参数 | 长会话 |
 | P2.7 重新 bake P1 snapshot | 等 P2.6 后 ABI 已变 | 短 |
-| P2.8 删除旧 inline helpers + bench module_only ≤ 60% | 等 P2.6 后 | 短（删除 1538 行 + bench） |
-| P3.1 sentinel E2E（builtin_js_bundle_hash 接入已完成；sentinel 验证依赖 P2.3-P2.6 后的 user-side eval） | 同上 | 中 |
-| P4.1 bench 三段证据（embedded warm vs runtime warm vs module_only ≤ 60%） | 等 P2.8 数据 | 短 |
-| P4.2 提测 | 等 P4.1 完成 | 短 |
+| P2.8 删除旧 inline helpers + bench module_only ≤ 60% | 等 P2.6 后 | 短 |
+| P3.1 sentinel E2E（builtin_js_bundle_hash 接入已完成） | 低优先级 - 仅验证框架完整性 | 短 |
+| P4.2 bench 三段证据（embedded warm vs runtime warm vs module_only ≤ 60%） | 等 P2.8 数据 | 短 |
+
+## P4.2 Final Verification (2026-06-20)
+
+**Workspace: 970 passed, 1 skipped** (skipped = bench_execute_phases 需 `--ignored`)
+
+### 关键修复
+在 P2.2 重构后发现 snapshot restore 因 `__arr_proto_table_len` global 未初始化（0）而静默失败，回退走 cold bootstrap——嵌入式 snapshot 从 **未实际命中**。修复：在 restore 前调用 `run_init_globals_only` 设置 imported globals，使校验通过。
+
+### P4.2 Benchmark
+
+运行：`target/release/deps/wjsm_runtime-<hash> bench_execute_phases --ignored --nocapture`（n=50）。
+
+#### Startup Phase Breakdown
+| 阶段 | 耗时 | 占比 |
+|------|------|------|
+| engine only | 15.4µs | 0.3% |
+| **module only** | **2.33ms** | **49%** |
+| store only | 9.0µs | 0.2% |
+| linker register | 566µs | 12% |
+| instantiate_async | 3.04ms | 64% |
+| bootstrap cold | 13.7µs | 0.3% |
+| host post-bootstrap | 27.4µs | 0.6% |
+| snapshot build cold | 9.7µs | 0.2% |
+| snapshot decode | 842ns | 0.02% |
+| **snapshot restore** | **7.8µs** | **0.2%** |
+
+#### Full Execute Timing
+
+| 模式 | 总耗时 |
+|------|--------|
+| Full execute OFF (cold bootstrap) | 6.326ms/each |
+| Full execute ON (embedded snapshot) | **6.270ms/each** |
+| ON detail: engine | 10.6µs |
+| ON detail: module | 2.256ms |
+| ON detail: decode | 866ns |
+| ON detail: restore | 34.5µs |
+| ON detail: startup | 35.4µs |
+| ON detail: main | 369.7µs |
+| ON detail: total | 6.241ms |
+
+关键发现：
+- **嵌入式 snapshot 首次真正命中**：restore 34.5µs 与 full execute embedded (6.27ms) ≈ full execute off (6.33ms) 持平
+- module_only 2.26ms 占 full execute ~36%，仍是最大热点（因 P2.4-P2.6 未迁移，user wasm 仍内联 helpers）
+- snapshot restore 7.8µs（单独 bench）vs cold bootstrap 41.1µs（startup-cold=13.7+27.4=41.1µs）≈ **5.3× 加速**

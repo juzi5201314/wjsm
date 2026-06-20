@@ -1203,7 +1203,7 @@ async fn instantiate_execute_bundle(
         .imports()
         .any(|import| import.module() == "wjsm_support");
     if needs_support {
-        setup_shared_env_and_support(&mut linker, &mut store, engine).await?;
+        setup_shared_env_and_support(&mut linker, &mut store, &engine).await?;
     }
 
     let instance = linker
@@ -1451,23 +1451,8 @@ fn define_env_global(
 /// 仅执行 bootstrap 逻辑（host post-bootstrap + __wjsm_bootstrap_once），不触发 snapshot capture。
 /// 供 build-time snapshot 生成使用，避免构建期执行用户 main。
 async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
-    // P2.2: 先调用 __wjsm_init_globals 设置 imported globals 的初始值。
-    // 必须在 initialize_host_post_bootstrap 之前执行——host 函数依赖
-    // heap_ptr/obj_table_ptr 等全局的正确值。
-    if let Ok(init_globals_fn) = bundle
-        .instance
-        .get_typed_func::<(), i64>(&mut bundle.store, "__wjsm_init_globals")
-    {
-        init_globals_fn
-            .call_async(&mut bundle.store, ())
-            .await
-            .map_err(|e| anyhow::anyhow!("init_globals failed: {e:?}"))?;
-    }
-    // Bootstrap 编排：Rust 显式跑 host post-bootstrap → __wjsm_bootstrap_once，
-    // 后者末尾自己写 `function_props_base = obj_table_count` 与 `bootstrap_done = 1`。
-    // 之后 main() 里的 emit_startup_phase_call(bootstrap_func) 因 bootstrap_done=1 跳过，
-    // 不会双重运行。restore 路径由 startup_snapshot::restore 把这两个 global 写回。
-    initialize_host_post_bootstrap(&mut bundle.store, &bundle.wasm_env);
+    run_init_globals_only(bundle).await?;
+    // 在 globals 就绪后运行 bootstrap_once
     if let Ok(bootstrap_fn) = bundle
         .instance
         .get_typed_func::<(), i64>(&mut bundle.store, "__wjsm_bootstrap_once")
@@ -1477,6 +1462,25 @@ async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("bootstrap_once failed: {e:?}"))?;
     }
+    Ok(())
+}
+
+/// 只设置 imported globals 的初始值 + host post-bootstrap，不运行 __wjsm_bootstrap_once。
+/// 供 snapshot restore 路径使用：restore 前必须让 globals（__arr_proto_table_len 等）反映
+/// 编译期的值，否则 snapshot 的 arr_proto_table_len 校验会失败。
+async fn run_init_globals_only(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
+    if let Ok(init_globals_fn) = bundle
+        .instance
+        .get_typed_func::<(), i64>(&mut bundle.store, "__wjsm_init_globals")
+    {
+        init_globals_fn
+            .call_async(&mut bundle.store, ())
+            .await
+            .map_err(|e| anyhow::anyhow!("init_globals failed: {e:?}"))?;
+    }
+    // host post-bootstrap 必须在 globals 就绪后执行——host 函数依赖
+    // heap_ptr/obj_table_ptr 等全局的正确值。
+    initialize_host_post_bootstrap(&mut bundle.store, &bundle.wasm_env);
     Ok(())
 }
 
@@ -1556,6 +1560,11 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
     timings.linker_register = start.elapsed();
 
     let start = std::time::Instant::now();
+    // P2.2: bench 也必须为 import env memory/table/globals 设置 shared env + support module。
+    let needs_support = module.imports().any(|import| import.module() == "wjsm_support");
+    if needs_support {
+        setup_shared_env_and_support(&mut linker, &mut store, &engine).await?;
+    }
     let instance = linker
         .instantiate_async(&mut store, &module)
         .await
@@ -1598,11 +1607,21 @@ async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTiming
     let _rx2 = prepare_async_host_completion(&mut store2);
     let mut linker2 = Linker::new(&engine);
     register_startup_linker(&mut linker2, &mut store2)?;
+    if needs_support {
+        setup_shared_env_and_support(&mut linker2, &mut store2, &engine).await?;
+    }
     let instance2 = linker2
         .instantiate_async(&mut store2, &module)
         .await
         .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
     let env2 = extract_wasm_env(&instance2, &mut store2);
+    // Snapshot restore 前必须先运行 init_globals 设置 __arr_proto_table_len 等。
+    if let Ok(init_globals_fn) =
+        instance2.get_typed_func::<(), i64>(&mut store2, "__wjsm_init_globals")
+    {
+        let _ = init_globals_fn.call_async(&mut store2, ()).await;
+    }
+    initialize_host_post_bootstrap(&mut store2, &env2);
     let start = std::time::Instant::now();
     startup_snapshot::restore_startup_snapshot(&mut store2, &env2, view)?;
     timings.snapshot_restore = start.elapsed();
@@ -1644,6 +1663,8 @@ async fn execute_for_startup_bench(
         timings.snapshot_decode = start.elapsed();
 
         let start = std::time::Instant::now();
+        // Snapshot restore 前先运行 init_globals 使 __arr_proto_table_len 等 globals 就绪。
+        let _ = run_init_globals_only(&mut bundle).await;
         startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view)?;
         timings.snapshot_restore = start.elapsed();
         snapshot_restored = true;
@@ -1701,6 +1722,9 @@ async fn execute_with_writer_shared_inner<W: Write>(
 
     let mut snapshot_restored = false;
     if let Some(bytes) = snapshot_bytes {
+        // 快照 restore 前必须先运行 init_globals + host_post_bootstrap，
+        // 设置 __arr_proto_table_len 等 imported globals 使 restore 校验通过。
+        let _ = run_init_globals_only(&mut bundle).await;
         snapshot_restored = try_restore_snapshot(&mut bundle, bytes).await;
         if !snapshot_restored {
             bundle = instantiate_execute_bundle(
