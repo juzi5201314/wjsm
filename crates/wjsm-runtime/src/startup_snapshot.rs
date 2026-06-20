@@ -7,8 +7,9 @@ use anyhow::{Context, Result, bail};
 use wasmtime::*;
 use wjsm_ir::value;
 
-use crate::startup_snapshot_format::*;
+use crate::startup_snapshot_native_bridge::SnapshotNativeCallableBridge;
 use crate::wasm_env::WasmEnv;
+use wjsm_snapshot_format::*;
 
 // ── global read helpers ─────────────────────────────────────────────
 

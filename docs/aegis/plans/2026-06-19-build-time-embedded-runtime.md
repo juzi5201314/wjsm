@@ -40,8 +40,7 @@ crates/wjsm-cli/                # main_entry 启动时 install_embedded_snapshot
 - `AGENTS.md` Startup snapshot / Function-property handle layout / WASM contract 段
 - 当前源码证据：
   - `crates/wjsm-runtime/src/startup_snapshot.rs` — capture/restore owner
-  - `crates/wjsm-runtime/src/startup_snapshot_format.rs` — format + abi_hash
-  - `crates/wjsm-runtime/src/startup_snapshot_cache.rs` — runtime cache
+  - `crates/wjsm-snapshot-format/src/lib.rs` — format + abi_hash
   - `crates/wjsm-runtime/src/lib.rs:911-1390` — execute path / instantiate bundle
   - `crates/wjsm-backend-wasm/src/compiler_module.rs:243-340,780-940` — 当前 helper 函数索引、bootstrap/init_function_props 阶段函数
   - `crates/wjsm-backend-wasm/src/compiler_helpers.rs:1-1538` — 当前所有 wasm-emitted helper bodies
@@ -62,10 +61,10 @@ crates/wjsm-cli/                # main_entry 启动时 install_embedded_snapshot
 - Snapshot 仍只覆盖 pristine runtime startup heap；用户对象、promise/timer/microtask/fetch/stream 活动状态、`SharedRuntimeState`、`eval_cache`、scheduler 状态都不能被任何 embedded 制品捕获
 - 用户 JS 模块解析行为不变；不引入 `wjsm:` 命名空间
 - 旧 per-module helper 内联 codegen 必须**完全退役**；旧 user module 自己 export memory 的 contract 必须**完全退役**
-- ABI hash 不一致一律 cold rebuild，不静默运行
-- 三个新 crate 都加 `embedded` cargo feature，默认开启；`--no-default-features` 时 fallback 到当前运行时 capture/runtime cache 路径
+- ABI hash 不一致一律 cold startup，不静默运行
+- 三个新 crate 都加 `embedded` cargo feature，默认开启；`--no-default-features` 时不生成 embedded 制品，运行时只走 cold bootstrap，不写客户机器缓存
 - P2 切换后，通过 backend 内部的 `#[cfg(feature = "support-module-imports")]` 兼容旧 contract wasm：feature 关闭时仍支持 old-contract user wasm；切换期间新旧并存，P2.8 删除旧路径。在此期间所有 fixture 的 `.expected` 不变，因为 fixture runner 只比 stdout/stderr，不比 wasm 结构
-- `startup_snapshot.rs`、`startup_snapshot_cache.rs`、`startup_snapshot_format.rs` 等旧模块始终编译，仅在 `install_embedded_*` 命中或 feature 关闭时选择不同调用路径；不被 feature gate 包裹
+- `startup_snapshot.rs`、`wjsm-snapshot-format` 始终编译；`install_embedded_*` 命中时 restore embedded，未安装或 ABI 失配时只 cold bootstrap
 
 **Verification**：
 
@@ -123,8 +122,8 @@ Owner / retirement matrix:
   - wjsm-cli/src/lib.rs: 进程启动时安装
   - wjsm-backend-wasm/src/compiler_module.rs: 用户 wasm import 形态
 - Old owner: 当前 per-module 内联 helpers + 当前 first-run capture-on-demand 路径
-- Compat-only carrier: runtime cache（OnceLock + 磁盘）保留为 fallback，仅当 `embedded` feature 关闭或 install_* 未被调用时启用
-- Delete-first / retirement trigger: 一旦 P2 切换完成，旧 inline helper codegen 全部删除；P1 切换后 capture-on-demand 路径在 default feature 下不再触发
+- Retired owner: runtime snapshot cache（OnceLock + 磁盘）已删除；不再作为 fallback
+- Delete-first / retirement trigger: 一旦 P2 切换完成，旧 inline helper codegen 全部删除；P1 切换后 capture-on-demand 路径在 runtime 执行默认路径不再触发
 
 Falsification matrix:
 - Dependency-removal test: 关闭 embedded feature 后，所有 fixture 仍通过；任意一项 ABI 输入修改后 embedded 字节必失效
@@ -152,7 +151,7 @@ Verdict:
   - 一份 builtin JS bundle，统一在 snapshot 期注入，不引入运行时 lazy 装载
 - Verification scope:
   - Unit: snapshot format/abi_hash、support module instantiate、builtin_js eval、resolver 不变
-  - Integration: snapshot on/off/embedded/runtime cache/embedded ABI mismatch；support module deserialize/降级；builtin_js 注入后 globals 在用户代码可见
+  - Integration: snapshot on/off/embedded/no-runtime-cache/embedded ABI mismatch；support module deserialize/降级；builtin_js 注入后 globals 在用户代码可见
   - Performance: P1 first-run / P2 module compile / P3 startup eval 三段计时
 - Task executability:
   - P1（独立、最小、最先验证 build.rs 模式）→ P2（最大改动）→ P3（依附 P2 后的 instance 形态）
@@ -172,7 +171,7 @@ Complexity Budget:
   - 新增: crates/wjsm-runtime-support/{Cargo.toml, build.rs, src/lib.rs, src/abi.rs, src/codegen.rs}
   - 新增: crates/wjsm-snapshot-format/{Cargo.toml, src/lib.rs}
   - 新增: crates/wjsm-runtime/builtin_js/{manifest.rs, *.js}
-  - 修改: crates/wjsm-runtime/src/{lib.rs, startup_snapshot.rs, startup_snapshot_format.rs, startup_snapshot_cache.rs, wasm_env.rs}
+  - 修改: crates/wjsm-runtime/src/{lib.rs, startup_snapshot.rs, startup_snapshot_format.rs, wasm_env.rs}
   - 修改: crates/wjsm-backend-wasm/src/{compiler_module.rs, compiler_core.rs, compiler_helpers.rs, compiler_array_helpers.rs, compiler_data.rs, lib.rs}
   - 修改: crates/wjsm-cli/src/lib.rs
   - 修改: AGENTS.md, docs/adr/0003-…(supersede), docs/adr/0004-build-time-embedded-runtime.md, docs/aegis/INDEX.md
@@ -195,7 +194,7 @@ Plan-Time Complexity Check:
 | P0 | 工作区准备：3 crate skeleton + Cargo workspace member 注册 | `cargo build --workspace` 通过，新 crate 空骨架编译 |
 | P1.0 | 抽 snapshot lib：把 `startup_snapshot_format` 迁入独立 `wjsm-snapshot-format` crate（pure，无 wasmtime） | crate 单独编译；wjsm-runtime 仍正常 |
 | P1.1 | `wjsm-runtime-snapshot` build.rs：编译空 seed JS、capture、写 OUT_DIR/snapshot.bin | OUT_DIR/snapshot.bin 存在，header.abi_hash 等于运行时 |
-| P1.2 | wjsm-runtime `install_embedded_snapshot` 入口 + 与 cache get_cached 优先级 | 单测：install 后 embedded 命中，cache 不写 |
+| P1.2 | wjsm-runtime `install_embedded_snapshot` 入口 + 退役 runtime cache | 单测：install 后 embedded 命中，cache env 不写盘 |
 | P1.3 | wjsm-cli 启动时 install | `wjsm run hello.js` 走 embedded 路径，输出不变 |
 | P1.4 | bench：embedded first-run vs runtime first-run 对比 | embedded first-run 不付 cold bootstrap |
 | P2.0 | 设计 support module ABI：列出 imported env/memory/table/globals/host imports + exports；写 `wjsm-runtime-support/src/abi.rs` 常量与 ABI hash 输入 | abi.rs 单元测试通过，ABI hash 稳定 |
@@ -343,7 +342,7 @@ Plan-Time Complexity Check:
 
 # P1：Embedded startup snapshot
 
-**Why**：让 first-run 不再付 cold bootstrap。snapshot 字节在构建期生成、`include_bytes!` 进二进制；运行时优先用 embedded，runtime cache 退化为 opt-out fallback。
+**Why**：让 first-run 不再付 cold bootstrap。snapshot 字节在构建期生成、`include_bytes!` 进二进制；运行时优先用 embedded，runtime cache 直接退役。
 
 ## P1.0 抽 snapshot 公共 lib：`wjsm-snapshot-format` crate
 
@@ -353,14 +352,14 @@ Plan-Time Complexity Check:
 - modify: `crates/wjsm-snapshot-format/src/lib.rs`（从 `crates/wjsm-runtime/src/startup_snapshot_format.rs` 迁入，`pub(crate)` → `pub`）
 - modify: `crates/wjsm-runtime/Cargo.toml`（加 `wjsm-snapshot-format = { path = "../wjsm-snapshot-format" }`）
 - modify: `crates/wjsm-runtime/src/lib.rs`：删 `mod startup_snapshot_format;`，改 `use wjsm_snapshot_format as startup_snapshot_format;`
-- modify: `crates/wjsm-runtime/src/{startup_snapshot.rs, startup_snapshot_cache.rs}`：导入路径统一为 `use wjsm_snapshot_format::*`
+- modify: `crates/wjsm-runtime/src/startup_snapshot.rs`：导入路径统一为 `use wjsm_snapshot_format::*`
 - delete: `crates/wjsm-runtime/src/startup_snapshot_format.rs`
 
 **Steps**：
 
 - [ ] 把 `crates/wjsm-runtime/src/startup_snapshot_format.rs` 整文件内容迁入 `crates/wjsm-snapshot-format/src/lib.rs`，`pub(crate)` 改为 `pub`，`use crate::*` 改为 `use wjsm_ir::*`（如有）。
 - [ ] 在 `crates/wjsm-runtime/src/lib.rs` 删除 `mod startup_snapshot_format;`，加 `use wjsm_snapshot_format as startup_snapshot_format;`。
-- [ ] 在 `crates/wjsm-runtime/src/{startup_snapshot.rs, startup_snapshot_cache.rs}` 中全局替换 `super::startup_snapshot_format` / `crate::startup_snapshot_format` 为 `wjsm_snapshot_format`。
+- [ ] 在 `crates/wjsm-runtime/src/startup_snapshot.rs` 中全局替换 `super::startup_snapshot_format` / `crate::startup_snapshot_format` 为 `wjsm_snapshot_format`。
 - [ ] 验证：
   ```bash
   cargo nextest run -p wjsm-runtime -E 'test(startup_snapshot)'
@@ -458,11 +457,11 @@ fn capture_embedded_startup_state(
   字节大小 > 100。
 - [ ] 提交：`feat(snapshot): generate embedded startup snapshot bytes at build time`
 
-## P1.2 install_embedded_snapshot 入口 + cache 优先级
+## P1.2 install_embedded_snapshot 入口 + 退役 runtime cache
 
-**Why**：让 wjsm-runtime 在执行路径上优先用 embedded bytes，runtime cache 仅当未安装或 ABI 不匹配时启用。
+**Why**：让 wjsm-runtime 在执行路径上优先用 embedded bytes；未安装或 ABI 不匹配时只 cold bootstrap，不在客户机器写 startup snapshot cache。
 
-**设计决策**：`try_restore_snapshot` 统一接受 `&[u8]`（非 `Arc<[u8]>`），避免 embedded static bytes 拷贝。cache 侧 `Arc::as_ref()` 传入。
+**设计决策**：`try_restore_snapshot` 统一接受 `&[u8]`（非 `Arc<[u8]>`），避免 embedded static bytes 拷贝；runtime cache 模块直接删除。
 
 **Files**：
 - modify: `crates/wjsm-runtime/src/lib.rs`：
@@ -470,7 +469,7 @@ fn capture_embedded_startup_state(
   - 新增 `pub fn install_embedded_startup_snapshot(bytes: &'static [u8])`
   - 新增 `fn embedded_startup_snapshot_view() -> Option<&'static [u8]>`：decode + abi_hash 校验
   - 修改 `try_restore_snapshot`：接受 `&[u8]` 代替 `Arc<[u8]>`
-  - 修改 `execute_with_writer_shared_inner`：先 embedded → 再 runtime cache
+  - 修改 `execute_with_writer_shared_inner`：先 embedded；未命中则 cold bootstrap
 
 **Steps**：
 
@@ -485,7 +484,7 @@ fn capture_embedded_startup_state(
       let view = wjsm_snapshot_format::decode_snapshot(bytes).ok()?;
       if view.header.abi_hash != wjsm_snapshot_format::abi_hash() {
           if startup_snapshot_debug_enabled() {
-              eprintln!("embedded snapshot abi hash mismatch; falling back to runtime cache/cold");
+              eprintln!("embedded snapshot abi hash mismatch; falling back to cold startup");
           }
           return None;
       }
@@ -495,17 +494,16 @@ fn capture_embedded_startup_state(
 
 - [ ] 修改 `try_restore_snapshot` 签名：`async fn try_restore_snapshot(bundle: &mut ExecuteInstanceBundle, snap_bytes: &[u8]) -> bool`
 
-- [ ] 修改 `execute_with_writer_shared_inner` 中 snapshot_bytes 来源：
+- [ ] 修改 `execute_with_writer_shared_inner` 中 snapshot bytes 来源：
   ```rust
   let snapshot_bytes: Option<&[u8]> = if startup_snapshot_enabled() {
-      match embedded_startup_snapshot_view() {
-          Some(bytes) => Some(bytes),
-          None => startup_snapshot_cache::get_cached().await.as_deref(),
-      }
+      embedded_startup_snapshot_view()
   } else {
       None
   };
   ```
+
+- [ ] 删除 `crates/wjsm-runtime/src/startup_snapshot_cache.rs` 与所有调用点。
 
 - [ ] 加单测：
   ```rust
@@ -522,7 +520,7 @@ fn capture_embedded_startup_state(
 
 - [ ] 跑：`cargo nextest run -p wjsm-runtime -E 'test(embedded_snapshot)'`
 
-- [ ] 提交：`feat(runtime): install_embedded_startup_snapshot + cache priority`
+- [ ] 提交：`feat(runtime): install_embedded_startup_snapshot and retire disk cache`
 
 ## P1.3 wjsm-cli 启动时 install
 
@@ -907,11 +905,11 @@ cargo test -p wjsm-runtime --release --lib --no-run \
 
 | 风险 | 触发 | 回退 |
 |---|---|---|
-| support cwasm wasmtime 版本/feature 配置不匹配 | 升级 wasmtime 后未重 bake | runtime 检测到 deserialize 失败时 fallback 到运行时 capture（feature 关闭路径） |
-| embedded ABI hash mismatch 但 install 仍发生 | builder 与 runtime 不同步构建 | install 路径 abi_hash 校验失败 → 静默丢弃，走 runtime cache/cold |
+| support cwasm wasmtime 版本/feature 配置不匹配 | 升级 wasmtime 后未重 bake | runtime 检测到 deserialize 失败时 fallback 到 cold startup（feature 关闭路径） |
+| embedded ABI hash mismatch 但 install 仍发生 | builder 与 runtime 不同步构建 | install 路径 abi_hash 校验失败 → 静默丢弃，走 cold startup |
 | build.rs 在 docker 等无 wasmtime native deps 环境失败 | CI 环境差异 | feature `embedded` 关闭即可降级；CI 单独跑 `--no-default-features` |
 | builtin JS 引入 timer/promise 等动态状态 | 错误的 builtin JS 实现 | capture 期断言（已有）必须命中；测试覆盖 |
-| 用户在 wjsm-runtime 作为库使用时未 install embedded | 库使用者忘记调用 install | 默认 fallback 到 runtime cache；不报错 |
+| 用户在 wjsm-runtime 作为库使用时未 install embedded | 库使用者忘记调用 install | 默认 cold startup；不写客户机器缓存 |
 | 旧 export memory contract 残留代码导致回归 | P4 删除不彻底 | grep 检查导出引用 |
 
 ## Retirement

@@ -1,6 +1,6 @@
 # ADR 0003: Startup Snapshot Boundary
 
-**Status**: Accepted (default on; opt-out env; Array.prototype table ABI-checked restore remap implemented)
+**Status**: snapshot 边界/格式仍采纳；分发与启动策略由 [ADR 0004](0004-build-time-embedded-runtime.md) 部分取代。ADR 0004 将 first-run capture 从客户运行时迁移到 build-time embedded bytes，并退役运行时磁盘 cache；本 ADR 仍是可捕获内容与 restore 重定位规则的权威文档。
 
 **Date**: 2026-06-18
 
@@ -17,8 +17,8 @@ wjsm 实现 **relocatable primordial heap snapshot**：
 1. **不捕获 Wasmtime Instance/Store**。Snapshot 仅保存 wasm 线性内存中对象堆片段 + handle 表相对偏移 + runtime strings + 无状态 NativeCallable 表项。
 2. 恢复时按当前模块的 `__object_heap_start` 重定位，随后执行当前模块专属的 `__wjsm_init_function_props`（幂等），再进入用户 `main`。
 3. Snapshot 格式为手写 little-endian 二进制，不走 JSON/serde 热路径。
-4. 进程内 cache 按 cache 目录 + ABI hash 共享 primordial snapshot；磁盘 cache 使用同一 ABI 级文件。
-5. 默认开启；显式设 `WJSM_STARTUP_SNAPSHOT=0`/`false`/`off` 关闭。可恢复 cache miss / 损坏 / ABI mismatch 走 cold bootstrap rebuild，不污染默认 stderr；`WJSM_STARTUP_SNAPSHOT_DEBUG=1` 输出诊断。
+4. ADR 0004 分发策略：snapshot bytes 在构建期嵌入；运行时磁盘 startup snapshot cache 已退役。
+5. 默认开启；显式设 `WJSM_STARTUP_SNAPSHOT=0`/`false`/`off` 关闭。embedded ABI mismatch / missing embedded bytes 走 cold bootstrap，不污染默认 stderr；`WJSM_STARTUP_SNAPSHOT_DEBUG=1` 输出诊断。
 
 ### Snapshot 内容
 

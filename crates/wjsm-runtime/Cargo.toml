@@ -12,6 +12,8 @@ anyhow = { workspace = true }
 wasmtime = { workspace = true }
 tokio = { workspace = true }
 wjsm-ir = { path = "../wjsm-ir" }
+wjsm-snapshot-format = { path = "../wjsm-snapshot-format" }
+wjsm-runtime-support = { path = "../wjsm-runtime-support" }
 num-bigint = { version = "0.4", features = ["std"] }
 num-traits = { version = "0.2" }
 rand = { version = "0.8" }

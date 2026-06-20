@@ -1,7 +1,7 @@
 use super::*;
 use crate::host_import_registry::{
     SpecialHostImport, array_proto_method_specs, array_proto_property_name, array_proto_table_hash,
-    array_proto_table_len,
+    array_proto_table_len, host_import_specs,
 };
 
 impl Compiler {
@@ -241,36 +241,54 @@ impl Compiler {
         }
 
         // Reserve indices for object helper functions (so they're known during user function compilation).
-        self.obj_new_func_idx = self._next_import_func;
-        self.functions.function(7);
-        self.push_func_table(self._next_import_func);
-        self._next_import_func += 1;
+        if self.mode == CompileMode::Normal {
+            // P2.3: obj_new/get/set/delete/string_eq/to_int32 已从 wjsm_support import
+            // （在 new_with_data_base 中追加），直接使用 import 索引。
+            let support_import_base = host_import_specs().len() as u32;
+            self.obj_new_func_idx = support_import_base + 0;
+            self.obj_get_func_idx = support_import_base + 1;
+            self.obj_set_func_idx = support_import_base + 2;
+            self.obj_delete_func_idx = support_import_base + 3;
+            self.string_eq_func_idx = support_import_base + 4;
+            self.to_int32_func_idx = support_import_base + 5;
+            // 这些 import 函数也需登记到 function table（call_indirect 可能引用）
+            for i in 0..6u32 {
+                self.push_func_table(support_import_base + i);
+            }
+        } else {
+            // Eval mode：helpers 仍为 inline 定义
+            self.obj_new_func_idx = self._next_import_func;
+            self.functions.function(7);
+            self.push_func_table(self._next_import_func);
+            self._next_import_func += 1;
 
-        self.obj_get_func_idx = self._next_import_func;
-        self.functions.function(8);
-        self.push_func_table(self._next_import_func);
-        self._next_import_func += 1;
+            self.obj_get_func_idx = self._next_import_func;
+            self.functions.function(8);
+            self.push_func_table(self._next_import_func);
+            self._next_import_func += 1;
 
-        self.obj_set_func_idx = self._next_import_func;
-        self.functions.function(9);
-        self.push_func_table(self._next_import_func);
-        self._next_import_func += 1;
+            self.obj_set_func_idx = self._next_import_func;
+            self.functions.function(9);
+            self.push_func_table(self._next_import_func);
+            self._next_import_func += 1;
 
-        self.obj_delete_func_idx = self._next_import_func;
-        self.functions.function(8); // Type 8: (i64, i32) -> (i64)
-        self.push_func_table(self._next_import_func);
-        self._next_import_func += 1;
+            self.obj_delete_func_idx = self._next_import_func;
+            self.functions.function(8); // Type 8: (i64, i32) -> (i64)
+            self.push_func_table(self._next_import_func);
+            self._next_import_func += 1;
 
-        self.to_int32_func_idx = self._next_import_func;
-        self.functions.function(10); // Type 10: (i64) -> (i32)
-        self.push_func_table(self._next_import_func);
-        self._next_import_func += 1;
+            self.to_int32_func_idx = self._next_import_func;
+            self.functions.function(10); // Type 10: (i64) -> (i32)
+            self.push_func_table(self._next_import_func);
+            self._next_import_func += 1;
 
-        self.string_eq_func_idx = self._next_import_func;
-        self.functions.function(26); // Type 26: (i32, i32) -> i32
-        self.push_func_table(self._next_import_func);
-        self._next_import_func += 1;
+            self.string_eq_func_idx = self._next_import_func;
+            self.functions.function(26); // Type 26: (i32, i32) -> i32
+            self.push_func_table(self._next_import_func);
+            self._next_import_func += 1;
+        }
 
+        // arr_new/elem_get/elem_set/get_proto_from_ctor 仍为 inline 定义（P2.4-P2.5 迁移）
         self.arr_new_func_idx = self._next_import_func;
         self.functions.function(7); // Type 7: (i32) -> i32
         self.push_func_table(self._next_import_func);
@@ -298,6 +316,19 @@ impl Compiler {
         self.arr_proto_table_base = arr_proto_base;
 
         if self.mode == CompileMode::Normal {
+            // P2.2: __wjsm_init_globals — 在 bootstrap 之前由 runtime 调用，
+            // 设置所有 imported globals 的初始值（heap 布局等编译期计算值）。
+            // 必须在 initialize_host_post_bootstrap 之前执行，因为 host 函数
+            // 依赖 heap_ptr/obj_table_ptr 等全局的正确值。
+            self.init_globals_func_idx = self._next_import_func;
+            self.functions.function(4); // () -> i64
+            self._next_import_func += 1;
+            self.exports.export(
+                "__wjsm_init_globals",
+                ExportKind::Func,
+                self.init_globals_func_idx,
+            );
+
             // Startup snapshot 边界：把 primordial bootstrap 与当前模块函数属性初始化拆成可单独调用的阶段。
             self.bootstrap_func_idx = self._next_import_func;
             self.functions.function(4); // () -> i64
@@ -447,309 +478,125 @@ impl Compiler {
         }
 
         self.compile_number_proto_wrappers();
-        // Pass 3: Compile object helper functions.
-        self.compile_object_helpers();
-        // 编译数组辅助函数
-        self.compile_array_helpers();
-        if self.mode == CompileMode::Normal {
-            self.compile_bootstrap_once_function();
-            self.compile_init_function_props_function();
-        }
-        self.table.table(TableType {
-            element_type: RefType::FUNCREF,
-            minimum: self.function_table.len() as u64,
-            maximum: None,
-            table64: false,
-            shared: false,
-        });
-        self.exports.export("__table", ExportKind::Table, 0);
 
-        self.elements.active(
-            Some(0),
-            &ConstExpr::i32_const(0),
-            Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
-        );
-
+        // P2.2 后 heap 布局由 imported globals 显式初始化。计算 heap_start 之前
+        // 必须先固化全部 data segment；否则后续追加的函数名字符串或 eval metadata
+        // 会落进 object heap，被分配/GC 覆盖。
         self.finalize_eval_var_map_data();
+        self.intern_data_string("length");
+        self.intern_data_string("name");
+        for function_name in self.function_names.clone() {
+            self.intern_data_string(&function_name);
+        }
 
-        // Allocate handle table at start of heap.
-        // Handle table replaces func_props: maps handle_index → object ptr (i32).
-        // Function property objects are stored at indices 0..num_functions-1.
-        // Runtime objects are stored at indices num_functions..capacity.
+        // P2.2: 提前计算 heap 布局，供 bootstrap 函数中的 emit_globals_init 使用。
+        // 这些值原本在 globals 定义段中计算，现在 globals 是 import 的，
+        // 需要在编译 bootstrap 之前确定初始值。
         let heap_start = (self.data_offset + 7) & !7; // align to 8 bytes
         let num_functions = self.num_ir_functions;
-        // P4 GC：obj_table 必须容纳 GC 阈值前的峰值分配数。
-        // GC 默认阈值 1000，故 obj_table 至少 2048（覆盖阈值 + 临时对象缓冲）。
-        // 旧值 max(256, num_functions*2) 在 GC 接通后不够（count 超 256 → obj_table 越界读垃圾）。
         let handle_table_entries = std::cmp::max(2048, num_functions * 2);
         let handle_table_size = handle_table_entries * 4;
-
         let shadow_stack_base = heap_start + handle_table_size;
         let object_heap_start = shadow_stack_base + SHADOW_STACK_SIZE;
         let shadow_stack_end = shadow_stack_base + SHADOW_STACK_SIZE;
         if self.mode == CompileMode::Normal {
-            // Global 0: func_props_ptr (deprecated, set to 0)
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: false,
-                    shared: false,
-                },
+            self.normal_init_values = Some(NormalGlobalsInit {
+                heap_ptr: object_heap_start as i32,
+                obj_table_ptr: heap_start as i32,
+                shadow_sp: shadow_stack_base as i32,
+                object_heap_start: object_heap_start as i32,
+                num_ir_functions: num_functions as i32,
+                shadow_stack_end: shadow_stack_end as i32,
+                eval_var_map_ptr: self.eval_var_map_ptr as i32,
+                eval_var_map_count: self.eval_var_map_count as i32,
+                arr_proto_table_base: self.arr_proto_table_base as i32,
+                arr_proto_table_len: array_proto_table_len() as i32,
+                arr_proto_table_hash: array_proto_table_hash() as i64,
+            });
+        }
+
+        // Pass 3: Compile helper functions.
+        // Normal mode: obj_new/get/set/delete/string_eq/to_int32 已从 wjsm_support import，
+        // 不再 inline 生成。Eval mode: 仍需全部 inline。
+        if self.mode == CompileMode::Eval {
+            self.compile_object_helpers();
+        }
+        // 编译数组辅助函数（arr_new/elem_get/elem_set 仍为 inline）
+        self.compile_array_helpers();
+        if self.mode == CompileMode::Normal {
+            self.compile_init_globals_function();
+            self.compile_bootstrap_once_function();
+            self.compile_init_function_props_function();
+        }
+        if self.mode == CompileMode::Eval {
+            // Eval mode: 定义自己的 table
+            self.table.table(TableType {
+                element_type: RefType::FUNCREF,
+                minimum: self.function_table.len() as u64,
+                maximum: None,
+                table64: false,
+                shared: false,
+            });
+            self.elements.active(
+                Some(0),
                 &ConstExpr::i32_const(0),
+                Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
             );
+        } else {
+            // Normal mode (P2.2): table 是 import 的（env.__table）。
+            // element section 从 table[0] 开始填充。support module 不使用 element section，
+            // 所以 table 完全由 user wasm 使用。
+            self.elements.active(
+                Some(0),
+                &ConstExpr::i32_const(0),
+                Elements::Functions(std::borrow::Cow::Borrowed(&self.function_table)),
+            );
+        }
+
+        if self.mode == CompileMode::Eval {
             self.exports.export("__func_props", ExportKind::Global, 0);
-            // Global 1: heap_ptr (starts after handle table + shadow stack, mutable)
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: true,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(object_heap_start as i32),
-            );
-            self.heap_ptr_global_idx = 1;
-            // Global 2: obj_table_ptr (immutable, points to handle table base)
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: false,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(heap_start as i32),
-            );
-            self.obj_table_global_idx = 2;
-            // Global 3: obj_table_count (mutable, starts at 0, incremented by $obj_new)
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: true,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(0),
-            );
-            self.obj_table_count_global_idx = 3;
-            // Global 4: shadow_sp (mutable, starts at shadow_stack_base)
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: true,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(shadow_stack_base as i32),
-            );
-            self.shadow_sp_global_idx = 4;
-            // Global 5: alloc_counter (mutable i32, initial 0, for GC heuristic)
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: true,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(0),
-            );
-            self.alloc_counter_global_idx = 5;
-            // Export alloc_counter for runtime debugging
-            self.exports
-                .export("__alloc_counter", ExportKind::Global, 5);
-            // Export globals for runtime access
+            self.exports.export("__heap_ptr", ExportKind::Global, 1);
             self.exports
                 .export("__obj_table_ptr", ExportKind::Global, 2);
-            self.exports.export("__heap_ptr", ExportKind::Global, 1);
             self.exports
                 .export("__obj_table_count", ExportKind::Global, 3);
             self.exports.export("__shadow_sp", ExportKind::Global, 4);
-            // Global 6: __object_heap_start (immutable, for runtime GC heap base)
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: false,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(object_heap_start as i32),
-            );
-            // Global 7: __num_ir_functions (immutable, for runtime GC root set)
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: false,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(num_functions as i32),
-            );
-            self.object_heap_start_global_idx = 6;
-            self.num_ir_functions_global_idx = 7;
+            self.exports
+                .export("__alloc_counter", ExportKind::Global, 5);
             self.exports
                 .export("__object_heap_start", ExportKind::Global, 6);
             self.exports
                 .export("__num_ir_functions", ExportKind::Global, 7);
-            // Global 8: __shadow_stack_end (immutable, for shadow stack bounds check)
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: false,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(shadow_stack_end as i32),
-            );
             self.exports
                 .export("__shadow_stack_end", ExportKind::Global, 8);
-            // Global 9: array_proto_handle (mutable, starts at -1 for uninitialized)
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: true,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(-1),
-            );
             self.exports
                 .export("__array_proto_handle", ExportKind::Global, 9);
-            // Global 10: object_proto_handle (mutable, starts at -1 for uninitialized)
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: true,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(-1),
-            );
             self.exports
                 .export("__object_proto_handle", ExportKind::Global, 10);
-            // Global 11/12: eval variable map metadata.
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: false,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(self.eval_var_map_ptr as i32),
-            );
             self.exports.export(
                 "__eval_var_map_ptr",
                 ExportKind::Global,
                 self.eval_var_map_ptr_global_idx,
             );
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: false,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(self.eval_var_map_count as i32),
-            );
             self.exports.export(
                 "__eval_var_map_count",
                 ExportKind::Global,
                 self.eval_var_map_count_global_idx,
-            );
-            // Global 13..18: startup snapshot bootstrap/function-property/table metadata state.
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: true,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(0),
             );
             self.exports.export(
                 "__bootstrap_done",
                 ExportKind::Global,
                 self.bootstrap_done_global_idx,
             );
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: true,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(0),
-            );
             self.exports.export(
                 "__function_props_done",
                 ExportKind::Global,
                 self.function_props_done_global_idx,
             );
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: true,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(0),
-            );
             self.exports.export(
                 "__function_props_base",
                 ExportKind::Global,
                 self.function_props_base_global_idx,
-            );
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: false,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(self.arr_proto_table_base as i32),
-            );
-            self.exports.export(
-                "__arr_proto_table_base",
-                ExportKind::Global,
-                self.arr_proto_table_base_global_idx,
-            );
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I32,
-                    mutable: false,
-                    shared: false,
-                },
-                &ConstExpr::i32_const(array_proto_table_len() as i32),
-            );
-            self.exports.export(
-                "__arr_proto_table_len",
-                ExportKind::Global,
-                self.arr_proto_table_len_global_idx,
-            );
-            self.globals.global(
-                GlobalType {
-                    val_type: ValType::I64,
-                    mutable: false,
-                    shared: false,
-                },
-                &ConstExpr::i64_const(array_proto_table_hash() as i64),
-            );
-            self.exports.export(
-                "__arr_proto_table_hash",
-                ExportKind::Global,
-                self.arr_proto_table_hash_global_idx,
-            );
-        } else {
-            self.exports.export("__func_props", ExportKind::Global, 0);
-            self.exports.export("__heap_ptr", ExportKind::Global, 1);
-            self.exports
-                .export("__obj_table_ptr", ExportKind::Global, 2);
-            self.exports
-                .export("__obj_table_count", ExportKind::Global, 3);
-            self.exports.export("__shadow_sp", ExportKind::Global, 4);
-            self.exports
-                .export("__alloc_counter", ExportKind::Global, 5);
-            self.exports
-                .export("__object_heap_start", ExportKind::Global, 6);
-            self.exports
-                .export("__num_ir_functions", ExportKind::Global, 7);
-            self.exports
-                .export("__shadow_stack_end", ExportKind::Global, 8);
-            self.exports
-                .export("__array_proto_handle", ExportKind::Global, 9);
-            self.exports
-                .export("__object_proto_handle", ExportKind::Global, 10);
-            self.exports.export(
-                "__eval_var_map_ptr",
-                ExportKind::Global,
-                self.eval_var_map_ptr_global_idx,
-            );
-            self.exports.export(
-                "__eval_var_map_count",
-                ExportKind::Global,
-                self.eval_var_map_count_global_idx,
             );
             self.exports.export(
                 "__arr_proto_table_base",
@@ -775,6 +622,93 @@ impl Compiler {
             );
         }
         Ok(())
+    }
+
+    /// P2.2: 在 main prologue 中初始化所有 imported globals。
+    /// 这些值原本通过 ConstExpr 在 global 定义时设置，改为 import 后必须显式 global.set。
+    /// 只在 main 函数开始时调用一次，在任何 helper 调用之前。
+    fn emit_globals_init(&mut self) {
+        let init = match &self.normal_init_values {
+            Some(v) => *v,
+            None => return,
+        };
+        // global 0: __func_props = 0 (deprecated)
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::GlobalSet(0));
+        // global 1: __heap_ptr
+        self.emit(WasmInstruction::I32Const(init.heap_ptr));
+        self.emit(WasmInstruction::GlobalSet(1));
+        // global 2: __obj_table_ptr
+        self.emit(WasmInstruction::I32Const(init.obj_table_ptr));
+        self.emit(WasmInstruction::GlobalSet(2));
+        // global 3: __obj_table_count = 0
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::GlobalSet(3));
+        // global 4: __shadow_sp
+        self.emit(WasmInstruction::I32Const(init.shadow_sp));
+        self.emit(WasmInstruction::GlobalSet(4));
+        // global 5: __alloc_counter = 0
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::GlobalSet(5));
+        // global 6: __object_heap_start
+        self.emit(WasmInstruction::I32Const(init.object_heap_start));
+        self.emit(WasmInstruction::GlobalSet(6));
+        // global 7: __num_ir_functions
+        self.emit(WasmInstruction::I32Const(init.num_ir_functions));
+        self.emit(WasmInstruction::GlobalSet(7));
+        // global 8: __shadow_stack_end
+        self.emit(WasmInstruction::I32Const(init.shadow_stack_end));
+        self.emit(WasmInstruction::GlobalSet(8));
+        // global 9: __array_proto_handle = -1 (uninitialized)
+        self.emit(WasmInstruction::I32Const(-1));
+        self.emit(WasmInstruction::GlobalSet(9));
+        // global 10: __object_proto_handle = -1 (uninitialized)
+        self.emit(WasmInstruction::I32Const(-1));
+        self.emit(WasmInstruction::GlobalSet(10));
+        // global 11: __eval_var_map_ptr
+        self.emit(WasmInstruction::I32Const(init.eval_var_map_ptr));
+        self.emit(WasmInstruction::GlobalSet(11));
+        // global 12: __eval_var_map_count
+        self.emit(WasmInstruction::I32Const(init.eval_var_map_count));
+        self.emit(WasmInstruction::GlobalSet(12));
+        // global 13: __bootstrap_done = 0
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::GlobalSet(13));
+        // global 14: __function_props_done = 0
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::GlobalSet(14));
+        // global 15: __function_props_base = 0
+        self.emit(WasmInstruction::I32Const(0));
+        self.emit(WasmInstruction::GlobalSet(15));
+        // global 16: __arr_proto_table_base
+        self.emit(WasmInstruction::I32Const(init.arr_proto_table_base));
+        self.emit(WasmInstruction::GlobalSet(16));
+        // global 17: __arr_proto_table_len
+        self.emit(WasmInstruction::I32Const(init.arr_proto_table_len));
+        self.emit(WasmInstruction::GlobalSet(17));
+        // global 18: __arr_proto_table_hash
+        self.emit(WasmInstruction::I64Const(init.arr_proto_table_hash));
+        self.emit(WasmInstruction::GlobalSet(18));
+    }
+
+    fn compile_init_globals_function(&mut self) {
+        let previous_shadow_sp_scratch_idx = self.shadow_sp_scratch_idx;
+        self.shadow_sp_scratch_idx = 0;
+        self.current_func = Some(Function::new(vec![(1, ValType::I32)]));
+
+        // 设置所有 imported globals 的初始值
+        self.emit_globals_init();
+
+        self.emit(WasmInstruction::I64Const(value::encode_undefined()));
+        self.emit(WasmInstruction::End);
+
+        self.codes.function(
+            self.current_func
+                .as_ref()
+                .expect("init_globals function should be initialized"),
+        );
+        self.current_func = None;
+        self.shadow_sp_scratch_idx = previous_shadow_sp_scratch_idx;
     }
 
     fn emit_startup_phase_call(&mut self, func_idx: u32) {
@@ -805,7 +739,8 @@ impl Compiler {
         self.emit(WasmInstruction::I64Const(value::encode_undefined()));
         self.emit(WasmInstruction::Return);
         self.emit(WasmInstruction::End);
-
+        // P2.2: globals 初始化已移到 __wjsm_init_globals 函数中，
+        // 由 runtime 在 initialize_host_post_bootstrap 之前调用。
         // ── 初始化 Array.prototype ──
         self.emit(WasmInstruction::I32Const(64));
         self.emit(WasmInstruction::Call(self.obj_new_func_idx));
@@ -999,6 +934,8 @@ impl Compiler {
         self.emit_safepoint_capacity_check(module, function);
 
         if is_module_entry_ir_function(function.name()) && self.mode == CompileMode::Normal {
+            // P2.2: globals 初始化在 __wjsm_bootstrap_once 中执行（bootstrap_done 检查之后），
+            // 确保 run_bootstrap_only 直接调用 bootstrap 时也能正确初始化 globals。
             self.emit_startup_phase_call(self.bootstrap_func_idx);
             self.emit_startup_phase_call(self.init_function_props_func_idx);
         }

@@ -1,0 +1,8 @@
+[package]
+name = "wjsm-snapshot-format"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow = { workspace = true }
+wjsm-ir = { path = "../wjsm-ir" }

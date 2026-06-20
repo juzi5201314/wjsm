@@ -4231,6 +4231,7 @@ dependencies = [
  "wasm-encoder 0.246.2",
  "wasmparser 0.246.2",
  "wasmprinter",
+ "wasmtime",
  "wjsm-ir",
  "wjsm-parser",
  "wjsm-semantic",
@@ -4257,6 +4258,8 @@ dependencies = [
  "wjsm-module",
  "wjsm-parser",
  "wjsm-runtime",
+ "wjsm-runtime-snapshot",
+ "wjsm-runtime-support",
  "wjsm-semantic",
 ]
 
@@ -4303,7 +4306,27 @@ dependencies = [
  "wjsm-backend-wasm",
  "wjsm-ir",
  "wjsm-parser",
+ "wjsm-runtime-support",
  "wjsm-semantic",
+ "wjsm-snapshot-format",
+]
+
+[[package]]
+name = "wjsm-runtime-snapshot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "wjsm-runtime",
+ "wjsm-snapshot-format",
+]
+
+[[package]]
+name = "wjsm-runtime-support"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "wasmtime",
+ "wjsm-backend-wasm",
 ]
 
 [[package]]
@@ -4314,6 +4337,14 @@ dependencies = [
  "thiserror 2.0.18",
  "wjsm-ir",
  "wjsm-parser",
+]
+
+[[package]]
+name = "wjsm-snapshot-format"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "wjsm-ir",
 ]
 
 [[package]]
