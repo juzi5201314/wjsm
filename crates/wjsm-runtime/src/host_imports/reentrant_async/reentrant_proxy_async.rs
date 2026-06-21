@@ -192,6 +192,3 @@ pub(crate) fn define_proxy_traps_async(
 }
 
 // ── TypedArray async callback overrides ──────────────────────────────────
-
-use super::super::typedarray_new_methods::{sab_read, sab_write, ta_read, ta_resolve, ta_write};
-

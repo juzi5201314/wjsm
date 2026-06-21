@@ -96,7 +96,6 @@ use runtime_render::*;
 use runtime_typedarray::*;
 use runtime_values::*;
 use types::*;
-use runtime_linker::*;
 
 pub async fn execute(wasm_bytes: &[u8]) -> Result<()> {
     let stdout = io::stdout();
