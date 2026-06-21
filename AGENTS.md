@@ -137,6 +137,7 @@ Exhaust each step before the next:
 
 - **Temporary files** (`*.wasm`, `*.o`, caches, test data) go in `/tmp`, never in the project dir. If accidentally committed: `git rm --cached <file>` then commit.
 - **Commit**: `feat:` / `fix:` / `docs:` / `refactor:` prefixes. Keep concise.
+- **Warnings**: if a build produces compiler warnings, fix them immediately before reporting the task as complete. Zero-warning builds are the baseline.
 
 ## Aegis
 
