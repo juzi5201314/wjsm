@@ -9,6 +9,10 @@
 //! support_module emit 改动都会触发重建（cargo:rerun-if-changed 已覆盖）。
 
 fn main() -> anyhow::Result<()> {
+    if std::env::var_os("CARGO_FEATURE_EMBEDDED").is_none() {
+        return Ok(());
+    }
+
     let out_dir =
         std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR not set by cargo"));
     let cwasm_path = out_dir.join("wjsm_support.cwasm");

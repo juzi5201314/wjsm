@@ -166,7 +166,7 @@ P2.4-P2.6（arr_new/elem_get/elem_set/get_proto_from_ctor/wjsm_bootstrap_once/wj
 | P2.5 get_proto_from_ctor import | ✅ | 570 fixture tests passed；support module get_proto_from_ctor body 已实现 |
 | P2.6 bootstrap migration | ⊘ (by design) | bootstrap/init_function_props 仅启动时调用一次，保持 user wasm 内联 |
 | P2.7 rebake snapshot | ✅ | workspace 970 passed, 1 skipped |
-| P2.8 final bench | ✅ | 数据见下 |
+| P2.8 final bench | ⊘ (partial) | 数据见下；module_only gate 未达标 |
 
 ### Normal Mode Helper Migration Status (final)
 

@@ -3,6 +3,10 @@ use std::fs;
 use std::path::PathBuf;
 
 fn main() -> anyhow::Result<()> {
+    if std::env::var_os("CARGO_FEATURE_EMBEDDED").is_none() {
+        return Ok(());
+    }
+
     let out_dir = PathBuf::from(env::var("OUT_DIR")?);
     let snapshot_path = out_dir.join("wjsm_startup_snapshot.bin");
 

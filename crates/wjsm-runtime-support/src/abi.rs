@@ -237,4 +237,15 @@ mod tests {
             "SUPPORT_TABLE_RESERVED_LEN 必须容纳 helpers + ~30 Array.prototype 方法"
         );
     }
+
+    /// 跨 crate 一致性：abi.rs 和 backend-wasm support_module.rs 的
+    /// SUPPORT_TABLE_RESERVED_LEN 必须相同，否则 embedded snapshot ABI hash 失配。
+    #[test]
+    fn support_table_reserved_matches_backend() {
+        assert_eq!(
+            SUPPORT_TABLE_RESERVED_LEN,
+            wjsm_backend_wasm::support_module::SUPPORT_TABLE_RESERVED_LEN,
+            "abi::SUPPORT_TABLE_RESERVED_LEN 与 backend support_module::SUPPORT_TABLE_RESERVED_LEN 不一致"
+        );
+    }
 }

@@ -24,7 +24,7 @@ WJSM_UPDATE_FIXTURES=1 cargo nextest run            # update E2E .expected snaps
 WJSM_UPDATE_SNAPSHOTS=1 cargo nextest run -p wjsm-semantic  # update .ir snapshots
 ```
 
-Fixtures run via `wjsm run <file>` subprocess, comparing exit code + stdout + stderr against `.expected` files. `build.rs` generates one `#[test]` per fixture into `tests/gen/` (gitignored).
+Fixtures run via `wjsm_cli::run_file_in_process` in-process, comparing exit code + stdout + stderr against `.expected` files. `build.rs` generates one `#[test]` per fixture into `tests/gen/` (gitignored).
 
 ## Architecture
 

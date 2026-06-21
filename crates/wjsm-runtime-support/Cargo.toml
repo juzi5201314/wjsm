@@ -16,3 +16,4 @@ wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
 
 [dev-dependencies]
 wasmtime = { workspace = true }
+wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }

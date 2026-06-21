@@ -15,7 +15,7 @@ use wjsm_ir::value;
 pub const SNAPSHOT_MAGIC: [u8; 8] = *b"WJSMSNP\0";
 /// 格式版本：v4 记录 Array.prototype 方法表基址、长度与表 ABI hash。
 /// 任何 wire 改动必须递增。
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 4;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 5;
 
 /// `handle_rel_offsets[i]` 的 null 槽哨兵：表示 `obj_table[i] == 0`。
 /// 选 `u32::MAX` 因实际 heap 偏移远小于它（heap_used 受 wasm32 线性内存限制），
@@ -52,6 +52,7 @@ pub struct StartupSnapshotOwned {
     pub handle_rel_offsets: Vec<u32>,
     pub runtime_strings: Vec<String>,
     pub native_callables: Vec<SnapshotNativeCallable>,
+    pub native_callable_methods: Vec<u8>,
 }
 
 /// Decoded snapshot view: `object_bytes` 安全借用输入 bytes，
@@ -63,6 +64,7 @@ pub struct StartupSnapshotView<'a> {
     pub handle_rel_offsets: Vec<u32>,
     pub runtime_strings: Vec<String>,
     pub native_callables: Vec<SnapshotNativeCallable>,
+    pub native_callable_methods: Vec<u8>,
 }
 
 // ── SnapshotNativeCallable ─────────────────────────────────────────
@@ -315,8 +317,10 @@ fn build_section_payloads(snapshot: &StartupSnapshotOwned) -> (Vec<u8>, Vec<u8>,
 
     let mut nc_payload = Vec::new();
     nc_payload.extend_from_slice(&(snapshot.native_callables.len() as u32).to_le_bytes());
-    for nc in &snapshot.native_callables {
-        nc_payload.extend_from_slice(&(*nc as u32).to_le_bytes());
+    for (i, nc) in snapshot.native_callables.iter().enumerate() {
+        let method = snapshot.native_callable_methods.get(i).copied().unwrap_or(0);
+        let raw: u32 = (*nc as u32) | ((method as u32) << 8);
+        nc_payload.extend_from_slice(&raw.to_le_bytes());
     }
 
     (obj_payload, ho_payload, rs_payload, nc_payload)
@@ -404,6 +408,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
     let mut handle_rel_offsets: Vec<u32> = Vec::new();
     let mut runtime_strings: Vec<String> = Vec::new();
     let mut native_callables: Vec<SnapshotNativeCallable> = Vec::new();
+    let mut native_callable_methods: Vec<u8> = Vec::new();
     let mut seen_object = false;
     let mut seen_handles = false;
     let mut seen_strings = false;
@@ -440,6 +445,12 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
                     bail!("duplicate section kind {}", _kind);
                 }
                 seen_handles = true;
+                if data.len() % 4 != 0 {
+                    bail!(
+                        "handle_rel_offsets data length {} is not a multiple of 4",
+                        data.len()
+                    );
+                }
                 handle_rel_offsets = data
                     .chunks_exact(4)
                     .map(|c| u32::from_le_bytes(c.try_into().unwrap_or([0; 4])))
@@ -491,14 +502,19 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
                     bail!("native_callables section truncated");
                 }
                 let mut ncs: Vec<SnapshotNativeCallable> = Vec::with_capacity(count);
+                let mut methods: Vec<u8> = Vec::with_capacity(count);
                 for j in 0..count {
-                    let d = u32::from_le_bytes(data[4 + j * 4..8 + j * 4].try_into()?);
+                    let raw = u32::from_le_bytes(data[4 + j * 4..8 + j * 4].try_into()?);
+                    let d = raw & 0xFF;
+                    let method = (raw >> 8) as u8;
                     let nc = SnapshotNativeCallable::from_discriminant(d).ok_or_else(|| {
                         anyhow::anyhow!("unknown native callable discriminant {}", d)
                     })?;
                     ncs.push(nc);
+                    methods.push(method);
                 }
                 native_callables = ncs;
+                native_callable_methods = methods;
             }
             _ => bail!("unknown snapshot section kind {}", _kind),
         }
@@ -536,6 +552,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
         handle_rel_offsets,
         runtime_strings,
         native_callables,
+        native_callable_methods,
     })
 }
 
