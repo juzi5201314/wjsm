@@ -20,9 +20,11 @@ fn embedded_support_cwasm_is_present_and_nonempty() {
 #[test]
 fn embedded_support_cwasm_deserializes() {
     let bytes = EMBEDDED_SUPPORT_CWASM.expect("embedded cwasm");
-    let cfg = wasmtime::Config::new();
+    let mut cfg = wasmtime::Config::new();
+    // 构建期 precompile 现已启用 epoch_interruption（匹配运行时 async yield 路径），
+    // deserialize 时 engine config 必须一致。
+    cfg.epoch_interruption(true);
     let engine = wasmtime::Engine::new(&cfg).expect("engine");
-    // SAFETY: cwasm 来自构建期 precompile_module 产物（OUT_DIR），可信任。
     let module =
         unsafe { wasmtime::Module::deserialize(&engine, bytes) }.expect("deserialize cwasm");
 
