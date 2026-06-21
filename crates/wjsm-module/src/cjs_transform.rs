@@ -249,33 +249,7 @@ impl CjsTransformer {
                 expr: Box::new(self.transform_expr(&expr_stmt.expr)),
             }),
             ast::Stmt::Decl(decl) => self.transform_decl(decl),
-            ast::Stmt::Block(block) => {
-                let mut items = Vec::new();
-                for s in &block.stmts {
-                    self.transform_stmt_into(s, &mut items);
-                }
-                let stmts = items
-                    .into_iter()
-                    .map(|item| match item {
-                        ast::ModuleItem::Stmt(s) => s,
-                        ast::ModuleItem::ModuleDecl(decl) => match decl {
-                            ast::ModuleDecl::ExportDecl(e) => ast::Stmt::Decl(e.decl),
-                            ast::ModuleDecl::ExportDefaultExpr(e) => {
-                                ast::Stmt::Expr(ast::ExprStmt {
-                                    span: DUMMY_SP,
-                                    expr: e.expr,
-                                })
-                            }
-                            _other => ast::Stmt::Empty(ast::EmptyStmt { span: DUMMY_SP }),
-                        },
-                    })
-                    .collect();
-                ast::Stmt::Block(ast::BlockStmt {
-                    span: block.span,
-                    ctxt: SyntaxContext::default(),
-                    stmts,
-                })
-            }
+            ast::Stmt::Block(block) => self.transform_block_stmt(block),
             ast::Stmt::If(if_stmt) => ast::Stmt::If(ast::IfStmt {
                 span: if_stmt.span,
                 test: Box::new(self.transform_expr(&if_stmt.test)),
@@ -295,20 +269,7 @@ impl CjsTransformer {
                 test: Box::new(self.transform_expr(&dw.test)),
                 body: Box::new(self.transform_stmt(&dw.body)),
             }),
-            ast::Stmt::For(f) => ast::Stmt::For(ast::ForStmt {
-                span: f.span,
-                init: f.init.as_ref().map(|i| match i {
-                    ast::VarDeclOrExpr::VarDecl(v) => {
-                        ast::VarDeclOrExpr::VarDecl(Box::new(self.transform_var_decl(v)))
-                    }
-                    ast::VarDeclOrExpr::Expr(e) => {
-                        ast::VarDeclOrExpr::Expr(Box::new(self.transform_expr(e)))
-                    }
-                }),
-                test: f.test.as_ref().map(|e| Box::new(self.transform_expr(e))),
-                update: f.update.as_ref().map(|e| Box::new(self.transform_expr(e))),
-                body: Box::new(self.transform_stmt(&f.body)),
-            }),
+            ast::Stmt::For(f) => self.transform_for_stmt(f),
             ast::Stmt::ForIn(fi) => ast::Stmt::ForIn(ast::ForInStmt {
                 span: fi.span,
                 left: fi.left.clone(),
@@ -322,29 +283,8 @@ impl CjsTransformer {
                 right: Box::new(self.transform_expr(&fo.right)),
                 body: Box::new(self.transform_stmt(&fo.body)),
             }),
-            ast::Stmt::Switch(sw) => ast::Stmt::Switch(ast::SwitchStmt {
-                span: sw.span,
-                discriminant: Box::new(self.transform_expr(&sw.discriminant)),
-                cases: sw
-                    .cases
-                    .iter()
-                    .map(|c| ast::SwitchCase {
-                        span: c.span,
-                        test: c.test.as_ref().map(|e| Box::new(self.transform_expr(e))),
-                        cons: c.cons.iter().map(|s| self.transform_stmt(s)).collect(),
-                    })
-                    .collect(),
-            }),
-            ast::Stmt::Try(tr) => ast::Stmt::Try(Box::new(ast::TryStmt {
-                span: tr.span,
-                block: self.transform_block(&tr.block),
-                handler: tr.handler.as_ref().map(|h| ast::CatchClause {
-                    span: h.span,
-                    param: h.param.clone(),
-                    body: self.transform_block(&h.body),
-                }),
-                finalizer: tr.finalizer.as_ref().map(|f| self.transform_block(f)),
-            })),
+            ast::Stmt::Switch(sw) => self.transform_switch_stmt(sw),
+            ast::Stmt::Try(tr) => self.transform_try_stmt(tr),
             ast::Stmt::Labeled(l) => ast::Stmt::Labeled(ast::LabeledStmt {
                 span: l.span,
                 label: l.label.clone(),
@@ -365,6 +305,84 @@ impl CjsTransformer {
             }),
             other => other.clone(),
         }
+    }
+
+    /// 转换 Block 语句：将 ModuleItem 展平回 Stmt
+    fn transform_block_stmt(&mut self, block: &ast::BlockStmt) -> ast::Stmt {
+        let mut items = Vec::new();
+        for s in &block.stmts {
+            self.transform_stmt_into(s, &mut items);
+        }
+        let stmts = items
+            .into_iter()
+            .map(|item| match item {
+                ast::ModuleItem::Stmt(s) => s,
+                ast::ModuleItem::ModuleDecl(decl) => match decl {
+                    ast::ModuleDecl::ExportDecl(e) => ast::Stmt::Decl(e.decl),
+                    ast::ModuleDecl::ExportDefaultExpr(e) => {
+                        ast::Stmt::Expr(ast::ExprStmt {
+                            span: DUMMY_SP,
+                            expr: e.expr,
+                        })
+                    }
+                    _other => ast::Stmt::Empty(ast::EmptyStmt { span: DUMMY_SP }),
+                },
+            })
+            .collect();
+        ast::Stmt::Block(ast::BlockStmt {
+            span: block.span,
+            ctxt: SyntaxContext::default(),
+            stmts,
+        })
+    }
+
+    /// 转换 for 语句：处理 init/test/update/body
+    fn transform_for_stmt(&mut self, f: &ast::ForStmt) -> ast::Stmt {
+        ast::Stmt::For(ast::ForStmt {
+            span: f.span,
+            init: f.init.as_ref().map(|i| match i {
+                ast::VarDeclOrExpr::VarDecl(v) => {
+                    ast::VarDeclOrExpr::VarDecl(Box::new(self.transform_var_decl(v)))
+                }
+                ast::VarDeclOrExpr::Expr(e) => {
+                    ast::VarDeclOrExpr::Expr(Box::new(self.transform_expr(e)))
+                }
+            }),
+            test: f.test.as_ref().map(|e| Box::new(self.transform_expr(e))),
+            update: f.update.as_ref().map(|e| Box::new(self.transform_expr(e))),
+            body: Box::new(self.transform_stmt(&f.body)),
+        })
+    }
+
+    /// 转换 switch 语句
+    fn transform_switch_stmt(&mut self, sw: &ast::SwitchStmt) -> ast::Stmt {
+        ast::Stmt::Switch(ast::SwitchStmt {
+            span: sw.span,
+            discriminant: Box::new(self.transform_expr(&sw.discriminant)),
+            cases: sw
+                .cases
+                .iter()
+                .map(|c| ast::SwitchCase {
+                    span: c.span,
+                    test: c.test.as_ref().map(|e| Box::new(self.transform_expr(e))),
+                    cons: c.cons.iter().map(|s| self.transform_stmt(s)).collect(),
+                })
+                .collect(),
+        })
+    }
+
+    /// 转换 try/catch/finally 语句
+    fn transform_try_stmt(&mut self, tr: &ast::TryStmt) -> ast::Stmt {
+        ast::Stmt::Try(Box::new(ast::TryStmt {
+            span: tr.span,
+            block: self.transform_block(&tr.block),
+            handler: tr.handler.as_ref().map(|h| ast::CatchClause {
+                span: h.span,
+                param: h.param.clone(),
+                body: self.transform_block(&h.body),
+            }),
+            finalizer: tr.finalizer.as_ref().map(|f| self.transform_block(f)),
+        }))
     }
 
     fn transform_block(&mut self, block: &ast::BlockStmt) -> ast::BlockStmt {
@@ -553,38 +571,7 @@ impl CjsTransformer {
 
     fn transform_expr(&mut self, expr: &ast::Expr) -> ast::Expr {
         match expr {
-            ast::Expr::Call(call) => {
-                if let Some(specifier) = extract_require_specifier(call)
-                    && let Some(local_name) = self.require_map.get(&specifier)
-                {
-                    return ast::Expr::Ident(ast::Ident::new(
-                        local_name.clone().into(),
-                        DUMMY_SP,
-                        SyntaxContext::default(),
-                    ));
-                }
-                let new_callee = match &call.callee {
-                    ast::Callee::Expr(callee) => {
-                        ast::Callee::Expr(Box::new(self.transform_expr(callee)))
-                    }
-                    other => other.clone(),
-                };
-                let new_args = call
-                    .args
-                    .iter()
-                    .map(|arg| ast::ExprOrSpread {
-                        spread: arg.spread,
-                        expr: Box::new(self.transform_expr(&arg.expr)),
-                    })
-                    .collect();
-                ast::Expr::Call(ast::CallExpr {
-                    span: call.span,
-                    ctxt: SyntaxContext::default(),
-                    callee: new_callee,
-                    args: new_args,
-                    type_args: call.type_args.clone(),
-                })
-            }
+            ast::Expr::Call(call) => self.transform_call_expr(call),
             ast::Expr::Member(member) => ast::Expr::Member(ast::MemberExpr {
                 span: member.span,
                 obj: Box::new(self.transform_expr(&member.obj)),
@@ -607,27 +594,7 @@ impl CjsTransformer {
                 prefix: update.prefix,
                 arg: Box::new(self.transform_expr(&update.arg)),
             }),
-            ast::Expr::Assign(assign) => {
-                let new_left = match &assign.left {
-                    ast::AssignTarget::Simple(simple) => match simple {
-                        ast::SimpleAssignTarget::Member(m) => ast::AssignTarget::Simple(
-                            ast::SimpleAssignTarget::Member(ast::MemberExpr {
-                                span: m.span,
-                                obj: Box::new(self.transform_expr(&m.obj)),
-                                prop: m.prop.clone(),
-                            }),
-                        ),
-                        other => ast::AssignTarget::Simple(other.clone()),
-                    },
-                    ast::AssignTarget::Pat(pat) => ast::AssignTarget::Pat(pat.clone()),
-                };
-                ast::Expr::Assign(ast::AssignExpr {
-                    span: assign.span,
-                    op: assign.op,
-                    left: new_left,
-                    right: Box::new(self.transform_expr(&assign.right)),
-                })
-            }
+            ast::Expr::Assign(assign) => self.transform_assign_expr(assign),
             ast::Expr::Cond(cond) => ast::Expr::Cond(ast::CondExpr {
                 span: cond.span,
                 test: Box::new(self.transform_expr(&cond.test)),
@@ -655,35 +622,7 @@ impl CjsTransformer {
                     })
                     .collect(),
             }),
-            ast::Expr::Object(obj) => ast::Expr::Object(ast::ObjectLit {
-                span: obj.span,
-                props: obj
-                    .props
-                    .iter()
-                    .map(|prop| match prop {
-                        ast::PropOrSpread::Prop(prop) => {
-                            ast::PropOrSpread::Prop(Box::new(match prop.as_ref() {
-                                ast::Prop::KeyValue(kv) => ast::Prop::KeyValue(ast::KeyValueProp {
-                                    key: kv.key.clone(),
-                                    value: Box::new(self.transform_expr(&kv.value)),
-                                }),
-                                ast::Prop::Assign(a) => ast::Prop::Assign(ast::AssignProp {
-                                    span: a.span,
-                                    key: a.key.clone(),
-                                    value: Box::new(self.transform_expr(&a.value)),
-                                }),
-                                other => other.clone(),
-                            }))
-                        }
-                        ast::PropOrSpread::Spread(s) => {
-                            ast::PropOrSpread::Spread(ast::SpreadElement {
-                                dot3_token: s.dot3_token,
-                                expr: Box::new(self.transform_expr(&s.expr)),
-                            })
-                        }
-                    })
-                    .collect(),
-            }),
+            ast::Expr::Object(obj) => self.transform_object_expr(obj),
             ast::Expr::Arrow(arrow) => ast::Expr::Arrow(ast::ArrowExpr {
                 span: arrow.span,
                 ctxt: SyntaxContext::default(),
@@ -714,45 +653,8 @@ impl CjsTransformer {
                     .collect(),
                 quasis: tpl.quasis.clone(),
             }),
-            ast::Expr::OptChain(oc) => ast::Expr::OptChain(ast::OptChainExpr {
-                span: oc.span,
-                optional: oc.optional,
-                base: Box::new(match oc.base.as_ref() {
-                    ast::OptChainBase::Member(m) => ast::OptChainBase::Member(ast::MemberExpr {
-                        span: m.span,
-                        obj: Box::new(self.transform_expr(&m.obj)),
-                        prop: m.prop.clone(),
-                    }),
-                    ast::OptChainBase::Call(c) => ast::OptChainBase::Call(ast::OptCall {
-                        span: c.span,
-                        ctxt: SyntaxContext::default(),
-                        callee: Box::new(self.transform_expr(&c.callee)),
-                        args: c
-                            .args
-                            .iter()
-                            .map(|a| ast::ExprOrSpread {
-                                spread: a.spread,
-                                expr: Box::new(self.transform_expr(&a.expr)),
-                            })
-                            .collect(),
-                        type_args: c.type_args.clone(),
-                    }),
-                }),
-            }),
-            ast::Expr::New(ne) => ast::Expr::New(ast::NewExpr {
-                span: ne.span,
-                ctxt: SyntaxContext::default(),
-                callee: Box::new(self.transform_expr(&ne.callee)),
-                args: ne.args.as_ref().map(|args| {
-                    args.iter()
-                        .map(|a| ast::ExprOrSpread {
-                            spread: a.spread,
-                            expr: Box::new(self.transform_expr(&a.expr)),
-                        })
-                        .collect()
-                }),
-                type_args: ne.type_args.clone(),
-            }),
+            ast::Expr::OptChain(oc) => self.transform_optchain_expr(oc),
+            ast::Expr::New(ne) => self.transform_new_expr(ne),
             ast::Expr::Await(a) => ast::Expr::Await(ast::AwaitExpr {
                 span: a.span,
                 arg: Box::new(self.transform_expr(&a.arg)),
@@ -775,24 +677,167 @@ impl CjsTransformer {
                     class: Box::new(class),
                 })
             }
-            ast::Expr::TaggedTpl(t) => ast::Expr::TaggedTpl(ast::TaggedTpl {
-                span: t.span,
-                ctxt: SyntaxContext::default(),
-                tag: Box::new(self.transform_expr(&t.tag)),
-                tpl: Box::new(ast::Tpl {
-                    span: t.tpl.span,
-                    exprs: t
-                        .tpl
-                        .exprs
-                        .iter()
-                        .map(|e| Box::new(self.transform_expr(e)))
-                        .collect(),
-                    quasis: t.tpl.quasis.clone(),
-                }),
-                type_params: t.type_params.clone(),
-            }),
+            ast::Expr::TaggedTpl(t) => self.transform_tagged_tpl(t),
             other => other.clone(),
         }
+    }
+
+    /// 转换 Call 表达式：检测 require() 并递归处理 callee/args
+    fn transform_call_expr(&mut self, call: &ast::CallExpr) -> ast::Expr {
+        if let Some(specifier) = extract_require_specifier(call)
+            && let Some(local_name) = self.require_map.get(&specifier)
+        {
+            return ast::Expr::Ident(ast::Ident::new(
+                local_name.clone().into(),
+                DUMMY_SP,
+                SyntaxContext::default(),
+            ));
+        }
+        let new_callee = match &call.callee {
+            ast::Callee::Expr(callee) => {
+                ast::Callee::Expr(Box::new(self.transform_expr(callee)))
+            }
+            other => other.clone(),
+        };
+        let new_args = call
+            .args
+            .iter()
+            .map(|arg| ast::ExprOrSpread {
+                spread: arg.spread,
+                expr: Box::new(self.transform_expr(&arg.expr)),
+            })
+            .collect();
+        ast::Expr::Call(ast::CallExpr {
+            span: call.span,
+            ctxt: SyntaxContext::default(),
+            callee: new_callee,
+            args: new_args,
+            type_args: call.type_args.clone(),
+        })
+    }
+
+    /// 转换 Assign 表达式：仅转换 member 赋值目标和右侧值
+    fn transform_assign_expr(&mut self, assign: &ast::AssignExpr) -> ast::Expr {
+        let new_left = match &assign.left {
+            ast::AssignTarget::Simple(simple) => match simple {
+                ast::SimpleAssignTarget::Member(m) => ast::AssignTarget::Simple(
+                    ast::SimpleAssignTarget::Member(ast::MemberExpr {
+                        span: m.span,
+                        obj: Box::new(self.transform_expr(&m.obj)),
+                        prop: m.prop.clone(),
+                    }),
+                ),
+                other => ast::AssignTarget::Simple(other.clone()),
+            },
+            ast::AssignTarget::Pat(pat) => ast::AssignTarget::Pat(pat.clone()),
+        };
+        ast::Expr::Assign(ast::AssignExpr {
+            span: assign.span,
+            op: assign.op,
+            left: new_left,
+            right: Box::new(self.transform_expr(&assign.right)),
+        })
+    }
+
+    /// 转换 Object 表达式：递归处理属性和 spread
+    fn transform_object_expr(&mut self, obj: &ast::ObjectLit) -> ast::Expr {
+        let props = obj
+            .props
+            .iter()
+            .map(|prop| match prop {
+                ast::PropOrSpread::Prop(prop) => {
+                    ast::PropOrSpread::Prop(Box::new(match prop.as_ref() {
+                        ast::Prop::KeyValue(kv) => ast::Prop::KeyValue(ast::KeyValueProp {
+                            key: kv.key.clone(),
+                            value: Box::new(self.transform_expr(&kv.value)),
+                        }),
+                        ast::Prop::Assign(a) => ast::Prop::Assign(ast::AssignProp {
+                            span: a.span,
+                            key: a.key.clone(),
+                            value: Box::new(self.transform_expr(&a.value)),
+                        }),
+                        other => other.clone(),
+                    }))
+                }
+                ast::PropOrSpread::Spread(s) => {
+                    ast::PropOrSpread::Spread(ast::SpreadElement {
+                        dot3_token: s.dot3_token,
+                        expr: Box::new(self.transform_expr(&s.expr)),
+                    })
+                }
+            })
+            .collect();
+        ast::Expr::Object(ast::ObjectLit {
+            span: obj.span,
+            props,
+        })
+    }
+
+    /// 转换可选链表达式
+    fn transform_optchain_expr(&mut self, oc: &ast::OptChainExpr) -> ast::Expr {
+        ast::Expr::OptChain(ast::OptChainExpr {
+            span: oc.span,
+            optional: oc.optional,
+            base: Box::new(match oc.base.as_ref() {
+                ast::OptChainBase::Member(m) => ast::OptChainBase::Member(ast::MemberExpr {
+                    span: m.span,
+                    obj: Box::new(self.transform_expr(&m.obj)),
+                    prop: m.prop.clone(),
+                }),
+                ast::OptChainBase::Call(c) => ast::OptChainBase::Call(ast::OptCall {
+                    span: c.span,
+                    ctxt: SyntaxContext::default(),
+                    callee: Box::new(self.transform_expr(&c.callee)),
+                    args: c
+                        .args
+                        .iter()
+                        .map(|a| ast::ExprOrSpread {
+                            spread: a.spread,
+                            expr: Box::new(self.transform_expr(&a.expr)),
+                        })
+                        .collect(),
+                    type_args: c.type_args.clone(),
+                }),
+            }),
+        })
+    }
+
+    /// 转换 New 表达式
+    fn transform_new_expr(&mut self, ne: &ast::NewExpr) -> ast::Expr {
+        ast::Expr::New(ast::NewExpr {
+            span: ne.span,
+            ctxt: SyntaxContext::default(),
+            callee: Box::new(self.transform_expr(&ne.callee)),
+            args: ne.args.as_ref().map(|args| {
+                args.iter()
+                    .map(|a| ast::ExprOrSpread {
+                        spread: a.spread,
+                        expr: Box::new(self.transform_expr(&a.expr)),
+                    })
+                    .collect()
+            }),
+            type_args: ne.type_args.clone(),
+        })
+    }
+
+    /// 转换 TaggedTemplate 表达式
+    fn transform_tagged_tpl(&mut self, t: &ast::TaggedTpl) -> ast::Expr {
+        ast::Expr::TaggedTpl(ast::TaggedTpl {
+            span: t.span,
+            ctxt: SyntaxContext::default(),
+            tag: Box::new(self.transform_expr(&t.tag)),
+            tpl: Box::new(ast::Tpl {
+                span: t.tpl.span,
+                exprs: t
+                    .tpl
+                    .exprs
+                    .iter()
+                    .map(|e| Box::new(self.transform_expr(e)))
+                    .collect(),
+                quasis: t.tpl.quasis.clone(),
+            }),
+            type_params: t.type_params.clone(),
+        })
     }
 }
 
