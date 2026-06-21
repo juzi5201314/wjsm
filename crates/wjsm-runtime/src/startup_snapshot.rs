@@ -79,7 +79,7 @@ pub(crate) fn capture_startup_snapshot(
     // 区分 null sentinel（entry == 0，GC sweep 释放槽位）和 rel == 0（entry 恰为
     // heap_start，handle 0 哨兵对象就在此处）：null 槽编码为 NULL_HANDLE_REL，
     // 否则编码为 entry - heap_start。
-    let mut handle_rel_offsets = Vec::with_capacity(obj_table_count as usize);
+    let mut handle_rel_offsets = Vec::with_capacity(obj_table_count);
     for i in 0..obj_table_count {
         let offset = obj_table_base + i * 4;
         if offset + 4 > data.len() {
@@ -388,7 +388,7 @@ pub(crate) fn restore_startup_snapshot(
         .checked_add(heap_used)
         .ok_or_else(|| anyhow::anyhow!("restore: heap range overflow"))?;
     if required_bytes as usize > mem_len as usize {
-        let pages_needed = ((required_bytes as u64 + 65535) / 65536) as u64;
+        let pages_needed = (required_bytes as u64).div_ceil(65536);
         let current_pages = mem_len as u64 / 65536;
         if pages_needed > current_pages {
             env.memory

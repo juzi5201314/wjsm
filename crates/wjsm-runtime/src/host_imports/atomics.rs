@@ -28,7 +28,7 @@ pub(crate) fn define_atomics(
         };
         let index =
             typedarray_to_index(caller, index_val, "RangeError: Invalid typed array index")?;
-        if (index as u32) >= entry.length {
+        if index >= entry.length {
             set_typedarray_runtime_error(caller, "RangeError: Invalid typed array index");
             return None;
         }
@@ -64,6 +64,7 @@ pub(crate) fn define_atomics(
 
     /// 对 buffer 加锁执行字节级 RMW，返回旧值编码（Number 用 f64 encode，BigInt 用 handle）。
     /// 支持 SAB (is_shared, sab_table + inner RwLock) 和 AB-backed (!is_shared, arraybuffer_table + Vec 直接 mut under table lock)。
+    #[allow(clippy::too_many_arguments)]
     fn atomic_rmw(
         caller: &mut Caller<'_, RuntimeState>,
         buffer_handle: usize,
@@ -898,6 +899,7 @@ pub(crate) fn define_atomics(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, size_val: i64| -> i64 {
             let size = value::decode_f64(size_val) as u8;
+            #[allow(clippy::match_like_matches_macro)]
             let result = match size {
                 1 | 2 | 4 => true,
                 8 => cfg!(target_has_atomic = "64"),
@@ -1152,29 +1154,29 @@ pub(crate) fn define_atomics(
                 dl,
                 Some(promise),
             );
-            if let Some(d) = dl {
-                if let Some(tx) = caller.data().host_completion_tx.clone() {
-                    let sh = shared.clone();
-                    let waiter = notified.clone();
-                    let nh = waiter.notified.clone();
-                    let pclone = promise;
-                    let bh = buf_handle as u32;
-                    let ou = off as u32;
-                    tokio::spawn(async move {
-                        ::tokio::time::sleep_until(d).await;
-                        crate::shared_buffer::remove_waiter(&sh, bh, ou, &nh);
-                        let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
-                            promise: pclone,
-                            materialize: Box::new(move |store, _env| {
-                                let timed = crate::runtime_render::store_runtime_string_in_state(
-                                    store.data(),
-                                    "timed-out".to_string(),
-                                );
-                                PromiseSettlement::Fulfill(timed)
-                            }),
-                        });
+            if let Some(d) = dl
+                && let Some(tx) = caller.data().host_completion_tx.clone()
+            {
+                let sh = shared.clone();
+                let waiter = notified.clone();
+                let nh = waiter.notified.clone();
+                let pclone = promise;
+                let bh = buf_handle as u32;
+                let ou = off as u32;
+                tokio::spawn(async move {
+                    ::tokio::time::sleep_until(d).await;
+                    crate::shared_buffer::remove_waiter(&sh, bh, ou, &nh);
+                    let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
+                        promise: pclone,
+                        materialize: Box::new(move |store, _env| {
+                            let timed = crate::runtime_render::store_runtime_string_in_state(
+                                store.data(),
+                                "timed-out".to_string(),
+                            );
+                            PromiseSettlement::Fulfill(timed)
+                        }),
                     });
-                }
+                });
             }
             let result = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");

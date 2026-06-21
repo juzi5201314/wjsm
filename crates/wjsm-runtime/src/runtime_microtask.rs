@@ -207,11 +207,11 @@ pub(crate) async fn drain_microtasks_async<
                         ctx.state_mut().reader_table.lock().expect("reader mutex");
                     let mut pending_promise: Option<i64> = None;
                     for reader in reader_table.iter_mut() {
-                        if reader.stream_handle == readable_stream_handle {
-                            if let Some(promise) = reader.pending_read_promise.take() {
-                                pending_promise = Some(promise);
-                                break;
-                            }
+                        if reader.stream_handle == readable_stream_handle
+                            && let Some(promise) = reader.pending_read_promise.take()
+                        {
+                            pending_promise = Some(promise);
+                            break;
                         }
                     }
                     pending_promise

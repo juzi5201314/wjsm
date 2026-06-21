@@ -220,7 +220,7 @@ pub fn encode_snapshot(snapshot: &StartupSnapshotOwned) -> Vec<u8> {
     // compute offsets
     let header_size = header_bytes.len() as u32;
     let st_start = align_up(header_size, 4);
-    let st_size = (SECTION_COUNT * 12) as u32; // 48
+    let st_size = SECTION_COUNT * 12; // 48
     let payload_start = align_up(st_start + st_size, 4);
 
     let mut off = payload_start;
@@ -334,7 +334,7 @@ fn write_section_entry(buf: &mut Vec<u8>, kind: u32, offset: u32, len: u32) {
 
 fn append_padded(buf: &mut Vec<u8>, data: &[u8]) {
     buf.extend_from_slice(data);
-    while (buf.len() % 4) != 0 {
+    while !buf.len().is_multiple_of(4) {
         buf.push(0);
     }
 }
@@ -421,7 +421,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
         let sect_len = u32::from_le_bytes(bytes[off + 8..off + 12].try_into()?) as usize;
         if sect_off
             .checked_add(sect_len)
-            .map_or(true, |e| e > bytes.len())
+            .is_none_or(|e| e > bytes.len())
         {
             bail!(
                 "section {} offset={} len={} out of bounds",
@@ -445,7 +445,7 @@ pub fn decode_snapshot(bytes: &[u8]) -> Result<StartupSnapshotView<'_>> {
                     bail!("duplicate section kind {}", _kind);
                 }
                 seen_handles = true;
-                if data.len() % 4 != 0 {
+                if !data.len().is_multiple_of(4) {
                     bail!(
                         "handle_rel_offsets data length {} is not a multiple of 4",
                         data.len()

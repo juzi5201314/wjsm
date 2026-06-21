@@ -33,11 +33,10 @@ pub(crate) fn define_object_builtins(
             }
             // Allocate new object; if proto is null, use null-proto allocator
             let env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-            let obj = if value::is_null(proto) {
+            if value::is_null(proto) {
                 alloc_host_null_proto_object(&mut caller, &env, 0)
             } else {
                 let o = alloc_host_object(&mut caller, &env, 0);
-                // Set prototype
                 let proto_handle = proto_handle_from_value(&mut caller, proto);
                 if let Some(ptr) = resolve_handle(&mut caller, o) {
                     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
@@ -49,8 +48,7 @@ pub(crate) fn define_object_builtins(
                     }
                 }
                 o
-            };
-            obj
+            }
         },
     );
     linker.define(&mut store, "env", "object.create", object_create_fn)?;

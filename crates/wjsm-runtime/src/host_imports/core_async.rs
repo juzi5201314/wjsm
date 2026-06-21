@@ -168,8 +168,8 @@ pub(crate) fn define_core_async(
             return promise;
         }
         if let Some(settled_val) = fulfilled {
-            if let Some((current_value, done)) = parse_iterator_result_fields(caller, settled_val) {
-                if let Some(IteratorState::ObjectIter {
+            if let Some((current_value, done)) = parse_iterator_result_fields(caller, settled_val)
+                && let Some(IteratorState::ObjectIter {
                     current_value: stored_value,
                     done: stored_done,
                     has_current: stored_has_current,
@@ -180,11 +180,10 @@ pub(crate) fn define_core_async(
                     .lock()
                     .expect("iterators mutex")
                     .get_mut(outer_handle_idx)
-                {
-                    *stored_value = current_value;
-                    *stored_done = done;
-                    *stored_has_current = true;
-                }
+            {
+                *stored_value = current_value;
+                *stored_done = done;
+                *stored_has_current = true;
             }
             return settled_val;
         }
@@ -348,7 +347,7 @@ pub(crate) fn define_core_async(
             };
             match iter {
                 IteratorState::StringIter { byte_pos, data } => {
-                    return value::encode_bool(*byte_pos as usize >= data.len());
+                    return value::encode_bool(*byte_pos >= data.len());
                 }
                 IteratorState::ArrayIter { index, length, .. } => {
                     return value::encode_bool(*index as usize >= *length as usize);

@@ -450,14 +450,14 @@ pub(crate) fn call_writable_stream_method_from_caller(
                     .writable_stream_table
                     .lock()
                     .expect("writable stream mutex");
-                if let Some(entry) = table.get(handle as usize) {
-                    if entry.state == WritableStreamState::Writable {
-                        settle_promise(
-                            caller.data(),
-                            ready_promise,
-                            PromiseSettlement::Fulfill(value::encode_undefined()),
-                        );
-                    }
+                if let Some(entry) = table.get(handle as usize)
+                    && entry.state == WritableStreamState::Writable
+                {
+                    settle_promise(
+                        caller.data(),
+                        ready_promise,
+                        PromiseSettlement::Fulfill(value::encode_undefined()),
+                    );
                 }
             }
 
@@ -613,14 +613,14 @@ pub(crate) fn call_writable_stream_method_from_caller(
             {
                 let writer_table = caller.data().writer_table.lock().expect("writer mutex");
                 for writer_entry in writer_table.iter() {
-                    if writer_entry.writable_stream_handle == handle {
-                        if let Some(cp) = writer_entry.closed_promise {
-                            settle_promise(
-                                caller.data(),
-                                cp,
-                                PromiseSettlement::Fulfill(value::encode_undefined()),
-                            );
-                        }
+                    if writer_entry.writable_stream_handle == handle
+                        && let Some(cp) = writer_entry.closed_promise
+                    {
+                        settle_promise(
+                            caller.data(),
+                            cp,
+                            PromiseSettlement::Fulfill(value::encode_undefined()),
+                        );
                     }
                 }
             }
@@ -809,14 +809,14 @@ pub(crate) fn call_default_writer_method_from_caller(
                 {
                     let writer_table = caller.data().writer_table.lock().expect("writer mutex");
                     for writer_entry in writer_table.iter() {
-                        if writer_entry.writable_stream_handle == sh {
-                            if let Some(cp) = writer_entry.closed_promise {
-                                settle_promise(
-                                    caller.data(),
-                                    cp,
-                                    PromiseSettlement::Fulfill(value::encode_undefined()),
-                                );
-                            }
+                        if writer_entry.writable_stream_handle == sh
+                            && let Some(cp) = writer_entry.closed_promise
+                        {
+                            settle_promise(
+                                caller.data(),
+                                cp,
+                                PromiseSettlement::Fulfill(value::encode_undefined()),
+                            );
                         }
                     }
                 }

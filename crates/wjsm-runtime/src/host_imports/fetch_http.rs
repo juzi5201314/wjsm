@@ -68,10 +68,10 @@ pub(crate) async fn perform_http_fetch(
     signal_handle: Option<u32>,
 ) -> std::result::Result<i64, String> {
     // 1. 检查 abort
-    if let Some(handle) = signal_handle {
-        if is_signal_aborted(caller.data(), handle) {
-            return Err("The operation was aborted".to_string());
-        }
+    if let Some(handle) = signal_handle
+        && is_signal_aborted(caller.data(), handle)
+    {
+        return Err("The operation was aborted".to_string());
     }
 
     // 2. 构建 reqwest 请求
@@ -114,10 +114,10 @@ pub(crate) async fn perform_http_fetch(
         .map_err(|e| format!("fetch failed: {}", e))?;
 
     // 6. 检查 abort（请求完成后）
-    if let Some(handle) = signal_handle {
-        if is_signal_aborted(caller.data(), handle) {
-            return Err("The operation was aborted".to_string());
-        }
+    if let Some(handle) = signal_handle
+        && is_signal_aborted(caller.data(), handle)
+    {
+        return Err("The operation was aborted".to_string());
     }
 
     // 7. 提取响应信息
@@ -195,7 +195,7 @@ pub(crate) fn urlencoding_decode(input: &str) -> String {
             let high = chars.next().and_then(|c| c.to_digit(16));
             let low = chars.next().and_then(|c| c.to_digit(16));
             if let (Some(h), Some(l)) = (high, low) {
-                result.push(char::from_u32((h * 16 + l) as u32).unwrap_or('?'));
+                result.push(char::from_u32(h * 16 + l).unwrap_or('?'));
             } else {
                 result.push('%');
             }

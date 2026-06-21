@@ -598,18 +598,19 @@ pub(crate) async fn proxy_own_keys_trap_async(
         }
     } else {
         for tk in &target_keys {
-            if let Some(tk_c) = find_memory_c_string(caller, tk) {
-                if let Some((_, flags, _)) = find_property_slot_by_name_id(caller, t_ptr, tk_c) {
-                    let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
-                    if !configurable && !trap_keys_str.contains(tk) {
-                        return make_type_error_exception(
-                            caller,
-                            &format!(
-                                "Proxy ownKeys invariant violated: non-configurable property '{}' is missing in trap result",
-                                tk
-                            ),
-                        );
-                    }
+            if let Some(tk_c) = find_memory_c_string(caller, tk)
+                && let Some((_, flags, _)) =
+                    find_property_slot_by_name_id(caller, t_ptr, tk_c)
+            {
+                let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
+                if !configurable && !trap_keys_str.contains(tk) {
+                    return make_type_error_exception(
+                        caller,
+                        &format!(
+                            "Proxy ownKeys invariant violated: non-configurable property '{}' is missing in trap result",
+                            tk
+                        ),
+                    );
                 }
             }
         }
@@ -632,11 +633,11 @@ async fn descriptor_enumerable_on_proxy_async(
     key: i64,
 ) -> bool {
     let desc = reflect_get_own_property_descriptor_on_object_async(caller, obj, key).await;
-    if !value::is_undefined(desc) {
-        if let Some(desc_ptr) = resolve_handle(caller, desc) {
-            let prop_enum = read_object_property_by_name(caller, desc_ptr, "enumerable");
-            return prop_enum.is_some_and(|v| !value::is_falsy(v));
-        }
+    if !value::is_undefined(desc)
+        && let Some(desc_ptr) = resolve_handle(caller, desc)
+    {
+        let prop_enum = read_object_property_by_name(caller, desc_ptr, "enumerable");
+        return prop_enum.is_some_and(|v| !value::is_falsy(v));
     }
     // 陷阱描述符解析失败时，回退到 target 上的 enumerable（与常见 ownKeys+getOwnPropertyDescriptor 转发 handler 一致）
     if value::is_proxy(obj) {
@@ -650,11 +651,11 @@ async fn descriptor_enumerable_on_proxy_async(
             .cloned();
         if let Some(entry) = entry {
             let target_desc = reflect_get_own_property_descriptor_impl(caller, entry.target, key);
-            if !value::is_undefined(target_desc) {
-                if let Some(desc_ptr) = resolve_handle(caller, target_desc) {
-                    let prop_enum = read_object_property_by_name(caller, desc_ptr, "enumerable");
-                    return prop_enum.is_some_and(|v| !value::is_falsy(v));
-                }
+            if !value::is_undefined(target_desc)
+                && let Some(desc_ptr) = resolve_handle(caller, target_desc)
+            {
+                let prop_enum = read_object_property_by_name(caller, desc_ptr, "enumerable");
+                return prop_enum.is_some_and(|v| !value::is_falsy(v));
             }
         }
     }

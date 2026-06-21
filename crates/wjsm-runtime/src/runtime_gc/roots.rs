@@ -192,7 +192,6 @@ fn push_value_roots(ctx: &mut GcContext, val: i64, visit: &mut dyn FnMut(Handle)
         for r in refs {
             push_value_roots(ctx, r, visit);
         }
-        return;
     }
     // 其他 handle tag（bigint/symbol/regexp/proxy/scope_record/iterator/enumerator/
     // runtime_string/exception/bound）：经对应 side-table fixed-point 路径或不持 obj_table 引用。
@@ -254,7 +253,7 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
                     close_promise,
                     ..
                 } => {
-                    out.extend(callback.into_iter());
+                    out.extend(callback);
                     out.extend([this_val, controller, close_promise]);
                 }
                 Microtask::AsyncResume {
@@ -376,9 +375,9 @@ fn collect_host_table_values(ctx: &mut GcContext) -> Vec<i64> {
             .map(|g| g.clone())
             .unwrap_or_default();
         for c in ctrls.iter() {
-            out.extend(c.underlying_source.into_iter());
-            out.extend(c.pull_callback.into_iter());
-            out.extend(c.cancel_callback.into_iter());
+            out.extend(c.underlying_source);
+            out.extend(c.pull_callback);
+            out.extend(c.cancel_callback);
         }
 
         // timers：callback（TimerEntry 非 Clone，在 guard 内直接取字段）

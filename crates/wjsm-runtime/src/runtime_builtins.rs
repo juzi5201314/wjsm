@@ -1256,17 +1256,17 @@ pub(crate) async fn advance_async_from_sync_async(
 
     {
         let iters = caller.data().iterators.lock().expect("iterators mutex");
-        if let Some(IteratorState::ObjectIter { done, .. }) = iters.get(sync_handle_idx) {
-            if *done {
-                drop(iters);
-                let mut table = caller
-                    .data()
-                    .async_from_sync_iterators
-                    .lock()
-                    .expect("async-from-sync iterators mutex");
-                if let Some(entry) = table.get_mut(handle as usize) {
-                    entry.sync_done = true;
-                }
+        if let Some(IteratorState::ObjectIter { done, .. }) = iters.get(sync_handle_idx)
+            && *done
+        {
+            drop(iters);
+            let mut table = caller
+                .data()
+                .async_from_sync_iterators
+                .lock()
+                .expect("async-from-sync iterators mutex");
+            if let Some(entry) = table.get_mut(handle as usize) {
+                entry.sync_done = true;
             }
         }
     }

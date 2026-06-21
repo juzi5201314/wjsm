@@ -77,7 +77,7 @@ const NUM_HOST_IMPORTS: u32 = 14;
 // ── Defined function indices ──────────────────────────────────────────
 // 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。
 #[allow(dead_code)]
-const FN_OBJ_NEW: u32 = NUM_HOST_IMPORTS + 0;
+const FN_OBJ_NEW: u32 = NUM_HOST_IMPORTS;
 const FN_OBJ_GET: u32 = NUM_HOST_IMPORTS + 1;
 const FN_OBJ_SET: u32 = NUM_HOST_IMPORTS + 2;
 #[allow(dead_code)]

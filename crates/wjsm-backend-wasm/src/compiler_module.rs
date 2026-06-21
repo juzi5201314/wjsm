@@ -243,7 +243,7 @@ impl Compiler {
         // Reserve indices for object helper functions (so they're known during user function compilation).
         if self.mode == CompileMode::Normal {
             let support_import_base = host_import_specs().len() as u32;
-            self.obj_new_func_idx = support_import_base + 0;
+            self.obj_new_func_idx = support_import_base;
             self.obj_get_func_idx = support_import_base + 1;
             self.obj_set_func_idx = support_import_base + 2;
             self.obj_delete_func_idx = support_import_base + 3;

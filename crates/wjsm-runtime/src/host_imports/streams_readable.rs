@@ -474,9 +474,7 @@ pub(crate) fn create_closed_readable_stream_from_bytes(
     }
 
     // 5. 构造 ReadableStream JS 对象
-    let obj = create_readable_stream_js_object(caller, stream_handle);
-
-    obj
+    create_readable_stream_js_object(caller, stream_handle)
 }
 
 /// ReadableStream 构造函数 — 由 NativeCallable::ReadableStreamConstructor 调度
@@ -694,11 +692,11 @@ fn controller_enqueue(
         let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
         let mut pending_info: Option<(ReaderKind, Option<i64>, i64)> = None;
         for reader in reader_table.iter_mut() {
-            if reader.stream_handle == stream_handle {
-                if let Some(promise) = reader.pending_read_promise.take() {
-                    pending_info = Some((reader.kind, reader.pending_byob_view.take(), promise));
-                    break;
-                }
+            if reader.stream_handle == stream_handle
+                && let Some(promise) = reader.pending_read_promise.take()
+            {
+                pending_info = Some((reader.kind, reader.pending_byob_view.take(), promise));
+                break;
             }
         }
         pending_info
@@ -772,11 +770,11 @@ fn controller_close(caller: &mut Caller<'_, RuntimeState>, controller_handle: u3
         let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
         let mut pending_info: Option<(Option<i64>, i64)> = None;
         for reader in reader_table.iter_mut() {
-            if reader.stream_handle == stream_handle {
-                if let Some(promise) = reader.pending_read_promise.take() {
-                    pending_info = Some((reader.pending_byob_view.take(), promise));
-                    break;
-                }
+            if reader.stream_handle == stream_handle
+                && let Some(promise) = reader.pending_read_promise.take()
+            {
+                pending_info = Some((reader.pending_byob_view.take(), promise));
+                break;
             }
         }
         pending_info
@@ -831,11 +829,11 @@ fn controller_error(
         let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
         let mut pending_promise: Option<i64> = None;
         for reader in reader_table.iter_mut() {
-            if reader.stream_handle == stream_handle {
-                if let Some(promise) = reader.pending_read_promise.take() {
-                    pending_promise = Some(promise);
-                    break;
-                }
+            if reader.stream_handle == stream_handle
+                && let Some(promise) = reader.pending_read_promise.take()
+            {
+                pending_promise = Some(promise);
+                break;
             }
         }
         pending_promise
@@ -1539,32 +1537,30 @@ pub(crate) fn call_default_reader_method_from_caller(
                 }
 
                 // BYOB path：create ByobRequestEntry, set controller.active_byob_request
-                if reader_kind == ReaderKind::Byob {
-                    if let Some(view) = byob_view {
-                        let byob_handle = {
-                            let mut table = caller
-                                .data()
-                                .byob_request_table
-                                .lock()
-                                .expect("byob_request mutex");
-                            let h = table.len() as u32;
-                            table.push(ByobRequestEntry {
-                                controller_handle: ctrl_handle,
-                                reader_handle: handle,
-                                view,
-                                promise: p,
-                                responded: false,
-                            });
-                            h
-                        };
-                        let mut ctrl_table = caller
+                if reader_kind == ReaderKind::Byob && let Some(view) = byob_view {
+                    let byob_handle = {
+                        let mut table = caller
                             .data()
-                            .stream_controller_table
+                            .byob_request_table
                             .lock()
-                            .expect("controller mutex");
-                        if let Some(ctrl) = ctrl_table.get_mut(ctrl_handle as usize) {
-                            ctrl.active_byob_request = Some(byob_handle);
-                        }
+                            .expect("byob_request mutex");
+                        let h = table.len() as u32;
+                        table.push(ByobRequestEntry {
+                            controller_handle: ctrl_handle,
+                            reader_handle: handle,
+                            view,
+                            promise: p,
+                            responded: false,
+                        });
+                        h
+                    };
+                    let mut ctrl_table = caller
+                        .data()
+                        .stream_controller_table
+                        .lock()
+                        .expect("controller mutex");
+                    if let Some(ctrl) = ctrl_table.get_mut(ctrl_handle as usize) {
+                        ctrl.active_byob_request = Some(byob_handle);
                     }
                 }
 
@@ -1996,10 +1992,10 @@ pub(crate) fn call_byob_request_method_from_caller(
                     .stream_controller_table
                     .lock()
                     .expect("controller mutex");
-                if let Some(ctrl) = table.get_mut(controller_handle as usize) {
-                    if ctrl.active_byob_request == Some(handle) {
-                        ctrl.active_byob_request = None;
-                    }
+                if let Some(ctrl) = table.get_mut(controller_handle as usize)
+                    && ctrl.active_byob_request == Some(handle)
+                {
+                    ctrl.active_byob_request = None;
                 }
             }
             // 清理 reader 的 pending 状态

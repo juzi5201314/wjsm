@@ -1127,10 +1127,10 @@ pub(crate) fn is_callable_in_runtime(caller: &mut Caller<'_, RuntimeState>, val:
             let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
             table.get(handle).cloned()
         };
-        if let Some(entry) = entry {
-            if !entry.revoked {
-                return is_callable_in_runtime(caller, entry.target);
-            }
+        if let Some(entry) = entry
+            && !entry.revoked
+        {
+            return is_callable_in_runtime(caller, entry.target);
         }
     }
     false
@@ -1146,10 +1146,10 @@ pub(crate) fn is_constructor_in_runtime(caller: &mut Caller<'_, RuntimeState>, v
             let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
             table.get(handle).cloned()
         };
-        if let Some(entry) = entry {
-            if !entry.revoked {
-                return is_constructor_in_runtime(caller, entry.target);
-            }
+        if let Some(entry) = entry
+            && !entry.revoked
+        {
+            return is_constructor_in_runtime(caller, entry.target);
         }
     }
     false
@@ -1267,21 +1267,19 @@ fn parse_descriptor(
     let prop_get = read_object_property_by_name(caller, desc_ptr, "get");
     let prop_set = read_object_property_by_name(caller, desc_ptr, "set");
 
-    if let Some(getter) = prop_get {
-        if !value::is_undefined(getter)
-            && !value::is_null(getter)
-            && !is_callable_in_runtime(caller, getter)
-        {
-            return Err("TypeError: property getter must be callable".to_string());
-        }
+    if let Some(getter) = prop_get
+        && !value::is_undefined(getter)
+        && !value::is_null(getter)
+        && !is_callable_in_runtime(caller, getter)
+    {
+        return Err("TypeError: property getter must be callable".to_string());
     }
-    if let Some(setter) = prop_set {
-        if !value::is_undefined(setter)
-            && !value::is_null(setter)
-            && !is_callable_in_runtime(caller, setter)
-        {
-            return Err("TypeError: property setter must be callable".to_string());
-        }
+    if let Some(setter) = prop_set
+        && !value::is_undefined(setter)
+        && !value::is_null(setter)
+        && !is_callable_in_runtime(caller, setter)
+    {
+        return Err("TypeError: property setter must be callable".to_string());
     }
 
     let has_accessor = prop_get.is_some() || prop_set.is_some();
@@ -1516,10 +1514,10 @@ fn define_property_on_normal_object(
             if desc.configurable == Some(true) {
                 return Err("TypeError: Cannot redefine non-configurable property".to_string());
             }
-            if let Some(new_enum) = desc.enumerable {
-                if new_enum != old_enumerable {
-                    return Err("TypeError: Cannot redefine enumerable attribute of non-configurable property".to_string());
-                }
+            if let Some(new_enum) = desc.enumerable
+                && new_enum != old_enumerable
+            {
+                return Err("TypeError: Cannot redefine enumerable attribute of non-configurable property".to_string());
             }
             let is_new_accessor = desc.get.is_some() || desc.set.is_some();
             if is_new_accessor != old_accessor {
@@ -1542,21 +1540,21 @@ fn define_property_on_normal_object(
                 }
             } else {
                 // 访问器属性
-                if let Some(new_getter) = desc.get {
-                    if new_getter != old_getter {
-                        return Err(
-                            "TypeError: Cannot change getter of non-configurable property"
-                                .to_string(),
-                        );
-                    }
+                if let Some(new_getter) = desc.get
+                    && new_getter != old_getter
+                {
+                    return Err(
+                        "TypeError: Cannot change getter of non-configurable property"
+                            .to_string(),
+                    );
                 }
-                if let Some(new_setter) = desc.set {
-                    if new_setter != old_setter {
-                        return Err(
-                            "TypeError: Cannot change setter of non-configurable property"
-                                .to_string(),
-                        );
-                    }
+                if let Some(new_setter) = desc.set
+                    && new_setter != old_setter
+                {
+                    return Err(
+                        "TypeError: Cannot change setter of non-configurable property"
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -2017,25 +2015,17 @@ async fn define_property_on_target_async(
                 let extensible = is_extensible_impl(caller, entry.target);
                 let setting_config_false = desc.configurable == Some(false);
 
-                if target_desc.is_none() {
-                    if !extensible {
-                        return Err("TypeError: proxy defineProperty invariant violation: target is non-extensible and property does not exist".to_string());
-                    }
-                    if setting_config_false {
-                        return Err("TypeError: proxy defineProperty invariant violation: cannot define non-configurable property if it does not exist on target".to_string());
-                    }
-                } else {
-                    let td = target_desc.unwrap();
+                if let Some(td) = target_desc {
                     let target_configurable = td.configurable.unwrap_or(true);
 
                     if !target_configurable {
                         if desc.configurable == Some(true) {
                             return Err("TypeError: proxy defineProperty invariant violation: cannot redefine non-configurable property as configurable".to_string());
                         }
-                        if let Some(new_enum) = desc.enumerable {
-                            if Some(new_enum) != td.enumerable {
-                                return Err("TypeError: proxy defineProperty invariant violation: cannot change enumerableness of non-configurable property".to_string());
-                            }
+                        if let Some(new_enum) = desc.enumerable
+                            && Some(new_enum) != td.enumerable
+                        {
+                            return Err("TypeError: proxy defineProperty invariant violation: cannot change enumerableness of non-configurable property".to_string());
                         }
 
                         let is_new_accessor = desc.get.is_some() || desc.set.is_some();
@@ -2072,6 +2062,13 @@ async fn define_property_on_target_async(
                                 }
                             }
                         }
+                    }
+                } else {
+                    if !extensible {
+                        return Err("TypeError: proxy defineProperty invariant violation: target is non-extensible and property does not exist".to_string());
+                    }
+                    if setting_config_false {
+                        return Err("TypeError: proxy defineProperty invariant violation: cannot define non-configurable property if it does not exist on target".to_string());
                     }
                 }
 
@@ -2177,7 +2174,7 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
                 caller,
                 dp_ptr,
                 default_proto,
-                name_c as u32,
+                name_c,
                 target,
                 constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
             );

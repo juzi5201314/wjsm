@@ -603,7 +603,7 @@ pub(crate) fn define_primitive_core(
             } else {
                 value::encode_undefined()
             };
-            write_array_elem(caller, arr_ptr, i as u32, elem);
+            write_array_elem(caller, arr_ptr, i, elem);
         }
         write_array_length(caller, arr_ptr, group_count);
         // .index — 使用 m.start() 保持一致
@@ -659,7 +659,7 @@ pub(crate) fn define_primitive_core(
                     }
                     None => value::encode_undefined(),
                 };
-                write_array_elem(caller, indices_ptr, i as u32, elem);
+                write_array_elem(caller, indices_ptr, i, elem);
             }
             write_array_length(caller, indices_ptr, group_count);
             if !named.is_empty() {

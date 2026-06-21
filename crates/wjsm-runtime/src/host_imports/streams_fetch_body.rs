@@ -158,10 +158,12 @@ fn spawn_chunk_pull(
                         .http_response_table
                         .lock()
                         .expect("http_response mutex");
-                    if let Some(entry) = table.get_mut(http_handle as usize) {
-                        if entry.response.is_none() && !entry.eof && entry.error.is_none() {
-                            entry.response = Some(response);
-                        }
+                    if let Some(entry) = table.get_mut(http_handle as usize)
+                        && entry.response.is_none()
+                        && !entry.eof
+                        && entry.error.is_none()
+                    {
+                        entry.response = Some(response);
                     }
                     settlement
                 }

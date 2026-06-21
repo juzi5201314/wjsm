@@ -575,24 +575,23 @@ pub(crate) fn resolve_buffer_backing(
             }
         })
         .unwrap_or(0);
-    if let Some(hv) = sab_h {
-        if value::is_f64(hv) {
-            // growable: 可选读取 maxByteLength
-            let growable = read_object_property_by_name(caller, ptr, "maxByteLength").is_some();
-            return Some(BufferBacking::SharedArrayBuffer {
-                handle: value::decode_f64(hv) as u32,
-                byte_length: bl,
-                growable,
-            });
-        }
+    if let Some(hv) = sab_h
+        && value::is_f64(hv)
+    {
+        let growable = read_object_property_by_name(caller, ptr, "maxByteLength").is_some();
+        return Some(BufferBacking::SharedArrayBuffer {
+            handle: value::decode_f64(hv) as u32,
+            byte_length: bl,
+            growable,
+        });
     }
-    if let Some(hv) = ab_h {
-        if value::is_f64(hv) {
-            return Some(BufferBacking::ArrayBuffer {
-                handle: value::decode_f64(hv) as u32,
-                byte_length: bl,
-            });
-        }
+    if let Some(hv) = ab_h
+        && value::is_f64(hv)
+    {
+        return Some(BufferBacking::ArrayBuffer {
+            handle: value::decode_f64(hv) as u32,
+            byte_length: bl,
+        });
     }
     None
 }

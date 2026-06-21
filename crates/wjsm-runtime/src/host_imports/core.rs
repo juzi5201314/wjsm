@@ -1242,7 +1242,7 @@ pub(crate) fn define_core(
                 return u32::MAX as i32;
             };
             let size = size.max(0) as usize;
-            let heap_type = heap_type.max(0).min(255) as u8;
+            let heap_type = heap_type.clamp(0, 255) as u8;
             let capacity = capacity.max(0) as u32;
             // 算法持有在 RuntimeState.gc_algorithm（Arc<Mutex>），经 GcContext 调用。
             // 先 clone Arc 释放 caller 不可变借用，再 lock，避免借用冲突。
@@ -1277,10 +1277,10 @@ pub(crate) fn define_core(
                 let mut gc = gc_arc.lock().expect("gc_algorithm mutex");
                 let mut ctx =
                     crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
-                if ctx.grow(1).is_ok() {
-                    if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
-                        return ptr as i32;
-                    }
+                if ctx.grow(1).is_ok()
+                    && let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity)
+                {
+                    return ptr as i32;
                 }
             }
             // 真 OOM：返回 sentinel（u32::MAX），调用方应 unreachable trap。

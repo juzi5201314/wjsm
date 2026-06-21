@@ -35,6 +35,7 @@ pub(crate) enum AsyncHostCompletion {
         promise: i64,
         settlement: PromiseSettlement,
     },
+    #[allow(clippy::type_complexity)]
     Materialize {
         promise: i64,
         materialize:
@@ -78,6 +79,7 @@ impl Drop for AsyncOpGuard {
 /// 替换原来 run_main_completion_block_async 里 `if main_ok { timer loop }` 的阻塞实现。
 /// 严格遵循 plan 361-456 的 process_one_due_timer 形状 + 现有经审计逻辑 + Phase 6 channel 处理（Correction 7）。
 /// 所有中文错误消息、MAX=1000 守卫、取消清理、重复 reschedule 顺序 100% 保留。
+#[allow(clippy::await_holding_lock)]
 pub(crate) async fn run_post_main_scheduler_async(
     store: &mut Store<RuntimeState>,
     env: &WasmEnv,

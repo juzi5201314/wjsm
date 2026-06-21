@@ -480,11 +480,11 @@ pub(crate) fn call_transform_from_writable(
                     let mut reader_table = caller.data().reader_table.lock().expect("reader mutex");
                     let mut pending_promise: Option<i64> = None;
                     for reader in reader_table.iter_mut() {
-                        if reader.stream_handle == sh {
-                            if let Some(promise) = reader.pending_read_promise.take() {
-                                pending_promise = Some(promise);
-                                break;
-                            }
+                        if reader.stream_handle == sh
+                            && let Some(promise) = reader.pending_read_promise.take()
+                        {
+                            pending_promise = Some(promise);
+                            break;
                         }
                     }
                     pending_promise
@@ -501,10 +501,10 @@ pub(crate) fn call_transform_from_writable(
                         .stream_controller_table
                         .lock()
                         .expect("controller mutex");
-                    if let Some(ctrl) = ctrl_table.get_mut(ctrl_handle as usize) {
-                        if !ctrl.close_requested {
-                            ctrl.chunk_queue.push_back(chunk);
-                        }
+                    if let Some(ctrl) = ctrl_table.get_mut(ctrl_handle as usize)
+                        && !ctrl.close_requested
+                    {
+                        ctrl.chunk_queue.push_back(chunk);
                     }
                 }
             }

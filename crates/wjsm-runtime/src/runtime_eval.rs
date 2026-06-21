@@ -342,12 +342,11 @@ pub(crate) fn compiled_eval_import(
                         return name_id as i32;
                     }
                     if value::is_runtime_string_handle(key) || value::is_f64(key) {
-                        if let Ok(s) = render_value(&mut caller, key) {
-                            if let Some(id) = find_memory_c_string(&mut caller, &s)
+                        if let Ok(s) = render_value(&mut caller, key)
+                            && let Some(id) = find_memory_c_string(&mut caller, &s)
                                 .or_else(|| alloc_heap_c_string(&mut caller, &s))
-                            {
-                                return id as i32;
-                            }
+                        {
+                            return id as i32;
                         }
                         return 0;
                     }
@@ -444,12 +443,12 @@ pub(crate) async fn perform_eval_from_caller_async(
         }
     };
     let strict_eval_source = runtime_module_has_use_strict_directive(&module);
-    if strict_eval_source {
-        if let Some(env) = scope_env {
-            let handle = value::decode_scope_record_handle(env);
-            if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
-                rec.is_strict = true;
-            }
+    if strict_eval_source
+        && let Some(env) = scope_env
+    {
+        let handle = value::decode_scope_record_handle(env);
+        if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
+            rec.is_strict = true;
         }
     }
     let caller_is_strict = scope_env
@@ -932,17 +931,17 @@ pub(crate) fn eval_stmt(
                     }
                 }
             }
-            if !matched {
-                if let Some(stmts) = default_case {
-                    for stmt in stmts {
-                        if matches!(stmt, swc_ast::Stmt::Break(_)) {
-                            return Ok(completion);
-                        }
-                        if let Some(value) =
-                            eval_stmt(caller, stmt, scope_env, var_writes_to_scope, eval_locals)?
-                        {
-                            completion = Some(value);
-                        }
+            if !matched
+                && let Some(stmts) = default_case
+            {
+                for stmt in stmts {
+                    if matches!(stmt, swc_ast::Stmt::Break(_)) {
+                        return Ok(completion);
+                    }
+                    if let Some(value) =
+                        eval_stmt(caller, stmt, scope_env, var_writes_to_scope, eval_locals)?
+                    {
+                        completion = Some(value);
                     }
                 }
             }
@@ -1221,10 +1220,10 @@ pub(crate) fn eval_expr(
                 use std::sync::atomic::Ordering;
                 if let Some(env) = scope_env {
                     let handle = value::decode_scope_record_handle(env);
-                    if let Some(rec) = caller.data().scope_records.get(&handle) {
-                        if let Some(nt) = rec.new_target {
-                            return Ok(nt);
-                        }
+                    if let Some(rec) = caller.data().scope_records.get(&handle)
+                        && let Some(nt) = rec.new_target
+                    {
+                        return Ok(nt);
                     }
                 }
                 Ok(caller.data().new_target.load(Ordering::Relaxed))
@@ -1850,12 +1849,12 @@ pub(crate) fn scope_record_add_binding(
 }
 
 pub(crate) fn eval_get_binding(
-    mut caller: &mut Caller<'_, RuntimeState>,
+    caller: &mut Caller<'_, RuntimeState>,
     record: i64,
     name: i64,
 ) -> i64 {
     let handle = value::decode_scope_record_handle(record);
-    let name_str = read_value_string_bytes(&mut caller, name)
+    let name_str = read_value_string_bytes(caller, name)
         .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_default();
     if name_str.is_empty() {
@@ -1883,8 +1882,8 @@ pub(crate) fn eval_get_binding(
             if n == &name_str {
                 if !init {
                     let msg = format!("Cannot access '{}' before initialization", name_str);
-                    let msg_val = store_runtime_string(&caller, msg.clone());
-                    let error_obj = create_error_object(&mut caller, "ReferenceError", msg_val);
+                    let msg_val = store_runtime_string(caller, msg.clone());
+                    let error_obj = create_error_object(caller, "ReferenceError", msg_val);
                     {
                         let mut errors = caller.data().error_table.lock().unwrap();
                         let idx = errors.len() as u32;
@@ -1904,13 +1903,13 @@ pub(crate) fn eval_get_binding(
 }
 
 pub(crate) fn eval_set_binding(
-    mut caller: &mut Caller<'_, RuntimeState>,
+    caller: &mut Caller<'_, RuntimeState>,
     record: i64,
     name: i64,
     val: i64,
 ) -> i64 {
     let handle = value::decode_scope_record_handle(record);
-    let name_str = read_value_string_bytes(&mut caller, name)
+    let name_str = read_value_string_bytes(caller, name)
         .and_then(|b| String::from_utf8(b).ok())
         .unwrap_or_default();
     if name_str.is_empty() {
@@ -1921,8 +1920,8 @@ pub(crate) fn eval_set_binding(
             if n == &name_str {
                 if *is_const && *init {
                     let msg = format!("assignment to constant `{}`", name_str);
-                    let msg_val = store_runtime_string(&caller, msg.clone());
-                    let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
+                    let msg_val = store_runtime_string(caller, msg.clone());
+                    let error_obj = create_error_object(caller, "TypeError", msg_val);
                     {
                         let mut errors = caller.data().error_table.lock().unwrap();
                         let idx = errors.len() as u32;
@@ -1941,8 +1940,8 @@ pub(crate) fn eval_set_binding(
         }
         if rec.is_strict {
             let msg = format!("assignment to undeclared variable `{}`", name_str);
-            let msg_val = store_runtime_string(&caller, msg.clone());
-            let error_obj = create_error_object(&mut caller, "ReferenceError", msg_val);
+            let msg_val = store_runtime_string(caller, msg.clone());
+            let error_obj = create_error_object(caller, "ReferenceError", msg_val);
             {
                 let mut errors = caller.data().error_table.lock().unwrap();
                 let idx = errors.len() as u32;

@@ -24,7 +24,6 @@ pub(crate) struct SymbolEntry {
 }
 
 /// Error 条目：存储 error 对象的 name 和 message
-
 pub(crate) struct ErrorEntry {
     #[allow(dead_code)]
     pub(crate) name: String,
@@ -959,7 +958,7 @@ pub(crate) enum ReactionType {
 }
 
 #[derive(Clone)]
-
+#[allow(clippy::enum_variant_names)]
 pub(crate) enum Microtask {
     PromiseReaction {
         promise: i64,
