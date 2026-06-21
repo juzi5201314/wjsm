@@ -38,7 +38,7 @@ pub(crate) fn define_object_builtins(
             } else {
                 let o = alloc_host_object(&mut caller, &env, 0);
                 // Set prototype
-                let proto_handle = proto_handle_from_value(proto);
+                let proto_handle = proto_handle_from_value(&mut caller, proto);
                 if let Some(ptr) = resolve_handle(&mut caller, o) {
                     let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
                         return o;
@@ -172,6 +172,7 @@ pub(crate) fn define_object_builtins(
             // Check extensibility
             if !is_extensible_impl(&mut caller, obj) {
                 // If non-extensible, only succeed if proto matches current
+                let new_handle = proto_handle_from_value(&mut caller, proto);
                 let Some(ptr) = resolve_handle(&mut caller, obj) else {
                     return obj;
                 };
@@ -184,7 +185,6 @@ pub(crate) fn define_object_builtins(
                 }
                 let current_handle =
                     u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
-                let new_handle = proto_handle_from_value(proto);
                 if current_handle != new_handle {
                     set_runtime_error(
                         caller.data(),
@@ -197,7 +197,7 @@ pub(crate) fn define_object_builtins(
             let Some(ptr) = resolve_handle(&mut caller, obj) else {
                 return obj;
             };
-            let proto_handle = proto_handle_from_value(proto);
+            let proto_handle = proto_handle_from_value(&mut caller, proto);
             let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
                 return obj;
             };
@@ -349,7 +349,10 @@ fn same_value(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -> bool {
 }
 
 /// Convert a prototype value to its raw handle representation for storage in object header.
-fn proto_handle_from_value(proto: i64) -> u32 {
+///
+/// 函数/闭包值的 low32 是函数表索引；其属性对象 handle 从 `__function_props_base` 起算，
+/// 故存储到 header proto 字段时必须加上 base，否则读回时解析到错误对象。
+fn proto_handle_from_value(caller: &mut Caller<'_, RuntimeState>, proto: i64) -> u32 {
     if value::is_null(proto) {
         0xFFFF_FFFF
     } else if value::is_object(proto) {
@@ -358,8 +361,29 @@ fn proto_handle_from_value(proto: i64) -> u32 {
         value::decode_array_handle(proto)
     } else if value::is_proxy(proto) {
         value::decode_proxy_handle(proto)
-    } else if value::is_function(proto) || value::is_closure(proto) {
-        value::decode_object_handle(proto)
+    } else if value::is_function(proto) {
+        let func_idx = value::decode_function_idx(proto);
+        let base = caller
+            .get_export("__function_props_base")
+            .and_then(|e| e.into_global())
+            .and_then(|g| g.get(&mut *caller).i32())
+            .unwrap_or(0) as u32;
+        base + func_idx
+    } else if value::is_closure(proto) {
+        let closure_idx = value::decode_closure_idx(proto) as usize;
+        let func_idx = caller
+            .data()
+            .closures
+            .lock()
+            .ok()
+            .and_then(|g| g.get(closure_idx).map(|e| e.func_idx))
+            .unwrap_or(0);
+        let base = caller
+            .get_export("__function_props_base")
+            .and_then(|e| e.into_global())
+            .and_then(|g| g.get(&mut *caller).i32())
+            .unwrap_or(0) as u32;
+        base + func_idx
     } else {
         0xFFFF_FFFF
     }

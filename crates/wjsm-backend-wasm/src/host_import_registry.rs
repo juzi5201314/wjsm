@@ -37,6 +37,7 @@ pub enum SpecialHostImport {
     StringConcat,
     StringConcatVa,
     SymbolPropertyKey,
+    StringToArrayIndex,
     NativeCallableGetProperty,
     PrimitiveNumberGetMethod,
     TypedArraySetByIndex,
@@ -2481,6 +2482,14 @@ static HOST_IMPORT_SPECS: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "string_to_array_index",
+        type_idx: 10,
+        key: Some(HostImportKey::Special(
+            SpecialHostImport::StringToArrayIndex,
+        )),
+        group: None,
+    },
+    HostImportSpec {
         name: "array.from",
         type_idx: 12,
         key: Some(HostImportKey::Builtin(Builtin::ArrayFrom)),
@@ -2577,6 +2586,53 @@ pub fn host_import_specs() -> &'static [HostImportSpec] {
     HOST_IMPORT_SPECS
 }
 
+pub fn array_proto_method_specs() -> impl Iterator<Item = (usize, &'static HostImportSpec)> {
+    HOST_IMPORT_SPECS
+        .iter()
+        .enumerate()
+        .filter(|(_, spec)| spec.group == Some(HostImportGroup::ArrayPrototypeMethod))
+}
+
+pub fn array_proto_table_len() -> u32 {
+    array_proto_method_specs().count() as u32
+}
+
+pub fn array_proto_table_hash() -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for (_, spec) in array_proto_method_specs() {
+        fnv1a_update(&mut hash, &(spec.name.len() as u32).to_le_bytes());
+        fnv1a_update(&mut hash, spec.name.as_bytes());
+        fnv1a_update(&mut hash, &spec.type_idx.to_le_bytes());
+    }
+    hash
+}
+
+fn fnv1a_update(hash: &mut u64, bytes: &[u8]) {
+    for byte in bytes {
+        *hash ^= u64::from(*byte);
+        *hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+}
+
+pub fn array_proto_property_name(import_name: &str) -> Option<String> {
+    let suffix = import_name.strip_prefix("arr_proto_")?;
+    let mut property = String::with_capacity(suffix.len());
+    let mut upper_next = false;
+    for byte in suffix.bytes() {
+        if byte == b'_' {
+            upper_next = true;
+            continue;
+        }
+        if upper_next {
+            property.push((byte as char).to_ascii_uppercase());
+            upper_next = false;
+        } else {
+            property.push(byte as char);
+        }
+    }
+    Some(property)
+}
+
 #[cfg(test)]
 mod registry_consistency {
     use super::*;
@@ -2605,10 +2661,7 @@ mod registry_consistency {
         for spec in HOST_IMPORT_SPECS {
             if let Some(HostImportKey::Builtin(b)) = spec.key {
                 if let Some(prev) = seen.insert(b, spec.name) {
-                    panic!(
-                        "Builtin::{b:?} bound to both {prev:?} and {:?}",
-                        spec.name
-                    );
+                    panic!("Builtin::{b:?} bound to both {prev:?} and {:?}", spec.name);
                 }
             }
         }

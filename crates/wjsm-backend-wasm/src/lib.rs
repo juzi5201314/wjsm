@@ -17,6 +17,9 @@ use wjsm_ir::{
 };
 
 pub mod host_import_registry;
+mod shared_types;
+pub mod support_module;
+pub use support_module::emit_support_module;
 
 // ── Shadow Stack Constants ─────────────────────────────────────────────
 use wjsm_ir::SHADOW_STACK_SIZE;
@@ -145,11 +148,29 @@ struct Compiler {
     /// WASM global index for array prototype handle.
     array_proto_handle_global_idx: u32,
     arr_proto_table_base: u32,
+    /// WASM global index for Array.prototype method table base.
+    arr_proto_table_base_global_idx: u32,
+    /// WASM global index for Array.prototype method table length.
+    arr_proto_table_len_global_idx: u32,
+    /// WASM global index for Array.prototype method table ABI hash.
+    arr_proto_table_hash_global_idx: u32,
     get_proto_from_ctor_func_idx: u32,
     /// WASM function index for nul-terminated string equality helper.
     string_eq_func_idx: u32,
     /// WASM global index for Object.prototype handle.
     object_proto_handle_global_idx: u32,
+    /// WASM global index for startup bootstrap completion flag.
+    bootstrap_done_global_idx: u32,
+    /// WASM global index for function-property initialization completion flag.
+    function_props_done_global_idx: u32,
+    /// WASM global index for first function-property handle.
+    function_props_base_global_idx: u32,
+    /// WASM function index for globals initialization (P2.2).
+    init_globals_func_idx: u32,
+    /// WASM function index for idempotent primordial bootstrap.
+    bootstrap_func_idx: u32,
+    /// WASM function index for current-module function property initialization.
+    init_function_props_func_idx: u32,
     /// WASM global index for __eval_var_map_ptr.
     eval_var_map_ptr_global_idx: u32,
     /// WASM global index for __eval_var_map_count.
@@ -176,6 +197,12 @@ struct Compiler {
     >,
     /// 当前函数的 ValueTy（P1 已实现，crate::analysis_value_ty::infer_value_ty）。
     current_fn_value_ty: Option<HashMap<wjsm_ir::ValueId, ValueTy>>,
+    /// 当前函数的变量活跃集（变量名粒度，crate::analysis_liveness::compute_var_liveness）。
+    /// 供 GC safepoint 的变量 local spill：弥补 per-ValueId liveness 看不到变量存活的空洞。
+    current_fn_var_liveness:
+        Option<HashMap<wjsm_ir::BasicBlockId, HashMap<usize, std::collections::HashSet<String>>>>,
+    /// 当前函数的变量类型（变量名 → ValueTy）。仅 spill 可能持有 handle 的变量。
+    current_fn_var_ty: Option<HashMap<String, ValueTy>>,
     /// 当前 emit 位置的 IR block 索引（= block id，见 wjsm-ir block_by_id O(1) by index 约定）。
     current_emit_block_idx: usize,
     /// 当前 emit 位置在当前 block 内的指令下标。
@@ -183,6 +210,27 @@ struct Compiler {
     // ── Layer 3: callee no-GC 分析 ──
     /// 模块级 GC 分析结果。compile_module 入口计算一次，用于 Call safepoint 省略判断。
     gc_analysis: Option<GcAnalysis>,
+    /// P2.2: Normal mode 下 globals 的编译期初始值，用于 main prologue 的 global.set 初始化。
+    /// Eval mode 下为 None（globals 由父模块初始化）。
+    normal_init_values: Option<NormalGlobalsInit>,
+}
+
+/// Normal mode 下需要初始化的 globals 编译期值。
+/// 这些值依赖编译期计算的 heap 布局，无法通过 import 的 ConstExpr 设置，
+/// 必须在 main prologue 中用 global.set 写入。
+#[derive(Debug, Clone, Copy)]
+struct NormalGlobalsInit {
+    heap_ptr: i32,
+    obj_table_ptr: i32,
+    shadow_sp: i32,
+    object_heap_start: i32,
+    num_ir_functions: i32,
+    shadow_stack_end: i32,
+    eval_var_map_ptr: i32,
+    eval_var_map_count: i32,
+    arr_proto_table_base: i32,
+    arr_proto_table_len: i32,
+    arr_proto_table_hash: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

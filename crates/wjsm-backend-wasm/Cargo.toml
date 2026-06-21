@@ -12,5 +12,6 @@ wjsm-ir = { path = "../wjsm-ir" }
 [dev-dependencies]
 wasmprinter = { workspace = true }
 wasmparser = { workspace = true }
+wasmtime = { workspace = true }
 wjsm-parser = { path = "../wjsm-parser" }
 wjsm-semantic = { path = "../wjsm-semantic" }

@@ -7,13 +7,14 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{Hash, Hasher};
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use swc_core::ecma::ast as swc_ast;
 use tokio::time::Instant;
 use wasmtime::Func;
 use wasmtime::*;
 use wjsm_ir::{constants, value};
+use wjsm_snapshot_format as startup_snapshot_format;
 mod agent_cluster;
 mod property_key;
 mod runtime_arguments;
@@ -32,6 +33,39 @@ mod runtime_promises;
 mod runtime_typedarray;
 mod runtime_value_adapter;
 mod shared_buffer;
+mod startup_snapshot;
+
+/// Builtin JS 扩展：snapshot 期顺序拼接为 seed module。空 manifest 时该 mod 是
+/// no-op；任一 .js 文件变化都会经 ABI hash external input 触发 embedded snapshot 失效。
+mod builtin_js {
+    pub mod manifest {
+        include!("../builtin_js/manifest.rs");
+    }
+}
+
+/// 把 BUILTIN_JS_FILES 顺序拼接为单一 ES module seed source。
+/// 空 manifest 返回 `String::new()`，与 builtin JS 引入前的 P1 行为字节级一致。
+fn concat_builtin_js_sources() -> String {
+    builtin_js::manifest::BUILTIN_JS_FILES
+        .iter()
+        .map(|(_, src)| *src)
+        .collect::<Vec<_>>()
+        .join("\n;\n")
+}
+
+/// builtin JS bundle 的稳定 hash 输入：(name, source) 序列按声明顺序参与。
+/// 用于 ABI hash external input，使任一 .js 改动都失效 embedded snapshot。
+fn builtin_js_bundle_hash() -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    for (name, source) in builtin_js::manifest::BUILTIN_JS_FILES {
+        name.hash(&mut h);
+        source.hash(&mut h);
+    }
+    h.finish()
+}
+mod startup_snapshot_native_bridge;
 mod types;
 pub(crate) use shared_buffer::{SharedRuntimeState, new_shared_runtime_state};
 mod scheduler;
@@ -171,14 +205,49 @@ fn register_common_bridges(
     // symbol_property_key
     let f = Func::wrap(
         &mut *store,
-        |_caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+        |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
             if let Some(name_id) = symbol_value_to_name_id(key) {
                 return name_id as i32;
             }
+            // 运行期字符串（拼接 / 模板 / String() 等）与数字 key：低 32 位是 handle 或 f64 位，
+            // 不是 data-section name_id。必须取内容（ToString）后 find-or-alloc 出稳定 name_id，
+            // 否则动态属性名（o["p"+i]）或数字 key（o[5]）会错位。
+            if value::is_runtime_string_handle(key) || value::is_f64(key) {
+                if let Ok(s) = render_value(&mut caller, key) {
+                    if let Some(id) = find_memory_c_string(&mut caller, &s)
+                        .or_else(|| alloc_heap_c_string(&mut caller, &s))
+                    {
+                        return id as i32;
+                    }
+                }
+                return 0;
+            }
+            // 编译期常量字符串：低 32 位即 data 区指针，本身就是 name_id。
             key as i32
         },
     );
     linker.define(&mut *store, "env", "symbol_property_key", f)?;
+    // string_to_array_index：key 为「规范数字索引字符串」（CanonicalNumericIndexString，
+    // 范围 [0, 2^31)）时返回该索引，否则 -1。用于 a["5"] 这类字符串键索引数组——
+    // "5"→5（元素），"05"/"5.0"/"x"/" 5"/"length"→-1（命名属性）。
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+            if !value::is_string(key) {
+                return -1;
+            }
+            let Ok(s) = render_value(&mut caller, key) else {
+                return -1;
+            };
+            match s.parse::<u32>() {
+                // 规范性：解析值回写字符串须与原串完全相等（排除前导零、空白、符号、小数点）；
+                // 限 < i32::MAX（elem_get 用 i32 索引，且远超任何真实数组长度）。
+                Ok(n) if (n as i64) < i32::MAX as i64 && n.to_string() == s => n as i32,
+                _ => -1,
+            }
+        },
+    );
+    linker.define(&mut *store, "env", "string_to_array_index", f)?;
     // native_callable_get_property
     let f = Func::wrap(
         &mut *store,
@@ -826,6 +895,93 @@ pub fn compile_source(source: &str) -> Result<Vec<u8>> {
     wjsm_backend_wasm::compile(&program)
 }
 
+/// 构建时生成嵌入式 startup snapshot 字节（空 seed JS → cold bootstrap → capture）。
+pub fn build_embedded_startup_snapshot_bytes() -> Result<Vec<u8>> {
+    // build.rs 路径不会进入运行时 `startup_snapshot_enabled()`，必须在此显式注册
+    // ABI external input，确保 snapshot header.abi_hash 与运行时 abi_hash() 一致。
+    wjsm_snapshot_format::register_abi_hash_external_input(combined_abi_external_input());
+    let seed = concat_builtin_js_sources();
+    let wasm = compile_source(&seed)?;
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| anyhow::anyhow!("failed to create tokio runtime for snapshot build: {e}"))?;
+    rt.block_on(build_embedded_startup_snapshot_bytes_async(&wasm))
+}
+
+async fn build_embedded_startup_snapshot_bytes_async(wasm: &[u8]) -> Result<Vec<u8>> {
+    let config = startup_engine_config(true);
+    let engine = Engine::new(&config)
+        .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
+    let module = Module::new(&engine, wasm)
+        .map_err(|e| anyhow::anyhow!("WASM validation failed: {:?}", e))?;
+    let mut bundle = instantiate_execute_bundle(&engine, &module, None, true).await?;
+    run_bootstrap_only(&mut bundle).await?;
+    let snap = startup_snapshot::capture_startup_snapshot(&mut bundle.store, &bundle.wasm_env)?;
+    let bytes = startup_snapshot_format::encode_snapshot(&snap);
+    let current_abi = startup_snapshot_format::abi_hash();
+    if snap.header.abi_hash != current_abi {
+        anyhow::bail!(
+            "embedded snapshot ABI hash mismatch: captured={:#018x} current={:#018x}",
+            snap.header.abi_hash,
+            current_abi
+        );
+    }
+    Ok(bytes)
+}
+
+static EMBEDDED_STARTUP_SNAPSHOT: OnceLock<Arc<[u8]>> = OnceLock::new();
+
+/// 安装编译时嵌入的 startup snapshot；进程内只需调用一次（重复 set 被忽略）。
+pub fn install_embedded_startup_snapshot(snapshot_bytes: impl AsRef<[u8]>) {
+    let _ = EMBEDDED_STARTUP_SNAPSHOT.set(Arc::from(snapshot_bytes.as_ref()));
+}
+
+/// 返回已通过 decode + ABI 校验的嵌入式 snapshot 字节；未安装或校验失败时为 `None`。
+pub fn embedded_startup_snapshot() -> Option<&'static [u8]> {
+    embedded_startup_snapshot_view()
+}
+
+pub(crate) fn embedded_startup_snapshot_view() -> Option<&'static [u8]> {
+    let arc = EMBEDDED_STARTUP_SNAPSHOT.get()?;
+    let bytes = arc.as_ref();
+    let view = startup_snapshot_format::decode_snapshot(bytes).ok()?;
+    // 惰性注册 external input（OnceLock 幂等）：确保 abi_hash() 包含 support module
+    // layout hash + builtin JS bundle hash，与 capture 时的 ABI 输入一致。
+    startup_snapshot_format::register_abi_hash_external_input(combined_abi_external_input());
+    if view.header.abi_hash != startup_snapshot_format::abi_hash() {
+        if startup_snapshot_debug_enabled() {
+            eprintln!("embedded snapshot abi hash mismatch; falling back to cold startup");
+        }
+        return None;
+    }
+    Some(bytes)
+}
+
+// ── Embedded support cwasm ────────────────────────────────────────────
+//
+// 运行时持有 build-time 预编译的 support cwasm 字节。首次访问时自动
+// 从 wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM 初始化；CLI 侧亦可
+// 通过 install_embedded_support_cwasm 显式注入（优先）。
+
+static EMBEDDED_SUPPORT_CWASM: OnceLock<&'static [u8]> = OnceLock::new();
+
+/// 安装编译时嵌入的 support cwasm；进程内只需调用一次（重复 set 静默忽略）。
+/// 未显式调用时，`embedded_support_cwasm()` 自动从 build-time artifact 初始化。
+pub fn install_embedded_support_cwasm(cwasm_bytes: &'static [u8]) {
+    let _ = EMBEDDED_SUPPORT_CWASM.set(cwasm_bytes);
+}
+
+/// 返回已安装的 embedded support cwasm 字节。
+/// 首次调用时若尚未通过 `install_embedded_support_cwasm` 显式注入，
+/// 自动从 wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM 初始化。
+/// 返回 None 仅当 embedded feature 未启用（build-time artifact 为空）。
+pub fn embedded_support_cwasm() -> Option<&'static [u8]> {
+    EMBEDDED_SUPPORT_CWASM.get_or_init(|| {
+        wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM.unwrap_or(&[])
+    });
+    let bytes = EMBEDDED_SUPPORT_CWASM.get().copied()?;
+    if bytes.is_empty() { None } else { Some(bytes) }
+}
+
 pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
     wasm_bytes: &[u8],
     writer: W,
@@ -840,87 +996,173 @@ pub(crate) async fn execute_with_writer_shared<W: Write>(
 ) -> Result<W> {
     execute_with_writer_shared_inner(wasm_bytes, writer, shared_state, true).await
 }
-async fn execute_with_writer_shared_inner<W: Write>(
-    wasm_bytes: &[u8],
-    writer: W,
-    shared_state: Option<Arc<SharedRuntimeState>>,
-    use_epoch_async_yield: bool,
-) -> Result<W> {
+
+fn startup_snapshot_enabled() -> bool {
+    // 首次进入 startup 路径时，注入 ABI hash external input：
+    // 把 support module layout hash + builtin JS bundle hash 合并为单个 u64，
+    // 任一变更都使 embedded snapshot abi_hash 失配 → cold rebuild。
+    // OnceLock 重复 set 静默；build.rs 与运行时都安全调用此处。
+    wjsm_snapshot_format::register_abi_hash_external_input(combined_abi_external_input());
+    // 默认开启；显式设 WJSM_STARTUP_SNAPSHOT=0/off/false 可关闭。
+    !matches!(
+        std::env::var("WJSM_STARTUP_SNAPSHOT").as_deref(),
+        Ok("0") | Ok("false") | Ok("off")
+    )
+}
+
+/// 把 support module layout hash 与 builtin JS bundle hash 合并为单个稳定 u64。
+/// 任一项变化都会使 combined hash 变化 → embedded snapshot ABI mismatch。
+fn combined_abi_external_input() -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    wjsm_runtime_support::support_module_layout_hash().hash(&mut h);
+    builtin_js_bundle_hash().hash(&mut h);
+    h.finish()
+}
+
+fn startup_snapshot_debug_enabled() -> bool {
+    matches!(
+        std::env::var("WJSM_STARTUP_SNAPSHOT_DEBUG").as_deref(),
+        Ok("1") | Ok("true") | Ok("on")
+    )
+}
+/// 解析编译缓存目录。WJSM_CACHE_DIR 优先；未设置时默认 $HOME/.cache/wjsm。
+/// 返回 None 表示缓存禁用（WJSM_CACHE_DIR 为空字符串，或 HOME 未设置）。
+fn module_cache_dir() -> Option<std::path::PathBuf> {
+    std::env::var("WJSM_CACHE_DIR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var("HOME")
+                .ok()
+                .filter(|h| !h.is_empty())
+                .map(|h| std::path::PathBuf::from(h).join(".cache").join("wjsm"))
+        })
+}
+
+/// 编译或从缓存加载 WASM 模块。
+///
+/// 缓存 key 是 wasm bytes 的 SipHash，不受二进制 mtime 影响
+/// （与 wasmtime 内置 cache 的 debug_assertions mtime keying 不同）。
+/// 命中时走 `Module::deserialize`（mmap + 直接加载），跳过 Cranelift 编译。
+/// 未命中时 `Module::new` 编译，再 `precompile_module` 持久化到磁盘。
+fn compile_or_load_cached(engine: &Engine, wasm_bytes: &[u8]) -> Result<Module> {
+    let Some(cache_dir) = module_cache_dir() else {
+        return Module::new(engine, wasm_bytes)
+            .map_err(|e| anyhow::anyhow!("WASM validation failed: {:?}", e));
+    };
+
+    let mut hasher = DefaultHasher::new();
+    // wasmtime 版本纳入 hash，避免跨版本缓存冲突
+    "wasmtime-43".hash(&mut hasher);
+    wasm_bytes.hash(&mut hasher);
+    let key = format!("{:016x}", hasher.finish());
+
+    let cache_path = cache_dir.join(&key);
+
+    // 尝试从缓存加载（deserialize_file 走 mmap，零拷贝）
+    if cache_path.exists() {
+        match unsafe { Module::deserialize_file(engine, &cache_path) } {
+            Ok(module) => return Ok(module),
+            Err(_) => {
+                // 缓存文件损坏或 engine 配置不匹配，删除后重新编译
+                let _ = std::fs::remove_file(&cache_path);
+            }
+        }
+    }
+
+    // 编译
+    let module = Module::new(engine, wasm_bytes)
+        .map_err(|e| anyhow::anyhow!("WASM validation failed: {:?}", e))?;
+
+    // 持久化到缓存（best-effort，失败不影响执行）
+    if let Ok(cwasm) = engine.precompile_module(wasm_bytes) {
+        let _ = std::fs::create_dir_all(&cache_dir);
+        let _ = std::fs::write(&cache_path, &cwasm);
+    }
+
+    Ok(module)
+}
+
+fn startup_engine_config(use_epoch_async_yield: bool) -> Config {
     let mut config = Config::new();
+    // WJSM_COMPILER=winch 使用 Winch 基线编译器
+    if std::env::var("WJSM_COMPILER").as_deref() == Ok("winch") {
+        config.strategy(Strategy::Winch);
+    }
+    // WJSM_OPT_LEVEL=none|speed_and_size 控制 Cranelift 优化等级
+    match std::env::var("WJSM_OPT_LEVEL").as_deref() {
+        Ok("none") => { config.cranelift_opt_level(OptLevel::None); }
+        Ok("speed_and_size") => { config.cranelift_opt_level(OptLevel::SpeedAndSize); }
+        _ => {}
+    }
     if use_epoch_async_yield {
         config.epoch_interruption(true);
     }
-    let engine = Engine::new(&config)
-        .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
+    config
+}
 
-    let module = match Module::new(&engine, wasm_bytes) {
-        Ok(m) => m,
-        Err(e) => {
-            return Err(anyhow::anyhow!("WASM validation failed: {:?}", e));
-        }
-    };
+fn register_startup_linker(
+    linker: &mut Linker<RuntimeState>,
+    store: &mut Store<RuntimeState>,
+) -> Result<()> {
+    register_linker(linker, store)?;
+    register_common_bridges(linker, store)?;
+    register_complex_bridges(linker, store)?;
+    Ok(())
+}
 
-    let mut store = Store::new(&engine, RuntimeState::new_with_shared(shared_state));
-    let output = Arc::clone(&store.data().output);
-    let runtime_error = Arc::clone(&store.data().runtime_error);
-
-    if use_epoch_async_yield {
-        store.set_epoch_deadline(1);
-        store.epoch_deadline_async_yield_and_update(1);
-    }
-
+fn prepare_async_host_completion(
+    store: &mut Store<RuntimeState>,
+) -> tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion> {
     // Phase 6: 创建 channel + counter（仅 async 路径）
-    let (host_completion_tx, mut host_completion_rx) = tokio::sync::mpsc::unbounded_channel();
+    let (host_completion_tx, host_completion_rx) = tokio::sync::mpsc::unbounded_channel();
     store
         .data_mut()
         .host_completion_tx
         .replace(host_completion_tx);
     let counter = crate::scheduler::AsyncOpCounter::new();
     store.data_mut().async_op_counter.replace(counter);
+    host_completion_rx
+}
 
-    let mut linker = Linker::new(&engine);
-    register_linker(&mut linker, &mut store)?;
-    register_common_bridges(&mut linker, &mut store)?;
-    register_complex_bridges(&mut linker, &mut store)?;
-    let instance = linker
-        .instantiate_async(&mut store, &module)
-        .await
-        .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
-
-    // post 原型（boring dupe 小段）
+fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeState>) -> WasmEnv {
     let memory = instance
-        .get_export(&mut store, "memory")
+        .get_export(&mut *store, "memory")
         .and_then(|e| e.into_memory())
         .expect("memory");
     let heap_ptr_global = instance
-        .get_export(&mut store, "__heap_ptr")
+        .get_export(&mut *store, "__heap_ptr")
         .and_then(|e| e.into_global())
         .expect("heap");
     let obj_table_ptr_global = instance
-        .get_export(&mut store, "__obj_table_ptr")
+        .get_export(&mut *store, "__obj_table_ptr")
         .and_then(|e| e.into_global())
         .expect("obj_table_ptr");
     let obj_table_count_global = instance
-        .get_export(&mut store, "__obj_table_count")
+        .get_export(&mut *store, "__obj_table_count")
         .and_then(|e| e.into_global())
         .expect("obj_table_count");
     let func_table = instance
-        .get_export(&mut store, "__table")
+        .get_export(&mut *store, "__table")
         .and_then(|e| e.into_table())
         .expect("table");
     let shadow_sp_global = instance
-        .get_export(&mut store, "__shadow_sp")
+        .get_export(&mut *store, "__shadow_sp")
         .and_then(|e| e.into_global())
         .expect("shadow");
     let array_proto_handle_global = instance
-        .get_export(&mut store, "__array_proto_handle")
+        .get_export(&mut *store, "__array_proto_handle")
         .and_then(|e| e.into_global())
         .expect("array_proto");
     let object_proto_handle_global = instance
-        .get_export(&mut store, "__object_proto_handle")
+        .get_export(&mut *store, "__object_proto_handle")
         .and_then(|e| e.into_global())
         .expect("object_proto");
-    let wasm_env = wasm_env::WasmEnv {
+
+    wasm_env::WasmEnv {
         memory,
         func_table,
         shadow_sp: shadow_sp_global,
@@ -929,8 +1171,39 @@ async fn execute_with_writer_shared_inner<W: Write>(
         obj_table_count: obj_table_count_global,
         object_proto_handle: object_proto_handle_global,
         array_proto_handle: array_proto_handle_global,
-    };
-    let async_iterator_proto = alloc_host_object(&mut store, &wasm_env, 2);
+        object_heap_start: instance
+            .get_export(&mut *store, "__object_heap_start")
+            .and_then(|e| e.into_global()),
+        bootstrap_done: instance
+            .get_export(&mut *store, "__bootstrap_done")
+            .and_then(|e| e.into_global()),
+        function_props_done: instance
+            .get_export(&mut *store, "__function_props_done")
+            .and_then(|e| e.into_global()),
+        function_props_base: instance
+            .get_export(&mut *store, "__function_props_base")
+            .and_then(|e| e.into_global()),
+        num_ir_functions: instance
+            .get_export(&mut *store, "__num_ir_functions")
+            .and_then(|e| e.into_global()),
+        arr_proto_table_base: instance
+            .get_export(&mut *store, "__arr_proto_table_base")
+            .and_then(|e| e.into_global()),
+        arr_proto_table_len: instance
+            .get_export(&mut *store, "__arr_proto_table_len")
+            .and_then(|e| e.into_global()),
+        arr_proto_table_hash: instance
+            .get_export(&mut *store, "__arr_proto_table_hash")
+            .and_then(|e| e.into_global()),
+    }
+}
+
+fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wasm_env: &WasmEnv) {
+    if wasm_env.obj_table_count.get(&mut *store).i32().unwrap_or(0) == 0 {
+        // handle 0 仍作为旧原型链 null 哨兵；host primordial 从 1 开始，避免 Object.getPrototypeOf 误判。
+        let _ = alloc_host_object(store, wasm_env, 0);
+    }
+    let async_iterator_proto = alloc_host_object(store, wasm_env, 2);
     let async_iterator_symbol_async_iterator = {
         let mut table = store.data().native_callables.lock().expect("native");
         let handle = table.len() as u32;
@@ -938,8 +1211,8 @@ async fn execute_with_writer_shared_inner<W: Write>(
         value::encode_native_callable_idx(handle)
     };
     let _ = define_host_data_property_by_name_id_with_env(
-        &mut store,
-        &wasm_env,
+        store,
+        wasm_env,
         async_iterator_proto,
         encode_symbol_name_id(3),
         async_iterator_symbol_async_iterator,
@@ -948,39 +1221,605 @@ async fn execute_with_writer_shared_inner<W: Write>(
     let async_iterator_tag =
         store_runtime_string_in_state(store.data(), "AsyncIterator".to_string());
     let _ = define_host_data_property_with_env(
-        &mut store,
-        &wasm_env,
+        store,
+        wasm_env,
         async_iterator_proto,
         "Symbol.toStringTag",
         async_iterator_tag,
     );
-    let async_gen_proto = alloc_host_object(&mut store, &wasm_env, 2);
+    let async_gen_proto = alloc_host_object(store, wasm_env, 2);
     let async_gen_handle = value::decode_object_handle(async_gen_proto);
     let async_iterator_handle = value::decode_object_handle(async_iterator_proto);
-    let obj_ptr = resolve_handle_idx_with_env(&mut store, &wasm_env, async_gen_handle as usize)
-        .expect("obj_ptr");
-    let data = memory.data_mut(&mut store);
+    let obj_ptr =
+        resolve_handle_idx_with_env(store, wasm_env, async_gen_handle as usize).expect("obj_ptr");
+    let data = wasm_env.memory.data_mut(&mut *store);
     data[obj_ptr..obj_ptr + 4].copy_from_slice(&async_iterator_handle.to_le_bytes());
     let async_gen_tag = store_runtime_string_in_state(store.data(), "AsyncGenerator".to_string());
     let _ = define_host_data_property_with_env(
-        &mut store,
-        &wasm_env,
+        store,
+        wasm_env,
         async_gen_proto,
         "Symbol.toStringTag",
         async_gen_tag,
     );
     store.data_mut().async_iterator_prototype = async_iterator_proto;
     store.data_mut().async_gen_prototype = async_gen_proto;
+}
 
-    // 委托（Phase 6 传入 rx 供 scheduler 接收 completion）
-    run_main_completion_block_async(
-        &instance,
+struct ExecuteInstanceBundle {
+    store: Store<RuntimeState>,
+    instance: Instance,
+    wasm_env: WasmEnv,
+    output: Arc<Mutex<Vec<u8>>>,
+    runtime_error: Arc<Mutex<Option<String>>>,
+    host_completion_rx: tokio::sync::mpsc::UnboundedReceiver<crate::scheduler::AsyncHostCompletion>,
+}
+
+async fn instantiate_execute_bundle(
+    engine: &Engine,
+    module: &Module,
+    shared_state: Option<Arc<SharedRuntimeState>>,
+    use_epoch_async_yield: bool,
+) -> Result<ExecuteInstanceBundle> {
+    let mut store = Store::new(engine, RuntimeState::new_with_shared(shared_state));
+    let output = Arc::clone(&store.data().output);
+    let runtime_error = Arc::clone(&store.data().runtime_error);
+    if use_epoch_async_yield {
+        store.set_epoch_deadline(1);
+        store.epoch_deadline_async_yield_and_update(1);
+    }
+    let host_completion_rx = prepare_async_host_completion(&mut store);
+    let mut linker = Linker::new(engine);
+    register_startup_linker(&mut linker, &mut store)?;
+
+    // P2.2+P2.3: 如果 user module import "wjsm_support" namespace，需要先 instantiate
+    // support module 并把它的 exports 注册到 linker 的 "wjsm_support" namespace。
+    // 同时创建 shared memory/table/globals 注册到 "env" namespace。
+    let needs_support = module
+        .imports()
+        .any(|import| import.module() == "wjsm_support");
+    if needs_support {
+        setup_shared_env_and_support(&mut linker, &mut store, &engine).await?;
+    }
+
+    let instance = linker
+        .instantiate_async(&mut store, module)
+        .await
+        .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
+    let wasm_env = extract_wasm_env(&instance, &mut store);
+
+    Ok(ExecuteInstanceBundle {
         store,
+        instance,
         wasm_env,
         output,
         runtime_error,
+        host_completion_rx,
+    })
+}
+
+/// P2.2+P2.3: 创建 shared memory/table/globals 注册到 "env" namespace，
+/// 然后 instantiate support module 并把 exports 注册到 "wjsm_support" namespace。
+async fn setup_shared_env_and_support(
+    linker: &mut Linker<RuntimeState>,
+    store: &mut Store<RuntimeState>,
+    engine: &Engine,
+) -> Result<()> {
+    // 创建 shared memory (4 pages = 256KB)
+    let memory = Memory::new(&mut *store, MemoryType::new(4, None))?;
+    linker.define(&*store, "env", "memory", memory)?;
+
+    // 创建 shared table (minimum 256, 覆盖 support 12 + user ~200 函数)
+    let table = Table::new(
+        &mut *store,
+        TableType::new(RefType::FUNCREF, 256, None),
+        Ref::Func(None),
+    )?;
+    linker.define(&*store, "env", "__table", table)?;
+
+    // 创建 19 个 shared globals（全部 mutable，user bootstrap 中用 global.set 初始化）
+    // 顺序与 abi::ENV_GLOBALS 和 compiler_core.rs::ENV_GLOBAL_EXPORT_NAMES 对齐。
+    define_env_global(
+        linker,
+        store,
+        "__func_props",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(linker, store, "__heap_ptr", ValType::I32, true, Val::I32(0));
+    define_env_global(
+        linker,
+        store,
+        "__obj_table_ptr",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__obj_table_count",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__shadow_sp",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__alloc_counter",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__object_heap_start",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__num_ir_functions",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__shadow_stack_end",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__array_proto_handle",
+        ValType::I32,
+        true,
+        Val::I32(-1),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__object_proto_handle",
+        ValType::I32,
+        true,
+        Val::I32(-1),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__eval_var_map_ptr",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__eval_var_map_count",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__bootstrap_done",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__function_props_done",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__function_props_base",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__arr_proto_table_base",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__arr_proto_table_len",
+        ValType::I32,
+        true,
+        Val::I32(0),
+    );
+    define_env_global(
+        linker,
+        store,
+        "__arr_proto_table_hash",
+        ValType::I64,
+        true,
+        Val::I64(0),
+    );
+
+    // 获取 support module：优先从 embedded cwasm deserialize，否则从 emit_support_module 编译。
+    // cwasm 的 precompile 配置必须与运行时 engine 配置匹配（epoch interruption 等），
+    // 不匹配时 fallback 到 Module::new 从 wasm bytes 编译。
+    let support_module = if let Some(cwasm_bytes) = embedded_support_cwasm() {
+        match unsafe { Module::deserialize(engine, cwasm_bytes) } {
+            Ok(m) => m,
+            Err(_) => {
+                // cwasm 配置不匹配（如 epoch interruption），fallback 到从 wasm bytes 编译
+                let support_wasm = wjsm_backend_wasm::emit_support_module()?;
+                Module::new(engine, &support_wasm)
+                    .map_err(|e| anyhow::anyhow!("support module compile failed: {:?}", e))?
+            }
+        }
+    } else {
+        // build-time snapshot 生成路径：没有 embedded cwasm，直接从 emit_support_module 编译。
+        let support_wasm = wjsm_backend_wasm::emit_support_module()?;
+        Module::new(engine, &support_wasm)
+            .map_err(|e| anyhow::anyhow!("support module compile failed: {:?}", e))?
+    };
+
+    // instantiate support module
+    let support_instance = linker
+        .instantiate_async(&mut *store, &support_module)
+        .await
+        .map_err(|e| anyhow::anyhow!("support module instantiate failed: {:?}", e))?;
+
+    // 把 support module 的 12 个 helper exports 注册到 "wjsm_support" namespace
+    for export_name in wjsm_runtime_support::abi::SUPPORT_EXPORTS {
+        let export = support_instance
+            .get_export(&mut *store, export_name)
+            .ok_or_else(|| anyhow::anyhow!("support module missing export: {}", export_name))?;
+        linker.define(&*store, "wjsm_support", export_name, export)?;
+    }
+
+    Ok(())
+}
+
+fn define_env_global(
+    linker: &mut Linker<RuntimeState>,
+    store: &mut Store<RuntimeState>,
+    name: &str,
+    val_type: ValType,
+    mutable: bool,
+    init: Val,
+) {
+    let gty = GlobalType::new(
+        val_type,
+        if mutable {
+            Mutability::Var
+        } else {
+            Mutability::Const
+        },
+    );
+    let g = Global::new(&mut *store, gty, init).expect("create env global");
+    linker
+        .define(&*store, "env", name, g)
+        .expect("define env global");
+}
+
+/// 仅执行 bootstrap 逻辑（host post-bootstrap + __wjsm_bootstrap_once），不触发 snapshot capture。
+/// 供 build-time snapshot 生成使用，避免构建期执行用户 main。
+async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
+    run_init_globals_only(bundle).await?;
+    // 在 globals 就绪后运行 bootstrap_once
+    if let Ok(bootstrap_fn) = bundle
+        .instance
+        .get_typed_func::<(), i64>(&mut bundle.store, "__wjsm_bootstrap_once")
+    {
+        bootstrap_fn
+            .call_async(&mut bundle.store, ())
+            .await
+            .map_err(|e| anyhow::anyhow!("bootstrap_once failed: {e:?}"))?;
+    }
+    Ok(())
+}
+
+/// 只设置 imported globals 的初始值 + host post-bootstrap，不运行 __wjsm_bootstrap_once。
+/// 供 snapshot restore 路径使用：restore 前必须让 globals（__arr_proto_table_len 等）反映
+/// 编译期的值，否则 snapshot 的 arr_proto_table_len 校验会失败。
+async fn run_init_globals_only(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
+    if let Ok(init_globals_fn) = bundle
+        .instance
+        .get_typed_func::<(), i64>(&mut bundle.store, "__wjsm_init_globals")
+    {
+        init_globals_fn
+            .call_async(&mut bundle.store, ())
+            .await
+            .map_err(|e| anyhow::anyhow!("init_globals failed: {e:?}"))?;
+    }
+    // host post-bootstrap 必须在 globals 就绪后执行——host 函数依赖
+    // heap_ptr/obj_table_ptr 等全局的正确值。
+    initialize_host_post_bootstrap(&mut bundle.store, &bundle.wasm_env);
+    Ok(())
+}
+
+/// 执行 cold startup：只跑 bootstrap，不在客户机器上 capture/write snapshot。
+async fn run_startup_cold_path(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
+    run_bootstrap_only(bundle).await
+}
+
+async fn try_restore_snapshot(bundle: &mut ExecuteInstanceBundle, snap_bytes: &[u8]) -> bool {
+    let view = match startup_snapshot_format::decode_snapshot(snap_bytes) {
+        Ok(v) => v,
+        Err(e) => {
+            if startup_snapshot_debug_enabled() {
+                eprintln!("startup snapshot decode failed: {e:#}");
+            }
+            return false;
+        }
+    };
+    match startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view) {
+        Ok(()) => true,
+        Err(e) => {
+            if startup_snapshot_debug_enabled() {
+                eprintln!("startup snapshot restore failed: {e:#}");
+            }
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct StartupBenchTimings {
+    engine_only: Duration,
+    module_only: Duration,
+    store_only: Duration,
+    linker_register: Duration,
+    instantiate_async: Duration,
+    bootstrap_cold: Duration,
+    host_post_bootstrap: Duration,
+    snapshot_build: Duration,
+    snapshot_decode: Duration,
+    snapshot_restore: Duration,
+    startup_path: Duration,
+    main_completion: Duration,
+    total_execute_path: Duration,
+}
+
+#[cfg(test)]
+async fn instantiate_for_startup_bench(wasm: &[u8]) -> Result<StartupBenchTimings> {
+    let mut timings = StartupBenchTimings::default();
+
+    let config = startup_engine_config(true);
+    let start = std::time::Instant::now();
+    let engine = Engine::new(&config)
+        .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
+    timings.engine_only = start.elapsed();
+
+    let start = std::time::Instant::now();
+    let module = match Module::new(&engine, wasm) {
+        Ok(m) => m,
+        Err(e) => {
+            return Err(anyhow::anyhow!("WASM validation failed: {:?}", e));
+        }
+    };
+    timings.module_only = start.elapsed();
+
+    let start = std::time::Instant::now();
+    let mut store = Store::new(&engine, RuntimeState::new_with_shared(None));
+    store.set_epoch_deadline(1);
+    store.epoch_deadline_async_yield_and_update(1);
+    let _host_completion_rx = prepare_async_host_completion(&mut store);
+    timings.store_only = start.elapsed();
+
+    let mut linker = Linker::new(&engine);
+    let start = std::time::Instant::now();
+    register_startup_linker(&mut linker, &mut store)?;
+    timings.linker_register = start.elapsed();
+
+    let start = std::time::Instant::now();
+    // P2.2: bench 也必须为 import env memory/table/globals 设置 shared env + support module。
+    let needs_support = module.imports().any(|import| import.module() == "wjsm_support");
+    if needs_support {
+        setup_shared_env_and_support(&mut linker, &mut store, &engine).await?;
+    }
+    let instance = linker
+        .instantiate_async(&mut store, &module)
+        .await
+        .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
+    timings.instantiate_async = start.elapsed();
+
+    // bench 也走 cold 路径单一编排：Rust 显式跑 host post-bootstrap → bootstrap_once。
+    let wasm_env = extract_wasm_env(&instance, &mut store);
+
+    let start = std::time::Instant::now();
+    if let Ok(init_globals_fn) =
+        instance.get_typed_func::<(), i64>(&mut store, "__wjsm_init_globals")
+    {
+        let _ = init_globals_fn.call_async(&mut store, ()).await;
+    }
+    initialize_host_post_bootstrap(&mut store, &wasm_env);
+    timings.host_post_bootstrap = start.elapsed();
+
+    let start = std::time::Instant::now();
+    if let Ok(bootstrap_fn) =
+        instance.get_typed_func::<(), i64>(&mut store, "__wjsm_bootstrap_once")
+    {
+        let _ = bootstrap_fn.call_async(&mut store, ()).await;
+    }
+    timings.bootstrap_cold = start.elapsed();
+
+    // snapshot build = capture + encode；解码与恢复在新 instance 上重测一次。
+    let start = std::time::Instant::now();
+    let snap = startup_snapshot::capture_startup_snapshot(&mut store, &wasm_env)?;
+    let bytes = startup_snapshot_format::encode_snapshot(&snap);
+    timings.snapshot_build = start.elapsed();
+
+    let start = std::time::Instant::now();
+    let view = startup_snapshot_format::decode_snapshot(&bytes)?;
+    timings.snapshot_decode = start.elapsed();
+
+    let mut store2 = Store::new(&engine, RuntimeState::new_with_shared(None));
+    store2.set_epoch_deadline(1);
+    store2.epoch_deadline_async_yield_and_update(1);
+    let _rx2 = prepare_async_host_completion(&mut store2);
+    let mut linker2 = Linker::new(&engine);
+    register_startup_linker(&mut linker2, &mut store2)?;
+    if needs_support {
+        setup_shared_env_and_support(&mut linker2, &mut store2, &engine).await?;
+    }
+    let instance2 = linker2
+        .instantiate_async(&mut store2, &module)
+        .await
+        .map_err(|e| anyhow::anyhow!("async instantiate failed: {:?}", e))?;
+    let env2 = extract_wasm_env(&instance2, &mut store2);
+    // Snapshot restore 前必须先运行 init_globals 设置 __arr_proto_table_len 等。
+    if let Ok(init_globals_fn) =
+        instance2.get_typed_func::<(), i64>(&mut store2, "__wjsm_init_globals")
+    {
+        let _ = init_globals_fn.call_async(&mut store2, ()).await;
+    }
+    initialize_host_post_bootstrap(&mut store2, &env2);
+    let start = std::time::Instant::now();
+    startup_snapshot::restore_startup_snapshot(&mut store2, &env2, view)?;
+    timings.snapshot_restore = start.elapsed();
+    Ok(timings)
+}
+
+#[cfg(test)]
+async fn execute_for_startup_bench(
+    wasm_bytes: &[u8],
+    snapshot_enabled: bool,
+) -> Result<StartupBenchTimings> {
+    let mut timings = StartupBenchTimings::default();
+    let total_start = std::time::Instant::now();
+    let config = startup_engine_config(true);
+
+    let start = std::time::Instant::now();
+    let engine = Engine::new(&config)
+        .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
+    timings.engine_only = start.elapsed();
+
+    let start = std::time::Instant::now();
+    let module = Module::new(&engine, wasm_bytes)
+        .map_err(|e| anyhow::anyhow!("WASM validation failed: {:?}", e))?;
+    timings.module_only = start.elapsed();
+
+    let snapshot_bytes = if snapshot_enabled {
+        embedded_startup_snapshot_view()
+    } else {
+        None
+    };
+
+    let mut bundle = instantiate_execute_bundle(&engine, &module, None, true).await?;
+
+    let startup_start = std::time::Instant::now();
+    let mut snapshot_restored = false;
+    if let Some(snap_bytes) = snapshot_bytes {
+        let start = std::time::Instant::now();
+        let view = startup_snapshot_format::decode_snapshot(snap_bytes)?;
+        timings.snapshot_decode = start.elapsed();
+
+        let start = std::time::Instant::now();
+        // Snapshot restore 前先运行 init_globals 使 __arr_proto_table_len 等 globals 就绪。
+        let _ = run_init_globals_only(&mut bundle).await;
+        startup_snapshot::restore_startup_snapshot(&mut bundle.store, &bundle.wasm_env, view)?;
+        timings.snapshot_restore = start.elapsed();
+        snapshot_restored = true;
+    }
+
+    if !snapshot_restored {
+        run_startup_cold_path(&mut bundle).await?;
+    }
+    timings.startup_path = startup_start.elapsed();
+
+    let start = std::time::Instant::now();
+    let _out = run_main_completion_block_async(
+        &bundle.instance,
+        bundle.store,
+        bundle.wasm_env,
+        bundle.output,
+        bundle.runtime_error,
+        Vec::new(),
+        &mut bundle.host_completion_rx,
+    )
+    .await?;
+    timings.main_completion = start.elapsed();
+    timings.total_execute_path = total_start.elapsed();
+    Ok(timings)
+}
+async fn execute_with_writer_shared_inner<W: Write>(
+    wasm_bytes: &[u8],
+    writer: W,
+    shared_state: Option<Arc<SharedRuntimeState>>,
+    use_epoch_async_yield: bool,
+) -> Result<W> {
+    let config = startup_engine_config(use_epoch_async_yield);
+    let engine = Engine::new(&config)
+        .map_err(|e| anyhow::anyhow!("Failed to create async engine: {:?}", e))?;
+
+    let module = compile_or_load_cached(&engine, wasm_bytes)?;
+    let snapshot_bytes = if startup_snapshot_enabled() {
+        embedded_startup_snapshot_view()
+    } else {
+        None
+    };
+
+    let mut bundle = instantiate_execute_bundle(
+        &engine,
+        &module,
+        shared_state.clone(),
+        use_epoch_async_yield,
+    )
+    .await?;
+
+    let mut snapshot_restored = false;
+    if let Some(bytes) = snapshot_bytes {
+        // 快照 restore 前必须先运行 init_globals + host_post_bootstrap，
+        // 设置 __arr_proto_table_len 等 imported globals 使 restore 校验通过。
+        let _ = run_init_globals_only(&mut bundle).await;
+        snapshot_restored = try_restore_snapshot(&mut bundle, bytes).await;
+        if !snapshot_restored {
+            bundle = instantiate_execute_bundle(
+                &engine,
+                &module,
+                shared_state.clone(),
+                use_epoch_async_yield,
+            )
+            .await?;
+        }
+    }
+
+    if !snapshot_restored {
+        run_startup_cold_path(&mut bundle).await?;
+    }
+
+    run_main_completion_block_async(
+        &bundle.instance,
+        bundle.store,
+        bundle.wasm_env,
+        bundle.output,
+        bundle.runtime_error,
         writer,
-        &mut host_completion_rx,
+        &mut bundle.host_completion_rx,
     )
     .await
 }
@@ -1366,24 +2205,317 @@ mod tests {
         assert_eq!(String::from_utf8(output)?, "Hello, Async Runtime!\n");
         Ok(())
     }
+
+    // 临时 benchmark：分阶段测 execute 路径各步的耗时（消除单次噪声，每步循环取均值）。
     #[test]
-    fn execute_with_writer_timer_fires_via_scheduler() -> Result<()> {
-        // Phase 5 核心行为验证：async 路径下 scheduler 接管 timer loop 后必须正确 fire + 输出。
-        // 使用 async execute（已 wiring get_builtin_global），触发 setTimeout 回调 + console.log。
-        // 证明：无阻塞 sleep、无 MAX 超限、per-callback drain 工作、语义与 sync 一致。
+    #[ignore]
+    fn bench_execute_phases() -> Result<()> {
+        use super::*;
+        let wasm = compile_source("")?;
+        let n = 50u32;
         let rt = Runtime::new()?;
-        let wasm_bytes = compile_source(
-            r#"
-            setTimeout(() => { console.log("async-timer-fired"); }, 0);
-        "#,
-        )?;
-        let output = rt.block_on(async { execute_with_writer(&wasm_bytes, Vec::new()).await })?;
-        let s = String::from_utf8(output)?;
-        assert!(
-            s.contains("async-timer-fired"),
-            "async scheduler must deliver timer callback output: {}",
-            s
+
+        let mut startup = StartupBenchTimings::default();
+        rt.block_on(async {
+            for _ in 0..n {
+                let run = instantiate_for_startup_bench(&wasm).await.unwrap();
+                startup.engine_only += run.engine_only;
+                startup.module_only += run.module_only;
+                startup.store_only += run.store_only;
+                startup.linker_register += run.linker_register;
+                startup.instantiate_async += run.instantiate_async;
+                startup.bootstrap_cold += run.bootstrap_cold;
+                startup.host_post_bootstrap += run.host_post_bootstrap;
+                startup.snapshot_build += run.snapshot_build;
+                startup.snapshot_decode += run.snapshot_decode;
+                startup.snapshot_restore += run.snapshot_restore;
+            }
+        });
+        eprintln!(
+            "BENCH engine only            : {:?}/each",
+            startup.engine_only / n
         );
+        eprintln!(
+            "BENCH module only            : {:?}/each",
+            startup.module_only / n
+        );
+        eprintln!(
+            "BENCH store only             : {:?}/each",
+            startup.store_only / n
+        );
+        eprintln!(
+            "BENCH linker register        : {:?}/each",
+            startup.linker_register / n
+        );
+        eprintln!(
+            "BENCH instantiate_async      : {:?}/each",
+            startup.instantiate_async / n
+        );
+        eprintln!(
+            "BENCH bootstrap cold         : {:?}/each",
+            startup.bootstrap_cold / n
+        );
+        eprintln!(
+            "BENCH host post-bootstrap    : {:?}/each",
+            startup.host_post_bootstrap / n
+        );
+        eprintln!(
+            "BENCH snapshot build cold    : {:?}/each",
+            startup.snapshot_build / n
+        );
+        eprintln!(
+            "BENCH snapshot decode        : {:?}/each",
+            startup.snapshot_decode / n
+        );
+        eprintln!(
+            "BENCH snapshot restore       : {:?}/each",
+            startup.snapshot_restore / n
+        );
+
+        // SAFETY: 单测内独占 env 窗口；勿与其它读 WJSM_STARTUP_SNAPSHOT 的测试并行。
+        unsafe {
+            std::env::set_var("WJSM_STARTUP_SNAPSHOT", "0");
+        }
+        let mut full_execute_off = std::time::Duration::ZERO;
+        rt.block_on(async {
+            for _ in 0..n {
+                let start = std::time::Instant::now();
+                let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
+                full_execute_off += start.elapsed();
+            }
+        });
+        eprintln!(
+            "BENCH full execute off       : {:?}/each",
+            full_execute_off / n
+        );
+
+        let mut execute_off = StartupBenchTimings::default();
+        rt.block_on(async {
+            for _ in 0..n {
+                let run = execute_for_startup_bench(&wasm, false).await.unwrap();
+                execute_off.engine_only += run.engine_only;
+                execute_off.module_only += run.module_only;
+                execute_off.startup_path += run.startup_path;
+                execute_off.main_completion += run.main_completion;
+                execute_off.total_execute_path += run.total_execute_path;
+            }
+        });
+        eprintln!(
+            "BENCH real off engine        : {:?}/each",
+            execute_off.engine_only / n
+        );
+        eprintln!(
+            "BENCH real off module        : {:?}/each",
+            execute_off.module_only / n
+        );
+        eprintln!(
+            "BENCH real off startup       : {:?}/each",
+            execute_off.startup_path / n
+        );
+        eprintln!(
+            "BENCH real off main          : {:?}/each",
+            execute_off.main_completion / n
+        );
+        eprintln!(
+            "BENCH real off total         : {:?}/each",
+            execute_off.total_execute_path / n
+        );
+
+        let embedded_snapshot = build_embedded_startup_snapshot_bytes()?;
+        install_embedded_startup_snapshot(&embedded_snapshot);
+
+        unsafe {
+            std::env::set_var("WJSM_STARTUP_SNAPSHOT", "1");
+        }
+        // embedded snapshot 已安装；循环测默认 on 路径。
+        let mut full_execute_warm = std::time::Duration::ZERO;
+        rt.block_on(async {
+            for _ in 0..n {
+                let start = std::time::Instant::now();
+                let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
+                full_execute_warm += start.elapsed();
+            }
+        });
+        unsafe {
+            std::env::remove_var("WJSM_STARTUP_SNAPSHOT");
+        }
+        eprintln!(
+            "BENCH full execute embedded  : {:?}/each",
+            full_execute_warm / n
+        );
+
+        unsafe {
+            std::env::set_var("WJSM_STARTUP_SNAPSHOT", "1");
+        }
+        rt.block_on(async {
+            let _ = execute_with_writer(&wasm, Vec::new()).await.unwrap();
+        });
+        let mut execute_on = StartupBenchTimings::default();
+        rt.block_on(async {
+            for _ in 0..n {
+                let run = execute_for_startup_bench(&wasm, true).await.unwrap();
+                execute_on.engine_only += run.engine_only;
+                execute_on.module_only += run.module_only;
+                execute_on.snapshot_decode += run.snapshot_decode;
+                execute_on.snapshot_restore += run.snapshot_restore;
+                execute_on.startup_path += run.startup_path;
+                execute_on.main_completion += run.main_completion;
+                execute_on.total_execute_path += run.total_execute_path;
+            }
+        });
+        unsafe {
+            std::env::remove_var("WJSM_STARTUP_SNAPSHOT");
+        }
+        eprintln!(
+            "BENCH real on engine         : {:?}/each",
+            execute_on.engine_only / n
+        );
+        eprintln!(
+            "BENCH real on module         : {:?}/each",
+            execute_on.module_only / n
+        );
+        eprintln!(
+            "BENCH real on decode         : {:?}/each",
+            execute_on.snapshot_decode / n
+        );
+        eprintln!(
+            "BENCH real on restore        : {:?}/each",
+            execute_on.snapshot_restore / n
+        );
+        eprintln!(
+            "BENCH real on startup        : {:?}/each",
+            execute_on.startup_path / n
+        );
+        eprintln!(
+            "BENCH real on main           : {:?}/each",
+            execute_on.main_completion / n
+        );
+        eprintln!(
+            "BENCH real on total          : {:?}/each",
+            execute_on.total_execute_path / n
+        );
+
+        Ok(())
+    }
+
+    /// Criterion bench：测量 WASM 编译缓存 + startup snapshot 两种序列化路径的反序列化耗时。
+    /// 运行：cargo test -p wjsm-runtime -- bench_deserialize --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn bench_deserialize() -> Result<()> {
+        use criterion::Criterion;
+        use super::*;
+        let wasm = compile_source("")?;
+        let rt = Runtime::new()?;
+        let mut c = Criterion::default().sample_size(50);
+
+        // ── 准备缓存目录 ────────────────────────────────────────────
+        let cache_dir = std::env::temp_dir().join("wjsm-bench-criterion");
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        std::fs::create_dir_all(&cache_dir)?;
+        unsafe { std::env::set_var("WJSM_CACHE_DIR", &cache_dir); }
+
+        let config = startup_engine_config(true);
+        let engine = Engine::new(&config)
+            .map_err(|e| anyhow::anyhow!("engine: {e:?}"))?;
+
+        // ── 1. WASM 缓存 warm 命中 ──────────────────────────────────
+        let _cold = compile_or_load_cached(&engine, &wasm)?;
+        let mut group = c.benchmark_group("wasm_cache");
+        group.bench_function("deserialize_file (warm)", |b| {
+            b.iter(|| {
+                criterion::black_box(
+                    compile_or_load_cached(&engine, criterion::black_box(&wasm))
+                        .expect("warm deserialize"),
+                );
+            })
+        });
+        // ── cold 编译 + precompile ──
+        group.bench_function("compile+precompile (cold)", |b| {
+            b.iter_custom(|iters| {
+                let mut total = Duration::ZERO;
+                for _ in 0..iters {
+                    let _ = std::fs::remove_dir_all(&cache_dir);
+                    std::fs::create_dir_all(&cache_dir).expect("create cache dir");
+                    let start = std::time::Instant::now();
+                    criterion::black_box(
+                        compile_or_load_cached(&engine, criterion::black_box(&wasm))
+                            .expect("cold compile"),
+                    );
+                    total += start.elapsed();
+                }
+                total
+            })
+        });
+        group.finish();
+
+        // ── 2. Support cwasm deserialize ────────────────────────────
+        let cwasm_bytes = embedded_support_cwasm()
+            .ok_or_else(|| anyhow::anyhow!("embedded support cwasm not available"))?;
+        let mut group = c.benchmark_group("support_cwasm");
+        group.bench_function("Module::deserialize", |b| {
+            b.iter(|| unsafe {
+                criterion::black_box(
+                    Module::deserialize(criterion::black_box(&engine), criterion::black_box(cwasm_bytes))
+                        .expect("support deserialize"),
+                );
+            })
+        });
+        group.finish();
+
+        // ── 3. Snapshot decode ──────────────────────────────────────
+        let snap_bytes = build_embedded_startup_snapshot_bytes()?;
+        let mut group = c.benchmark_group("snapshot");
+        group.bench_function("decode", |b| {
+            b.iter(|| {
+                criterion::black_box(
+                    startup_snapshot_format::decode_snapshot(criterion::black_box(&snap_bytes))
+                        .expect("snapshot decode"),
+                );
+            })
+        });
+
+        // ── 4. Snapshot restore ─────────────────────────────────────
+        let snap_view = startup_snapshot_format::decode_snapshot(&snap_bytes)?;
+        group.bench_function("restore", |b| {
+            b.iter_custom(|iters| {
+                let mut total = Duration::ZERO;
+                for _ in 0..iters {
+                    rt.block_on(async {
+                        let config = startup_engine_config(true);
+                        let engine = Engine::new(&config).expect("engine");
+                        let module = Module::new(&engine, &wasm).expect("module");
+                        let mut store = Store::new(&engine, RuntimeState::new_with_shared(None));
+                        store.set_epoch_deadline(1);
+                        store.epoch_deadline_async_yield_and_update(1);
+                        let _rx = prepare_async_host_completion(&mut store);
+                        let mut linker = Linker::new(&engine);
+                        register_startup_linker(&mut linker, &mut store).expect("register linker");
+                        let needs_support = module.imports().any(|imp| imp.module() == "wjsm_support");
+                        if needs_support {
+                            setup_shared_env_and_support(&mut linker, &mut store, &engine)
+                                .await
+                                .expect("setup support");
+                        }
+                        let instance = linker.instantiate_async(&mut store, &module)
+                            .await
+                            .expect("instantiate");
+                        let env = extract_wasm_env(&instance, &mut store);
+                        if let Ok(f) = instance.get_typed_func::<(), i64>(&mut store, "__wjsm_init_globals") {
+                            let _ = f.call_async(&mut store, ()).await;
+                        }
+                        let start = std::time::Instant::now();
+                        startup_snapshot::restore_startup_snapshot(&mut store, &env, snap_view.clone())
+                            .expect("restore");
+                        total += start.elapsed();
+                    });
+                }
+                total
+            })
+        });
+        group.finish();
+
+        let _ = std::fs::remove_dir_all(&cache_dir);
         Ok(())
     }
     // Phase 6 针对性单元测试（任务 6）：手动 enqueue 完成，验证 value settlement + 材料化能分配 runtime string/object

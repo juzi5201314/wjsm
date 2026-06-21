@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+3 alpha
+1 beta
+6 42
+--- stderr ---

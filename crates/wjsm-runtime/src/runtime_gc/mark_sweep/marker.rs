@@ -158,7 +158,7 @@ fn collect_child_raw_values(
 /// 把一个 NaN-boxed value 解析为它引用的 obj_table handle 列表（P4-blocker #2）。
 ///
 /// - object/array → decode_object_handle（直接 handle）
-/// - function → low32（函数表索引 = obj_table 下标）
+/// - function → function_props_base + low32（函数属性对象 handle）
 /// - closure → host closures 表的 env_obj，递归解析（env_obj 可能是 object/closure）
 /// - native_callable → host native_callables 表内部引用（promise/generator/combinator/env）
 ///   递归解析（这些引用本身可能又是 object/closure/native_callable）
@@ -179,7 +179,8 @@ fn resolve_value_handles(ctx: &mut GcContext, val: i64, obj_table_count: usize) 
         };
     }
     if value::is_function(val) {
-        let h = (val as u32) as Handle;
+        let base = ctx.function_props_base();
+        let h = ((val as u32) as usize).saturating_add(base) as Handle;
         return if (h as usize) < obj_table_count {
             vec![h]
         } else {
@@ -253,6 +254,7 @@ pub(crate) fn mark_drain_on_buffer(
     obj_table_ptr: usize,
     obj_table_count: usize,
     roots: &[Handle],
+    function_props_base: usize,
 ) {
     let mut worklist: Vec<Handle> = Vec::new();
     for &h in roots {
@@ -264,7 +266,9 @@ pub(crate) fn mark_drain_on_buffer(
         let raw_vals = collect_child_raw_values(data, h, obj_table_ptr, obj_table_count);
         for val in raw_vals {
             // buffer 作用域：只解析 object/array/function（closure/native_callable 需 host 表）
-            if let Some(child) = resolve_buffer_value_handle(val, obj_table_count) {
+            if let Some(child) =
+                resolve_buffer_value_handle(val, obj_table_count, function_props_base)
+            {
                 if mark_bits.mark_if_new(child) {
                     worklist.push(child);
                 }
@@ -275,7 +279,11 @@ pub(crate) fn mark_drain_on_buffer(
 
 /// buffer 作用域值→handle 解析（只处理 object/array/function，无 host 表）。
 #[cfg(test)]
-fn resolve_buffer_value_handle(val: i64, obj_table_count: usize) -> Option<Handle> {
+fn resolve_buffer_value_handle(
+    val: i64,
+    obj_table_count: usize,
+    function_props_base: usize,
+) -> Option<Handle> {
     if !value::tag_needs_root(val) {
         return None;
     }
@@ -284,7 +292,7 @@ fn resolve_buffer_value_handle(val: i64, obj_table_count: usize) -> Option<Handl
         return ((h as usize) < obj_table_count).then_some(h);
     }
     if value::is_function(val) {
-        let h = (val as u32) as Handle;
+        let h = ((val as u32) as usize).saturating_add(function_props_base) as Handle;
         return ((h as usize) < obj_table_count).then_some(h);
     }
     None
@@ -360,7 +368,7 @@ mod tests {
         let buf = build_object_buffer(obj_table_ptr, &objects, 3);
         let mut bm = MarkBitmap::new();
         bm.reset(3);
-        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 3, &[0]);
+        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 3, &[0], 0);
         assert!(bm.is_marked(0));
         assert!(bm.is_marked(1));
         assert!(bm.is_marked(2));
@@ -379,7 +387,7 @@ mod tests {
         let buf = build_object_buffer(obj_table_ptr, &objects, 3);
         let mut bm = MarkBitmap::new();
         bm.reset(3);
-        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 3, &[0]);
+        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 3, &[0], 0);
         assert!(bm.is_marked(0));
         assert!(bm.is_marked(1));
         assert!(!bm.is_marked(2)); // 不可达
@@ -396,7 +404,7 @@ mod tests {
         let buf = build_object_buffer(obj_table_ptr, &objects, 2);
         let mut bm = MarkBitmap::new();
         bm.reset(2);
-        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 2, &[0]);
+        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, 2, &[0], 0);
         assert!(bm.is_marked(0));
         assert!(bm.is_marked(1));
         assert_eq!(bm.popcount(), 2); // 不重复
@@ -423,7 +431,7 @@ mod tests {
         let buf = build_object_buffer(obj_table_ptr, &objects, N);
         let mut bm = MarkBitmap::new();
         bm.reset(N);
-        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, N, &[0]);
+        mark_drain_on_buffer(&mut bm, &buf, obj_table_ptr, N, &[0], 0);
         // 全部 marked
         assert_eq!(bm.popcount(), N);
         assert!(bm.is_marked((N - 1) as u32)); // 链尾

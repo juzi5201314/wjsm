@@ -4,7 +4,8 @@
 //!
 //! Root 来源：
 //! - shadow stack：[0, sp) 每 8B 槽读 i64，解析为 handle（含 closure→env_obj）。
-//! - IR function property objects（0..num_ir_functions）：永久存活。
+//! - IR function property objects（function_props_base..+num_ir_functions）：永久存活。
+//! - primordial 原型（Array/Object/AsyncIterator/AsyncGenerator.prototype）：永久存活。
 //! - fixed-point host 侧表（移植自 trace_runtime_side_table_roots_fixed_point）：
 //!   microtask_queue（PromiseReaction/ResolveThenable/Callback/Transform/Pull/AsyncResume/
 //!   CleanupFinalizationRegistry）、promise_table（state value + reactions）、
@@ -113,20 +114,34 @@ impl RootProvider for RuntimeRoots {
     }
 
     fn for_each_host_table_root(&mut self, ctx: &mut GcContext, visit: &mut dyn FnMut(Handle)) {
-        // 稳定 root：IR function property objects（0..num_ir_functions），永久存活。
+        // 稳定 root：IR function property objects，永久存活。
+        // startup snapshot 拆分 bootstrap 后，primordial 原型先于函数属性对象分配，
+        // 占据更低 handle，故函数属性对象从 __function_props_base 起算，区间为
+        // function_props_base..+num_ir_functions（不再是 0..num_ir_functions）。
+        let base = ctx.function_props_base();
         let n = ctx.num_ir_functions();
-        for h in 0..(n as Handle) {
-            visit(h);
+        let count = ctx.obj_table_count();
+        for h in base..base + n {
+            if h < count {
+                visit(h as Handle);
+            }
         }
-        // 稳定 root：prototype 对象（Array.prototype / Object.prototype）。
-        // 这些在模块初始化时创建（handle >= num_ir_functions），必须作顶层 root 否则被 sweep 回收
-        // → 原型链断裂 → 属性查找读到 garbage（P4 T4.5 发现）。
+        // 稳定 root：primordial 原型对象。这些在 bootstrap / host post-bootstrap 创建，
+        // handle 低于 function_props_base，不被上面的区间扫描覆盖，必须显式作顶层 root，
+        // 否则被 sweep 回收 → 原型链断裂 → 属性查找读到 garbage（P4 T4.5 发现）。
         if let Some(h) = ctx.array_proto_handle() {
             visit(h);
         }
         if let Some(h) = ctx.object_proto_handle() {
             visit(h);
         }
+        // %AsyncIteratorPrototype% / AsyncGenerator.prototype 同样位于 function_props_base
+        // 之下，且仅由 RuntimeState 字段持有；旧布局下靠 0..num_ir_functions 扫描被顺带 root，
+        // 区间改为 base.. 后失去覆盖，必须显式 root。
+        let (async_iterator_proto, async_gen_proto) =
+            ctx.with_state(|st| (st.async_iterator_prototype, st.async_gen_prototype));
+        push_value_roots(ctx, async_iterator_proto, visit);
+        push_value_roots(ctx, async_gen_proto, visit);
         // 动态 root：host 侧表快照 → 解析每个 raw 值为 handle。
         let snapshot = collect_host_table_values(ctx);
         for val in snapshot {
@@ -150,9 +165,11 @@ fn push_value_roots(ctx: &mut GcContext, val: i64, visit: &mut dyn FnMut(Handle)
         return;
     }
     if value::is_function(val) {
-        let h = (val as u32) as Handle;
-        if (h as usize) < count {
-            visit(h);
+        // 函数值低 32 位是函数表索引；其属性对象 handle 从 function_props_base 起算。
+        let base = ctx.function_props_base();
+        let h = (val as u32 as usize).saturating_add(base);
+        if h < count {
+            visit(h as Handle);
         }
         return;
     }

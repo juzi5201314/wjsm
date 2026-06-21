@@ -109,7 +109,7 @@ module {
     bb3:
       %42 = load var $0.E
       %43 = const c30
-      %44 = get_prop %42, %43
+      %44 = get_elem %42, %43
       %45 = call builtin.console.log(%44)
       %46 = is_exception %45
       branch %46, bb6, bb5

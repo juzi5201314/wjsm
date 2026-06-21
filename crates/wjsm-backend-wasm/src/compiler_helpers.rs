@@ -52,6 +52,7 @@ impl Compiler {
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
         let num_ir_functions_global = self.num_ir_functions_global_idx;
+        let function_props_base_global = self.function_props_base_global_idx;
 
         // ── $obj_new (param $capacity i32) (result i32) — Type 7 ──
         // P4 重写：bump fast-path + handle 复用 + proactive GC + gc_alloc_slow slow-path。
@@ -240,6 +241,8 @@ impl Compiler {
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::GlobalGet(function_props_base_global));
+            func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::I32Const(4));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
@@ -590,6 +593,10 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
             func.instruction(&WasmInstruction::LocalTee(9));
+            func.instruction(&WasmInstruction::GlobalGet(function_props_base_global));
+            func.instruction(&WasmInstruction::I32Add);
+            func.instruction(&WasmInstruction::LocalSet(9));
+            func.instruction(&WasmInstruction::LocalGet(9));
             func.instruction(&WasmInstruction::I32Const(4));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::GlobalGet(obj_table_global));
@@ -1161,6 +1168,8 @@ impl Compiler {
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I32WrapI64);
+            func.instruction(&WasmInstruction::GlobalGet(function_props_base_global));
+            func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::I32Const(4));
             func.instruction(&WasmInstruction::I32Mul);
             func.instruction(&WasmInstruction::GlobalGet(obj_table_global));

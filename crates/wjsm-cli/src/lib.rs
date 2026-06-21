@@ -279,6 +279,16 @@ impl PipelineTimings {
 // ============================================================================
 
 pub fn main_entry() -> ExitCode {
+    // Install embedded startup snapshot + support cwasm at CLI startup.
+    // Both are produced at `cargo build` time via wjsm-runtime-snapshot/
+    // wjsm-runtime-support build.rs and `include_bytes!`'d into the binary.
+    if let Some(bytes) = wjsm_runtime_snapshot::EMBEDDED_STARTUP_SNAPSHOT {
+        wjsm_runtime::install_embedded_startup_snapshot(bytes);
+    }
+    if let Some(bytes) = wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM {
+        wjsm_runtime::install_embedded_support_cwasm(bytes);
+    }
+
     let cli = match Cli::try_parse() {
         Ok(c) => c,
         Err(e) => {
@@ -1141,5 +1151,62 @@ fn compile_source(source: &str, target: Target, script: bool) -> Result<Vec<u8>>
     match target {
         Target::Wasm => backend_wasm::compile(&program),
         Target::Jit => bail!("JIT backend is not implemented yet"),
+    }
+}
+
+/// In-process 复现 `wjsm run <file>` 的可观测行为（stdout / stderr / exit_code），
+/// 供 E2E fixture 测试在测试进程内直接调用，免去每个 fixture spawn 一个 wjsm 子进程
+/// （省一层进程 + 510MB ELF 加载）。
+///
+/// 退出码 / stderr 契约必须与 `main_entry` + `cmd_run` 逐字一致：
+/// - 编译错（parse/lower/bundle/compile）→ 退出码 1，stderr = `Error: {e:#}\n`
+/// - 运行时错（WASM 执行失败）→ 退出码 2，stderr = `Runtime error: {e:#}\n`
+/// - 成功 → 退出码 0，stdout = 程序输出，stderr 空
+///
+/// 偏离 CLI 的唯一点：stdout 写入返回的 buffer 而非真实 fd（测试需捕获）。
+/// 与 CLI 默认对齐：target=Wasm、script=false、root 由文件路径推断。
+pub fn run_file_in_process(input: &Path) -> (i32, Vec<u8>, Vec<u8>) {
+    // 与 main_entry 一致：安装 embedded snapshot + support cwasm（OnceLock，幂等）。
+    if let Some(bytes) = wjsm_runtime_snapshot::EMBEDDED_STARTUP_SNAPSHOT {
+        wjsm_runtime::install_embedded_startup_snapshot(bytes);
+    }
+    if let Some(bytes) = wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM {
+        wjsm_runtime::install_embedded_support_cwasm(bytes);
+    }
+
+    let input_str = input.to_string_lossy();
+    let wasm = match compile_from_file_input(&input_str, None, Target::Wasm, false) {
+        Ok(w) => w,
+        Err(e) => {
+            return (
+                EXIT_COMPILE_ERROR as i32,
+                Vec::new(),
+                format!("Error: {e:#}\n").into_bytes(),
+            );
+        }
+    };
+
+    let rt = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            return (
+                EXIT_COMPILE_ERROR as i32,
+                Vec::new(),
+                format!("Error: {e:#}\n").into_bytes(),
+            );
+        }
+    };
+
+    let mut stdout: Vec<u8> = Vec::new();
+    match rt.block_on(runtime::execute_with_writer(&wasm, &mut stdout)) {
+        Ok(_) => (EXIT_SUCCESS as i32, stdout, Vec::new()),
+        Err(e) => (
+            EXIT_RUNTIME_ERROR as i32,
+            stdout,
+            format!("Runtime error: {e:#}\n").into_bytes(),
+        ),
     }
 }

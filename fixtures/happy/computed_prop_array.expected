@@ -1,6 +1,6 @@
 exit_code: 0
 --- stdout ---
-undefined
+200
 999
-undefined
+1000
 --- stderr ---

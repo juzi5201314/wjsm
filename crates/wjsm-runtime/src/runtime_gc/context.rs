@@ -122,6 +122,14 @@ impl<'a, 'b> GcContext<'a, 'b> {
             .max(0) as usize
     }
 
+    /// 读 function_props_base global（__function_props_base，函数属性对象起始 handle）。
+    /// startup snapshot 拆分后 primordial 原型占据更低 handle，函数属性对象从此基址起算。
+    pub fn function_props_base(&mut self) -> usize {
+        read_i32_global(&mut *self.caller, "__function_props_base")
+            .unwrap_or(0)
+            .max(0) as usize
+    }
+
     /// 读 array_proto_handle global（__array_proto_handle，Array.prototype 对象 handle）。
     /// 返回 None 表未初始化（-1）或不可读。
     pub fn array_proto_handle(&mut self) -> Option<Handle> {

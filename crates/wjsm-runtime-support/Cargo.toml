@@ -1,0 +1,19 @@
+[package]
+name = "wjsm-runtime-support"
+version.workspace = true
+edition.workspace = true
+
+[features]
+default = ["embedded"]
+embedded = []
+
+[dependencies]
+
+[build-dependencies]
+anyhow = { workspace = true }
+wasmtime = { workspace = true }
+wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
+
+[dev-dependencies]
+wasmtime = { workspace = true }
+wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
