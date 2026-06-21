@@ -7,19 +7,23 @@
 //! - 3: usage error (invalid arguments)
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand, ValueEnum};
-use colored::Colorize;
+use clap::Parser;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::OnceLock;
 use std::time::Instant;
 use wjsm_backend_wasm as backend_wasm;
 use wjsm_ir::Program;
 use wjsm_parser as parser;
 use wjsm_runtime as runtime;
 use wjsm_semantic as semantic;
+
+mod cli_args;
+mod ir_output;
+
+use cli_args::*;
+use ir_output::{print_ir, print_ir_dot, print_stats};
 
 // ============================================================================
 // Exit Codes
@@ -43,210 +47,14 @@ fn block_on_wasm_execute(wasm: &[u8]) -> Result<()> {
 }
 
 // ============================================================================
-// CLI Structure
-// ============================================================================
-
-#[derive(Parser)]
-#[command(author, version, about, long_about = None)]
-pub struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-
-    /// Verbose output (-v shows progress, -vv shows details)
-    #[arg(short = 'v', long, action = clap::ArgAction::Count, global = true)]
-    verbose: u8,
-
-    /// Show timing information for each pipeline stage
-    #[arg(long, global = true)]
-    time: bool,
-
-    /// Show statistics after build (constants, functions, blocks, instructions, WASM size)
-    #[arg(long, global = true)]
-    stats: bool,
-
-    /// Color output control (auto/always/never). Also respects NO_COLOR env var.
-    #[arg(long, value_name = "WHEN", global = true)]
-    color: Option<ColorChoice>,
-
-    /// Target backend (wasm or jit)
-    #[arg(long, default_value = "wasm", global = true)]
-    target: Target,
-
-    /// GC algorithm (runtime; mark-sweep is the only implementation now, generational/incremental reserved)
-    #[arg(long, default_value = "mark-sweep", global = true)]
-    gc_algorithm: GcAlgorithmChoice,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum ColorChoice {
-    /// Auto-detect based on terminal
-    Auto,
-    /// Always use colors
-    Always,
-    /// Never use colors
-    Never,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum Target {
-    Wasm,
-    Jit,
-}
-
-/// GC 算法选择（运行期切换，spec §6 trait 框架）。当前仅 MarkSweep；预留 generational/incremental。
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum GcAlgorithmChoice {
-    /// Non-moving mark-sweep + segregated free list（默认实现，spec §8/§9）
-    #[value(alias = "mark_sweep")]
-    MarkSweep,
-    // 未来：Generational, Incremental（impl 新 struct，不改框架）
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum DumpFormat {
-    Text,
-    Dot,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum Stage {
-    /// Parse and print AST JSON
-    Parse,
-    /// Lower to IR and print
-    Lower,
-    /// Compile to WASM and write output
-    Compile,
-    /// Compile and execute (default for run)
-    Execute,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Build a JS/TS file to WebAssembly
-    Build {
-        /// The input file to compile, or - for stdin
-        input: String,
-
-        /// The output .wasm file, or - for stdout
-        #[arg(short, long, default_value = "out.wasm")]
-        output: String,
-
-        /// Stop at a specific pipeline stage
-        #[arg(long, value_name = "STAGE")]
-        stage: Option<Stage>,
-
-        /// The root directory for module resolution
-        #[arg(long)]
-        root: Option<String>,
-    },
-
-    /// Run a JS/TS file directly
-    Run {
-        /// The input file to run, or - for stdin
-        input: String,
-
-        /// The root directory for module resolution
-        #[arg(long)]
-        root: Option<String>,
-
-        /// Watch for changes and re-run
-        #[arg(short, long)]
-        watch: bool,
-
-        /// Parse as script instead of module (allows await as identifier)
-        #[arg(long)]
-        script: bool,
-    },
-
-    /// Parse and check a JS/TS file for errors (no output)
-    Check {
-        /// The input file to check, or - for stdin
-        input: String,
-    },
-
-    /// Evaluate a JS expression and print the result
-    Eval {
-        /// The JS expression to evaluate
-        code: String,
-    },
-
-    /// Dump IR for a JS/TS file
-    DumpIr {
-        /// The input file, or - for stdin
-        input: String,
-
-        /// Output format (text or dot for Graphviz)
-        #[arg(long, default_value = "text")]
-        format: DumpFormat,
-    },
-
-    /// Dump SWC AST as JSON for a JS/TS file
-    DumpAst {
-        /// The input file, or - for stdin
-        input: String,
-    },
-
-    /// Dump WAT (WebAssembly Text) for a compiled JS/TS file
-    DumpWat {
-        /// The input file, or - for stdin
-        input: String,
-
-        /// The root directory for module resolution
-        #[arg(long)]
-        root: Option<String>,
-    },
-
-    /// Format a JS/TS file using SWC codegen
-    Fmt {
-        /// The input file to format
-        input: String,
-
-        /// Write formatted output back to the file
-        #[arg(short, long)]
-        write: bool,
-    },
-
-    /// Validate a .wasm file
-    Validate {
-        /// The .wasm file to validate
-        input: String,
-    },
-
-    /// Show size breakdown of WASM sections
-    Size {
-        /// The .wasm file to analyze
-        input: String,
-    },
-
-    /// Disassemble a .wasm file with detailed output
-    Disasm {
-        /// The .wasm file to disassemble
-        input: String,
-    },
-
-    /// Create a new wjsm project
-    Init {
-        /// The project directory to create
-        path: String,
-    },
-
-    /// Show extended version information
-    Version {
-        /// Show extended version info
-        #[arg(long)]
-        extended: bool,
-    },
-}
-
-// ============================================================================
 // Pipeline Types
 // ============================================================================
 
-struct PipelineResult {
-    ast: Option<swc_core::ecma::ast::Module>,
-    program: Option<Program>,
-    wasm: Option<Vec<u8>>,
-    timings: PipelineTimings,
+pub(crate) struct PipelineResult {
+    pub(crate) ast: Option<swc_core::ecma::ast::Module>,
+    pub(crate) program: Option<Program>,
+    pub(crate) wasm: Option<Vec<u8>>,
+    pub(crate) timings: PipelineTimings,
 }
 
 #[derive(Default)]
@@ -866,179 +674,6 @@ fn read_input(input: &str) -> Result<String> {
     }
 }
 
-// ============================================================================
-// IR Output
-// ============================================================================
-
-fn print_ir(program: &Program) {
-    let text = program.dump_text();
-
-    // Check if colors are enabled
-    if colored::control::SHOULD_COLORIZE.should_colorize() {
-        for line in text.lines() {
-            let colored_line = colorize_ir_line(line);
-            println!("{}", colored_line);
-        }
-    } else {
-        println!("{}", text);
-    }
-}
-
-fn colorize_ir_line(line: &str) -> String {
-    static VALUE_RE: OnceLock<regex::Regex> = OnceLock::new();
-    static SCOPE_RE: OnceLock<regex::Regex> = OnceLock::new();
-    static CONST_RE: OnceLock<regex::Regex> = OnceLock::new();
-
-    // Keywords in blue
-    let keywords = [
-        "module", "fn", "entry=", "bb", "return", "call", "const", "jump", "branch",
-    ];
-
-    let mut result = line.to_string();
-
-    // Color keywords
-    for kw in &keywords {
-        result = result.replace(kw, &kw.blue().to_string());
-    }
-
-    // Color types (like "number", "string") in green
-    result = result.replace("number(", &"number(".green().to_string());
-    result = result.replace("string(", &"string(".green().to_string());
-
-    // Color values (like %0, $0.x) in cyan
-    if result.contains('%') {
-        let re = VALUE_RE.get_or_init(|| regex::Regex::new(r"%\d+").unwrap());
-        result = re
-            .replace_all(&result, |caps: &regex::Captures| caps[0].cyan().to_string())
-            .to_string();
-    }
-
-    // Color scope-qualified names like $0.x in cyan
-    if result.contains('$') {
-        let re = SCOPE_RE.get_or_init(|| regex::Regex::new(r"\$\d+\.\w+").unwrap());
-        result = re
-            .replace_all(&result, |caps: &regex::Captures| caps[0].cyan().to_string())
-            .to_string();
-    }
-
-    // Color constants like c0, c1 in yellow
-    if result.contains(" c") || result.starts_with('c') {
-        let re = CONST_RE.get_or_init(|| regex::Regex::new(r"\bc\d+").unwrap());
-        result = re
-            .replace_all(&result, |caps: &regex::Captures| {
-                caps[0].yellow().to_string()
-            })
-            .to_string();
-    }
-
-    result
-}
-
-fn print_ir_dot(program: &Program) {
-    println!("digraph IR {{");
-    println!("  rankdir=TB;");
-    println!("  node [shape=box];");
-    println!();
-
-    // For each function
-    for func in program.functions() {
-        println!("  subgraph cluster_{} {{", func.name());
-        println!("    label=\"{}\";", func.name());
-        println!("    style=rounded;");
-        println!();
-
-        // Create nodes for each basic block using actual block IDs
-        for bb in func.blocks() {
-            let bb_id = bb.id();
-            let label = format!(
-                "{}\\l{}",
-                bb_id,
-                bb.instructions()
-                    .iter()
-                    .map(|inst| format!("  {}", inst))
-                    .collect::<Vec<_>>()
-                    .join("\\l")
-            );
-            println!("    bb{} [label=\"{}\"];", bb_id.0, label);
-        }
-
-        // Create edges for control flow using actual block IDs
-        for bb in func.blocks() {
-            let bb_id = bb.id();
-            use wjsm_ir::Terminator;
-            match bb.terminator() {
-                Terminator::Return { .. } => {
-                    // No outgoing edges
-                }
-                Terminator::Jump { target } => {
-                    println!("    bb{} -> bb{};", bb_id.0, target.0);
-                }
-                Terminator::Branch {
-                    condition: _,
-                    true_block,
-                    false_block,
-                } => {
-                    println!("    bb{} -> bb{} [label=\"true\"];", bb_id.0, true_block.0);
-                    println!(
-                        "    bb{} -> bb{} [label=\"false\"];",
-                        bb_id.0, false_block.0
-                    );
-                }
-                Terminator::Switch {
-                    value: _,
-                    cases,
-                    default_block,
-                    exit_block,
-                } => {
-                    for case in cases {
-                        println!("    bb{} -> bb{};", bb_id.0, case.target.0);
-                    }
-                    println!(
-                        "    bb{} -> bb{} [label=\"default\"];",
-                        bb_id.0, default_block.0
-                    );
-                    println!("    bb{} -> bb{} [label=\"exit\"];", bb_id.0, exit_block.0);
-                }
-                Terminator::Throw { .. } => {
-                    // No outgoing edges
-                }
-                Terminator::Unreachable => {
-                    // No outgoing edges
-                }
-            }
-        }
-
-        println!("  }}");
-    }
-
-    println!("}}");
-}
-
-fn print_stats(result: &PipelineResult) {
-    eprintln!();
-    eprintln!("=== Statistics ===");
-
-    if let Some(program) = &result.program {
-        let mut total_blocks = 0;
-        let mut total_instructions = 0;
-
-        for func in program.functions() {
-            total_blocks += func.blocks().len();
-            for bb in func.blocks() {
-                total_instructions += bb.instructions().len();
-            }
-        }
-
-        eprintln!("  Constants: {}", program.constants().len());
-        eprintln!("  Functions: {}", program.functions().len());
-        eprintln!("  Basic Blocks: {}", total_blocks);
-        eprintln!("  Instructions: {}", total_instructions);
-    }
-
-    if let Some(wasm) = &result.wasm {
-        eprintln!("  WASM Size: {} bytes", wasm.len());
-    }
-}
 
 // ============================================================================
 // SWC Codegen (for fmt command)

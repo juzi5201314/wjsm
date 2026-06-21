@@ -1,0 +1,175 @@
+use colored::Colorize;
+use std::sync::OnceLock;
+use wjsm_ir::Program;
+
+use super::PipelineResult;
+
+pub(crate) fn print_ir(program: &Program) {
+    let text = program.dump_text();
+
+    // Check if colors are enabled
+    if colored::control::SHOULD_COLORIZE.should_colorize() {
+        for line in text.lines() {
+            let colored_line = colorize_ir_line(line);
+            println!("{}", colored_line);
+        }
+    } else {
+        println!("{}", text);
+    }
+}
+
+fn colorize_ir_line(line: &str) -> String {
+    static VALUE_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static SCOPE_RE: OnceLock<regex::Regex> = OnceLock::new();
+    static CONST_RE: OnceLock<regex::Regex> = OnceLock::new();
+
+    // Keywords in blue
+    let keywords = [
+        "module", "fn", "entry=", "bb", "return", "call", "const", "jump", "branch",
+    ];
+
+    let mut result = line.to_string();
+
+    // Color keywords
+    for kw in &keywords {
+        result = result.replace(kw, &kw.blue().to_string());
+    }
+
+    // Color types (like "number", "string") in green
+    result = result.replace("number(", &"number(".green().to_string());
+    result = result.replace("string(", &"string(".green().to_string());
+
+    // Color values (like %0, $0.x) in cyan
+    if result.contains('%') {
+        let re = VALUE_RE.get_or_init(|| regex::Regex::new(r"%\d+").unwrap());
+        result = re
+            .replace_all(&result, |caps: &regex::Captures| caps[0].cyan().to_string())
+            .to_string();
+    }
+
+    // Color scope-qualified names like $0.x in cyan
+    if result.contains('$') {
+        let re = SCOPE_RE.get_or_init(|| regex::Regex::new(r"\$\d+\.\w+").unwrap());
+        result = re
+            .replace_all(&result, |caps: &regex::Captures| caps[0].cyan().to_string())
+            .to_string();
+    }
+
+    // Color constants like c0, c1 in yellow
+    if result.contains(" c") || result.starts_with('c') {
+        let re = CONST_RE.get_or_init(|| regex::Regex::new(r"\bc\d+").unwrap());
+        result = re
+            .replace_all(&result, |caps: &regex::Captures| {
+                caps[0].yellow().to_string()
+            })
+            .to_string();
+    }
+
+    result
+}
+
+pub(crate) fn print_ir_dot(program: &Program) {
+    println!("digraph IR {{");
+    println!("  rankdir=TB;");
+    println!("  node [shape=box];");
+    println!();
+
+    // For each function
+    for func in program.functions() {
+        println!("  subgraph cluster_{} {{", func.name());
+        println!("    label=\"{}\";", func.name());
+        println!("    style=rounded;");
+        println!();
+
+        // Create nodes for each basic block using actual block IDs
+        for bb in func.blocks() {
+            let bb_id = bb.id();
+            let label = format!(
+                "{}\\l{}",
+                bb_id,
+                bb.instructions()
+                    .iter()
+                    .map(|inst| format!("  {}", inst))
+                    .collect::<Vec<_>>()
+                    .join("\\l")
+            );
+            println!("    bb{} [label=\"{}\"];", bb_id.0, label);
+        }
+
+        // Create edges for control flow using actual block IDs
+        for bb in func.blocks() {
+            let bb_id = bb.id();
+            use wjsm_ir::Terminator;
+            match bb.terminator() {
+                Terminator::Return { .. } => {
+                    // No outgoing edges
+                }
+                Terminator::Jump { target } => {
+                    println!("    bb{} -> bb{};", bb_id.0, target.0);
+                }
+                Terminator::Branch {
+                    condition: _,
+                    true_block,
+                    false_block,
+                } => {
+                    println!("    bb{} -> bb{} [label=\"true\"];", bb_id.0, true_block.0);
+                    println!(
+                        "    bb{} -> bb{} [label=\"false\"];",
+                        bb_id.0, false_block.0
+                    );
+                }
+                Terminator::Switch {
+                    value: _,
+                    cases,
+                    default_block,
+                    exit_block,
+                } => {
+                    for case in cases {
+                        println!("    bb{} -> bb{};", bb_id.0, case.target.0);
+                    }
+                    println!(
+                        "    bb{} -> bb{} [label=\"default\"];",
+                        bb_id.0, default_block.0
+                    );
+                    println!("    bb{} -> bb{} [label=\"exit\"];", bb_id.0, exit_block.0);
+                }
+                Terminator::Throw { .. } => {
+                    // No outgoing edges
+                }
+                Terminator::Unreachable => {
+                    // No outgoing edges
+                }
+            }
+        }
+
+        println!("  }}");
+    }
+
+    println!("}}");
+}
+
+pub(crate) fn print_stats(result: &PipelineResult) {
+    eprintln!();
+    eprintln!("=== Statistics ===");
+
+    if let Some(program) = &result.program {
+        let mut total_blocks = 0;
+        let mut total_instructions = 0;
+
+        for func in program.functions() {
+            total_blocks += func.blocks().len();
+            for bb in func.blocks() {
+                total_instructions += bb.instructions().len();
+            }
+        }
+
+        eprintln!("  Constants: {}", program.constants().len());
+        eprintln!("  Functions: {}", program.functions().len());
+        eprintln!("  Basic Blocks: {}", total_blocks);
+        eprintln!("  Instructions: {}", total_instructions);
+    }
+
+    if let Some(wasm) = &result.wasm {
+        eprintln!("  WASM Size: {} bytes", wasm.len());
+    }
+}
