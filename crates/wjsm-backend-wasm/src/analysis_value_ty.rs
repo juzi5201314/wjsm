@@ -14,8 +14,8 @@
 //! 每次降级要求所有上游源都是 Scalar；未被 StoreVar 的变量（函数参数、捕获变量）
 //! 不降级；Phi 任一入边 Handle 则不降级。误判（把 Handle 当 Scalar）会导致 GC
 //! 漏 root → 悬垂指针，故一律保守。
-use wjsm_ir::{Builtin, Constant, Function, Instruction, Module, ValueId};
 use std::collections::HashMap;
+use wjsm_ir::{Builtin, Constant, Function, Instruction, Module, ValueId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValueTy {
@@ -30,6 +30,19 @@ pub enum ValueTy {
 /// 返回 `HashMap<ValueId, ValueTy>`。未出现在 map 中的 ValueId（理论上不应发生）
 /// 在调用方保守视为 Handle。
 pub fn infer_value_ty(module: &Module, function: &Function) -> HashMap<ValueId, ValueTy> {
+    infer_value_and_var_ty(module, function).0
+}
+
+/// 同 `infer_value_ty`，并额外返回**每个变量**的类型（按 `StoreVar` 源折叠）。
+///
+/// 变量类型供 GC safepoint 的变量 spill 过滤：某变量所有 `StoreVar` 源都是 Scalar
+/// → Scalar（safepoint 不 spill，避免热循环里多 spill 标量内建如 `Math.E`）；否则
+/// Handle（保守，含 handle 源或未分类源）。从未被 `StoreVar` 的变量（函数参数 / 捕获
+/// 变量）不在返回 map 中，由调用方默认按 Handle 处理（保守 spill）。
+pub fn infer_value_and_var_ty(
+    module: &Module,
+    function: &Function,
+) -> (HashMap<ValueId, ValueTy>, HashMap<String, ValueTy>) {
     let constants = module.constants();
 
     // ── 阶段 1：初始化遍，确定性分类 ──
@@ -105,7 +118,22 @@ pub fn infer_value_ty(module: &Module, function: &Function) -> HashMap<ValueId, 
         }
     }
 
-    ty
+    // ── 阶段 3：折叠每个变量的类型（按其全部 StoreVar 源）──
+    let mut var_ty: HashMap<String, ValueTy> = HashMap::new();
+    for (name, sources) in &var_stores {
+        let all_scalar =
+            !sources.is_empty() && sources.iter().all(|s| ty.get(s) == Some(&ValueTy::Scalar));
+        var_ty.insert(
+            name.clone(),
+            if all_scalar {
+                ValueTy::Scalar
+            } else {
+                ValueTy::Handle
+            },
+        );
+    }
+
+    (ty, var_ty)
 }
 
 /// 该 builtin 的返回值是否**规范保证**总是标量（number/bool/undefined）。

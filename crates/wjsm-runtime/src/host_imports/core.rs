@@ -572,81 +572,91 @@ pub(crate) fn define_core(
     linker.define(&mut store, "env", "typeof", f)?;
 
     // ── Import 15: op_instanceof(i64, i64) ────────────────────────────
-    let f = Func::wrap(
-        &mut store,
-        |mut caller: Caller<'_, RuntimeState>, value: i64, constructor: i64| -> i64 {
-            // 1. 原始类型直接返回 false
-            if !value::is_js_object(value) {
-                return value::encode_bool(false);
-            }
-
-            // 2. 检查 constructor 是否是对象或函数或 Proxy
-            if !value::is_js_object(constructor) {
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
-                    Some("TypeError: Right-hand side of instanceof is not an object".to_string());
-                return value::encode_undefined();
-            }
-
-            // 3. 获取 constructor 的 "prototype" 属性
-            let proto_prop = store_runtime_string(&caller, "prototype".to_string());
-            let prototype_val = reflect_get_impl(&mut caller, constructor, proto_prop);
-
-            // 4. 如果 prototype 不是对象/函数/Proxy/null，抛出 TypeError
-            if !value::is_js_object(prototype_val) && !value::is_null(prototype_val) {
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
-                    Some("TypeError: Function has non-object prototype property".to_string());
-                return value::encode_undefined();
-            }
-
-            let prototype = prototype_val;
-
-            // 5. 遍历 value 的原型链
-            let proto_target = match resolve_handle(&mut caller, prototype) {
-                Some(p) => p as u32,
-                None => return value::encode_bool(false),
-            };
-            let mut current_ptr = match resolve_handle(&mut caller, value) {
-                Some(p) => p,
-                None => return value::encode_bool(false),
-            };
-            loop {
-                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+    linker.func_wrap_async(
+        "env",
+        "op_instanceof",
+        |mut caller: Caller<'_, RuntimeState>, (value, constructor): (i64, i64)| {
+            Box::new(async move {
+                // 1. 原始类型直接返回 false
+                if !value::is_js_object(value) {
                     return value::encode_bool(false);
+                }
+
+                // 2. 检查 constructor 是否是对象或函数或 Proxy
+                if !value::is_js_object(constructor) {
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") = Some(
+                        "TypeError: Right-hand side of instanceof is not an object".to_string(),
+                    );
+                    return value::encode_undefined();
+                }
+
+                // 3. 获取 constructor 的 "prototype" 属性（含 proxy get trap，必须 async 重入）
+                let proto_prop = store_runtime_string(&caller, "prototype".to_string());
+                let prototype_val = reflect_get_impl_with_receiver_async(
+                    &mut caller,
+                    constructor,
+                    proto_prop,
+                    constructor,
+                )
+                .await;
+
+                // 4. 如果 prototype 不是对象/函数/Proxy/null，抛出 TypeError
+                if !value::is_js_object(prototype_val) && !value::is_null(prototype_val) {
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") =
+                        Some("TypeError: Function has non-object prototype property".to_string());
+                    return value::encode_undefined();
+                }
+
+                let prototype = prototype_val;
+
+                // 5. 遍历 value 的原型链
+                let proto_target = match resolve_handle(&mut caller, prototype) {
+                    Some(p) => p as u32,
+                    None => return value::encode_bool(false),
                 };
-                let data = memory.data(&caller);
-                if current_ptr + 4 > data.len() {
-                    return value::encode_bool(false);
-                }
-                let proto_handle = u32::from_le_bytes([
-                    data[current_ptr],
-                    data[current_ptr + 1],
-                    data[current_ptr + 2],
-                    data[current_ptr + 3],
-                ]);
-
-                if proto_handle == 0xFFFF_FFFF {
-                    return value::encode_bool(false);
-                }
-                // 通过 handle 表解析 proto_handle → proto_ptr
-                let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize) else {
-                    return value::encode_bool(false);
+                let mut current_ptr = match resolve_handle(&mut caller, value) {
+                    Some(p) => p,
+                    None => return value::encode_bool(false),
                 };
-                if proto_ptr == proto_target as usize {
-                    return value::encode_bool(true);
+                loop {
+                    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                        return value::encode_bool(false);
+                    };
+                    let data = memory.data(&caller);
+                    if current_ptr + 4 > data.len() {
+                        return value::encode_bool(false);
+                    }
+                    let proto_handle = u32::from_le_bytes([
+                        data[current_ptr],
+                        data[current_ptr + 1],
+                        data[current_ptr + 2],
+                        data[current_ptr + 3],
+                    ]);
+
+                    if proto_handle == 0xFFFF_FFFF {
+                        return value::encode_bool(false);
+                    }
+                    // 通过 handle 表解析 proto_handle → proto_ptr
+                    let Some(proto_ptr) = resolve_handle_idx(&mut caller, proto_handle as usize)
+                    else {
+                        return value::encode_bool(false);
+                    };
+                    if proto_ptr == proto_target as usize {
+                        return value::encode_bool(true);
+                    }
+                    current_ptr = proto_ptr;
                 }
-                current_ptr = proto_ptr;
-            }
+            })
         },
-    );
-    linker.define(&mut store, "env", "op_instanceof", f)?;
+    )?;
 
     // ── Import 16: string_concat(i64, i64) → i64 ──────────────────────────────
     let f = Func::wrap(
@@ -861,7 +871,11 @@ pub(crate) fn define_core(
                         };
                         g.get(&mut caller).i32().unwrap_or(0) as usize
                     };
-                    let handle_idx = (obj as u64 & 0xFFFF_FFFF) as u32;
+                    // 扩容写回 obj_table 槽：必须与上面 resolve_handle 读取的 handle 一致。
+                    // 函数 target 的属性对象 handle 经 __function_props_base 重定位，故走 handle_index_of，
+                    // 不能直接用 obj 低 32 位（那是函数表索引，会写错槽 → 扩容后读到旧对象）。
+                    let handle_idx =
+                        crate::runtime_values::handle_index_of(&mut caller, obj) as u32;
 
                     // 计算新容量和新大小
                     let new_capacity = if capacity == 0 { 1 } else { capacity * 2 };

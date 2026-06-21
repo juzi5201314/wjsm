@@ -14,6 +14,9 @@ members = [
     "crates/wjsm-cli",
     "crates/wjsm-test262",
     "crates/wjsm-module",
+    "crates/wjsm-runtime-snapshot",
+    "crates/wjsm-runtime-support",
+    "crates/wjsm-snapshot-format",
 ]
 
 [workspace.package]
@@ -26,7 +29,7 @@ clap = { version = "4.6.0", features = ["derive"] }
 swc_core = { version = "62.0.0", features = ["ecma_parser", "ecma_ast", "common", "ecma_visit", "ecma_ast_serde", "ecma_codegen"] }
 thiserror = "2.0.18"
 wasm-encoder = "0.246.2"
-wasmtime = { version = "43.0.0", features = ["async"] }
+wasmtime = { version = "43.0.0", features = ["async", "winch"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "time", "sync", "macros"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -47,3 +50,28 @@ wjsm-cli = { path = "crates/wjsm-cli" }
 
 [dev-dependencies]
 anyhow = { workspace = true }
+
+# 仅对 wasmtime/cranelift 这类编译密集型依赖启用优化，
+# 保持本仓库自身 crate 仍走快速 debug 编译。
+# 测试时每个 fixture 都会用 Cranelift 把 WASM 编译成本机码，
+# 未优化的 Cranelift 是 fixture 执行 ~290ms 开销的主因。
+[profile.dev.package.cranelift-codegen]
+opt-level = 3
+[profile.dev.package.wasmtime-internal-cranelift]
+opt-level = 3
+[profile.dev.package.cranelift-frontend]
+opt-level = 3
+[profile.dev.package.cranelift-codegen-meta]
+opt-level = 3
+[profile.dev.package.cranelift-assembler-x64]
+opt-level = 3
+[profile.dev.package.wasmtime-internal-core]
+opt-level = 3
+[profile.dev.package.wasmtime-environ]
+opt-level = 3
+[profile.dev.package.wjsm-runtime]
+opt-level = 3
+# memchr 的 SIMD 子串搜索（find_memory_c_string 用）在未优化 debug 下
+# 带大量 UB 检查 + 未内联，实测占 bootstrap ~35% 指令；opt 后大幅收缩。
+[profile.dev.package.memchr]
+opt-level = 3

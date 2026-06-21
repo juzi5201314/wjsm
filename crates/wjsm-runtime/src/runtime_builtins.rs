@@ -408,9 +408,14 @@ pub(crate) fn call_native_callable_with_args_from_caller(
         NativeCallable::NumberPrimitiveMethod { method } => Some(invoke_number_primitive_method(
             caller, this_val, method, &args,
         )),
-        NativeCallable::EvalIndirect => Some(perform_eval_from_caller(caller, argument, None)),
-        NativeCallable::EvalFunction(function) => {
-            Some(call_eval_function_from_caller(caller, function, args))
+        NativeCallable::EvalIndirect | NativeCallable::EvalFunction(_) => {
+            // sync 路径已退役（参见 docs/async-scheduler.md / async_reentry_audit）；
+            // 唯一进入点是 sync eval 解释器内嵌套 eval，本身已改为错误返回。
+            set_runtime_error(
+                caller.data(),
+                "indirect eval / eval function unsupported on sync NativeCallable path".to_string(),
+            );
+            Some(value::encode_undefined())
         }
         NativeCallable::PromiseResolvingFunction {
             promise,

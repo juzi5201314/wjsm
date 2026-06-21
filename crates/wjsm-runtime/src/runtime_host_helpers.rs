@@ -125,6 +125,18 @@ fn resolve_handle_val_with_env<C: AsContextMut<Data = RuntimeState>>(
     val: i64,
 ) -> Option<usize> {
     let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    // 函数值低 32 位是函数表索引；其属性对象 handle 从 __function_props_base 起算，需重定位。
+    // 与 runtime_values::handle_index_of 保持一致，避免 read/write 漂移。
+    let handle_idx = if value::is_function(val) {
+        let base = env
+            .function_props_base
+            .and_then(|g| g.get(&mut *ctx).i32())
+            .unwrap_or(0)
+            .max(0) as usize;
+        handle_idx.saturating_add(base)
+    } else {
+        handle_idx
+    };
     resolve_handle_idx_with_env(ctx, env, handle_idx)
 }
 
@@ -460,99 +472,6 @@ pub(crate) async fn invoke_resolved_callback_async_option<
     }
 }
 
-fn dispatch_callback_target_caller_sync(
-    caller: &mut Caller<'_, RuntimeState>,
-    env: &WasmEnv,
-    target: CallbackTarget,
-    this_val: i64,
-    args: &[i64],
-    shadow_sp: i32,
-    shadow_sp_global: wasmtime::Global,
-) -> anyhow::Result<i64> {
-    match target {
-        CallbackTarget::Native(resolved) => {
-            let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
-            call_native_callable_with_args_from_caller(caller, resolved, this_val, args.to_vec())
-                .ok_or_else(|| anyhow::anyhow!("native callable returned None"))
-        }
-        CallbackTarget::ApplyTrap {
-            trap,
-            handler,
-            proxy_target,
-        } => {
-            let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
-            let arr = alloc_array(caller, args.len() as u32);
-            for (i, &arg) in args.iter().enumerate() {
-                set_array_elem(caller, arr, i as i32, arg);
-            }
-            let wasm_args = [proxy_target, this_val, arr];
-            let inner = resolve_callback_target_with_env(caller, env, trap)?;
-            dispatch_callback_target_caller_sync(
-                caller,
-                env,
-                inner,
-                handler,
-                &wasm_args,
-                shadow_sp,
-                shadow_sp_global,
-            )
-        }
-        CallbackTarget::Bound {
-            target_func,
-            bound_this,
-            bound_args,
-        } => {
-            let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
-            let mut combined_args = bound_args;
-            combined_args.extend_from_slice(args);
-            call_wasm_callback(caller, target_func, bound_this, &combined_args)
-        }
-        CallbackTarget::Wasm { func_idx, env_obj } => {
-            let (func, previous_new_target) =
-                lookup_callback_wasm_func_with_env(caller, env, func_idx)?;
-            let mut results = [Val::I64(0)];
-            let call_result = func.call(
-                &mut *caller,
-                &[
-                    Val::I64(env_obj),
-                    Val::I64(this_val),
-                    Val::I32(shadow_sp),
-                    Val::I32(args.len() as i32),
-                ],
-                &mut results,
-            );
-            caller
-                .data()
-                .new_target
-                .store(previous_new_target, Ordering::Relaxed);
-            let _ = shadow_sp_global.set(&mut *caller, Val::I32(shadow_sp));
-            call_result?;
-            Ok(results[0].unwrap_i64())
-        }
-    }
-}
-
-// ── 辅助函数：调用 WASM 回调函数 ────────────────────────────────
-pub(crate) fn call_wasm_callback(
-    caller: &mut Caller<'_, RuntimeState>,
-    func_val: i64,
-    this_val: i64,
-    args: &[i64],
-) -> anyhow::Result<i64> {
-    let env = WasmEnv::from_caller(caller).ok_or_else(|| anyhow::anyhow!("WasmEnv"))?;
-    let (shadow_sp_global, shadow_sp) = prepare_callback_shadow_stack(caller, args)?;
-    let target = resolve_callback_target_with_env(caller, &env, func_val)?;
-    dispatch_callback_target_caller_sync(
-        caller,
-        &env,
-        target,
-        this_val,
-        args,
-        shadow_sp,
-        shadow_sp_global,
-    )
-}
-
 /// Phase 3 must-convert 之 host reentrant 路径（按 2026-05-31-async-scheduler-implementation-plan.md 审计条目 + 26-async-audit-refactor-design.md）：
 /// 为 `call_wasm_callback`（中央 host reentrant 调用点，proxy/define/array 等 13+ callers）添加 async 版本，与现有 sync `call_wasm_callback` 并存。
 ///
@@ -777,18 +696,30 @@ pub(crate) fn alloc_object_with_env<C: AsContextMut<Data = RuntimeState>>(
     value::encode_object_handle(obj_table_count)
 }
 
-pub(crate) fn find_memory_c_string_with_env<C: AsContext>(
-    ctx: &C,
+/// 查找 name 对应的 nul 结尾 c-string 在线性内存中的偏移（即 name_id）。
+///
+/// 性能不变量：**只扫描 [0, heap_ptr) 的已分配区间，且用 SIMD 子串搜索（memchr::memmem）。**
+/// 线性内存默认 256KB，但 bootstrap 期实际数据只占开头 ~80KB（heap_ptr 是 bump 分配上界）；
+/// 大量 builtin 属性名注定找不到（miss），若朴素 windows() 全扫整块 256KB 确认不存在，
+/// 会逐字节比掉 ~70% 的空尾部 —— 这曾是空程序执行开销的最大头（~70% 指令）。
+/// 新增按名查找属性的代码请复用本函数，切勿另写裸的全内存 windows()/逐字节扫描。
+pub(crate) fn find_memory_c_string_with_env<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
     env: &WasmEnv,
     name: &str,
 ) -> Option<u32> {
     let mut needle = Vec::with_capacity(name.len() + 1);
     needle.extend_from_slice(name.as_bytes());
     needle.push(0);
-    env.memory
-        .data(ctx)
-        .windows(needle.len())
-        .position(|window| window == needle.as_slice())
+    let heap_end = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as usize;
+    let data = env.memory.data(&*ctx);
+    let scan_end = heap_end.min(data.len());
+    // 必须匹配完整的 nul 结尾 c-string，而非任意子串。data section 中字符串
+    // 紧凑排布、每个串前一字节是上一个串的 nul 终止符，因此合法起点必满足
+    // `offset == 0 || data[offset-1] == 0`。否则形如 "Array" 会错误匹配进
+    // "isArray" 内部（offset+2），导致 name_id 与编译期 intern 偏移不一致。
+    memchr::memmem::find_iter(&data[..scan_end], &needle)
+        .find(|&offset| offset == 0 || data[offset - 1] == 0)
         .map(|offset| offset as u32)
 }
 
@@ -1288,86 +1219,17 @@ pub(crate) fn prototype_handle_to_value(
         .and_then(Extern::into_global)
         .and_then(|global| global.get(&mut *caller).i32())
         .unwrap_or(0) as u32;
-    if proto_handle < num_ir_functions {
-        value::encode_function_idx(proto_handle)
+    let function_props_base = caller
+        .get_export("__function_props_base")
+        .and_then(Extern::into_global)
+        .and_then(|global| global.get(&mut *caller).i32())
+        .unwrap_or(0) as u32;
+    if proto_handle >= function_props_base && proto_handle < function_props_base + num_ir_functions
+    {
+        value::encode_function_idx(proto_handle - function_props_base)
     } else {
         value::encode_object_handle(proto_handle)
     }
-}
-
-pub(crate) fn proxy_or_target_get_prototype_of_impl(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-) -> i64 {
-    if value::is_proxy(target) {
-        let handle = value::decode_proxy_handle(target) as usize;
-        let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
-            table.get(handle).cloned()
-        };
-        if let Some(entry) = entry {
-            if entry.revoked {
-                return make_type_error_exception(
-                    caller,
-                    "TypeError: Cannot perform 'getPrototypeOf' on a proxy that has been revoked",
-                );
-            }
-            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-                let trap = read_object_property_by_name(caller, handler_ptr, "getPrototypeOf")
-                    .unwrap_or_else(value::encode_undefined);
-                if !value::is_undefined(trap) && !value::is_null(trap) {
-                    let result =
-                        match call_wasm_callback(caller, trap, entry.handler, &[entry.target]) {
-                            Ok(result) => result,
-                            Err(error) => {
-                                set_runtime_error(
-                                    caller.data(),
-                                    format!("TypeError: getPrototypeOf trap failed: {error}"),
-                                );
-                                return value::encode_null();
-                            }
-                        };
-                    if !value::is_null(result) && !value::is_js_object(result) {
-                        set_runtime_error(
-                            caller.data(),
-                            "TypeError: Proxy getPrototypeOf must return an object or null"
-                                .to_string(),
-                        );
-                        return value::encode_null();
-                    }
-                    if !is_extensible_impl(caller, entry.target) {
-                        let target_proto =
-                            proxy_or_target_get_prototype_of_impl(caller, entry.target);
-                        if result != target_proto {
-                            set_runtime_error(
-                                caller.data(),
-                                "TypeError: Proxy getPrototypeOf invariant violated: target is not extensible and trap returned different prototype".to_string(),
-                            );
-                            return value::encode_null();
-                        }
-                    }
-                    return result;
-                }
-            }
-            return proxy_or_target_get_prototype_of_impl(caller, entry.target);
-        }
-    }
-
-    let Some(ptr) = resolve_handle(caller, target) else {
-        return value::encode_null();
-    };
-    let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-        return value::encode_null();
-    };
-    let data = memory.data(&*caller);
-    if ptr + 4 > data.len() {
-        return value::encode_null();
-    }
-    let proto_handle = u32::from_le_bytes([data[ptr], data[ptr + 1], data[ptr + 2], data[ptr + 3]]);
-    if proto_handle == 0 && value::is_object(target) {
-        return value::encode_null();
-    }
-    prototype_handle_to_value(caller, proto_handle)
 }
 
 /// JS 属性描述符结构体，对应规范中 Property Descriptor 内部类型
@@ -1821,7 +1683,9 @@ pub(crate) fn write_new_property_to_memory(
             };
             g.get(&mut *caller).i32().unwrap_or(0) as usize
         };
-        let handle_idx = (target as u64 & 0xFFFF_FFFF) as u32;
+        // 扩容后写回 obj_table 槽：必须与上面 resolve_handle 读取的 handle 一致。
+        // 函数 target 的属性对象 handle 经 __function_props_base 重定位，故走 handle_index_of。
+        let handle_idx = crate::runtime_values::handle_index_of(caller, target) as u32;
 
         let new_capacity = if capacity == 0 { 1 } else { capacity * 2 };
         let new_size = 16 + new_capacity * 32;
@@ -2235,124 +2099,6 @@ async fn define_property_on_target_async(
     }
 
     define_property_on_normal_object(caller, target, name_id, desc)
-}
-
-pub(crate) fn reflect_get_impl(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-    prop: i64,
-) -> i64 {
-    reflect_get_impl_with_receiver(caller, target, prop, target)
-}
-
-pub(crate) fn reflect_get_impl_with_receiver(
-    caller: &mut Caller<'_, RuntimeState>,
-    target: i64,
-    prop: i64,
-    receiver: i64,
-) -> i64 {
-    if value::is_proxy(target) {
-        let handle = value::decode_proxy_handle(target) as usize;
-        let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
-            table.get(handle).cloned()
-        };
-        if let Some(entry) = entry {
-            if entry.revoked {
-                return make_type_error_exception(
-                    caller,
-                    "TypeError: Cannot perform 'get' on a proxy that has been revoked",
-                );
-            }
-            if let Some(handler_ptr) = resolve_handle(caller, entry.handler) {
-                let trap = read_object_property_by_name(caller, handler_ptr, "get")
-                    .unwrap_or_else(value::encode_undefined);
-                if !value::is_undefined(trap) && !value::is_null(trap) {
-                    return call_wasm_callback(
-                        caller,
-                        trap,
-                        entry.handler,
-                        &[entry.target, prop, receiver],
-                    )
-                    .unwrap_or_else(|_| value::encode_undefined());
-                }
-            }
-            return reflect_get_impl_with_receiver(caller, entry.target, prop, receiver);
-        }
-        return value::encode_undefined();
-    }
-
-    let prop_name = match render_value(caller, prop) {
-        Ok(name) => name,
-        Err(_) => return value::encode_undefined(),
-    };
-    let obj_ptr = match resolve_handle(caller, target) {
-        Some(ptr) => ptr,
-        None => return value::encode_undefined(),
-    };
-    let name_id = find_memory_c_string(caller, &prop_name);
-
-    if prop_name == "prototype"
-        && (value::is_function(target) || value::is_closure(target) || value::is_bound(target))
-    {
-        if let Some(id) = name_id
-            && let Some((_, _, value)) = find_property_slot_by_name_id(caller, obj_ptr, id)
-            && !value::is_undefined(value)
-        {
-            return value;
-        }
-
-        // 函数首次读取 prototype 时按需创建默认 prototype，并写回函数对象。
-        let default_proto = {
-            let wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
-            alloc_host_object(caller, &wjsm_env, 4)
-        };
-        let _ = define_host_data_property_from_caller(caller, target, "prototype", default_proto);
-        if let Some(name_c) = find_memory_c_string(caller, "constructor")
-            && let Some(dp_ptr) = resolve_handle(caller, default_proto)
-        {
-            write_object_property_by_name_id(
-                caller,
-                dp_ptr,
-                default_proto,
-                name_c as u32,
-                target,
-                constants::FLAG_CONFIGURABLE | constants::FLAG_WRITABLE,
-            );
-        }
-        return default_proto;
-    }
-
-    if let Some(id) = name_id
-        && let Some((slot_offset, flags, value)) =
-            find_property_slot_by_name_id(caller, obj_ptr, id)
-    {
-        if (flags & constants::FLAG_IS_ACCESSOR) == 0 {
-            return value;
-        }
-        let getter = {
-            let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return value::encode_undefined();
-            };
-            let data = memory.data(&*caller);
-            if slot_offset + 24 > data.len() {
-                return value::encode_undefined();
-            }
-            i64::from_le_bytes(data[slot_offset + 16..slot_offset + 24].try_into().unwrap())
-        };
-        if value::is_undefined(getter) || value::is_null(getter) {
-            return value::encode_undefined();
-        }
-        return call_wasm_callback(caller, getter, receiver, &[])
-            .unwrap_or_else(|_| value::encode_undefined());
-    }
-
-    let proto = proxy_or_target_get_prototype_of_impl(caller, target);
-    if value::is_null(proto) {
-        value::encode_undefined()
-    } else {
-        reflect_get_impl_with_receiver(caller, proto, prop, receiver)
-    }
 }
 
 pub(crate) async fn reflect_get_impl_with_receiver_async(

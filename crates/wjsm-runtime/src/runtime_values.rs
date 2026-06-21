@@ -1,10 +1,28 @@
 use super::*;
 use crate::wasm_env::WasmEnv;
 
-/// 通过 handle 表解析 boxed value 的真实对象指针。
-/// 支持 TAG_OBJECT 和 TAG_FUNCTION（统一走 handle 表）。
-pub(crate) fn resolve_handle(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
+/// 计算 boxed value 在 obj_table 中的 handle 索引。
+/// 函数值低 32 位是函数表索引；其属性对象 handle 从 __function_props_base 起算
+//（startup snapshot 拆分后 primordial 原型占据更低 handle）。其余值的 handle 即低 32 位。
+/// 所有"函数值 → 属性对象 handle"的解析（读/写/扩容）都必须经此函数，避免 read/write 漂移。
+pub(crate) fn handle_index_of(caller: &mut Caller<'_, RuntimeState>, val: i64) -> usize {
     let handle_idx = (val as u64 & 0xFFFF_FFFF) as usize;
+    if value::is_function(val) {
+        let base = caller
+            .get_export("__function_props_base")
+            .and_then(Extern::into_global)
+            .and_then(|global| global.get(&mut *caller).i32())
+            .unwrap_or(0)
+            .max(0) as usize;
+        return handle_idx.saturating_add(base);
+    }
+    handle_idx
+}
+
+/// 通过 handle 表解析 boxed value 的真实对象指针。
+/// 函数值低 32 位是函数表索引；函数属性对象 handle 从 __function_props_base 起算。
+pub(crate) fn resolve_handle(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
+    let handle_idx = handle_index_of(caller, val);
     resolve_handle_idx(caller, handle_idx)
 }
 
@@ -206,6 +224,8 @@ pub(crate) fn grow_array(
         g.get(&mut *caller).i32().unwrap_or(0) as usize
     };
     let new_size = 16 + new_cap as usize * 8;
+    // handle_idx 必须在 data_mut 借用前计算（handle_index_of 需 &mut caller）
+    let handle_idx = handle_index_of(caller, this_val);
     let old_size = {
         let cap = read_array_capacity(caller, ptr)?;
         16 + cap as usize * 8
@@ -219,7 +239,6 @@ pub(crate) fn grow_array(
     }
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 12..heap_ptr + 16].copy_from_slice(&new_cap.to_le_bytes());
-    let handle_idx = (this_val as u64 & 0xFFFF_FFFF) as usize;
     let slot_addr = obj_table_ptr + handle_idx * 4;
     if slot_addr + 4 <= d.len() {
         d[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());
@@ -253,6 +272,8 @@ pub(crate) fn grow_object(
         g.get(&mut *caller).i32().unwrap_or(0) as usize
     };
     let new_size = 16 + new_cap as usize * 32;
+    // handle_idx 必须在 data_mut 借用前计算（handle_index_of 需 &mut caller）
+    let handle_idx = handle_index_of(caller, handle_val);
     let old_cap = {
         let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
             return None;
@@ -273,7 +294,6 @@ pub(crate) fn grow_object(
     }
     d.copy_within(ptr..ptr + old_size, heap_ptr);
     d[heap_ptr + 8..heap_ptr + 12].copy_from_slice(&new_cap.to_le_bytes());
-    let handle_idx = (handle_val as u64 & 0xFFFF_FFFF) as usize;
     let slot_addr = obj_table_ptr + handle_idx * 4;
     if slot_addr + 4 <= d.len() {
         d[slot_addr..slot_addr + 4].copy_from_slice(&(heap_ptr as u32).to_le_bytes());

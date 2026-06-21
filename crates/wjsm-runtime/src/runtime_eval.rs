@@ -42,76 +42,6 @@ fn sync_eval_new_target_from_scope_record(
     }
 }
 
-pub(crate) fn try_compiled_eval_from_caller(
-    caller: &mut Caller<'_, RuntimeState>,
-    code: &str,
-    module: &swc_ast::Module,
-    scope_env: Option<i64>,
-    var_writes_to_scope: bool,
-) -> Result<i64> {
-    let data_base = reserve_eval_data_segment(caller, code.len() as u32)?;
-    let wasm_bytes = cached_eval_wasm(
-        caller.data(),
-        code,
-        module,
-        scope_env.is_some(),
-        var_writes_to_scope,
-        data_base,
-    )?;
-    let eval_module = Module::new(caller.engine(), &wasm_bytes)?;
-    let mut imports = Vec::with_capacity(eval_module.imports().count());
-
-    for import in eval_module.imports() {
-        match import.ty() {
-            ExternType::Func(func_ty) => {
-                let func = compiled_eval_import(caller, import.name(), &func_ty);
-                imports.push(func.into());
-            }
-            ExternType::Memory(_) => {
-                let memory = caller
-                    .get_export(import.name())
-                    .and_then(Extern::into_memory)
-                    .ok_or_else(|| anyhow::anyhow!("eval parent missing memory import"))?;
-                imports.push(memory.into());
-            }
-            ExternType::Global(_) => {
-                let global = caller
-                    .get_export(import.name())
-                    .and_then(Extern::into_global)
-                    .ok_or_else(|| {
-                        anyhow::anyhow!("eval parent missing global import `{}`", import.name())
-                    })?;
-                imports.push(global.into());
-            }
-            _ => {
-                anyhow::bail!("unsupported eval import `{}`", import.name());
-            }
-        }
-    }
-
-    sync_eval_new_target_from_scope_record(caller, scope_env);
-    let instance = Instance::new(&mut *caller, &eval_module, &imports)?;
-    let entry = instance.get_typed_func::<i64, i64>(&mut *caller, "__eval_entry")?;
-    let result = entry.call(
-        &mut *caller,
-        scope_env.unwrap_or_else(value::encode_undefined),
-    )?;
-    Ok(result)
-}
-/// Phase 3 must-convert 之 compiled eval 路径（按 2026-05-31-async-scheduler-implementation-plan.md 审计条目 + 26-async-audit-refactor-design.md）：
-/// 为 `try_compiled_eval_from_caller`（eval 编译路径的 Instance::new + __eval_entry.call 点，perform_eval_from_caller 唯一 caller）添加 async 版本，与现有 sync `try_compiled_eval_from_caller` 并存。
-///
-/// 规则：
-/// - 严格与 sync 版本并存，供保留的 sync execute 路径继续使用
-/// - 所有 data segment reservation、import resolution（via compiled_eval_import）、scope handling 逻辑必须 100% 相同
-/// - 仅 Wasm 实例化（Instance::new）和调用（entry.call）完全等价；唯一差异是将 `Instance::new(...)` 替换为 `Instance::new_async(...).await` ， `entry.call(...)` 替换为 `entry.call_async(...).await`
-/// - 本阶段保持调用点不变（perform_eval_from_caller 仍调用 sync 版本；未来 async eval 路径激活时同步转换）
-/// - 精确保留原有行为，无任何语义或顺序差异
-///
-/// 特别提醒（plan Correction 3 + lib.rs 已有注释 + 审计计划）：
-///   在 Store::epoch_deadline_async_yield_and_update 之后，
-///   *所有* 经由该 Store 的 Wasm 实例化与调用（主 + 回调，包括此处 compiled eval 中的 Instance::new + call）都必须走 async API（new_async / call_async 等）。
-///   本文件中的 async 版本即为此准备；sync 版本仅留给未切换的 sync execute 路径。
 pub(crate) async fn try_compiled_eval_from_caller_async(
     caller: &mut Caller<'_, RuntimeState>,
     code: &str,
@@ -300,6 +230,28 @@ pub(crate) fn compiled_eval_import(
                 },
             );
         }
+        "new_target" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, _dummy: i64| {
+                    caller
+                        .data()
+                        .new_target
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                },
+            );
+        }
+        "new_target_set" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, new_target: i64| {
+                    caller
+                        .data()
+                        .new_target
+                        .swap(new_target, std::sync::atomic::Ordering::Relaxed)
+                },
+            );
+        }
         "create_unmapped_arguments_object" => {
             return Func::wrap(
                 &mut *caller,
@@ -317,6 +269,112 @@ pub(crate) fn compiled_eval_import(
                  func_ref: i64|
                  -> i64 {
                     create_mapped_arguments_object(&mut caller, args_array, param_count, func_ref)
+                },
+            );
+        }
+        "scope_record_create" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, capacity: i64| {
+                    scope_record_create(caller, capacity)
+                },
+            );
+        }
+        "scope_record_add_binding" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>,
+                 record: i64,
+                 name: i64,
+                 val: i64,
+                 is_tdz: i64,
+                 is_const: i64|
+                 -> i64 {
+                    scope_record_add_binding(caller, record, name, val, is_tdz, is_const)
+                },
+            );
+        }
+        "eval_get_binding" => {
+            return Func::wrap(
+                &mut *caller,
+                |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+                    eval_get_binding(&mut caller, record, name)
+                },
+            );
+        }
+        "eval_set_binding" => {
+            return Func::wrap(
+                &mut *caller,
+                |mut caller: Caller<'_, RuntimeState>, record: i64, name: i64, val: i64| -> i64 {
+                    eval_set_binding(&mut caller, record, name, val)
+                },
+            );
+        }
+        "eval_has_binding" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, record: i64, name: i64| -> i64 {
+                    eval_has_binding(caller, record, name)
+                },
+            );
+        }
+        "eval_super_base" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, record: i64| eval_super_base(caller, record),
+            );
+        }
+        "scope_record_set_meta" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, record: i64, key: i64, val: i64| -> i64 {
+                    scope_record_set_meta(caller, record, key, val)
+                },
+            );
+        }
+        "scope_record_destroy" => {
+            return Func::wrap(
+                &mut *caller,
+                |caller: Caller<'_, RuntimeState>, record: i64| {
+                    scope_record_destroy(caller, record)
+                },
+            );
+        }
+        "symbol_property_key" => {
+            return Func::wrap(
+                &mut *caller,
+                |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+                    if let Some(name_id) = symbol_value_to_name_id(key) {
+                        return name_id as i32;
+                    }
+                    if value::is_runtime_string_handle(key) || value::is_f64(key) {
+                        if let Ok(s) = render_value(&mut caller, key) {
+                            if let Some(id) = find_memory_c_string(&mut caller, &s)
+                                .or_else(|| alloc_heap_c_string(&mut caller, &s))
+                            {
+                                return id as i32;
+                            }
+                        }
+                        return 0;
+                    }
+                    key as i32
+                },
+            );
+        }
+        "string_to_array_index" => {
+            return Func::wrap(
+                &mut *caller,
+                |mut caller: Caller<'_, RuntimeState>, key: i64| -> i32 {
+                    if !value::is_string(key) {
+                        return -1;
+                    }
+                    let Ok(s) = render_value(&mut caller, key) else {
+                        return -1;
+                    };
+                    match s.parse::<u32>() {
+                        Ok(n) if (n as i64) < i32::MAX as i64 && n.to_string() == s => n as i32,
+                        _ => -1,
+                    }
                 },
             );
         }
@@ -351,164 +409,6 @@ pub(crate) fn compiled_eval_import(
             Ok(())
         },
     )
-}
-
-pub(crate) fn perform_eval_from_caller(
-    caller: &mut Caller<'_, RuntimeState>,
-    code_value: i64,
-    scope_env: Option<i64>,
-) -> i64 {
-    if !value::is_string(code_value) {
-        return code_value;
-    }
-
-    let code = match read_value_string_bytes(caller, code_value)
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-    {
-        Some(code) => code,
-        None => return value::encode_undefined(),
-    };
-    if code.trim().is_empty() {
-        return value::encode_undefined();
-    }
-
-    let eval_var_map = if scope_env.is_some() {
-        read_eval_var_map(caller)
-    } else {
-        Vec::new()
-    };
-    let _eval_var_slots = eval_var_map
-        .iter()
-        .filter(|entry| {
-            entry.offset % 8 == 0 && !entry.function_name.is_empty() && !entry.var_name.is_empty()
-        })
-        .count();
-
-    let module = match wjsm_parser::parse_script_as_module(&code) {
-        Ok(module) => module,
-        Err(error) => {
-            set_runtime_error(caller.data(), format!("SyntaxError: {error}"));
-            return value::encode_undefined();
-        }
-    };
-    let strict_eval_source = runtime_module_has_use_strict_directive(&module);
-    if strict_eval_source {
-        if let Some(env) = scope_env {
-            let handle = value::decode_scope_record_handle(env);
-            if let Some(rec) = caller.data_mut().scope_records.get_mut(&handle) {
-                rec.is_strict = true;
-            }
-        }
-    }
-    let caller_is_strict = scope_env
-        .map(|env| eval_scope_has_strict_marker(caller, env))
-        .unwrap_or(false);
-    let strict_eval = strict_eval_source || caller_is_strict;
-    let var_writes_to_scope = scope_env.map(|_| !strict_eval).unwrap_or(false);
-
-    // ── 非可定义函数检查（CanDeclareGlobalFunction）──
-    // eval 代码中声明 function NaN/Infinity/undefined → TypeError
-    for item in &module.body {
-        if let swc_ast::ModuleItem::Stmt(swc_ast::Stmt::Decl(swc_ast::Decl::Fn(fn_decl))) = item {
-            let name = fn_decl.ident.sym.as_ref();
-            if matches!(name, "NaN" | "Infinity" | "undefined") {
-                let msg = format!("Cannot define function '{}' in eval", fn_decl.ident.sym);
-                let msg_val = store_runtime_string(caller, msg.clone());
-                let error_obj = create_error_object(caller, "TypeError", msg_val);
-                {
-                    let mut errors = caller.data().error_table.lock().expect("error table mutex");
-                    let idx = errors.len() as u32;
-                    // create_error_object 已 push 了第一项（value=undefined），
-                    // 我们需要再 push 一项（value=错误对象），以便 ExceptionValue 能恢复
-                    errors.push(crate::ErrorEntry {
-                        name: "TypeError".to_string(),
-                        message: msg,
-                        value: error_obj,
-                    });
-                    return value::encode_handle(value::TAG_EXCEPTION, idx);
-                }
-            }
-        }
-    }
-
-    let output_len = caller
-        .data()
-        .output
-        .lock()
-        .expect("runtime output buffer mutex")
-        .len();
-    let previous_runtime_error = caller
-        .data()
-        .runtime_error
-        .lock()
-        .expect("runtime_error mutex")
-        .clone();
-    let previous_error_count = caller.data().error_table.lock().unwrap().len();
-
-    match try_compiled_eval_from_caller(caller, &code, &module, scope_env, var_writes_to_scope) {
-        Ok(value) => {
-            if value::is_exception(value) {
-                return value;
-            }
-            let current_runtime_error = caller
-                .data()
-                .runtime_error
-                .lock()
-                .expect("runtime_error mutex")
-                .clone();
-            if value::is_undefined(value) && current_runtime_error != previous_runtime_error {
-                return value::encode_undefined();
-            }
-            value
-        }
-        Err(_error) => {
-            let thrown_exception = {
-                let errors = caller.data().error_table.lock().unwrap();
-                if errors.len() > previous_error_count {
-                    Some((errors.len() - 1) as u32)
-                } else {
-                    None
-                }
-            };
-
-            if let Some(idx) = thrown_exception {
-                caller
-                    .data()
-                    .output
-                    .lock()
-                    .expect("runtime output buffer mutex")
-                    .truncate(output_len);
-                *caller
-                    .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime_error mutex") = previous_runtime_error;
-                return value::encode_handle(value::TAG_EXCEPTION, idx);
-            }
-            caller
-                .data()
-                .output
-                .lock()
-                .expect("runtime output buffer mutex")
-                .truncate(output_len);
-            *caller
-                .data()
-                .runtime_error
-                .lock()
-                .expect("runtime_error mutex") = previous_runtime_error;
-            let mut eval_locals = HashMap::new();
-            match eval_module_items(
-                caller,
-                &module.body,
-                scope_env,
-                var_writes_to_scope,
-                &mut eval_locals,
-            ) {
-                Ok(completion) => completion.unwrap_or_else(value::encode_undefined),
-                Err(msg) => eval_exception_from_message(caller, msg),
-            }
-        }
-    }
 }
 
 pub(crate) async fn perform_eval_from_caller_async(
@@ -1508,12 +1408,14 @@ pub(crate) fn eval_call(
         if let swc_ast::Expr::Ident(ident) = callee.as_ref()
             && ident.sym.as_ref() == "eval"
         {
-            let arg = if let Some(first) = call.args.first() {
+            let _arg = if let Some(first) = call.args.first() {
                 eval_expr(caller, &first.expr, scope_env, eval_locals)?
             } else {
                 value::encode_undefined()
             };
-            return Ok(perform_eval_from_caller(caller, arg, scope_env));
+            return Err(
+                "direct eval is unsupported on the sync interpreter path; reaches via async perform_eval_from_caller_async".to_string(),
+            );
         }
         if let swc_ast::Expr::Member(member) = callee.as_ref()
             && let swc_ast::Expr::Ident(obj) = member.obj.as_ref()
@@ -1710,20 +1612,6 @@ pub(crate) fn create_eval_function(state: &RuntimeState, function: EvalFunction)
     let handle = table.len() as u32;
     table.push(NativeCallable::EvalFunction(function));
     value::encode_native_callable_idx(handle)
-}
-
-pub(crate) fn call_eval_function_from_caller(
-    caller: &mut Caller<'_, RuntimeState>,
-    function: EvalFunction,
-    args: Vec<i64>,
-) -> i64 {
-    match eval_call_function(caller, &function, args) {
-        Ok(value) => value,
-        Err(message) => {
-            set_runtime_error(caller.data(), message);
-            value::encode_handle(value::TAG_EXCEPTION, 0)
-        }
-    }
 }
 
 pub(crate) async fn call_eval_function_from_caller_async(

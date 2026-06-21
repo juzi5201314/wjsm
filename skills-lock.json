@@ -1,107 +1,113 @@
 {
   "version": 1,
   "skills": {
+    "anti-entropy-governance": {
+      "source": "ganyuanran/aegis",
+      "sourceType": "github",
+      "skillPath": "skills/anti-entropy-governance/SKILL.md",
+      "computedHash": "975c7193aef2003c64242d71d15a71733c1a3046e0b95e4ad30d78144cfb71c7"
+    },
     "brainstorming": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/brainstorming/SKILL.md",
-      "computedHash": "fde1fbb48b4228a3c400cfa8372df39903d8228d285e195b932066f4674ddcc3"
+      "computedHash": "8c8035db8ec54b42f1cafb1e32c8a2e56de5cf9d80146f521e442b25ea71405a"
     },
     "communicating-concisely": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/communicating-concisely/SKILL.md",
       "computedHash": "2dfc865db2a6bfabfe049020b8c19139f55262a2b55a7c781372afc29f27b14e"
     },
     "dispatching-parallel-agents": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/dispatching-parallel-agents/SKILL.md",
       "computedHash": "e21044ae7496fc285f1df9ff3fb518a3a20bea6f5216c1f59f4987e12c769a0a"
     },
     "establishing-project-context": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/establishing-project-context/SKILL.md",
       "computedHash": "bddc832f43111beec324c8d7ab9bcdf548663469e8b28bb361ee29ded1ea3d58"
     },
     "executing-plans": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/executing-plans/SKILL.md",
-      "computedHash": "cd43a242515ae0a8067c8624af34c6f53cccb7608d2709d34ecc3cc724bbcee7"
+      "computedHash": "2882858a2f799cfbe5fb4dccc8709e620ad4c8ca5fa7bc426c426c8f479cb4c6"
     },
     "finishing-a-development-branch": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/finishing-a-development-branch/SKILL.md",
       "computedHash": "96356c6d710c02aa336e81b2f508dc91570cb4252e3db1dc80fe44283dc68932"
     },
     "first-principles-review": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/first-principles-review/SKILL.md",
-      "computedHash": "01c8808e4f6a01df93700f8cec680a4e5b49dd284e4313a992cbddc0f2804364"
+      "computedHash": "047f9b7acb0b71c88b6702399d81641aefcf250ad48ea52d0917b85045c257ee"
     },
     "goal-framing": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/goal-framing/SKILL.md",
-      "computedHash": "b6d85143350a4d4a6638e7e6228f360014982ce8d0617cadc959e833501ad13c"
+      "computedHash": "8ccbcd8f3097931de020067bc6697c342be0dc8ace9dbe66a2466b1540e57ee7"
     },
     "long-task-continuation": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/long-task-continuation/SKILL.md",
-      "computedHash": "bdacfb1307c658af1361614367fdc415e1a14978f27a653a400bc8b69e34249c"
+      "computedHash": "4a3f6a9370ea8616f6218ef31df723c38c0aa517bfa73832fc71b03068376bf4"
     },
     "receiving-code-review": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/receiving-code-review/SKILL.md",
       "computedHash": "fbc9180483ec3f2f09b009e712b58f4617fdcf9cd3b8ca2f4691ea97a7154a5a"
     },
     "recording-architecture-decisions": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/recording-architecture-decisions/SKILL.md",
-      "computedHash": "f8aa0e7b3aaa44bb16ed6f52ea97903d284357bd1792a3778a7425df8b174eb0"
+      "computedHash": "232f2f91b4f33c7fd67577cbd414a57c0ca45fcab650fe819350e2690e0f6028"
     },
     "requesting-code-review": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/requesting-code-review/SKILL.md",
-      "computedHash": "467412d57d7f71eb1a6681c0d0bde183778e9251e825fec58678180bb5f99d5a"
+      "computedHash": "419f9e7d87754d881404f96ee5da18fb49793e406f3cea7c6f8cd118fad22525"
     },
     "subagent-driven-development": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/subagent-driven-development/SKILL.md",
       "computedHash": "b3502851e4ea0448b483de73287632b4f1e5e209e971b14605c16f46f963b914"
     },
     "systematic-debugging": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/systematic-debugging/SKILL.md",
-      "computedHash": "93427b147429d48229b518c078900b24031ae9ed7bb320f0856cdbbc2a0e03fd"
+      "computedHash": "da88e89c116be28b9a33069dc8888d96e1361db3526446fa511bce2ab3982a67"
     },
     "test-driven-development": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/test-driven-development/SKILL.md",
-      "computedHash": "02bc8f100563247538cd396aa9ab63eb002c6573cea112658d2ec8764968aea5"
+      "computedHash": "f93824df8eb7514449ff60edb75c0115c76a2d0e870de6c371fdebb8bee8ae68"
     },
     "update-aegis": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/update-aegis/SKILL.md",
-      "computedHash": "85d9b4e03a8cd7a01deba4c8395d3310bc28298c018389f8371339a6ac3280d0"
+      "computedHash": "8ec918a4a6c9f420c43f66724be917bcee6a9fbc66ebe26af4722a6dd7e72d12"
     },
     "using-aegis": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/using-aegis/SKILL.md",
-      "computedHash": "47df459aa7533491e3b3b9e60e0c384a73a2a27f7b89cbc20d4567fd91148eb4"
+      "computedHash": "c33c374f809f41d55d1a65463d546ecd7b01d73987cb7cffa08b5f78eb9444f2"
     },
     "using-git-worktrees": {
       "source": "GanyuanRan/Aegis",
@@ -116,22 +122,22 @@
       "computedHash": "de10fd3ff46d797acc92b9df6b3ea456a5cd1d095b73c90bc921e83cce4c5bb9"
     },
     "verification-before-completion": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/verification-before-completion/SKILL.md",
-      "computedHash": "c60722563b55b47b0c1dc304addcd9686b1eebc7a693a5f6e521e87c6a377fe1"
+      "computedHash": "b7c95b7dd26cdc1a9d4cb70e4d1b72a5a1969588569e3715566887dcc3d5af5a"
     },
     "writing-plans": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/writing-plans/SKILL.md",
-      "computedHash": "ed16667975933d85d48820da282a665b961af03cd6557622bd64e95c739850b2"
+      "computedHash": "c1b55630f40f355d415786b117bcd4a9d26935f2aeb0266bdd25b19843ecc788"
     },
     "writing-skills": {
-      "source": "GanyuanRan/Aegis",
+      "source": "ganyuanran/aegis",
       "sourceType": "github",
       "skillPath": "skills/writing-skills/SKILL.md",
-      "computedHash": "156faab4fd673e7fd699195ff07fdc6bd61f5e00ff227ddcd99acaa414362fec"
+      "computedHash": "cc49970853ac74a4fd424d37604eca0288676e16bce3fcbae9e600818017d96e"
     }
   }
 }

@@ -163,7 +163,7 @@ pub(crate) fn define_proxy_reflect_async(
                         "TypeError: Reflect.apply target must be callable",
                     );
                 }
-                let args = match extract_array_like_elements(&mut caller, args_array) {
+                let args = match extract_array_like_elements(&mut caller, args_array).await {
                     Ok(arr) => arr,
                     Err(err) => {
                         set_runtime_error(caller.data(), err);
@@ -231,7 +231,7 @@ pub(crate) fn define_proxy_reflect_async(
                 if !is_constructor_in_runtime(&mut caller, target) || !is_constructor_in_runtime(&mut caller, n_target) {
                     return make_type_error_exception(&mut caller, "TypeError: Reflect.construct target and newTarget must be constructors");
                 }
-                let args = match extract_array_like_elements(&mut caller, args_array) {
+                let args = match extract_array_like_elements(&mut caller, args_array).await {
                     Ok(arr) => arr,
                     Err(err) => { set_runtime_error(caller.data(), err); return value::encode_undefined(); }
                 };
@@ -327,10 +327,10 @@ pub(crate) fn define_proxy_reflect_async(
                             return value::encode_bool(trap_res);
                         }
                     }
-                    return reflect_set_prototype_of_fn_impl(&mut caller, entry.target, proto);
+                    return reflect_set_prototype_of_fn_impl(&mut caller, entry.target, proto).await;
                 }
             }
-            reflect_set_prototype_of_fn_impl(&mut caller, target, proto)
+            reflect_set_prototype_of_fn_impl(&mut caller, target, proto).await
         })
     })?;
 
