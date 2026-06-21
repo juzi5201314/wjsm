@@ -131,11 +131,18 @@ pub fn execute(cli: Cli) -> Result<ExitCode> {
             ref root,
             watch,
             script,
+            ref eval,
         } => {
-            if watch {
-                cmd_run_watch(&cli, input, root.as_deref(), script)
+            if let Some(code) = eval {
+                cmd_run_eval(&cli, code, script)
+            } else if let Some(input) = input {
+                if watch {
+                    cmd_run_watch(&cli, input, root.as_deref(), script)
+                } else {
+                    cmd_run(&cli, input, root.as_deref(), script)
+                }
             } else {
-                cmd_run(&cli, input, root.as_deref(), script)
+                bail!("Either an input file or -e <code> is required");
             }
         }
 
@@ -265,6 +272,17 @@ fn cmd_run(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<E
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
+fn cmd_run_eval(cli: &Cli, code: &str, script: bool) -> Result<ExitCode> {
+    let wasm = compile_source(code, cli.target, script)?;
+
+    if let Err(e) = block_on_wasm_execute(&wasm) {
+        eprintln!("Runtime error: {:#}", e);
+        return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
+    }
+
+    Ok(ExitCode::from(EXIT_SUCCESS))
+}
+
 fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<ExitCode> {
     use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -348,26 +366,7 @@ fn cmd_check(cli: &Cli, input: &str) -> Result<ExitCode> {
 }
 
 fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
-    // Wrap the expression in a module that logs it
-    let source = format!("console.log({});", code);
-
-    let result = run_pipeline(
-        &source,
-        Stage::Execute,
-        cli.verbose,
-        cli.time,
-        cli.target,
-        false,
-    )?;
-
-    if let Some(wasm) = &result.wasm
-        && let Err(e) = block_on_wasm_execute(wasm)
-    {
-        eprintln!("Runtime error: {:#}", e);
-        return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
-    }
-
-    Ok(ExitCode::from(EXIT_SUCCESS))
+    cmd_run_eval(cli, code, false)
 }
 
 fn cmd_dump_ir(cli: &Cli, input: &str, format: DumpFormat) -> Result<ExitCode> {

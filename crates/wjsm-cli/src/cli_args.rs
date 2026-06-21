@@ -96,8 +96,8 @@ pub(crate) enum Commands {
 
     /// Run a JS/TS file directly
     Run {
-        /// The input file to run, or - for stdin
-        input: String,
+        /// The input file to run, or - for stdin. Optional when -e is used.
+        input: Option<String>,
 
         /// The root directory for module resolution
         #[arg(long)]
@@ -110,6 +110,10 @@ pub(crate) enum Commands {
         /// Parse as script instead of module (allows await as identifier)
         #[arg(long)]
         script: bool,
+
+        /// Evaluate inline code string instead of a file
+        #[arg(short, long = "eval")]
+        eval: Option<String>,
     },
 
     /// Parse and check a JS/TS file for errors (no output)
