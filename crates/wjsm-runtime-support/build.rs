@@ -15,7 +15,11 @@ fn main() -> anyhow::Result<()> {
 
     let wasm = wjsm_backend_wasm::emit_support_module()?;
 
-    let cfg = wasmtime::Config::new();
+    let mut cfg = wasmtime::Config::new();
+    // 运行时 engine 默认启用 epoch interruption（async yield 路径），
+    // precompile 必须匹配，否则 Module::deserialize 会拒绝：
+    // "Module was compiled without epoch interruption but it is enabled for the host"
+    cfg.epoch_interruption(true);
     let engine = wasmtime::Engine::new(&cfg)?;
     let cwasm_bytes = engine.precompile_module(&wasm)?;
 

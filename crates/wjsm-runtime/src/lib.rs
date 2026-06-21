@@ -955,23 +955,28 @@ pub(crate) fn embedded_startup_snapshot_view() -> Option<&'static [u8]> {
 
 // ── Embedded support cwasm ────────────────────────────────────────────
 //
-// 运行时持有 build-time 预编译的 support cwasm 字节；wjsm-cli 启动时调用
-// `install_embedded_support_cwasm` 注入。OnceLock 因为输入只能在运行时确定
-// （来源是 wjsm-runtime-snapshot crate 的 static），不可换 LazyLock。
-//
-// P2.2 阶段：仅持有 + 暴露访问器，未启用 instantiate 双 instance 路径；
-// P2.3-P2.6 切换 user wasm 为 import 形态后才会真正用到。
+// 运行时持有 build-time 预编译的 support cwasm 字节。首次访问时自动
+// 从 wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM 初始化；CLI 侧亦可
+// 通过 install_embedded_support_cwasm 显式注入（优先）。
 
 static EMBEDDED_SUPPORT_CWASM: OnceLock<&'static [u8]> = OnceLock::new();
 
 /// 安装编译时嵌入的 support cwasm；进程内只需调用一次（重复 set 静默忽略）。
+/// 未显式调用时，`embedded_support_cwasm()` 自动从 build-time artifact 初始化。
 pub fn install_embedded_support_cwasm(cwasm_bytes: &'static [u8]) {
     let _ = EMBEDDED_SUPPORT_CWASM.set(cwasm_bytes);
 }
 
-/// 返回已安装的 embedded support cwasm 字节；未安装为 `None`。
+/// 返回已安装的 embedded support cwasm 字节。
+/// 首次调用时若尚未通过 `install_embedded_support_cwasm` 显式注入，
+/// 自动从 wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM 初始化。
+/// 返回 None 仅当 embedded feature 未启用（build-time artifact 为空）。
 pub fn embedded_support_cwasm() -> Option<&'static [u8]> {
-    EMBEDDED_SUPPORT_CWASM.get().copied()
+    EMBEDDED_SUPPORT_CWASM.get_or_init(|| {
+        wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM.unwrap_or(&[])
+    });
+    let bytes = EMBEDDED_SUPPORT_CWASM.get().copied()?;
+    if bytes.is_empty() { None } else { Some(bytes) }
 }
 
 pub(crate) async fn execute_with_writer_shared_agent<W: Write>(
