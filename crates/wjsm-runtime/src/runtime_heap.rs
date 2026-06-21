@@ -9,7 +9,7 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
 ) -> i64 {
     let heap_ptr = env.heap_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let _obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
-    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
+    let _obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let size = 16u32.saturating_add(capacity.saturating_mul(32));
     let new_heap_ptr = heap_ptr.saturating_add(size);
 

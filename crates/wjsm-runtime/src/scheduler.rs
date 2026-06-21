@@ -30,6 +30,7 @@ use crate::{RuntimeState, TimerEntry, WasmEnv};
 /// - SettleValue: simple value settle (worker can Send data)
 /// - Materialize: closure runs only on scheduler owner (&mut Store + &WasmEnv)
 pub(crate) enum AsyncHostCompletion {
+    #[allow(dead_code)]
     SettleValue {
         promise: i64,
         settlement: PromiseSettlement,

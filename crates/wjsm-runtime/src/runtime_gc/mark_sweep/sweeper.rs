@@ -114,7 +114,6 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::runtime_gc::mark_sweep::MarkSweepCollector;
 
     /// P4-blocker #1：验证 resize-abandoned 区域经 sweeper 步骤 5 路径进入 free list。

@@ -78,10 +78,5 @@ pub mod mark_sweep;
 pub mod native_callable_refs;
 pub mod roots;
 
-pub use api::{
-    Allocator, GcAlgorithm, GcContext, GcStats, Handle, HeapObjectQuery, HeapRegionManager,
-    MarkProgress, Marker, ReadBarrier, RootProvider, Sweeper, Value, WriteBarrier,
-};
-pub use mark_bitmap::MarkBitmap;
+pub use api::{GcAlgorithm, GcContext};
 pub use mark_sweep::MarkSweepCollector;
-pub use mark_sweep::allocator::SegregatedFreeList;

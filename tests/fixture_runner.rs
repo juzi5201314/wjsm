@@ -1,8 +1,7 @@
 use anyhow::{Context, Result, bail};
 use std::env;
-use std::ffi::OsStr;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Once;
 
 const UPDATE_SNAPSHOTS_ENV: &str = "WJSM_UPDATE_FIXTURES";
@@ -33,7 +32,6 @@ pub struct FixtureRunner {
 struct FixtureCase {
     input_path: PathBuf,
     expected_path: PathBuf,
-    relative_path: PathBuf,
 }
 
 struct FixtureOutput {
@@ -55,26 +53,6 @@ impl FixtureRunner {
         })
     }
 
-    pub fn run_suite(&self, suite: &str) -> Result<()> {
-        let fixtures = self.discover(suite)?;
-        let mut failures = Vec::new();
-
-        for fixture in fixtures {
-            if let Err(error) = self.run_fixture(&fixture) {
-                failures.push(format!("{}\n{error:#}", fixture.relative_path.display()));
-            }
-        }
-
-        if failures.is_empty() {
-            return Ok(());
-        }
-
-        bail!(
-            "fixture suite '{suite}' failed with {} case(s):\n\n{}",
-            failures.len(),
-            failures.join("\n\n")
-        );
-    }
     /// Run a single fixture by its suite-relative path (without extension).
     /// Example: `run_single("happy/hello")` runs `fixtures/happy/hello.js`.
     pub fn run_single(&self, name: &str) -> Result<()> {
@@ -93,70 +71,13 @@ impl FixtureRunner {
         }
 
         let expected_path = input_path.with_extension("expected");
-        let relative_path = input_path
-            .strip_prefix(&self.fixtures_root)
-            .with_context(|| format!("Failed to build relative path for {}", input_path.display()))?
-            .to_path_buf();
 
         let fixture = FixtureCase {
             input_path,
             expected_path,
-            relative_path,
         };
 
         self.run_fixture(&fixture)
-    }
-
-    fn discover(&self, suite: &str) -> Result<Vec<FixtureCase>> {
-        let suite_dir = self.fixtures_root.join(suite);
-        if !suite_dir.is_dir() {
-            bail!(
-                "Fixture suite directory does not exist: {}",
-                suite_dir.display()
-            );
-        }
-
-        let mut fixtures = Vec::new();
-        self.collect_cases(&suite_dir, &mut fixtures)?;
-        fixtures.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
-
-        if fixtures.is_empty() {
-            bail!("Fixture suite '{suite}' does not contain any .js/.ts files");
-        }
-
-        Ok(fixtures)
-    }
-
-    fn collect_cases(&self, dir: &Path, fixtures: &mut Vec<FixtureCase>) -> Result<()> {
-        let mut entries = fs::read_dir(dir)
-            .with_context(|| format!("Failed to read fixture directory: {}", dir.display()))?
-            .collect::<std::result::Result<Vec<_>, _>>()?;
-        entries.sort_by_key(|entry| entry.path());
-
-        for entry in entries {
-            let path = entry.path();
-            if path.is_dir() {
-                self.collect_cases(&path, fixtures)?;
-                continue;
-            }
-
-            if !is_fixture_file(&path) {
-                continue;
-            }
-
-            let relative_path = path
-                .strip_prefix(&self.fixtures_root)
-                .with_context(|| format!("Failed to build relative path for {}", path.display()))?
-                .to_path_buf();
-
-            fixtures.push(FixtureCase {
-                expected_path: path.with_extension("expected"),
-                input_path: path,
-                relative_path,
-            });
-        }
-
-        Ok(())
     }
 
     fn run_fixture(&self, fixture: &FixtureCase) -> Result<()> {
@@ -386,9 +307,3 @@ fn normalize_object_handles(text: &str) -> String {
     result
 }
 
-fn is_fixture_file(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(OsStr::to_str),
-        Some("js") | Some("ts") | Some("tsx")
-    )
-}

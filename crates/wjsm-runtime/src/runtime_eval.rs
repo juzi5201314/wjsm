@@ -1,11 +1,5 @@
 use super::*;
 
-/// 0=is_strict, 1=has_arguments, 2=home_object, 3=new_target
-const META_IS_STRICT: u8 = 0;
-const META_HAS_ARGUMENTS: u8 = 1;
-const META_HOME_OBJECT: u8 = 2;
-const META_NEW_TARGET: u8 = 3;
-
 /// Host-allocated scope record implementing spec-like scope behavior.
 #[derive(Clone)]
 pub(crate) struct ScopeRecord {
@@ -1628,23 +1622,6 @@ pub(crate) async fn call_eval_function_from_caller_async(
     }
 }
 
-pub(crate) fn eval_call_function(
-    caller: &mut Caller<'_, RuntimeState>,
-    function: &EvalFunction,
-    args: Vec<i64>,
-) -> Result<i64, String> {
-    let mut locals = HashMap::new();
-    for (index, param) in function.params.iter().enumerate() {
-        let value = args
-            .get(index)
-            .copied()
-            .unwrap_or_else(value::encode_undefined);
-        eval_declare_local(&mut locals, param, EvalLocalKind::Var, value)?;
-    }
-    eval_function_block(caller, &function.body, function.scope_env, &mut locals)
-        .map(|value| value.unwrap_or_else(value::encode_undefined))
-}
-
 pub(crate) async fn eval_call_function_async(
     caller: &mut Caller<'_, RuntimeState>,
     function: &EvalFunction,
@@ -1663,20 +1640,6 @@ pub(crate) async fn eval_call_function_async(
         .map(|value| value.unwrap_or_else(value::encode_undefined))
 }
 
-pub(crate) fn eval_function_block(
-    caller: &mut Caller<'_, RuntimeState>,
-    stmts: &[swc_ast::Stmt],
-    scope_env: Option<i64>,
-    eval_locals: &mut HashMap<String, EvalLocalBinding>,
-) -> Result<Option<i64>, String> {
-    for stmt in stmts {
-        if let Some(value) = eval_function_stmt(caller, stmt, scope_env, eval_locals)? {
-            return Ok(Some(value));
-        }
-    }
-    Ok(None)
-}
-
 pub(crate) async fn eval_function_block_async(
     caller: &mut Caller<'_, RuntimeState>,
     stmts: &[swc_ast::Stmt],
@@ -1689,41 +1652,6 @@ pub(crate) async fn eval_function_block_async(
         }
     }
     Ok(None)
-}
-
-pub(crate) fn eval_function_stmt(
-    caller: &mut Caller<'_, RuntimeState>,
-    stmt: &swc_ast::Stmt,
-    scope_env: Option<i64>,
-    eval_locals: &mut HashMap<String, EvalLocalBinding>,
-) -> Result<Option<i64>, String> {
-    match stmt {
-        swc_ast::Stmt::Return(return_stmt) => {
-            let value = if let Some(arg) = &return_stmt.arg {
-                eval_expr(caller, arg, scope_env, eval_locals)?
-            } else {
-                value::encode_undefined()
-            };
-            Ok(Some(value))
-        }
-        swc_ast::Stmt::Block(block) => {
-            eval_function_block(caller, &block.stmts, scope_env, eval_locals)
-        }
-        swc_ast::Stmt::If(if_stmt) => {
-            let test = eval_expr(caller, &if_stmt.test, scope_env, eval_locals)?;
-            if !value::is_falsy(test) {
-                eval_function_stmt(caller, &if_stmt.cons, scope_env, eval_locals)
-            } else if let Some(alt) = &if_stmt.alt {
-                eval_function_stmt(caller, alt, scope_env, eval_locals)
-            } else {
-                Ok(None)
-            }
-        }
-        _ => {
-            let _ = eval_stmt(caller, stmt, scope_env, false, eval_locals)?;
-            Ok(None)
-        }
-    }
 }
 
 pub(crate) async fn eval_function_stmt_async(

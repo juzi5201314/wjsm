@@ -62,6 +62,7 @@ pub(crate) struct WaiterRecord {
     pub(crate) notified: Arc<AtomicBool>,
     pub(crate) condvar: Arc<Condvar>,
     pub(crate) signal: Arc<tokio::sync::Notify>,
+    #[allow(dead_code)]
     pub(crate) deadline: Option<Instant>,
     pub(crate) promise: Option<i64>,
 }

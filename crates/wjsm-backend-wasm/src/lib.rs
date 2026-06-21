@@ -140,6 +140,7 @@ struct Compiler {
     /// WASM global index for alloc_counter (GC heuristic).
     alloc_counter_global_idx: u32,
     /// WASM global index for __object_heap_start (runtime GC heap base).
+    #[allow(dead_code)]
     object_heap_start_global_idx: u32,
     /// WASM global index for __num_ir_functions (runtime GC root set).
     num_ir_functions_global_idx: u32,

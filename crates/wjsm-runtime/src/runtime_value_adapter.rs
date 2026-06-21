@@ -15,6 +15,7 @@ use wjsm_ir::value;
 ///
 /// # Safety
 /// 调用者必须确保 `val` 已通过 `value::is_f64(val)` 验证
+#[allow(dead_code)]
 #[inline(always)]
 pub fn as_f64(val: i64) -> f64 {
     value::decode_f64(val)
@@ -28,6 +29,7 @@ pub fn as_f64(val: i64) -> f64 {
 /// - null: 0.0
 /// - undefined: NaN
 /// - 其他类型: NaN（保守处理）
+#[allow(dead_code)]
 #[inline]
 pub fn to_number(val: i64) -> f64 {
     if value::is_f64(val) {
@@ -44,6 +46,7 @@ pub fn to_number(val: i64) -> f64 {
 /// 从 shadow stack 参数转换为 usize（用于索引、长度等）
 ///
 /// 处理 bool（true → 1, false → 0）和 f64（截断为整数）
+#[allow(dead_code)]
 #[inline]
 pub fn to_usize(val: i64) -> usize {
     if value::is_bool(val) {
@@ -56,6 +59,7 @@ pub fn to_usize(val: i64) -> usize {
 }
 
 /// 从 shadow stack 参数转换为 u32
+#[allow(dead_code)]
 #[inline(always)]
 pub fn to_u32(val: i64) -> u32 {
     to_usize(val) as u32
@@ -67,6 +71,7 @@ pub fn to_u32(val: i64) -> u32 {
 /// - bool: 直接返回
 /// - f64: 非零且非 NaN 为 true
 /// - 其他: false（保守处理）
+#[allow(dead_code)]
 #[inline]
 pub fn to_bool(val: i64) -> bool {
     if value::is_bool(val) {
@@ -80,6 +85,7 @@ pub fn to_bool(val: i64) -> bool {
 }
 
 /// 从 shadow stack 参数转换为 i32（用于有符号整数参数）
+#[allow(dead_code)]
 #[inline]
 pub fn to_i32(val: i64) -> i32 {
     if value::is_f64(val) {
@@ -92,6 +98,7 @@ pub fn to_i32(val: i64) -> i32 {
 }
 
 /// 从 shadow stack 参数转换为 u64（用于大整数参数）
+#[allow(dead_code)]
 #[inline]
 pub fn to_u64(val: i64) -> u64 {
     if value::is_f64(val) {

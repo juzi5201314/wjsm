@@ -143,6 +143,7 @@ impl StringBlock {
     fn has_backslash(&self) -> bool {
         self.backslash_bits != 0
     }
+    #[allow(dead_code)]
     fn has_control(&self) -> bool {
         self.control_bits != 0
     }

@@ -1,6 +1,4 @@
-use super::streams_readable::{
-    create_closed_readable_stream_from_bytes, mark_response_body_used_from_caller,
-};
+use super::streams_readable::create_closed_readable_stream_from_bytes;
 use crate::*;
 use wasmtime::Caller;
 

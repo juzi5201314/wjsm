@@ -8,48 +8,6 @@ pub(crate) fn define_atomics(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
 ) -> Result<()> {
-    /// 验证 |this_val| 是整数 TypedArray（含 BigInt typed arrays）。
-    /// element_kind: 0=i8, 1=u8, 2=u8clamped, 3=float, 4=BigInt64, 5=BigUint64。
-    /// 拒绝 element_kind 3（float）和 2（clamped 不是规范 Atomics 整数类型）。
-    fn validate_ta_for_atomics(
-        caller: &mut Caller<'_, RuntimeState>,
-        this_val: i64,
-    ) -> Option<(usize, u8, u8, usize)> {
-        if !value::is_object(this_val) {
-            return None;
-        }
-        let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize)?;
-        let h = read_object_property_by_name(caller, obj_ptr, "__typedarray_handle__")?;
-        let handle = value::decode_f64(h) as usize;
-        let table = caller.data().typedarray_table.lock().ok()?;
-        let entry = table.get(handle)?;
-        if entry.element_kind == 2 || entry.element_kind == 3 {
-            return None;
-        }
-        let sab_handle = entry.buffer_handle as usize;
-        let byte_offset = entry.byte_offset as usize;
-        Some((
-            byte_offset,
-            entry.element_size,
-            entry.element_kind,
-            sab_handle,
-        ))
-    }
-
-    /// 验证 TypedArray 对 wait/waitAsync/notify 可用（仅 Int32 或 BigInt64）。
-    fn validate_waitable_ta(
-        caller: &mut Caller<'_, RuntimeState>,
-        this_val: i64,
-    ) -> Option<(usize, u8, u8, usize)> {
-        let (byte_offset, elem_size, element_kind, sab_handle) =
-            validate_ta_for_atomics(caller, this_val)?;
-        let waitable =
-            (elem_size == 4 && element_kind == 0) || (elem_size == 8 && element_kind == 4);
-        if !waitable {
-            return None;
-        }
-        Some((byte_offset, elem_size, element_kind, sab_handle))
-    }
     /// 统一 Atomics 访问准备：ToIndex、length OOB RangeError、整数 TA 检查 TypeError（float/clamped 拒绝）。
     /// 返回 AccessCtx；对非 wait RMW 允许 AB 上的整数 TA（is_shared=false），wait 路径单独要求 shared。
     /// buffer_handle 指向 arraybuffer_table 或 sab_table（由 is_shared 决定）。
@@ -418,71 +376,6 @@ pub(crate) fn define_atomics(
                 let handle = table.len() as u32;
                 table.push(num_bigint::BigInt::from(v));
                 Some(value::encode_bigint_handle(handle))
-            }
-            _ => None,
-        }
-    }
-
-    /// 带锁的 SAB 写入。val 均为 f64 encode（Number 数组）或 bigint handle（BigInt 数组）。
-    fn sab_locked_write(
-        caller: &Caller<'_, RuntimeState>,
-        sab_handle: usize,
-        off: usize,
-        elem_size: u8,
-        element_kind: u8,
-        val: i64,
-    ) -> Option<()> {
-        let shared = caller.data().shared_state.as_ref()?.clone();
-        let table = shared.sab_table.lock().ok()?;
-        let entry = table.get(sab_handle)?;
-        let mut data = entry.data.write().ok()?;
-        if off + elem_size as usize > data.len() {
-            return None;
-        }
-        match (elem_size, element_kind) {
-            (1, 0) => {
-                data[off] = (value::decode_f64(val) as i8) as u8;
-                Some(())
-            }
-            (1, 1) => {
-                data[off] = value::decode_f64(val) as u8;
-                Some(())
-            }
-            (2, 0) => {
-                let bytes = (value::decode_f64(val) as i16).to_le_bytes();
-                data[off..off + 2].copy_from_slice(&bytes);
-                Some(())
-            }
-            (2, 1) => {
-                let bytes = (value::decode_f64(val) as u16).to_le_bytes();
-                data[off..off + 2].copy_from_slice(&bytes);
-                Some(())
-            }
-            (4, 0) => {
-                let bytes = (value::decode_f64(val) as i32).to_le_bytes();
-                data[off..off + 4].copy_from_slice(&bytes);
-                Some(())
-            }
-            (4, 1) => {
-                let bytes = (value::decode_f64(val) as u32).to_le_bytes();
-                data[off..off + 4].copy_from_slice(&bytes);
-                Some(())
-            }
-            (8, 4) => {
-                let handle = value::decode_bigint_handle(val) as usize;
-                let bigint_table = caller.data().bigint_table.lock().ok()?;
-                let bi = bigint_table.get(handle)?.clone();
-                let bytes = bigint_low_64_bytes(&bi);
-                data[off..off + 8].copy_from_slice(&bytes);
-                Some(())
-            }
-            (8, 5) => {
-                let handle = value::decode_bigint_handle(val) as usize;
-                let bigint_table = caller.data().bigint_table.lock().ok()?;
-                let bi = bigint_table.get(handle)?.clone();
-                let bytes = bigint_low_64_bytes(&bi);
-                data[off..off + 8].copy_from_slice(&bytes);
-                Some(())
             }
             _ => None,
         }
