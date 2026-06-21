@@ -2394,6 +2394,127 @@ mod tests {
 
         Ok(())
     }
+
+    /// Criterion bench：测量 WASM 编译缓存 + startup snapshot 两种序列化路径的反序列化耗时。
+    /// 运行：cargo test -p wjsm-runtime -- bench_deserialize --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn bench_deserialize() -> Result<()> {
+        use criterion::Criterion;
+        use super::*;
+        let wasm = compile_source("")?;
+        let rt = Runtime::new()?;
+        let mut c = Criterion::default().sample_size(50);
+
+        // ── 准备缓存目录 ────────────────────────────────────────────
+        let cache_dir = std::env::temp_dir().join("wjsm-bench-criterion");
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        std::fs::create_dir_all(&cache_dir)?;
+        unsafe { std::env::set_var("WJSM_CACHE_DIR", &cache_dir); }
+
+        let config = startup_engine_config(true);
+        let engine = Engine::new(&config)
+            .map_err(|e| anyhow::anyhow!("engine: {e:?}"))?;
+
+        // ── 1. WASM 缓存 warm 命中 ──────────────────────────────────
+        let _cold = compile_or_load_cached(&engine, &wasm)?;
+        let mut group = c.benchmark_group("wasm_cache");
+        group.bench_function("deserialize_file (warm)", |b| {
+            b.iter(|| {
+                criterion::black_box(
+                    compile_or_load_cached(&engine, criterion::black_box(&wasm))
+                        .expect("warm deserialize"),
+                );
+            })
+        });
+        // ── cold 编译 + precompile ──
+        group.bench_function("compile+precompile (cold)", |b| {
+            b.iter_custom(|iters| {
+                let mut total = Duration::ZERO;
+                for _ in 0..iters {
+                    let _ = std::fs::remove_dir_all(&cache_dir);
+                    std::fs::create_dir_all(&cache_dir).expect("create cache dir");
+                    let start = std::time::Instant::now();
+                    criterion::black_box(
+                        compile_or_load_cached(&engine, criterion::black_box(&wasm))
+                            .expect("cold compile"),
+                    );
+                    total += start.elapsed();
+                }
+                total
+            })
+        });
+        group.finish();
+
+        // ── 2. Support cwasm deserialize ────────────────────────────
+        let cwasm_bytes = embedded_support_cwasm()
+            .ok_or_else(|| anyhow::anyhow!("embedded support cwasm not available"))?;
+        let mut group = c.benchmark_group("support_cwasm");
+        group.bench_function("Module::deserialize", |b| {
+            b.iter(|| unsafe {
+                criterion::black_box(
+                    Module::deserialize(criterion::black_box(&engine), criterion::black_box(cwasm_bytes))
+                        .expect("support deserialize"),
+                );
+            })
+        });
+        group.finish();
+
+        // ── 3. Snapshot decode ──────────────────────────────────────
+        let snap_bytes = build_embedded_startup_snapshot_bytes()?;
+        let mut group = c.benchmark_group("snapshot");
+        group.bench_function("decode", |b| {
+            b.iter(|| {
+                criterion::black_box(
+                    startup_snapshot_format::decode_snapshot(criterion::black_box(&snap_bytes))
+                        .expect("snapshot decode"),
+                );
+            })
+        });
+
+        // ── 4. Snapshot restore ─────────────────────────────────────
+        let snap_view = startup_snapshot_format::decode_snapshot(&snap_bytes)?;
+        group.bench_function("restore", |b| {
+            b.iter_custom(|iters| {
+                let mut total = Duration::ZERO;
+                for _ in 0..iters {
+                    rt.block_on(async {
+                        let config = startup_engine_config(true);
+                        let engine = Engine::new(&config).expect("engine");
+                        let module = Module::new(&engine, &wasm).expect("module");
+                        let mut store = Store::new(&engine, RuntimeState::new_with_shared(None));
+                        store.set_epoch_deadline(1);
+                        store.epoch_deadline_async_yield_and_update(1);
+                        let _rx = prepare_async_host_completion(&mut store);
+                        let mut linker = Linker::new(&engine);
+                        register_startup_linker(&mut linker, &mut store).expect("register linker");
+                        let needs_support = module.imports().any(|imp| imp.module() == "wjsm_support");
+                        if needs_support {
+                            setup_shared_env_and_support(&mut linker, &mut store, &engine)
+                                .await
+                                .expect("setup support");
+                        }
+                        let instance = linker.instantiate_async(&mut store, &module)
+                            .await
+                            .expect("instantiate");
+                        let env = extract_wasm_env(&instance, &mut store);
+                        if let Ok(f) = instance.get_typed_func::<(), i64>(&mut store, "__wjsm_init_globals") {
+                            let _ = f.call_async(&mut store, ()).await;
+                        }
+                        let start = std::time::Instant::now();
+                        startup_snapshot::restore_startup_snapshot(&mut store, &env, snap_view.clone())
+                            .expect("restore");
+                        total += start.elapsed();
+                    });
+                }
+                total
+            })
+        });
+        group.finish();
+
+        let _ = std::fs::remove_dir_all(&cache_dir);
+        Ok(())
+    }
     // Phase 6 针对性单元测试（任务 6）：手动 enqueue 完成，验证 value settlement + 材料化能分配 runtime string/object
     // 严格引用 plan 458-550 + Correction 7：worker 只 Send 数据/闭包，materialize 在 Store owner 执行
     // 使用 channel 直接模拟（不依赖真实 wasm 主流程），证明 channel 形状 + 处理路径正确
