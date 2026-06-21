@@ -213,12 +213,11 @@ fn register_common_bridges(
             // 不是 data-section name_id。必须取内容（ToString）后 find-or-alloc 出稳定 name_id，
             // 否则动态属性名（o["p"+i]）或数字 key（o[5]）会错位。
             if value::is_runtime_string_handle(key) || value::is_f64(key) {
-                if let Ok(s) = render_value(&mut caller, key) {
-                    if let Some(id) = find_memory_c_string(&mut caller, &s)
+                if let Ok(s) = render_value(&mut caller, key)
+                    && let Some(id) = find_memory_c_string(&mut caller, &s)
                         .or_else(|| alloc_heap_c_string(&mut caller, &s))
-                    {
-                        return id as i32;
-                    }
+                {
+                    return id as i32;
                 }
                 return 0;
             }
@@ -435,10 +434,10 @@ fn register_common_bridges(
     let f = Func::wrap(
         &mut *store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, index: i32| -> i64 {
-            if index >= 0 {
-                if let Some(value) = typedarray_element_read(&mut caller, boxed, index as u32) {
-                    return value;
-                }
+            if index >= 0
+                && let Some(value) = typedarray_element_read(&mut caller, boxed, index as u32)
+            {
+                return value;
             }
             if !value::is_object(boxed) && !value::is_array(boxed) && !value::is_function(boxed) {
                 return value::encode_undefined();
@@ -539,22 +538,22 @@ fn register_complex_bridges(
                     return value::encode_handle(value::TAG_ITERATOR, handle);
                 };
                 // 数组 fast path
-                if value::is_array(iterable) {
-                    if let Some(arr_ptr) = resolve_handle(&mut caller, iterable) {
-                        let length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
-                        let sync_iter_handle = {
-                            let mut iters =
-                                caller.data().iterators.lock().expect("iterators mutex");
-                            let sync_handle = iters.len() as u32;
-                            iters.push(IteratorState::ArrayIter {
-                                ptr: arr_ptr,
-                                index: 0,
-                                length,
-                            });
-                            value::encode_handle(value::TAG_ITERATOR, sync_handle)
-                        };
-                        return create_async_from_sync_iterator(&mut caller, sync_iter_handle);
-                    }
+                if value::is_array(iterable)
+                    && let Some(arr_ptr) = resolve_handle(&mut caller, iterable)
+                {
+                    let length = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                    let sync_iter_handle = {
+                        let mut iters =
+                            caller.data().iterators.lock().expect("iterators mutex");
+                        let sync_handle = iters.len() as u32;
+                        iters.push(IteratorState::ArrayIter {
+                            ptr: arr_ptr,
+                            index: 0,
+                            length,
+                        });
+                        value::encode_handle(value::TAG_ITERATOR, sync_handle)
+                    };
+                    return create_async_from_sync_iterator(&mut caller, sync_iter_handle);
                 }
                 // 尝试 @@asyncIterator（使用 GetMethod 规范实现）
                 match crate::host_imports::get_method_by_name_id(
@@ -569,31 +568,31 @@ fn register_complex_bridges(
                         if value::is_exception(iterator) {
                             return iterator;
                         }
-                        if value::is_object(iterator) {
-                            if let Some(iter_ptr) = resolve_handle(&mut caller, iterator) {
-                                let next =
-                                    read_object_property_by_name(&mut caller, iter_ptr, "next")
-                                        .filter(|n| value::is_callable(*n));
-                                if let Some(next_fn) = next {
-                                    let return_method = read_object_property_by_name(
-                                        &mut caller,
-                                        iter_ptr,
-                                        "return",
-                                    )
-                                    .filter(|c| value::is_callable(*c));
-                                    let mut iters =
-                                        caller.data().iterators.lock().expect("iterators mutex");
-                                    let handle = iters.len() as u32;
-                                    iters.push(IteratorState::ObjectIter {
-                                        iterator,
-                                        next: next_fn,
-                                        return_method,
-                                        current_value: value::encode_undefined(),
-                                        has_current: false,
-                                        done: false,
-                                    });
-                                    return value::encode_handle(value::TAG_ITERATOR, handle);
-                                }
+                        if value::is_object(iterator)
+                            && let Some(iter_ptr) = resolve_handle(&mut caller, iterator)
+                        {
+                            let next =
+                                read_object_property_by_name(&mut caller, iter_ptr, "next")
+                                    .filter(|n| value::is_callable(*n));
+                            if let Some(next_fn) = next {
+                                let return_method = read_object_property_by_name(
+                                    &mut caller,
+                                    iter_ptr,
+                                    "return",
+                                )
+                                .filter(|c| value::is_callable(*c));
+                                let mut iters =
+                                    caller.data().iterators.lock().expect("iterators mutex");
+                                let handle = iters.len() as u32;
+                                iters.push(IteratorState::ObjectIter {
+                                    iterator,
+                                    next: next_fn,
+                                    return_method,
+                                    current_value: value::encode_undefined(),
+                                    has_current: false,
+                                    done: false,
+                                });
+                                return value::encode_handle(value::TAG_ITERATOR, handle);
                             }
                         }
                     }
@@ -614,40 +613,40 @@ fn register_complex_bridges(
                         if value::is_exception(sync_iter) {
                             return sync_iter;
                         }
-                        if value::is_object(sync_iter) {
-                            if let Some(sync_ptr) = resolve_handle(&mut caller, sync_iter) {
-                                let next_fn =
-                                    read_object_property_by_name(&mut caller, sync_ptr, "next")
-                                        .filter(|n| value::is_callable(*n));
-                                if let Some(next_fn) = next_fn {
-                                    let return_method = read_object_property_by_name(
-                                        &mut caller,
-                                        sync_ptr,
-                                        "return",
-                                    )
-                                    .filter(|c| value::is_callable(*c));
-                                    let sync_iter_handle = {
-                                        let mut iters = caller
-                                            .data()
-                                            .iterators
-                                            .lock()
-                                            .expect("iterators mutex");
-                                        let sync_handle = iters.len() as u32;
-                                        iters.push(IteratorState::ObjectIter {
-                                            iterator: sync_iter,
-                                            next: next_fn,
-                                            return_method,
-                                            current_value: value::encode_undefined(),
-                                            has_current: false,
-                                            done: false,
-                                        });
-                                        value::encode_handle(value::TAG_ITERATOR, sync_handle)
-                                    };
-                                    return create_async_from_sync_iterator(
-                                        &mut caller,
-                                        sync_iter_handle,
-                                    );
-                                }
+                        if value::is_object(sync_iter)
+                            && let Some(sync_ptr) = resolve_handle(&mut caller, sync_iter)
+                        {
+                            let next_fn =
+                                read_object_property_by_name(&mut caller, sync_ptr, "next")
+                                    .filter(|n| value::is_callable(*n));
+                            if let Some(next_fn) = next_fn {
+                                let return_method = read_object_property_by_name(
+                                    &mut caller,
+                                    sync_ptr,
+                                    "return",
+                                )
+                                .filter(|c| value::is_callable(*c));
+                                let sync_iter_handle = {
+                                    let mut iters = caller
+                                        .data()
+                                        .iterators
+                                        .lock()
+                                        .expect("iterators mutex");
+                                    let sync_handle = iters.len() as u32;
+                                    iters.push(IteratorState::ObjectIter {
+                                        iterator: sync_iter,
+                                        next: next_fn,
+                                        return_method,
+                                        current_value: value::encode_undefined(),
+                                        has_current: false,
+                                        done: false,
+                                    });
+                                    value::encode_handle(value::TAG_ITERATOR, sync_handle)
+                                };
+                                return create_async_from_sync_iterator(
+                                    &mut caller,
+                                    sync_iter_handle,
+                                );
                             }
                         }
                     }
@@ -690,43 +689,43 @@ fn register_complex_bridges(
                 let result = alloc_object(&mut caller, 0);
                 let mut groups: HashMap<String, Vec<i64>> = HashMap::new();
                 let mut index = 0u32;
-                if value::is_array(items) {
-                    if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
-                        let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
-                        for i in 0..len {
-                            let elem = read_array_elem(&mut caller, arr_ptr, i)
-                                .unwrap_or(value::encode_undefined());
-                            let idx_val = value::encode_f64(index as f64);
-                            let key = match call_wasm_callback_async(
-                                &mut caller,
-                                callbackfn,
-                                value::encode_undefined(),
-                                &[elem, idx_val],
-                            )
-                            .await
-                            {
-                                Ok(k) => k,
-                                Err(_) => return value::encode_undefined(),
-                            };
-                            let key_str = to_property_key(&mut caller, key);
-                            if caller.data().runtime_error.lock().expect("mutex").is_some() {
-                                return value::encode_undefined();
-                            }
-                            groups.entry(key_str).or_default().push(elem);
-                            index += 1;
+                if value::is_array(items)
+                    && let Some(arr_ptr) = resolve_array_ptr(&mut caller, items)
+                {
+                    let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                    for i in 0..len {
+                        let elem = read_array_elem(&mut caller, arr_ptr, i)
+                            .unwrap_or(value::encode_undefined());
+                        let idx_val = value::encode_f64(index as f64);
+                        let key = match call_wasm_callback_async(
+                            &mut caller,
+                            callbackfn,
+                            value::encode_undefined(),
+                            &[elem, idx_val],
+                        )
+                        .await
+                        {
+                            Ok(k) => k,
+                            Err(_) => return value::encode_undefined(),
+                        };
+                        let key_str = to_property_key(&mut caller, key);
+                        if caller.data().runtime_error.lock().expect("mutex").is_some() {
+                            return value::encode_undefined();
                         }
-                        for (key_str, elements) in &groups {
-                            let arr = alloc_array(&mut caller, elements.len() as u32);
-                            if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
-                                for (i, &elem) in elements.iter().enumerate() {
-                                    write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                                }
-                                write_array_length(&mut caller, arr_ptr, elements.len() as u32);
-                            }
-                            define_host_data_property(&mut caller, result, key_str, arr);
-                        }
-                        return result;
+                        groups.entry(key_str).or_default().push(elem);
+                        index += 1;
                     }
+                    for (key_str, elements) in &groups {
+                        let arr = alloc_array(&mut caller, elements.len() as u32);
+                        if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
+                            for (i, &elem) in elements.iter().enumerate() {
+                                write_array_elem(&mut caller, arr_ptr, i as u32, elem);
+                            }
+                            write_array_length(&mut caller, arr_ptr, elements.len() as u32);
+                        }
+                        define_host_data_property(&mut caller, result, key_str, arr);
+                    }
+                    return result;
                 }
                 result
             })
@@ -809,65 +808,65 @@ fn register_complex_bridges(
                 let mut groups: Vec<(i64, Vec<i64>)> = Vec::new();
                 let mut key_to_index: HashMap<i64, usize> = HashMap::new();
                 let mut index = 0u32;
-                if value::is_array(items) {
-                    if let Some(arr_ptr) = resolve_array_ptr(&mut caller, items) {
-                        let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
-                        for i in 0..len {
-                            let elem = read_array_elem(&mut caller, arr_ptr, i)
-                                .unwrap_or(value::encode_undefined());
-                            let idx_val = value::encode_f64(index as f64);
-                            let key = match call_wasm_callback_async(
-                                &mut caller,
-                                callbackfn,
-                                value::encode_undefined(),
-                                &[elem, idx_val],
-                            )
-                            .await
-                            {
-                                Ok(k) => k,
-                                Err(_) => return value::encode_undefined(),
-                            };
-                            let group_index = if let Some(&idx) = key_to_index.get(&key) {
-                                if same_value_zero(groups[idx].0, key) {
-                                    Some(idx)
-                                } else {
-                                    None
-                                }
+                if value::is_array(items)
+                    && let Some(arr_ptr) = resolve_array_ptr(&mut caller, items)
+                {
+                    let len = read_array_length(&mut caller, arr_ptr).unwrap_or(0);
+                    for i in 0..len {
+                        let elem = read_array_elem(&mut caller, arr_ptr, i)
+                            .unwrap_or(value::encode_undefined());
+                        let idx_val = value::encode_f64(index as f64);
+                        let key = match call_wasm_callback_async(
+                            &mut caller,
+                            callbackfn,
+                            value::encode_undefined(),
+                            &[elem, idx_val],
+                        )
+                        .await
+                        {
+                            Ok(k) => k,
+                            Err(_) => return value::encode_undefined(),
+                        };
+                        let group_index = if let Some(&idx) = key_to_index.get(&key) {
+                            if same_value_zero(groups[idx].0, key) {
+                                Some(idx)
                             } else {
                                 None
-                            };
-                            if let Some(idx) = group_index {
-                                groups[idx].1.push(elem);
-                            } else {
-                                let mut found = false;
-                                for (existing_key, elements) in &mut groups {
-                                    if same_value_zero(*existing_key, key) {
-                                        elements.push(elem);
-                                        key_to_index.insert(*existing_key, groups.len() - 1);
-                                        found = true;
-                                        break;
-                                    }
-                                }
-                                if !found {
-                                    key_to_index.insert(key, groups.len());
-                                    groups.push((key, vec![elem]));
+                            }
+                        } else {
+                            None
+                        };
+                        if let Some(idx) = group_index {
+                            groups[idx].1.push(elem);
+                        } else {
+                            let mut found = false;
+                            for (existing_key, elements) in &mut groups {
+                                if same_value_zero(*existing_key, key) {
+                                    elements.push(elem);
+                                    key_to_index.insert(*existing_key, groups.len() - 1);
+                                    found = true;
+                                    break;
                                 }
                             }
-                            index += 1;
-                        }
-                        for (group_key, elements) in &groups {
-                            let arr = alloc_array(&mut caller, elements.len() as u32);
-                            if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
-                                for (i, &elem) in elements.iter().enumerate() {
-                                    write_array_elem(&mut caller, arr_ptr, i as u32, elem);
-                                }
-                                write_array_length(&mut caller, arr_ptr, elements.len() as u32);
+                            if !found {
+                                key_to_index.insert(key, groups.len());
+                                groups.push((key, vec![elem]));
                             }
-                            let mut table =
-                                caller.data().map_table.lock().expect("map table mutex");
-                            table[map_handle].keys.push(*group_key);
-                            table[map_handle].values.push(arr);
                         }
+                        index += 1;
+                    }
+                    for (group_key, elements) in &groups {
+                        let arr = alloc_array(&mut caller, elements.len() as u32);
+                        if let Some(arr_ptr) = resolve_array_ptr(&mut caller, arr) {
+                            for (i, &elem) in elements.iter().enumerate() {
+                                write_array_elem(&mut caller, arr_ptr, i as u32, elem);
+                            }
+                            write_array_length(&mut caller, arr_ptr, elements.len() as u32);
+                        }
+                        let mut table =
+                            caller.data().map_table.lock().expect("map table mutex");
+                        table[map_handle].keys.push(*group_key);
+                        table[map_handle].values.push(arr);
                     }
                 }
                 map_result
@@ -1279,7 +1278,7 @@ async fn instantiate_execute_bundle(
         .imports()
         .any(|import| import.module() == "wjsm_support");
     if needs_support {
-        setup_shared_env_and_support(&mut linker, &mut store, &engine).await?;
+        setup_shared_env_and_support(&mut linker, &mut store, engine).await?;
     }
 
     let instance = linker
@@ -1982,6 +1981,7 @@ struct RuntimeState {
     /// FinalizationRegistry 侧表：存储 registry 对象、callback 和注册信息
     finalization_registry_table: Arc<Mutex<Vec<FinalizationRegistryEntry>>>,
     /// GC 后待调度的清理回调
+    #[allow(clippy::type_complexity)]
     pending_cleanup_callbacks: Arc<Mutex<Vec<(i64, Vec<i64>)>>>,
     /// Proxy 侧表：存储 Proxy 对象的 target、handler 和 revoked 状态
     proxy_table: Arc<Mutex<Vec<ProxyEntry>>>,

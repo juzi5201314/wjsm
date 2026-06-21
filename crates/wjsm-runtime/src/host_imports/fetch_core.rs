@@ -18,6 +18,7 @@ pub(crate) fn create_empty_headers(caller: &mut Caller<'_, RuntimeState>) -> u32
     h
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_response_object(
     caller: &mut Caller<'_, RuntimeState>,
     status: u16,
@@ -58,7 +59,7 @@ pub(crate) fn create_response_object(
     let _ = define_host_data_property_from_caller(caller, obj, "__response_handle__", handle_val);
 
     // Public properties (data descriptors)
-    let ok_val = value::encode_bool(status >= 200 && status < 300);
+    let ok_val = value::encode_bool((200..300).contains(&status));
     let _ = define_host_data_property_from_caller(caller, obj, "ok", ok_val);
 
     let status_val = value::encode_f64(status as f64);
@@ -123,6 +124,7 @@ pub(crate) fn create_headers_object_from_handle(
     obj
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_response_object_with_http_handle(
     caller: &mut Caller<'_, RuntimeState>,
     status: u16,
@@ -158,7 +160,7 @@ pub(crate) fn create_response_object_with_http_handle(
     let handle_val = value::encode_f64(handle as f64);
     let _ = define_host_data_property_from_caller(caller, obj, "__response_handle__", handle_val);
 
-    let ok_val = value::encode_bool(status >= 200 && status < 300);
+    let ok_val = value::encode_bool((200..300).contains(&status));
     let _ = define_host_data_property_from_caller(caller, obj, "ok", ok_val);
 
     let status_val = value::encode_f64(status as f64);
@@ -211,6 +213,7 @@ pub(crate) fn create_response_object_with_http_handle(
     obj
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn create_request_object(
     caller: &mut Caller<'_, RuntimeState>,
     method: String,
@@ -468,10 +471,7 @@ pub(crate) fn call_response_method_from_caller(
             .fetch_response_table
             .lock()
             .expect("fetch_response_table mutex");
-        let entry = match table.get_mut(handle as usize) {
-            Some(e) => e,
-            None => return None,
-        };
+        let entry = table.get_mut(handle as usize)?;
         let is_consuming = matches!(
             kind,
             ResponseMethodKind::Text | ResponseMethodKind::Json | ResponseMethodKind::ArrayBuffer
@@ -500,8 +500,9 @@ pub(crate) fn call_response_method_from_caller(
         return Some(p);
     }
     // HTTP Response — 异步 body 消费
-    if is_consuming && http_response_handle.is_some() {
-        let http_handle = http_response_handle.unwrap();
+    if is_consuming
+        && let Some(http_handle) = http_response_handle
+    {
         let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
         if super::streams_fetch_body::consume_fetch_body_to_bytes(
             caller,
@@ -804,14 +805,12 @@ pub(crate) fn construct_request(
         if let Some(init_keepalive) = bool_property(caller, init, "keepalive") {
             keepalive = init_keepalive;
         }
-        if let Some(init_signal) = object_property(caller, init, "signal") {
-            if !value::is_undefined(init_signal) {
-                if let Some(handle) =
-                    number_property(caller, init_signal, "__abort_signal_handle__")
-                {
-                    signal_handle = Some(handle as u32);
-                }
-            }
+        if let Some(init_signal) = object_property(caller, init, "signal")
+            && !value::is_undefined(init_signal)
+            && let Some(handle) =
+                number_property(caller, init_signal, "__abort_signal_handle__")
+        {
+            signal_handle = Some(handle as u32);
         }
     }
 
@@ -1274,7 +1273,7 @@ fn url_has_credentials(url: &str) -> bool {
     };
     let rest = &url[scheme_end + 3..];
     let authority_end = rest
-        .find(|ch| matches!(ch, '/' | '?' | '#'))
+        .find(['/', '?', '#'])
         .unwrap_or(rest.len());
     rest[..authority_end].contains('@')
 }
@@ -1363,14 +1362,8 @@ pub(crate) fn extract_string_property(
     obj: i64,
     name: &str,
 ) -> Option<String> {
-    let ptr = match resolve_handle(caller, obj) {
-        Some(p) => p,
-        None => return None,
-    };
-    let prop = match read_object_property_by_name(caller, ptr, name) {
-        Some(v) => v,
-        None => return None,
-    };
+    let ptr = resolve_handle(caller, obj)?;
+    let prop = read_object_property_by_name(caller, ptr, name)?;
     if value::is_string(prop) {
         Some(extract_string_from_value(caller, prop))
     } else {

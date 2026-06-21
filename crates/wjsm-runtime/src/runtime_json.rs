@@ -53,6 +53,7 @@ fn compute_nonspace_bits_avx2(input: &[u8], base: usize) -> u64 {
 }
 
 #[inline(always)]
+#[allow(clippy::needless_range_loop)]
 fn compute_nonspace_bits_scalar(input: &[u8], base: usize) -> u64 {
     let mut bits: u64 = 0;
     let end = (base + 64).min(input.len());
@@ -912,9 +913,7 @@ pub fn json_parse_to_wasm(caller: &mut Caller<'_, RuntimeState>, text: i64, _rev
                 );
             }
 
-            let wasm_value = build_wasm_value(caller, &json_value);
-
-            wasm_value
+            build_wasm_value(caller, &json_value)
         }
         Err(error) => make_exception(caller, "SyntaxError", error),
     }

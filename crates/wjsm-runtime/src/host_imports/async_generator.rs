@@ -14,17 +14,17 @@ pub(crate) fn define_async_generator(
             let generator = alloc_object(&mut caller, 4);
             // 设置 [[Prototype]] = AsyncGenerator.prototype
             let async_gen_proto = caller.data().async_gen_prototype;
-            if !value::is_undefined(async_gen_proto) {
-                if let Some(ptr) = resolve_handle(&mut caller, generator) {
-                    let memory = caller
-                        .get_export("memory")
-                        .and_then(|e| e.into_memory())
-                        .expect("memory");
-                    let data = memory.data_mut(&mut caller);
-                    data[ptr..ptr + 4].copy_from_slice(
-                        &value::decode_object_handle(async_gen_proto).to_le_bytes(),
-                    );
-                }
+            if !value::is_undefined(async_gen_proto)
+                && let Some(ptr) = resolve_handle(&mut caller, generator)
+            {
+                let memory = caller
+                    .get_export("memory")
+                    .and_then(|e| e.into_memory())
+                    .expect("memory");
+                let data = memory.data_mut(&mut caller);
+                data[ptr..ptr + 4].copy_from_slice(
+                    &value::decode_object_handle(async_gen_proto).to_le_bytes(),
+                );
             }
             if !value::is_object(generator) {
                 return value::encode_undefined();
@@ -100,17 +100,17 @@ pub(crate) fn define_async_generator(
                     .async_generator_table
                     .lock()
                     .expect("async generator table mutex");
-                if let Some(entry) = table.get(handle) {
-                    if matches!(entry.state, AsyncGeneratorState::Completed) {
-                        drop(table);
-                        let result = alloc_iterator_result_from_caller(
-                            &mut caller,
-                            value::encode_undefined(),
-                            true,
-                        );
-                        resolve_promise_from_caller(&mut caller, resume_promise, result);
-                        return resume_promise;
-                    }
+                if let Some(entry) = table.get(handle)
+                    && matches!(entry.state, AsyncGeneratorState::Completed)
+                {
+                    drop(table);
+                    let result = alloc_iterator_result_from_caller(
+                        &mut caller,
+                        value::encode_undefined(),
+                        true,
+                    );
+                    resolve_promise_from_caller(&mut caller, resume_promise, result);
+                    return resume_promise;
                 }
             }
             let request_to_fulfill = {

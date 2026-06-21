@@ -92,12 +92,12 @@ pub(crate) fn create_unmapped_arguments_object(
     };
 
     // 覆写 heap type 为 HEAP_TYPE_ARGUMENTS 用于 [object Arguments] 检测
-    if let Some(ptr) = resolve_handle(caller, obj) {
-        if let Some(Extern::Memory(mem)) = caller.get_export("memory") {
-            let data = mem.data_mut(&mut *caller);
-            if ptr + 4 < data.len() {
-                data[ptr + 4] = wjsm_ir::HEAP_TYPE_ARGUMENTS;
-            }
+    if let Some(ptr) = resolve_handle(caller, obj)
+        && let Some(Extern::Memory(mem)) = caller.get_export("memory")
+    {
+        let data = mem.data_mut(&mut *caller);
+        if ptr + 4 < data.len() {
+            data[ptr + 4] = wjsm_ir::HEAP_TYPE_ARGUMENTS;
         }
     }
 
@@ -163,12 +163,12 @@ pub(crate) fn create_mapped_arguments_object(
     };
 
     // 覆写 heap type 为 HEAP_TYPE_ARGUMENTS 用于 [object Arguments] 检测
-    if let Some(ptr) = resolve_handle(caller, obj) {
-        if let Some(Extern::Memory(mem)) = caller.get_export("memory") {
-            let data = mem.data_mut(&mut *caller);
-            if ptr + 4 < data.len() {
-                data[ptr + 4] = wjsm_ir::HEAP_TYPE_ARGUMENTS;
-            }
+    if let Some(ptr) = resolve_handle(caller, obj)
+        && let Some(Extern::Memory(mem)) = caller.get_export("memory")
+    {
+        let data = mem.data_mut(&mut *caller);
+        if ptr + 4 < data.len() {
+            data[ptr + 4] = wjsm_ir::HEAP_TYPE_ARGUMENTS;
         }
     }
 

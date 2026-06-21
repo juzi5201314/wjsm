@@ -75,21 +75,20 @@ pub(crate) fn render_value(caller: &mut Caller<'_, RuntimeState>, val: i64) -> R
         let obj_ptr = resolve_handle_idx(caller, ptr as usize);
         if let Some(op) = obj_ptr {
             // C2: 先检查 __error_brand__，仅真实 Error 对象才渲染为 "Name: message"。
-            if let Some(brand_val) = read_object_property_by_name(caller, op, "__error_brand__") {
-                if value::is_bool(brand_val) && value::decode_bool(brand_val) {
-                    if let Some(name_val) = read_object_property_by_name(caller, op, "name") {
-                        let name = render_value(caller, name_val).unwrap_or_default();
-                        let message = read_object_property_by_name(caller, op, "message")
-                            .map(|message_val| {
-                                render_value(caller, message_val).unwrap_or_default()
-                            })
-                            .unwrap_or_default();
-                        if message.is_empty() {
-                            return Ok(name);
-                        }
-                        return Ok(format!("{name}: {message}"));
-                    }
+            if let Some(brand_val) = read_object_property_by_name(caller, op, "__error_brand__")
+                && value::is_bool(brand_val) && value::decode_bool(brand_val)
+                && let Some(name_val) = read_object_property_by_name(caller, op, "name")
+            {
+                let name = render_value(caller, name_val).unwrap_or_default();
+                let message = read_object_property_by_name(caller, op, "message")
+                    .map(|message_val| {
+                        render_value(caller, message_val).unwrap_or_default()
+                    })
+                    .unwrap_or_default();
+                if message.is_empty() {
+                    return Ok(name);
                 }
+                return Ok(format!("{name}: {message}"));
             }
 
             let map_handle = read_object_property_by_name(caller, op, "__map_handle__");
@@ -399,7 +398,7 @@ fn build_space_string(caller: &mut Caller<'_, RuntimeState>, space: i64) -> Stri
         let n = value::decode_f64(space);
         let i = n.trunc() as i32;
         if i > 0 {
-            let w = i.min(10).max(0) as usize;
+            let w = i.clamp(0, 10) as usize;
             " ".repeat(w)
         } else {
             String::new()
@@ -515,6 +514,7 @@ pub(crate) async fn runtime_json_stringify_full_async(
 
 /// 序列化 JSON 属性（核心递归 impl，含 cycle、toJSON、replacer、pretty-print）
 /// async 版本：使用 call_wasm_callback_async 替代 sync call_wasm_callback
+#[allow(clippy::too_many_arguments)]
 async fn serialize_json_property_async(
     caller: &mut Caller<'_, RuntimeState>,
     key: &str,
