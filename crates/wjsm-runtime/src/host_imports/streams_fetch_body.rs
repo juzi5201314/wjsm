@@ -105,7 +105,7 @@ fn spawn_chunk_pull(
     reader_handle: u32,
     http_handle: u32,
     byob_view: Option<i64>,
-    mut response: reqwest::Response,
+    response: reqwest::Response,
 ) -> Option<i64> {
     let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
     {
@@ -239,7 +239,7 @@ pub(crate) fn consume_fetch_body_to_bytes(
         }
     };
 
-    let mut response = match decision {
+    let response = match decision {
         ConsumeDecision::Spawn(r) => r,
         ConsumeDecision::Reject(msg) => {
             let err = alloc_type_error_from_caller(caller, msg);
@@ -365,7 +365,7 @@ fn clear_reader_pending<C: wasmtime::AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     reader_handle: u32,
 ) {
-    let mut store = ctx.as_context_mut();
+    let store = ctx.as_context_mut();
     let mut reader_table = store.data().reader_table.lock().expect("reader mutex");
     if let Some(reader) = reader_table.get_mut(reader_handle as usize) {
         reader.pending_read_promise = None;

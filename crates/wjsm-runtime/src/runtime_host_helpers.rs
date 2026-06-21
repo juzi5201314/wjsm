@@ -2310,16 +2310,6 @@ pub(crate) fn define_host_data_property(
     define_host_data_property_by_name_id(caller, obj, encode_string_name_id(name_id), val)
 }
 
-pub(crate) fn define_host_data_property_symbol(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-    symbol_val: i64,
-    val: i64,
-) -> Option<()> {
-    let name_id = symbol_value_to_name_id(symbol_val)?;
-    define_host_data_property_by_name_id(caller, obj, name_id, val)
-}
-
 pub(crate) fn define_host_data_property_by_name_id(
     caller: &mut Caller<'_, RuntimeState>,
     obj: i64,
@@ -2400,24 +2390,6 @@ pub(crate) fn define_host_accessor_property(
         caller,
         obj,
         name,
-        getter,
-        setter,
-        constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE,
-    )
-}
-
-pub(crate) fn define_host_accessor_property_symbol(
-    caller: &mut Caller<'_, RuntimeState>,
-    obj: i64,
-    symbol_val: i64,
-    getter: i64,
-    setter: i64,
-) -> Option<()> {
-    let name_id = symbol_value_to_name_id(symbol_val)?;
-    define_host_accessor_property_by_name_id_with_flags(
-        caller,
-        obj,
-        name_id,
         getter,
         setter,
         constants::FLAG_CONFIGURABLE | constants::FLAG_ENUMERABLE,

@@ -171,6 +171,7 @@ impl GcAlgorithm for MarkSweepCollector {
 
 impl MarkSweepCollector {
     /// 带 root 迭代器的完整 collect（P4 集成时宿主调用此方法而非 collect）。
+    #[allow(dead_code)]
     pub fn collect_with_roots(
         &mut self,
         ctx: &mut GcContext,

@@ -26,6 +26,7 @@ pub(crate) struct SymbolEntry {
 /// Error 条目：存储 error 对象的 name 和 message
 
 pub(crate) struct ErrorEntry {
+    #[allow(dead_code)]
     pub(crate) name: String,
     pub(crate) message: String,
     pub(crate) value: i64,
@@ -57,14 +58,18 @@ pub(crate) struct WeakRefEntry {
 
 #[derive(Clone, Debug)]
 pub(crate) struct FinalizationRegistryEntry {
+    #[allow(dead_code)]
     pub(crate) object_handle: u32,
+    #[allow(dead_code)]
     pub(crate) callback: i64,
     pub(crate) registrations: Vec<FinalizationRegistration>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct FinalizationRegistration {
+    #[allow(dead_code)]
     pub(crate) target_handle: u32,
+    #[allow(dead_code)]
     pub(crate) held_value: i64,
     pub(crate) unregister_token: Option<i64>,
 }
@@ -94,6 +99,7 @@ pub(crate) struct TypedArrayEntry {
     pub(crate) is_shared: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub(crate) enum ResponseType {
     Basic,
     Cors,
@@ -108,6 +114,7 @@ pub(crate) enum RedirectMode {
     Manual,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[allow(dead_code)]
 pub(crate) enum HeadersGuard {
     #[default]
     None,
@@ -117,6 +124,7 @@ pub(crate) enum HeadersGuard {
     Immutable,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[allow(dead_code)]
 pub(crate) enum RequestMode {
     #[default]
     Cors,
@@ -125,6 +133,7 @@ pub(crate) enum RequestMode {
     Navigate,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[allow(dead_code)]
 pub(crate) enum RequestCredentials {
     #[default]
     SameOrigin,
@@ -132,6 +141,7 @@ pub(crate) enum RequestCredentials {
     Include,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[allow(dead_code)]
 pub(crate) enum RequestCache {
     #[default]
     Default,
@@ -145,6 +155,7 @@ pub(crate) enum RequestCache {
 pub(crate) struct HeadersEntry {
     /// Lowercased key → value (append allows multi-value; we store duplicates)
     pub(crate) pairs: Vec<(String, String)>,
+    #[allow(dead_code)]
     pub(crate) guard: HeadersGuard,
 }
 #[derive(Clone, Debug)]
@@ -166,17 +177,28 @@ pub(crate) struct FetchRequestEntry {
     pub(crate) headers_handle: u32,
     pub(crate) body: Option<Vec<u8>>,
     pub(crate) redirect: RedirectMode,
+    #[allow(dead_code)]
     pub(crate) body_used: bool,
+    #[allow(dead_code)]
     pub(crate) signal_handle: Option<u32>,
     // Extended observable fields per Fetch Standard
+    #[allow(dead_code)]
     pub(crate) mode: RequestMode,
+    #[allow(dead_code)]
     pub(crate) credentials: RequestCredentials,
+    #[allow(dead_code)]
     pub(crate) cache: RequestCache,
+    #[allow(dead_code)]
     pub(crate) referrer: String,
+    #[allow(dead_code)]
     pub(crate) referrer_policy: String,
+    #[allow(dead_code)]
     pub(crate) integrity: String,
+    #[allow(dead_code)]
     pub(crate) keepalive: bool,
+    #[allow(dead_code)]
     pub(crate) destination: String,
+    #[allow(dead_code)]
     pub(crate) duplex: String,
 }
 
@@ -270,6 +292,7 @@ pub(crate) struct TransformStreamEntry {
     pub(crate) readable_controller_handle: Option<u32>,
     /// transformer 对象（作为 transform/flush 回调的 this 值）
     pub(crate) transformer_this: Option<i64>,
+    #[allow(dead_code)]
     pub(crate) backpressure: bool,
     /// readable JS 对象缓存（getter 返回用）
     pub(crate) readable_obj: Option<i64>,
@@ -290,6 +313,7 @@ pub(crate) enum ControllerKind {
 /// Stream Controller 侧表条目
 #[derive(Clone)]
 pub(crate) struct StreamControllerEntry {
+    #[allow(dead_code)]
     pub(crate) kind: ControllerKind,
     pub(crate) stream_handle: u32,
     /// 排队的 chunk（NaN-boxed JS values）
@@ -299,14 +323,19 @@ pub(crate) struct StreamControllerEntry {
     pub(crate) started: bool,
     pub(crate) close_requested: bool,
 
+    #[allow(dead_code)]
     pub(crate) byob_reader_handle: Option<u32>,
 
+    #[allow(dead_code)]
     pub(crate) pull_requested: bool,
 
+    #[allow(dead_code)]
     pub(crate) abort_requested: bool,
 
+    #[allow(dead_code)]
     pub(crate) abort_reason: Option<i64>,
 
+    #[allow(dead_code)]
     pub(crate) flush_requested: bool,
 
     /// underlyingSource 对象（JS 值，GC root）
@@ -398,6 +427,7 @@ pub(crate) enum NativeCallable {
         handle: u32,
     },
     /// AsyncFromSyncIterator.prototype.throw()
+    #[allow(dead_code)]
     AsyncFromSyncThrow {
         handle: u32,
     },
@@ -469,14 +499,17 @@ pub(crate) enum NativeCallable {
     AgentMonotonicNow,
     // ── Fetch / Headers / Response / Request method dispatch ──
     HeadersMethod {
+        #[allow(dead_code)]
         handle: u32,
         kind: HeadersMethodKind,
     },
     ResponseMethod {
+        #[allow(dead_code)]
         handle: u32,
         kind: ResponseMethodKind,
     },
     RequestMethod {
+        #[allow(dead_code)]
         handle: u32,
         kind: RequestMethodKind,
     },
@@ -486,6 +519,7 @@ pub(crate) enum NativeCallable {
     RequestConstructor,
     // ── ReadableStream / Reader / AbortController ──
     AbortControllerConstructor,
+    #[allow(dead_code)]
     AbortControllerAbort {
         signal_handle: u32,
     },
@@ -672,6 +706,7 @@ pub(crate) enum ReadableStreamDefaultControllerMethodKind {
 }
 #[derive(Clone, Copy)]
 pub(crate) enum ReadableStreamByobRequestMethodKind {
+    #[allow(dead_code)]
     GetView,
     Respond,
 }
@@ -962,6 +997,7 @@ pub(crate) enum Microtask {
         resume_val: i64,
         is_rejected: bool,
     },
+    #[allow(dead_code)]
     CleanupFinalizationRegistry {
         callback: i64,
         held_value: i64,

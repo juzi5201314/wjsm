@@ -369,33 +369,6 @@ pub(crate) fn write_console_values(
     .expect("write_console_values should write to the configured output sink");
 }
 
-/// 简单的 URL 编码解码（支持 %XX 和 + → 空格）
-pub(crate) fn urlencoding_decode(input: &str) -> String {
-    let mut result = String::with_capacity(input.len());
-    let mut chars = input.chars();
-    while let Some(c) = chars.next() {
-        match c {
-            '+' => result.push(' '),
-            '%' => {
-                let hex: String = chars.by_ref().take(2).collect();
-                if hex.len() == 2 {
-                    if let Ok(byte) = u8::from_str_radix(&hex, 16) {
-                        result.push(byte as char);
-                    } else {
-                        result.push('%');
-                        result.push_str(&hex);
-                    }
-                } else {
-                    result.push('%');
-                    result.push_str(&hex);
-                }
-            }
-            other => result.push(other),
-        }
-    }
-    result
-}
-
 /// JSON 字符串字面量转义（ES §24.5.2 QuoteJSONString）
 /// - 补充平面字符直接输出 UTF-8（不使用 surrogate pair，review key fix 1）
 /// - 仅转义 " \ 和控制字符，其余 unicode 直接保留（合法 JSON）

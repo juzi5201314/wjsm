@@ -1649,11 +1649,6 @@ caller_env_wrapper! {
 
 caller_env_wrapper! {
     #[inline]
-    pub(crate) fn read_array_elem_raw(ptr: usize, index: u32) -> Option<i64> = read_array_elem_raw_with_env
-}
-
-caller_env_wrapper! {
-    #[inline]
     pub(crate) fn array_elem_present(ptr: usize, index: u32) -> bool = array_elem_present_with_env
 }
 

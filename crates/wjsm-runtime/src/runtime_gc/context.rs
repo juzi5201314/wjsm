@@ -5,7 +5,7 @@
 //! - `HeapMeta`：从 memory 现场读对象 header 的辅助（object_size/object_ptr/heap_type）。
 //! - `obj_table` global 读取辅助。
 use crate::runtime_gc::api::{GcContext, Handle};
-use wasmtime::{Caller, Global, Val};
+use wasmtime::{Caller, Val};
 
 /// 对象 header 常量（与 runtime_heap.rs / runtime_values.rs 一致）。
 pub const HEADER_SIZE: usize = 16;
@@ -53,6 +53,7 @@ pub fn object_size_from_memory(data: &[u8], ptr: usize) -> Option<usize> {
 }
 
 /// 读对象 heap_type byte。
+#[allow(dead_code)]
 pub fn heap_type_from_memory(data: &[u8], ptr: usize) -> Option<u8> {
     data.get(ptr + 4).copied()
 }
@@ -88,6 +89,7 @@ impl<'a, 'b> GcContext<'a, 'b> {
     }
 
     /// 设置 obj_table_count global。
+    #[allow(dead_code)]
     pub fn set_obj_table_count(&mut self, val: usize) {
         if let Some(Extern::Global(g)) = self.caller.get_export("__obj_table_count") {
             let _ = g.set(&mut *self.caller, Val::I32(val as i32));
@@ -116,6 +118,7 @@ impl<'a, 'b> GcContext<'a, 'b> {
     }
 
     /// 读 object_heap_start global（__object_heap_start，堆基址）。
+    #[allow(dead_code)]
     pub fn object_heap_start(&mut self) -> usize {
         read_i32_global(&mut *self.caller, "__object_heap_start")
             .unwrap_or(0)
@@ -145,6 +148,7 @@ impl<'a, 'b> GcContext<'a, 'b> {
 
     /// 读 obj_table[h] → ptr。返回 None 表示越界或空槽（ptr==0）。
     /// 注：需先读 obj_table_ptr（&mut self），再 with_memory 读 data（不可同时 &mut caller）。
+    #[allow(dead_code)]
     pub fn obj_table_slot(&mut self, data: &[u8], h: Handle) -> Option<usize> {
         let base = self.obj_table_ptr();
         let addr = base + h as usize * 4;
@@ -157,6 +161,7 @@ impl<'a, 'b> GcContext<'a, 'b> {
     }
 
     /// 写 obj_table[h] = ptr（INV-A：注册 handle）。
+    #[allow(dead_code)]
     pub fn write_obj_table_slot(&mut self, h: Handle, ptr: usize) {
         let base = self.obj_table_ptr();
         let bytes = (ptr as u32).to_le_bytes();

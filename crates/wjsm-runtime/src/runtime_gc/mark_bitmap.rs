@@ -29,6 +29,7 @@ impl MarkBitmap {
     }
 
     /// 标记 handle h。若 h 超出当前容量，自动扩容。
+    #[allow(dead_code)]
     pub fn mark(&mut self, h: u32) {
         let (w, b) = (h as usize / 64, h as usize % 64);
         if w >= self.bits.len() {

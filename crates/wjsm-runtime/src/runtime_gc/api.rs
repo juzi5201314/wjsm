@@ -12,6 +12,7 @@
 //! - INV-C 对象永不动（non-moving）：所有算法实现必须维护，否则 WASM locals 失效 → O2 复现。
 //! - IMPL-8 `GcContext` 不持 `&mut [u8]`；每阶段 `with_memory`/`with_memory_mut` 重借；
 //!   grow 经 `ctx.grow()`（#9，grow 借用安全）。
+#![allow(dead_code)]
 use crate::RuntimeState;
 use wasmtime::{Caller, Memory};
 

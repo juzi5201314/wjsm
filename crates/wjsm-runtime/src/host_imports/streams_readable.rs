@@ -120,7 +120,7 @@ pub(crate) fn truncate_byob_view_with_env<C: wasmtime::AsContextMut<Data = Runti
 ) -> Option<i64> {
     let entry = typedarray_entry_from_value_with_env(ctx, env, view)?;
     let new_ta = {
-        let mut store = ctx.as_context_mut();
+        let store = ctx.as_context_mut();
         let mut ta_table = store
             .data()
             .typedarray_table
@@ -1639,71 +1639,6 @@ pub(crate) fn call_default_reader_method_from_caller(
             Some(promise)
         }
     }
-}
-
-/// HTTP 路径的 reader.read() — 转发到 fetch_core.rs 的现有逻辑
-fn call_reader_http_read(
-    caller: &mut Caller<'_, RuntimeState>,
-    _reader_handle: u32,
-    http_handle: u32,
-) -> Option<i64> {
-    let response = {
-        let mut http_table = caller
-            .data()
-            .http_response_table
-            .lock()
-            .expect("http_response mutex");
-        http_table
-            .get_mut(http_handle as usize)
-            .and_then(|e| e.response.take())
-    };
-    if response.is_none() {
-        let p = alloc_promise_from_caller(caller, PromiseEntry::pending());
-        let result = build_reader_result(caller, true, None);
-        settle_promise(caller.data(), p, PromiseSettlement::Fulfill(result));
-        return Some(p);
-    }
-    let mut response = response.unwrap();
-    let promise = alloc_promise_from_caller(caller, PromiseEntry::pending());
-    let tx = caller.data().host_completion_tx.clone()?;
-    let promise_clone = promise;
-    tokio::spawn(async move {
-        match response.chunk().await {
-            Ok(Some(chunk)) => {
-                let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
-                    promise: promise_clone,
-                    materialize: Box::new(move |store, env| {
-                        let arr = create_uint8array_with_env(store, env, &chunk);
-                        let result = build_reader_result_with_env(store, env, false, Some(arr));
-                        PromiseSettlement::Fulfill(result)
-                    }),
-                });
-            }
-            Ok(None) => {
-                let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
-                    promise: promise_clone,
-                    materialize: Box::new(move |store, env| {
-                        let result = build_reader_result_with_env(store, env, true, None);
-                        PromiseSettlement::Fulfill(result)
-                    }),
-                });
-            }
-            Err(e) => {
-                let _ = tx.send(crate::scheduler::AsyncHostCompletion::Materialize {
-                    promise: promise_clone,
-                    materialize: Box::new(move |store, env| {
-                        let err = crate::runtime_heap::alloc_type_error_with_env(
-                            store,
-                            env,
-                            e.to_string(),
-                        );
-                        PromiseSettlement::Reject(err)
-                    }),
-                });
-            }
-        }
-    });
-    Some(promise)
 }
 
 /// 辅助：使用 env 构建 reader result（用于 Materialize 回调）

@@ -1,7 +1,7 @@
 // TransformStream 核心实现（WHATWG Streams Phase 5）
 // 包含：构造函数、readable/writable getter、transform 回调调度、flush 回调调度
 
-use super::fetch_core::{alloc_type_error_from_caller, push_native_callable};
+use super::fetch_core::push_native_callable;
 use super::streams_readable::create_controller_object;
 use super::streams_writable::{
     create_writable_abort_signal_object, create_writable_stream_js_object,

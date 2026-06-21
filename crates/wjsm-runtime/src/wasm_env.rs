@@ -17,6 +17,7 @@ pub(crate) struct WasmEnv {
     pub bootstrap_done: Option<Global>,
     pub function_props_done: Option<Global>,
     pub function_props_base: Option<Global>,
+    #[allow(dead_code)]
     pub num_ir_functions: Option<Global>,
     pub arr_proto_table_base: Option<Global>,
     pub arr_proto_table_len: Option<Global>,

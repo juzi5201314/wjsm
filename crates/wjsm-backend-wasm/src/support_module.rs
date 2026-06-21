@@ -32,6 +32,7 @@ const TY_STRING_EQ: u32 = 26; // (i32, i32) -> i32
 const TY_TO_INT32: u32 = 10; // (i64) -> i32
 const TY_GET_PROTO: u32 = 3; // (i64) -> i64
 const TY_BOOTSTRAP: u32 = 4; // () -> i64
+#[allow(dead_code)]
 const TY_CALL_INDIRECT: u32 = 12; // (i64, i64, i32, i32) -> i64 — call_indirect / native_call
 
 // ── Host function imports ─────────────────────────────────────────────
@@ -75,38 +76,58 @@ const NUM_HOST_IMPORTS: u32 = 14;
 
 // ── Defined function indices ──────────────────────────────────────────
 // 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。
+#[allow(dead_code)]
 const FN_OBJ_NEW: u32 = NUM_HOST_IMPORTS + 0;
 const FN_OBJ_GET: u32 = NUM_HOST_IMPORTS + 1;
 const FN_OBJ_SET: u32 = NUM_HOST_IMPORTS + 2;
+#[allow(dead_code)]
 const FN_OBJ_DELETE: u32 = NUM_HOST_IMPORTS + 3;
+#[allow(dead_code)]
 const FN_ARR_NEW: u32 = NUM_HOST_IMPORTS + 4;
+#[allow(dead_code)]
 const FN_ELEM_GET: u32 = NUM_HOST_IMPORTS + 5;
+#[allow(dead_code)]
 const FN_ELEM_SET: u32 = NUM_HOST_IMPORTS + 6;
 const FN_STRING_EQ: u32 = NUM_HOST_IMPORTS + 7;
+#[allow(dead_code)]
 const FN_TO_INT32: u32 = NUM_HOST_IMPORTS + 8;
+#[allow(dead_code)]
 const FN_GET_PROTO: u32 = NUM_HOST_IMPORTS + 9;
+#[allow(dead_code)]
 const FN_BOOTSTRAP: u32 = NUM_HOST_IMPORTS + 10;
+#[allow(dead_code)]
 const FN_INIT_FUNC_PROPS: u32 = NUM_HOST_IMPORTS + 11;
 
 // ── Global indices (与 user wasm 0..18 对齐) ──────────────────────────
+#[allow(dead_code)]
 const G_FUNC_PROPS: u32 = 0;
 const G_HEAP_PTR: u32 = 1;
 const G_OBJ_TABLE_PTR: u32 = 2;
 const G_OBJ_TABLE_COUNT: u32 = 3;
 const G_SHADOW_SP: u32 = 4;
+#[allow(dead_code)]
 const G_ALLOC_COUNTER: u32 = 5;
+#[allow(dead_code)]
 const G_OBJECT_HEAP_START: u32 = 6;
 const G_NUM_IR_FUNCTIONS: u32 = 7;
+#[allow(dead_code)]
 const G_SHADOW_STACK_END: u32 = 8;
 const G_ARRAY_PROTO_HANDLE: u32 = 9;
 const G_OBJECT_PROTO_HANDLE: u32 = 10;
+#[allow(dead_code)]
 const G_EVAL_VAR_MAP_PTR: u32 = 11;
+#[allow(dead_code)]
 const G_EVAL_VAR_MAP_COUNT: u32 = 12;
+#[allow(dead_code)]
 const G_BOOTSTRAP_DONE: u32 = 13;
+#[allow(dead_code)]
 const G_FUNCTION_PROPS_DONE: u32 = 14;
 const G_FUNCTION_PROPS_BASE: u32 = 15;
+#[allow(dead_code)]
 const G_ARR_PROTO_TABLE_BASE: u32 = 16;
+#[allow(dead_code)]
 const G_ARR_PROTO_TABLE_LEN: u32 = 17;
+#[allow(dead_code)]
 const G_ARR_PROTO_TABLE_HASH: u32 = 18;
 
 // Imported env globals — 与 abi::ENV_GLOBALS 同步：19 项。

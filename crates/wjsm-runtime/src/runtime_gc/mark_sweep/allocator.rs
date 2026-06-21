@@ -113,11 +113,13 @@ impl SegregatedFreeList {
     }
 
     /// debug：总空闲块数。
+    #[allow(dead_code)]
     pub fn total_free_regions(&self) -> usize {
         self.lists.iter().map(|q| q.len()).sum::<usize>() + self.big_list.len()
     }
 
     /// debug：总空闲字节数。
+    #[allow(dead_code)]
     pub fn total_free_bytes(&self) -> usize {
         self.lists
             .iter()
