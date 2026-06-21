@@ -1,0 +1,559 @@
+use super::*;
+
+impl Lowerer {
+    pub(crate) fn emit_pat_inits_impl(
+        &mut self,
+        pats: &[&swc_ast::Pat],
+        param_ir_names: &[String],
+        mut block: BasicBlockId,
+    ) -> Result<BasicBlockId, LoweringError> {
+        // param_ir_names[0] = $env, [1] = $this, [2..] = user params (excluding rest)
+        let mut ir_name_idx: usize = 2;
+        let mut regular_param_count: u32 = 0;
+        for pat in pats.iter() {
+            if let swc_ast::Pat::Rest(_) = pat {
+                break;
+            }
+            regular_param_count += 1;
+        }
+
+        for pat in pats.iter() {
+            if let swc_ast::Pat::Rest(rest) = pat {
+                let skip = regular_param_count;
+                let rest_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::CollectRestArgs {
+                        dest: rest_val,
+                        skip,
+                    },
+                );
+                block = self.lower_destructure_pattern(&rest.arg, rest_val, block, VarKind::Let)?;
+                block = self.resolve_store_block(block);
+                break;
+            }
+
+            let ir_name = &param_ir_names[ir_name_idx];
+            match pat {
+                swc_ast::Pat::Ident(_) => {
+                    // 简单参数无默认值：值已在 local 中，无需操作
+                }
+                swc_ast::Pat::Assign(assign) => {
+                    let raw = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::LoadVar {
+                            dest: raw,
+                            name: ir_name.clone(),
+                        },
+                    );
+                    let resolved = self.lower_default_value_check(raw, &assign.right, block)?;
+                    let store_block = self.resolve_store_block(block);
+                    self.current_function.append_instruction(
+                        store_block,
+                        Instruction::StoreVar {
+                            name: ir_name.clone(),
+                            value: resolved,
+                        },
+                    );
+
+                    if !matches!(&*assign.left, swc_ast::Pat::Ident(_)) {
+                        let loaded = self.alloc_value();
+                        self.current_function.append_instruction(
+                            store_block,
+                            Instruction::LoadVar {
+                                dest: loaded,
+                                name: ir_name.clone(),
+                            },
+                        );
+                        block = self.lower_destructure_pattern(
+                            &assign.left,
+                            loaded,
+                            store_block,
+                            VarKind::Let,
+                        )?;
+                    }
+                }
+                _ => {
+                    // 解构参数
+                    let raw = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::LoadVar {
+                            dest: raw,
+                            name: ir_name.clone(),
+                        },
+                    );
+                    block = self.lower_destructure_pattern(pat, raw, block, VarKind::Let)?;
+                }
+            }
+            ir_name_idx += 1;
+            let store_block = self.resolve_store_block(block);
+            block = self.resolve_open_after_expr(block, store_block);
+        }
+        Ok(block)
+    }
+
+    /// 将解构 pattern 降低为一系列 IR 指令（GetProp/GetElem + StoreVar）。
+    /// 递归处理嵌套的 Array/Object/Assign pattern。
+    pub(crate) fn lower_destructure_pattern(
+        &mut self,
+        pat: &swc_ast::Pat,
+        src_val: ValueId,
+        block: BasicBlockId,
+        kind: VarKind,
+    ) -> Result<BasicBlockId, LoweringError> {
+        match pat {
+            swc_ast::Pat::Ident(binding) => {
+                let name = binding.id.sym.to_string();
+                let scope_id = self
+                    .scopes
+                    .resolve_scope_id(&name)
+                    .map_err(|msg| self.error(pat.span(), msg))?;
+                let ir_name = format!("${scope_id}.{name}");
+
+                if matches!(kind, VarKind::Var) {
+                    self.scopes
+                        .mark_initialised(&name)
+                        .map_err(|msg| self.error(pat.span(), msg))?;
+                } else {
+                    self.scopes
+                        .mark_initialised(&name)
+                        .map_err(|msg| self.error(pat.span(), msg))?;
+                }
+
+                let store_block = self.resolve_store_block(block);
+                self.current_function.append_instruction(
+                    store_block,
+                    Instruction::StoreVar {
+                        name: ir_name,
+                        value: src_val,
+                    },
+                );
+                let store_block =
+                    self.append_eval_var_leak_if_needed(&name, kind, src_val, store_block)?;
+                Ok(store_block)
+            }
+            swc_ast::Pat::Object(object_pat) => {
+                self.lower_object_destructure(object_pat, src_val, block, kind)
+            }
+            swc_ast::Pat::Array(array_pat) => {
+                self.lower_array_destructure(array_pat, src_val, block, kind)
+            }
+            swc_ast::Pat::Assign(assign_pat) => {
+                let resolved = self.lower_default_value_check(src_val, &assign_pat.right, block)?;
+                let store_block = self.resolve_store_block(block);
+                self.lower_destructure_pattern(&assign_pat.left, resolved, store_block, kind)
+            }
+            swc_ast::Pat::Rest(_) => Err(self.error(
+                pat.span(),
+                "rest element must be used as a function parameter or inside array destructuring",
+            )),
+            swc_ast::Pat::Expr(_) | swc_ast::Pat::Invalid(_) => Ok(block),
+        }
+    }
+
+    /// 对象解构: `{ prop1, prop2: alias, ...rest }`
+    pub(crate) fn lower_object_destructure(
+        &mut self,
+        object_pat: &swc_ast::ObjectPat,
+        src_val: ValueId,
+        mut block: BasicBlockId,
+        kind: VarKind,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let mut excluded_keys = Vec::new();
+        for prop in &object_pat.props {
+            match prop {
+                swc_ast::ObjectPatProp::KeyValue(kv) => {
+                    // { key: pattern } 或 { [computed]: pattern }
+                    let key_val = self.lower_prop_name(&kv.key, block)?;
+                    block = self.resolve_store_block(block);
+                    excluded_keys.push(key_val);
+                    let dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::GetProp {
+                            dest,
+                            object: src_val,
+                            key: key_val,
+                        },
+                    );
+                    block = self.lower_destructure_pattern(&kv.value, dest, block, kind)?;
+                }
+                swc_ast::ObjectPatProp::Assign(assign) => {
+                    // { key } 等价于 { key: key }
+                    let name = assign.key.id.sym.to_string();
+                    let key_const = self.module.add_constant(Constant::String(name.clone()));
+                    let key_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::Const {
+                            dest: key_val,
+                            constant: key_const,
+                        },
+                    );
+                    excluded_keys.push(key_val);
+                    let dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::GetProp {
+                            dest,
+                            object: src_val,
+                            key: key_val,
+                        },
+                    );
+
+                    // 如果有默认值 { key = default }
+                    if let Some(default_expr) = &assign.value {
+                        let resolved = self.lower_default_value_check(dest, default_expr, block)?;
+                        block = self.resolve_store_block(block);
+                        let scope_id = self
+                            .scopes
+                            .resolve_scope_id(&name)
+                            .map_err(|msg| self.error(assign.key.span(), msg))?;
+                        let ir_name = format!("${scope_id}.{name}");
+                        self.scopes
+                            .mark_initialised(&name)
+                            .map_err(|msg| self.error(assign.key.span(), msg))?;
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::StoreVar {
+                                name: ir_name,
+                                value: resolved,
+                            },
+                        );
+                        block =
+                            self.append_eval_var_leak_if_needed(&name, kind, resolved, block)?;
+                    } else {
+                        block = self.lower_destructure_pattern(
+                            &swc_ast::Pat::Ident(assign.key.clone()),
+                            dest,
+                            block,
+                            kind,
+                        )?;
+                    }
+                }
+                swc_ast::ObjectPatProp::Rest(rest) => {
+                    // { ...rest } — 使用 ObjectRest builtin，并排除前面已绑定的属性键。
+                    let rest_dest = self.alloc_value();
+                    let excluded_val = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::NewArray {
+                            dest: excluded_val,
+                            capacity: excluded_keys.len() as u32,
+                        },
+                    );
+                    for key_val in &excluded_keys {
+                        self.current_function.append_instruction(
+                            block,
+                            Instruction::CallBuiltin {
+                                dest: None,
+                                builtin: Builtin::ArrayPush,
+                                args: vec![excluded_val, *key_val],
+                            },
+                        );
+                    }
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::CallBuiltin {
+                            dest: Some(rest_dest),
+                            builtin: Builtin::ObjectRest,
+                            args: vec![src_val, excluded_val],
+                        },
+                    );
+                    block = self.lower_destructure_pattern(&rest.arg, rest_dest, block, kind)?;
+                }
+            }
+            // 确保 block 指向当前可用的基本块（可能已被 lower_default_value_check 等终结）
+            block = self.resolve_store_block(block);
+        }
+        Ok(block)
+    }
+
+    /// 数组解构: `[a, b, ...rest]`
+    pub(crate) fn lower_array_destructure(
+        &mut self,
+        array_pat: &swc_ast::ArrayPat,
+        src_val: ValueId,
+        mut block: BasicBlockId,
+        kind: VarKind,
+    ) -> Result<BasicBlockId, LoweringError> {
+        let mut idx: i32 = 0;
+        let mut has_rest = false;
+
+        for elem in array_pat.elems.iter() {
+            let elem = match elem {
+                Some(e) => e,
+                None => {
+                    idx += 1;
+                    continue;
+                }
+            };
+
+            if let swc_ast::Pat::Rest(rest) = elem {
+                has_rest = true;
+                // [...rest] — 使用 iterator 协议收集剩余元素
+                let rest_val =
+                    self.lower_array_rest_destructure(src_val, &rest.arg, idx, block, kind)?;
+                // rest.arg 可能是 Pat::Ident 或嵌套 pattern
+                // 但我们已经在 lower_array_rest_destructure 中处理了
+                let _ = rest_val;
+            } else {
+                // 普通元素 get_elem
+                let index_const = self.module.add_constant(Constant::Number(idx as f64));
+                let index_val = self.alloc_value();
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Const {
+                        dest: index_val,
+                        constant: index_const,
+                    },
+                );
+
+                // 如果有默认值，用 IteratorFrom/Next/Value/Done 或简单 undefined 检查
+                if let swc_ast::Pat::Assign(assign) = elem {
+                    // [a = default] — 需要检查数组对应位置是否为 undefined（不是 nullish）
+                    let dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::GetElem {
+                            dest,
+                            object: src_val,
+                            index: index_val,
+                        },
+                    );
+                    let resolved = self.lower_default_value_check(dest, &assign.right, block)?;
+                    block = self.resolve_store_block(block);
+                    block = self.lower_destructure_pattern(&assign.left, resolved, block, kind)?;
+                } else {
+                    let dest = self.alloc_value();
+                    self.current_function.append_instruction(
+                        block,
+                        Instruction::GetElem {
+                            dest,
+                            object: src_val,
+                            index: index_val,
+                        },
+                    );
+                    block = self.lower_destructure_pattern(elem, dest, block, kind)?;
+                }
+                idx += 1;
+            }
+            block = self.resolve_store_block(block);
+        }
+
+        if has_rest {
+            // 如果使用了 rest，需要关闭 iterator
+            // 在此上下文中不需要显式 IteratorClose — 已由 lower_array_rest_destructure 处理
+        }
+
+        Ok(block)
+    }
+
+    /// 数组解构中的 rest 元素: `[...rest]`
+    /// 使用 iterator 协议从当前位置收集剩余元素到一个新数组
+    pub(crate) fn lower_array_rest_destructure(
+        &mut self,
+        src_val: ValueId,
+        rest_pat: &swc_ast::Pat,
+        skip_count: i32,
+        block: BasicBlockId,
+        kind: VarKind,
+    ) -> Result<ValueId, LoweringError> {
+        // 1. 创建迭代器
+        let iter_handle = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::CallBuiltin {
+                dest: Some(iter_handle),
+                builtin: Builtin::IteratorFrom,
+                args: vec![src_val],
+            },
+        );
+
+        // 2. 跳过已处理的元素
+        for _ in 0..skip_count {
+            self.current_function.append_instruction(
+                block,
+                Instruction::CallBuiltin {
+                    dest: None,
+                    builtin: Builtin::IteratorNext,
+                    args: vec![iter_handle],
+                },
+            );
+        }
+
+        // 3. 创建结果数组
+        let result_arr = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::NewArray {
+                dest: result_arr,
+                capacity: 0,
+            },
+        );
+
+        // 4. 循环收集剩余元素
+        let header = self.current_function.new_block();
+        let loop_body = self.current_function.new_block();
+        let exit = self.current_function.new_block();
+
+        self.current_function
+            .set_terminator(block, Terminator::Jump { target: header });
+
+        // header: 检查 iterator done
+        let done_val = self.alloc_value();
+        self.current_function.append_instruction(
+            header,
+            Instruction::CallBuiltin {
+                dest: Some(done_val),
+                builtin: Builtin::IteratorDone,
+                args: vec![iter_handle],
+            },
+        );
+        let not_done = self.alloc_value();
+        self.current_function.append_instruction(
+            header,
+            Instruction::Unary {
+                dest: not_done,
+                op: UnaryOp::Not,
+                value: done_val,
+            },
+        );
+        self.current_function.set_terminator(
+            header,
+            Terminator::Branch {
+                condition: not_done,
+                true_block: loop_body,
+                false_block: exit,
+            },
+        );
+
+        // body: 获取值，push 到数组
+        let elem_val = self.alloc_value();
+        self.current_function.append_instruction(
+            loop_body,
+            Instruction::CallBuiltin {
+                dest: Some(elem_val),
+                builtin: Builtin::IteratorValue,
+                args: vec![iter_handle],
+            },
+        );
+        self.current_function.append_instruction(
+            loop_body,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::ArrayPush,
+                args: vec![result_arr, elem_val],
+            },
+        );
+        // 调用 iterator next 前进
+        self.current_function.append_instruction(
+            loop_body,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::IteratorNext,
+                args: vec![iter_handle],
+            },
+        );
+        self.current_function
+            .set_terminator(loop_body, Terminator::Jump { target: header });
+
+        // exit: 关闭迭代器
+        self.current_function.append_instruction(
+            exit,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::IteratorClose,
+                args: vec![iter_handle],
+            },
+        );
+
+        // 5. 将结果数组赋值给 rest pattern
+        let _ = self.lower_destructure_pattern(rest_pat, result_arr, exit, kind)?;
+
+        Ok(result_arr)
+    }
+
+    /// 默认值检查: `x = default`
+    /// 语义：如果 value === undefined，使用 default 表达式；否则保留原值。
+    pub(crate) fn lower_default_value_check(
+        &mut self,
+        value: ValueId,
+        default_expr: &swc_ast::Expr,
+        block: BasicBlockId,
+    ) -> Result<ValueId, LoweringError> {
+        // Compare { op: StrictEq, lhs: value, rhs: Undefined }
+        let undef_cid = self.module.add_constant(Constant::Undefined);
+        let undef_val = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Const {
+                dest: undef_val,
+                constant: undef_cid,
+            },
+        );
+        let is_undef = self.alloc_value();
+        self.current_function.append_instruction(
+            block,
+            Instruction::Compare {
+                dest: is_undef,
+                op: CompareOp::StrictEq,
+                lhs: value,
+                rhs: undef_val,
+            },
+        );
+
+        // Branch
+        let then_block = self.current_function.new_block();
+        let else_block = self.current_function.new_block();
+        let merge_block = self.current_function.new_block();
+        self.current_function.set_terminator(
+            block,
+            Terminator::Branch {
+                condition: is_undef,
+                true_block: then_block,
+                false_block: else_block,
+            },
+        );
+
+        // then_block: 求值默认表达式
+        let default_val = self.lower_expr(default_expr, then_block)?;
+        self.current_function.set_terminator(
+            then_block,
+            Terminator::Jump {
+                target: merge_block,
+            },
+        );
+
+        // else_block: 保留原值
+        self.current_function.set_terminator(
+            else_block,
+            Terminator::Jump {
+                target: merge_block,
+            },
+        );
+
+        // merge_block: Phi
+        let result = self.alloc_value();
+        self.current_function.append_instruction(
+            merge_block,
+            Instruction::Phi {
+                dest: result,
+                sources: vec![
+                    PhiSource {
+                        predecessor: then_block,
+                        value: default_val,
+                    },
+                    PhiSource {
+                        predecessor: else_block,
+                        value,
+                    },
+                ],
+            },
+        );
+
+        Ok(result)
+    }
+}
