@@ -55,7 +55,11 @@
 | P2.0 support module ABI | ✅ | 12 helpers + 19 globals + layout_hash |
 | P2.1 build.rs 产 cwasm | ✅ | OUT_DIR/wjsm_support.cwasm |
 | P2.2-2.3 instantiate + object helpers | ✅ | 共享 env + 6 helpers import |
-| P2.4-2.8 helpers 迁移 | 🟡 暂缓 | 纯性能优化；当前 inline 编译 |
+| P2.4 arr_new/elem_get/elem_set import | ✅ | support module bodies 已实现 |
+| P2.5 get_proto_from_ctor import | ✅ | support module body 已实现 |
+| P2.6 bootstrap migration | ⊘ by design | 仅启动时调用一次，保持 inline |
+| P2.7 rebake snapshot | ✅ | 970 passed |
+| P2.8 final bench | ⊘ partial | module_only gate 未达标（见 evidence） |
 | P3.0 builtin_js 框架 | ✅ | 空 manifest + ABI hash 接入 |
 | P3.1 sentinel | 🟡 暂缓 | 需 snapshot capture 走 main() |
 | P4.0 退役旧路径 | ✅ | 磁盘 cache 已退役 |

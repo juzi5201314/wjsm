@@ -8,6 +8,7 @@ use wasmtime::*;
 use wjsm_ir::value;
 
 use crate::startup_snapshot_native_bridge::SnapshotNativeCallableBridge;
+use crate::types::NativeCallable;
 use crate::wasm_env::WasmEnv;
 use wjsm_snapshot_format::*;
 
@@ -111,17 +112,25 @@ pub(crate) fn capture_startup_snapshot(
     };
 
     // 保存 native_callables
-    let native_callables: Vec<SnapshotNativeCallable> = {
+    let (native_callables, native_callable_methods): (Vec<SnapshotNativeCallable>, Vec<u8>) = {
         let table = store
             .data()
             .native_callables
             .lock()
             .expect("native callables mutex");
-        table
-            .iter()
-            .map(|nc| SnapshotNativeCallable::try_from_native_callable(nc))
-            .collect::<Result<Vec<_>>>()
-            .context("capture: native_callable not whitelisted")?
+        let mut ncs = Vec::with_capacity(table.len());
+        let mut methods = Vec::with_capacity(table.len());
+        for nc in table.iter() {
+            ncs.push(
+                SnapshotNativeCallable::try_from_native_callable(nc)
+                    .context("capture: native_callable not whitelisted")?,
+            );
+            methods.push(match nc {
+                NativeCallable::NumberPrimitiveMethod { method } => *method,
+                _ => 0,
+            });
+        }
+        (ncs, methods)
     };
 
     // 检查排除项: 不能让运行态进入 snapshot
@@ -157,6 +166,7 @@ pub(crate) fn capture_startup_snapshot(
         handle_rel_offsets,
         runtime_strings,
         native_callables,
+        native_callable_methods,
     })
 }
 
@@ -456,8 +466,9 @@ pub(crate) fn restore_startup_snapshot(
             .collect();
         let mut ncs = state.native_callables.lock().expect("native");
         ncs.clear();
-        for snap_nc in snapshot.native_callables {
-            ncs.push(snap_nc.into_native_callable());
+        for (i, snap_nc) in snapshot.native_callables.iter().enumerate() {
+            let method = snapshot.native_callable_methods.get(i).copied().unwrap_or(0);
+            ncs.push(snap_nc.into_native_callable(method));
         }
         state.async_iterator_prototype = snapshot.header.async_iterator_prototype;
         state.async_gen_prototype = snapshot.header.async_gen_prototype;

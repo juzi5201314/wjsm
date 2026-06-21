@@ -1166,6 +1166,14 @@ fn compile_source(source: &str, target: Target, script: bool) -> Result<Vec<u8>>
 /// 偏离 CLI 的唯一点：stdout 写入返回的 buffer 而非真实 fd（测试需捕获）。
 /// 与 CLI 默认对齐：target=Wasm、script=false、root 由文件路径推断。
 pub fn run_file_in_process(input: &Path) -> (i32, Vec<u8>, Vec<u8>) {
+    // 与 main_entry 一致：安装 embedded snapshot + support cwasm（OnceLock，幂等）。
+    if let Some(bytes) = wjsm_runtime_snapshot::EMBEDDED_STARTUP_SNAPSHOT {
+        wjsm_runtime::install_embedded_startup_snapshot(bytes);
+    }
+    if let Some(bytes) = wjsm_runtime_support::EMBEDDED_SUPPORT_CWASM {
+        wjsm_runtime::install_embedded_support_cwasm(bytes);
+    }
+
     let input_str = input.to_string_lossy();
     let wasm = match compile_from_file_input(&input_str, None, Target::Wasm, false) {
         Ok(w) => w,

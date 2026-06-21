@@ -100,7 +100,7 @@ pub async fn execute_with_writer<W: std::io::Write>(
 1. `timer_timing`（10/10）— 含 clearTimeout、setInterval 回调内 clear。
 2. `async_scheduler`（11/11）— 含 microtask 顺序、timer drain、fetch promise、async 异常、数组回调、Function call/apply、microtask/timer 回调、JSON.parse reviver、Proxy/Reflect trap、Proxy 内部 trap、eval 直接/间接/NativeCallable。
 3. `async_reentry_audit`（1/1，STRICT）— `async_reentry_audit_forbidden_sync_patterns` 在 `STRICT_AUDIT = true` 下通过，源码中已不存在 async Store 可达路径的 sync re-entry。
-4. E2E fixture：全 workspace 772 tests passed，`.expected` 零变更。
+4. E2E fixture：全 workspace 970 tests passed，`.expected` 零变更。
 
 运行：
 
@@ -110,7 +110,7 @@ cargo nextest run -p wjsm-runtime -E 'test(async_scheduler) or test(async_reentr
 ```
 ## Startup Snapshot 兼容性
 
-Startup snapshot（`WJSM_STARTUP_SNAPSHOT=1`，默认关闭）不保存 scheduler、worker、async host completion channel/counter 状态。Snapshot capture 在 bootstrap 后、用户 JS 前执行，此时 scheduler 尚未启动、无 timer/microtask/promise/continuation 残留（capture 时断言所有 side table 为空）。Restore 仅在 scheduler owner 上执行，恢复后由 `main()` 正常驱动调度器。详见 `docs/adr/0003-startup-snapshot-boundary.md`。
+Startup snapshot（默认开启，`WJSM_STARTUP_SNAPSHOT=0` 关闭）不保存 scheduler、worker、async host completion channel/counter 状态。Snapshot capture 在 bootstrap 后、用户 JS 前执行，此时 scheduler 尚未启动、无 timer/microtask/promise/continuation 残留（capture 时断言所有 side table 为空）。Restore 仅在 scheduler owner 上执行，恢复后由 `main()` 正常驱动调度器。详见 `docs/adr/0003-startup-snapshot-boundary.md`。
 
 ## 后续工作
 

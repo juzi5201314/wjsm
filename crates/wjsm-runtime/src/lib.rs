@@ -944,6 +944,9 @@ pub(crate) fn embedded_startup_snapshot_view() -> Option<&'static [u8]> {
     let arc = EMBEDDED_STARTUP_SNAPSHOT.get()?;
     let bytes = arc.as_ref();
     let view = startup_snapshot_format::decode_snapshot(bytes).ok()?;
+    // 惰性注册 external input（OnceLock 幂等）：确保 abi_hash() 包含 support module
+    // layout hash + builtin JS bundle hash，与 capture 时的 ABI 输入一致。
+    startup_snapshot_format::register_abi_hash_external_input(combined_abi_external_input());
     if view.header.abi_hash != startup_snapshot_format::abi_hash() {
         if startup_snapshot_debug_enabled() {
             eprintln!("embedded snapshot abi hash mismatch; falling back to cold startup");

@@ -74,7 +74,7 @@ const HOST_TYPEDARRAY_SET_BY_INDEX: u32 = 13;
 const NUM_HOST_IMPORTS: u32 = 14;
 
 // ── Defined function indices ──────────────────────────────────────────
-// 顺序与 SUPPORT_EXPORTS 一致；element section [0..12) 登记这些函数。
+// 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。
 const FN_OBJ_NEW: u32 = NUM_HOST_IMPORTS + 0;
 const FN_OBJ_GET: u32 = NUM_HOST_IMPORTS + 1;
 const FN_OBJ_SET: u32 = NUM_HOST_IMPORTS + 2;
@@ -132,7 +132,8 @@ const ENV_GLOBAL_IMPORTS: &[(&str, ValType, bool)] = &[
     ("__arr_proto_table_hash", ValType::I64, true),
 ];
 
-const SUPPORT_TABLE_RESERVED_LEN: u32 = 64;
+/// 必须与 `wjsm-runtime-support::abi::SUPPORT_TABLE_RESERVED_LEN` 一致。
+pub const SUPPORT_TABLE_RESERVED_LEN: u32 = 64;
 
 // 12 个 defined functions 的 type index（顺序与 SUPPORT_EXPORTS 一致）
 const HELPER_TYPE_INDICES: &[u32] = &[
@@ -213,7 +214,7 @@ pub fn emit_support_module() -> Result<Vec<u8>> {
             }),
         );
     }
-    // 11 host function imports
+    // 14 host function imports
     for (name, type_idx) in HOST_IMPORTS {
         imports.import("env", name, EntityType::Function(*type_idx));
     }

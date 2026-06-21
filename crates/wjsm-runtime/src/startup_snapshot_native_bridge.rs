@@ -6,14 +6,14 @@ use crate::types::NativeCallable;
 use wjsm_snapshot_format::SnapshotNativeCallable;
 
 pub(crate) trait SnapshotNativeCallableBridge {
-    fn into_native_callable(self) -> NativeCallable;
+    fn into_native_callable(self, method: u8) -> NativeCallable;
     fn try_from_native_callable(nc: &NativeCallable) -> Result<Self>
     where
         Self: Sized;
 }
 
 impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
-    fn into_native_callable(self) -> NativeCallable {
+    fn into_native_callable(self, method: u8) -> NativeCallable {
         match self {
             Self::EvalIndirect => NativeCallable::EvalIndirect,
             Self::AsyncIteratorProtoSymbolAsyncIterator => {
@@ -78,7 +78,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
                 NativeCallable::ByteLengthQueuingStrategyConstructor
             }
             Self::StubGlobal => NativeCallable::StubGlobal(()),
-            Self::NumberPrimitiveMethod => NativeCallable::NumberPrimitiveMethod { method: 0 },
+            Self::NumberPrimitiveMethod => NativeCallable::NumberPrimitiveMethod { method },
             Self::ArgumentsStrictCalleeGetter => NativeCallable::ArgumentsStrictCalleeGetter,
             Self::TypedArrayConstructor => NativeCallable::TypedArrayConstructor(()),
         }
