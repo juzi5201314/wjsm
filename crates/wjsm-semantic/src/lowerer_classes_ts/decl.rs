@@ -8,6 +8,14 @@ impl Lowerer {
     ) -> Result<StmtFlow, LoweringError> {
         let class_name = class_decl.ident.sym.to_string();
 
+        // Class declaration name is visible inside the class body but in TDZ until evaluation completes.
+        self.scopes.push_scope(ScopeKind::Block);
+        let class_body_name_scope_id = self
+            .scopes
+            .declare(&class_name, VarKind::Const, false)
+            .map_err(|msg| self.error(class_decl.span(), msg))?;
+
+
         let constructor = class_decl
             .class
             .body
@@ -831,17 +839,29 @@ impl Lowerer {
             },
         );
 
-        // Mark class name as initialised to exit TDZ before lookup.
+        // Initialize class-body binding (exits TDZ for in-body references).
         self.scopes
             .mark_initialised(&class_name)
             .map_err(|msg| self.error(class_decl.span(), msg))?;
+        let body_ir_name = format!("${class_body_name_scope_id}.{class_name}");
+        self.current_function.append_instruction(
+            outer_block,
+            Instruction::StoreVar {
+                name: body_ir_name,
+                value: ctor_dest,
+            },
+        );
+        self.scopes.pop_scope();
 
-        // Register class name in module scope with constructor as value.
-        let (scope_id, _) = self
-            .scopes
-            .lookup(&class_name)
+        // Initialize enclosing-scope binding from predeclare.
+        self.scopes
+            .mark_initialised(&class_name)
             .map_err(|msg| self.error(class_decl.span(), msg))?;
-        let ir_name = format!("${}.{}", scope_id, class_name);
+        let outer_scope_id = self
+            .scopes
+            .resolve_scope_id(&class_name)
+            .map_err(|msg| self.error(class_decl.span(), msg))?;
+        let ir_name = format!("${outer_scope_id}.{class_name}");
         self.current_function.append_instruction(
             outer_block,
             Instruction::StoreVar {
@@ -849,6 +869,7 @@ impl Lowerer {
                 value: ctor_dest,
             },
         );
+
 
         Ok(StmtFlow::Open(outer_block))
     }
