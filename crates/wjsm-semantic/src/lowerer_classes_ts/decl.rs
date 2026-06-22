@@ -31,6 +31,10 @@ impl Lowerer {
                 self.push_function_context(&fn_name, BasicBlockId(0));
                 self.is_method = true;
                 self.super_allowed = true;
+                self.set_lexical_home_object_for_enclosing_method(
+                    Self::PENDING_CTOR_FUNCTION_ID,
+                    is_static,
+                );
                 let env_scope_id = self
                     .scopes
                     .declare("$env", VarKind::Let, true)
@@ -102,6 +106,7 @@ impl Lowerer {
         self.push_function_context(&ctor_name, BasicBlockId(0));
         self.is_method = true;
         self.super_allowed = true;
+        self.set_lexical_home_object_for_enclosing_method(Self::PENDING_CTOR_FUNCTION_ID, false);
         self.super_call_allowed = class_decl.class.super_class.is_some();
 
         // 声明 $env（闭包环境对象）
@@ -284,6 +289,7 @@ impl Lowerer {
         if let Some(function) = self.module.function_mut(ctor_function_id) {
             function.home_object = Some(HomeObject::Prototype(ctor_function_id));
         }
+        self.patch_pending_ctor_home_object_references(ctor_function_id);
         for (_, is_static, func_id) in &private_method_ids {
             if let Some(function) = self.module.function_mut(*func_id) {
                 function.home_object = Some(if *is_static {
@@ -416,6 +422,10 @@ impl Lowerer {
                             self.push_function_context(&fn_name, BasicBlockId(0));
                             self.is_method = true;
                             self.super_allowed = true;
+                            self.set_lexical_home_object_for_enclosing_method(
+                                ctor_function_id,
+                                is_static,
+                            );
 
                             let env_scope_id = self
                                 .scopes
@@ -566,6 +576,10 @@ impl Lowerer {
                             self.push_function_context(&fn_name, BasicBlockId(0));
                             self.is_method = true;
                             self.super_allowed = true;
+                            self.set_lexical_home_object_for_enclosing_method(
+                                ctor_function_id,
+                                is_static,
+                            );
 
                             let env_scope_id = self
                                 .scopes
@@ -678,6 +692,7 @@ impl Lowerer {
                     self.push_function_context(&fn_name, BasicBlockId(0));
                     self.is_method = true;
                     self.super_allowed = true;
+                    self.set_lexical_home_object_for_enclosing_method(ctor_function_id, true);
 
                     let env_scope_id = self
                         .scopes

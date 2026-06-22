@@ -10,8 +10,8 @@ impl Lowerer {
         if arrow.is_async {
             return self.lower_async_arrow_expr(arrow, block);
         }
+        let inherited_home_object = self.lexical_home_object;
         let outer_super_allowed = self.super_allowed;
-        let outer_super_call_allowed = self.super_call_allowed;
         let name = format!("arrow_{}", self.module.functions().len());
         self.push_function_context(&name, BasicBlockId(0));
         // 标记当前为箭头函数；箭头函数继承外层 super 绑定。
@@ -97,6 +97,9 @@ impl Lowerer {
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
+        if let Some(home) = inherited_home_object {
+            ir_function.home_object = Some(home);
+        }
         for b in blocks {
             ir_function.push_block(b);
         }
@@ -142,8 +145,8 @@ impl Lowerer {
         arrow: &swc_ast::ArrowExpr,
         block: BasicBlockId,
     ) -> Result<ValueId, LoweringError> {
+        let inherited_home_object = self.lexical_home_object;
         let outer_super_allowed = self.super_allowed;
-        let outer_super_call_allowed = self.super_call_allowed;
         let name = format!("arrow_{}", self.module.functions().len());
         let async_name = format!("{name}$async");
 
@@ -503,6 +506,9 @@ impl Lowerer {
         ir_function.set_params(param_ir_names);
         let captured = self.captured_names_stack.last().unwrap().clone();
         ir_function.set_captured_names(Self::captured_display_names(&captured));
+        if let Some(home) = inherited_home_object {
+            ir_function.home_object = Some(home);
+        }
         for b in blocks {
             ir_function.push_block(b);
         }

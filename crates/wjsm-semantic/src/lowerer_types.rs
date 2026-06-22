@@ -43,6 +43,9 @@ pub(crate) struct Lowerer {
     pub(crate) function_super_call_allowed_stack: Vec<bool>,
     pub(crate) function_is_arrow_stack: Vec<bool>,
     pub(crate) function_is_method_stack: Vec<bool>,
+    /// 词法上可继承的 [[HomeObject]]（类方法体内嵌套箭头函数使用）。
+    pub(crate) lexical_home_object: Option<HomeObject>,
+    pub(crate) function_lexical_home_object_stack: Vec<Option<HomeObject>>,
     /// 每层函数的共享 env 对象 (ValueId) + 已注册的捕获绑定集合。
     /// 同一外层函数中的多个闭包共享同一个 env 对象，确保可变捕获变量的修改对所有闭包可见。
     pub(crate) shared_env_stack:
