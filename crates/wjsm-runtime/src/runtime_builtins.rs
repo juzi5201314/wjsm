@@ -207,6 +207,59 @@ pub(crate) fn read_weakset_handle(
     Some(value::decode_f64(handle_val) as usize)
 }
 
+/// `BigIntPrimitiveMethod`：this 为 bigint handle，按 method 调用 BigInt.prototype 语义。
+fn invoke_bigint_primitive_method(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    method: u8,
+    args: &[i64],
+) -> i64 {
+    if !value::is_bigint(this_val) {
+        return value::encode_undefined();
+    }
+    let handle = value::decode_bigint_handle(this_val) as usize;
+    let radix_or_digits = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    match method {
+        0 => {
+            let radix = if value::is_undefined(radix_or_digits) || value::is_null(radix_or_digits) {
+                10
+            } else if value::is_f64(radix_or_digits) {
+                let r = value::decode_f64(radix_or_digits) as i32;
+                if !(2..=36).contains(&r) {
+                    set_runtime_error(
+                        caller.data(),
+                        "RangeError: toString() radix argument must be between 2 and 36"
+                            .to_string(),
+                    );
+                    return value::encode_undefined();
+                }
+                r
+            } else {
+                10
+            };
+            let table = caller
+                .data()
+                .bigint_table
+                .lock()
+                .expect("bigint_table mutex");
+            let Some(bi) = table.get(handle) else {
+                return store_runtime_string(caller, "0".to_string());
+            };
+            let s = if radix == 10 {
+                bi.to_string()
+            } else {
+                bi.to_str_radix(radix as u32)
+            };
+            store_runtime_string(caller, s)
+        }
+        1 => this_val,
+        _ => value::encode_undefined(),
+    }
+}
+
 /// `NumberPrimitiveMethod`：this 为 raw f64，按 method 调用已有 number_proto 语义。
 fn invoke_number_primitive_method(
     caller: &mut Caller<'_, RuntimeState>,
@@ -404,6 +457,9 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             length,
         } => Some(advance_array_like_values_iterator(
             caller, target, index, length,
+        )),
+        NativeCallable::BigIntPrimitiveMethod { method } => Some(invoke_bigint_primitive_method(
+            caller, this_val, method, &args,
         )),
         NativeCallable::NumberPrimitiveMethod { method } => Some(invoke_number_primitive_method(
             caller, this_val, method, &args,

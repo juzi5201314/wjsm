@@ -886,6 +886,30 @@ pub(crate) fn define_math_number_error(
         error_proto_to_string_fn,
     )?;
 
+    let primitive_bigint_get_method_fn = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {
+            if !value::is_bigint(boxed) {
+                return value::encode_undefined();
+            }
+            let method = match read_string_bytes(&mut caller, name_id as u32).as_slice() {
+                b"toString" => 0,
+                b"valueOf" => 1,
+                _ => return value::encode_undefined(),
+            };
+            create_native_callable(
+                caller.data(),
+                NativeCallable::BigIntPrimitiveMethod { method },
+            )
+        },
+    );
+    linker.define(
+        &mut store,
+        "env",
+        "primitive_bigint_get_method",
+        primitive_bigint_get_method_fn,
+    )?;
+
     let primitive_number_get_method_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, boxed: i64, name_id: i32| -> i64 {

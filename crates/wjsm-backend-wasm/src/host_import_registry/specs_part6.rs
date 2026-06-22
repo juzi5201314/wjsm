@@ -331,6 +331,15 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "primitive_bigint_get_method",
+        type_idx: 8,
+        key: Some(HostImportKey::Special(
+            SpecialHostImport::PrimitiveBigIntGetMethod,
+        )),
+        group: None,
+    },
+
+    HostImportSpec {
         name: "primitive_number_get_method",
         type_idx: 8,
         key: Some(HostImportKey::Special(

@@ -49,6 +49,7 @@ pub enum SpecialHostImport {
     SymbolPropertyKey,
     StringToArrayIndex,
     NativeCallableGetProperty,
+    PrimitiveBigIntGetMethod,
     PrimitiveNumberGetMethod,
     TypedArraySetByIndex,
     // ── P4 GC framework host imports ──

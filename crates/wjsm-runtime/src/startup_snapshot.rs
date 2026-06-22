@@ -127,7 +127,8 @@ pub(crate) fn capture_startup_snapshot(
                     .context("capture: native_callable not whitelisted")?,
             );
             methods.push(match nc {
-                NativeCallable::NumberPrimitiveMethod { method } => *method,
+                NativeCallable::NumberPrimitiveMethod { method }
+                | NativeCallable::BigIntPrimitiveMethod { method } => *method,
                 _ => 0,
             });
         }
