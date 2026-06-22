@@ -385,6 +385,10 @@ pub(crate) struct ClosureEntry {
 pub(crate) enum NativeCallable {
     EvalIndirect,
 
+    /// raw bigint handle 上 `n.toString(radix)` / `valueOf`；`method`: 0=toString, 1=valueOf
+    BigIntPrimitiveMethod {
+        method: u8,
+    },
     /// raw f64 上 `n.toString()` 等；`method`: 0=toString, 1=valueOf, 2=toFixed, 3=toExponential, 4=toPrecision
     NumberPrimitiveMethod {
         method: u8,

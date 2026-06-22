@@ -50,6 +50,7 @@ const HOST_IMPORTS: &[(&str, u32)] = &[
     ("proxy_trap_set", 9),               // (i64, i32, i64) -> ()
     ("proxy_trap_delete", 8),            // (i64, i32) -> i64
     ("native_callable_get_property", 8), // (i64, i32) -> i64
+    ("primitive_bigint_get_method", 8),  // (i64, i32) -> i64
     ("primitive_number_get_method", 8),  // (i64, i32) -> i64
     ("symbol_property_key", 10),          // (i64) -> i32
     ("obj_get_by_index", 8),              // (i64, i32) -> i64
@@ -67,12 +68,13 @@ const HOST_PROXY_TRAP_GET: u32 = 6;
 const HOST_PROXY_TRAP_SET: u32 = 7;
 const HOST_PROXY_TRAP_DELETE: u32 = 8;
 const HOST_NATIVE_CALLABLE_GET_PROPERTY: u32 = 9;
-const HOST_PRIMITIVE_NUMBER_GET_METHOD: u32 = 10;
-const HOST_SYMBOL_PROPERTY_KEY: u32 = 11;
-const HOST_OBJ_GET_BY_INDEX: u32 = 12;
-const HOST_TYPEDARRAY_SET_BY_INDEX: u32 = 13;
+const HOST_PRIMITIVE_BIGINT_GET_METHOD: u32 = 10;
+const HOST_PRIMITIVE_NUMBER_GET_METHOD: u32 = 11;
+const HOST_SYMBOL_PROPERTY_KEY: u32 = 12;
+const HOST_OBJ_GET_BY_INDEX: u32 = 13;
+const HOST_TYPEDARRAY_SET_BY_INDEX: u32 = 14;
 
-const NUM_HOST_IMPORTS: u32 = 14;
+const NUM_HOST_IMPORTS: u32 = 15;
 
 // ── Defined function indices ──────────────────────────────────────────
 // 顺序与 SUPPORT_EXPORTS 一致；通过 export/import 调用（Call），不经 element section。

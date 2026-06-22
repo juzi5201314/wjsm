@@ -78,6 +78,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
                 NativeCallable::ByteLengthQueuingStrategyConstructor
             }
             Self::StubGlobal => NativeCallable::StubGlobal(()),
+            Self::BigIntPrimitiveMethod => NativeCallable::BigIntPrimitiveMethod { method },
             Self::NumberPrimitiveMethod => NativeCallable::NumberPrimitiveMethod { method },
             Self::ArgumentsStrictCalleeGetter => NativeCallable::ArgumentsStrictCalleeGetter,
             Self::TypedArrayConstructor => NativeCallable::TypedArrayConstructor(()),
@@ -150,6 +151,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             }
             NativeCallable::StubGlobal(()) => Self::StubGlobal,
             NativeCallable::ArgumentsStrictCalleeGetter => Self::ArgumentsStrictCalleeGetter,
+            NativeCallable::BigIntPrimitiveMethod { method: _ } => Self::BigIntPrimitiveMethod,
             NativeCallable::NumberPrimitiveMethod { method: _ } => Self::NumberPrimitiveMethod,
             NativeCallable::TypedArrayConstructor(()) => Self::TypedArrayConstructor,
             NativeCallable::EvalFunction(_)
