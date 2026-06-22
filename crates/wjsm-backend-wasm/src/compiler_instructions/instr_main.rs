@@ -618,7 +618,7 @@ impl Compiler {
                 object,
                 index,
             } => {
-                // 按 key 类型分派：数字 → $elem_get（数组元素等）；字符串 → $obj_get（命名属性）。
+                // 按 key 运行期类型分派（见 emit_computed_get）：数字→$elem_get；字符串/symbol→命名属性或数组规范索引。
                 self.emit_computed_get(*object, *index);
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(false)
@@ -628,7 +628,7 @@ impl Compiler {
                 index,
                 value,
             } => {
-                // 按 key 类型分派：数字 → $elem_set；字符串 → $obj_set。
+                // 按 key 运行期类型分派（见 emit_computed_set）：数字→$elem_set；字符串/symbol→命名属性或数组规范索引。
                 self.emit_computed_set(*object, *index, *value);
                 Ok(false)
             }

@@ -97,7 +97,7 @@ impl Compiler {
         self.emit(WasmInstruction::I64ShrU);
         self.emit(WasmInstruction::I64Const(0x1F));
         self.emit(WasmInstruction::I64And);
-        self.emit(WasmInstruction::I64Const(0xA)); // TAG_CLOSURE
+        self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64)); // TAG_CLOSURE
         self.emit(WasmInstruction::I64Eq);
         self.emit(WasmInstruction::If(BlockType::Empty));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
@@ -308,13 +308,8 @@ impl Compiler {
         lhs: ValueId,
         rhs: ValueId,
     ) -> Result<()> {
-        // For Phase 3: implement strict equality and numeric comparisons.
-        // All values are i64 NaN-boxed.
-        //
-        // For strict equality: check if both are f64, then compare as f64.
-        // For numeric comparisons: reinterpret as f64 and compare.
-        //
-        // The result is a NaN-boxed bool (BOX_BASE | TAG_BOOL << 32 | 0 or 1).
+        // Strict equality only (CompareOp has StrictEq / StrictNotEq).
+        // Values are i64 NaN-boxed; result is a NaN-boxed bool (BOX_BASE | TAG_BOOL << 32 | 0/1).
 
         let box_base = value::BOX_BASE as i64;
         match op {
@@ -377,11 +372,12 @@ impl Compiler {
         Ok(())
     }
 
-    /// 编译 Array.prototype 方法调用（Type 12 导入函数）。
-    /// 将 IR 层的 CallBuiltin 转换为对 Type 12 宿主函数的调用。
-    /// 通过影子栈传递参数，参数布局：
-    ///   env_obj=undefined, this_val=args[0], shadow_args=args[1..]
-    /// 特例：ArrayIsArray 的 this_val=undefined, shadow_args=args
+    /// 编译需经影子栈 + Type 12 签名的 builtin/proto 调用（非全部 CallBuiltin）。
+    /// 将部分 Builtin（含 Array/String/Math/Date 静态方法、Function.prototype.call/bind 等）
+    /// 转为 Type 12 宿主调用；参数经影子栈传递，布局因 builtin 而异：
+    ///   默认: env_obj=undefined, this_val=args[0], shadow_args=args[1..]
+    ///   FuncCall/FuncBind: env_obj=args[0], this_val=args[1], shadow_args=args[2..]
+    ///   无 this 的静态方法（含 ArrayIsArray/ArrayFrom 等）: this_val=undefined, shadow_args=args
     pub(crate) fn compile_proto_method_call(
         &mut self,
         dest: Option<ValueId>,
@@ -506,7 +502,7 @@ impl Compiler {
         // 推入 string_concat_va 参数: args_base, args_count
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::I32Const(parts.len() as i32));
-        // 调用 import 17: string_concat_va
+        // 调用 StringConcatVa 宿主 import（索引由 special_host_import_indices 解析）
         self.emit(WasmInstruction::Call(
             self.special_host_import_indices[&SpecialHostImport::StringConcatVa],
         ));
