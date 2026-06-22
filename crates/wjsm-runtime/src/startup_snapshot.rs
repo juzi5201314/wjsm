@@ -8,6 +8,7 @@ use wasmtime::*;
 use wjsm_ir::value;
 
 use crate::startup_snapshot_native_bridge::SnapshotNativeCallableBridge;
+use crate::startup_snapshot_remap::remap_array_proto_function_indices;
 use crate::types::NativeCallable;
 use crate::wasm_env::WasmEnv;
 use wjsm_snapshot_format::*;
@@ -170,32 +171,51 @@ pub(crate) fn capture_startup_snapshot(
     })
 }
 
-fn remap_array_proto_function_indices(
-    data: &mut [u8],
-    snapshot_base: u32,
-    table_len: u32,
-    current_base: u32,
+/// Clear primordial heap / handle table / host bootstrap side state before snapshot restore
+/// when shared memory still holds objects from an earlier cold bootstrap (issue #113).
+pub(crate) fn reset_primordial_heap_before_restore(
+    store: &mut Store<crate::RuntimeState>,
+    env: &WasmEnv,
 ) -> Result<()> {
-    if snapshot_base == current_base {
+    let heap_start = read_i32_global(store, env.object_heap_start) as u32;
+    let heap_ptr = env.heap_ptr.get(&mut *store).i32().unwrap_or(0) as u32;
+    let obj_table_base = env.obj_table_ptr.get(&mut *store).i32().unwrap_or(0) as u32;
+    let obj_table_count = env.obj_table_count.get(&mut *store).i32().unwrap_or(0) as u32;
+    if heap_ptr <= heap_start && obj_table_count == 0 {
         return Ok(());
     }
 
-    let snapshot_end = snapshot_base
-        .checked_add(table_len)
-        .ok_or_else(|| anyhow::anyhow!("restore: Array.prototype table range overflow"))?;
-    for chunk in data.chunks_exact_mut(8) {
-        let raw = i64::from_le_bytes(chunk.try_into().expect("8-byte chunk"));
-        if !value::is_function(raw) {
-            continue;
-        }
-        let table_idx = value::decode_function_idx(raw);
-        if table_idx < snapshot_base || table_idx >= snapshot_end {
-            continue;
-        }
-        let offset = table_idx - snapshot_base;
-        let remapped = value::encode_function_idx(current_base + offset);
-        chunk.copy_from_slice(&remapped.to_le_bytes());
+    let mem = env.memory.data_mut(&mut *store);
+    let hs = heap_start as usize;
+    let hp = heap_ptr as usize;
+    if hp > hs && hp <= mem.len() {
+        mem[hs..hp].fill(0);
     }
+    let ot_base = obj_table_base as usize;
+    let ot_end = ot_base.saturating_add(obj_table_count as usize * 4);
+    if ot_end <= mem.len() {
+        mem[ot_base..ot_end].fill(0);
+    }
+
+    let _ = env.heap_ptr.set(&mut *store, Val::I32(heap_start as i32));
+    let _ = env.obj_table_count.set(&mut *store, Val::I32(0));
+    if let Some(bootstrap_done) = env.bootstrap_done {
+        bootstrap_done.set(&mut *store, Val::I32(0))?;
+    }
+    if let Some(function_props_done) = env.function_props_done {
+        function_props_done.set(&mut *store, Val::I32(0))?;
+    }
+    let _ = env.array_proto_handle.set(&mut *store, Val::I32(-1));
+    let _ = env.object_proto_handle.set(&mut *store, Val::I32(-1));
+
+    let state = store.data_mut();
+    state.runtime_strings.lock().expect("runtime strings").clear();
+    state.native_callables.lock().expect("native callables").clear();
+    state.async_iterator_prototype = value::encode_undefined();
+    state.async_gen_prototype = value::encode_undefined();
+    state
+        .array_proto_values
+        .store(value::encode_undefined(), std::sync::atomic::Ordering::Relaxed);
     Ok(())
 }
 
@@ -336,6 +356,8 @@ pub(crate) fn restore_startup_snapshot(
             current_abi
         );
     }
+
+    reset_primordial_heap_before_restore(store, env)?;
 
     let heap_start = read_i32_global(store, env.object_heap_start) as u32;
     let heap_used = snapshot.header.heap_used;

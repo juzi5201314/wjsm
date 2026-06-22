@@ -532,7 +532,7 @@ pub(super) fn define_env_global(
 /// 供 build-time snapshot 生成使用，避免构建期执行用户 main。
 pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
     run_init_globals_only(bundle).await?;
-    // 在 globals 就绪后运行 bootstrap_once
+    initialize_host_post_bootstrap(&mut bundle.store, &bundle.wasm_env);
     if let Ok(bootstrap_fn) = bundle
         .instance
         .get_typed_func::<(), i64>(&mut bundle.store, "__wjsm_bootstrap_once")
@@ -545,9 +545,8 @@ pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Re
     Ok(())
 }
 
-/// 只设置 imported globals 的初始值 + host post-bootstrap，不运行 __wjsm_bootstrap_once。
-/// 供 snapshot restore 路径使用：restore 前必须让 globals（__arr_proto_table_len 等）反映
-/// 编译期的值，否则 snapshot 的 arr_proto_table_len 校验会失败。
+/// 只设置 imported globals（`__wjsm_init_globals`）。Snapshot restore 前调用；不分配 bootstrap 堆对象。
+/// 泄漏的 cold-bootstrap 状态由 `reset_primordial_heap_before_restore` 清除。
 pub(super) async fn run_init_globals_only(bundle: &mut ExecuteInstanceBundle) -> Result<()> {
     if let Ok(init_globals_fn) = bundle
         .instance
@@ -558,9 +557,6 @@ pub(super) async fn run_init_globals_only(bundle: &mut ExecuteInstanceBundle) ->
             .await
             .map_err(|e| anyhow::anyhow!("init_globals failed: {e:?}"))?;
     }
-    // host post-bootstrap 必须在 globals 就绪后执行——host 函数依赖
-    // heap_ptr/obj_table_ptr 等全局的正确值。
-    initialize_host_post_bootstrap(&mut bundle.store, &bundle.wasm_env);
     Ok(())
 }
 
