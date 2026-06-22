@@ -477,24 +477,24 @@ pub(crate) fn define_collections_buffers(
     let map_set_keys_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            let map_handle = if let Some(ptr) = resolve_handle(&mut caller, this_val) {
+            let map_handle_u32 = if let Some(ptr) = resolve_handle(&mut caller, this_val) {
                 read_object_property_by_name(&mut caller, ptr, "__map_handle__")
-                    .map(|v| value::decode_f64(v) as usize)
-                    .unwrap_or(usize::MAX)
+                    .map(|v| value::decode_f64(v) as u32)
+                    .unwrap_or(u32::MAX)
             } else {
                 return value::encode_undefined();
             };
-            let keys = {
-                let table = caller.data().map_table.lock().expect("map table mutex");
-                if let Some(entry) = table.get(map_handle) {
-                    entry.keys.clone()
-                } else {
-                    return value::encode_undefined();
-                }
-            };
+            let table = caller.data().map_table.lock().expect("map table mutex");
+            if (map_handle_u32 as usize) >= table.len() {
+                return value::encode_undefined();
+            }
+            drop(table);
             let mut iters = caller.data().iterators.lock().expect("iterators mutex");
             let iter_handle = iters.len() as u32;
-            iters.push(IteratorState::MapKeyIter { keys, index: 0 });
+            iters.push(IteratorState::MapKeyIter {
+                map_handle: map_handle_u32,
+                index: 0,
+            });
             value::encode_handle(value::TAG_ITERATOR, iter_handle)
         },
     );

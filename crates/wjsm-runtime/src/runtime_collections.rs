@@ -369,14 +369,16 @@ pub(crate) fn call_map_set_method_from_caller(
         MapSetMethodKind::ForEach => value::encode_undefined(),
         MapSetMethodKind::Keys => {
             if let Some(mh) = map_handle {
-                let handle = value::decode_f64(mh) as usize;
+                let map_handle_u32 = value::decode_f64(mh) as u32;
                 let table = caller.data().map_table.lock().expect("map table mutex");
-                if handle < table.len() {
-                    let keys = table[handle].keys.clone();
+                if (map_handle_u32 as usize) < table.len() {
                     drop(table);
                     let mut iters = caller.data().iterators.lock().expect("iterators mutex");
                     let iter_handle = iters.len() as u32;
-                    iters.push(IteratorState::MapKeyIter { keys, index: 0 });
+                    iters.push(IteratorState::MapKeyIter {
+                        map_handle: map_handle_u32,
+                        index: 0,
+                    });
                     return value::encode_handle(value::TAG_ITERATOR, iter_handle);
                 }
             }
@@ -384,14 +386,16 @@ pub(crate) fn call_map_set_method_from_caller(
         }
         MapSetMethodKind::Values => {
             if let Some(mh) = map_handle {
-                let handle = value::decode_f64(mh) as usize;
+                let map_handle_u32 = value::decode_f64(mh) as u32;
                 let table = caller.data().map_table.lock().expect("map table mutex");
-                if handle < table.len() {
-                    let values = table[handle].values.clone();
+                if (map_handle_u32 as usize) < table.len() {
                     drop(table);
                     let mut iters = caller.data().iterators.lock().expect("iterators mutex");
                     let iter_handle = iters.len() as u32;
-                    iters.push(IteratorState::MapValueIter { values, index: 0 });
+                    iters.push(IteratorState::MapValueIter {
+                        map_handle: map_handle_u32,
+                        index: 0,
+                    });
                     return value::encode_handle(value::TAG_ITERATOR, iter_handle);
                 }
             }

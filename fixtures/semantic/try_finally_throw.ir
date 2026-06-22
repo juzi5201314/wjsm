@@ -74,24 +74,22 @@ module {
       %22 = const c21
       %23 = call builtin.console.log(%22)
       %24 = is_exception %23
-      branch %24, bb6, bb5
+      branch %24, bb5, bb4
     bb2:
-      jump bb3
-    bb3:
       %26 = const c22
       %27 = call builtin.console.log(%26)
       %28 = is_exception %27
-      branch %28, bb8, bb7
-    bb4:
+      branch %28, bb7, bb6
+    bb3:
       return
-    bb5:
+    bb4:
       throw %21
-    bb6:
+    bb5:
       %25 = call builtin.exception_value(%23)
       throw %25
+    bb6:
+      jump bb3
     bb7:
-      jump bb4
-    bb8:
       %29 = call builtin.exception_value(%27)
       throw %29
 }

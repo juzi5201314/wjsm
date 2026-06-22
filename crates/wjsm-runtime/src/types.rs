@@ -813,10 +813,15 @@ pub(crate) enum IteratorState {
         length: u32,
     },
     MapKeyIter {
-        keys: Vec<i64>,
+        map_handle: u32,
         index: u32,
     },
     MapValueIter {
+        map_handle: u32,
+        index: u32,
+    },
+    /// 预物化索引序列（如 TypedArray.prototype.keys 的 0..length）
+    IndexValueIter {
         values: Vec<i64>,
         index: u32,
     },

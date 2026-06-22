@@ -242,6 +242,10 @@ pub(crate) fn define_core_async(
                     *index += 1;
                     return value::encode_undefined();
                 }
+                IteratorState::IndexValueIter { index, .. } => {
+                    *index += 1;
+                    return value::encode_undefined();
+                }
                 IteratorState::TypedArrayValueIter { index, .. }
                 | IteratorState::TypedArrayEntryIter { index, .. } => {
                     *index += 1;
@@ -352,10 +356,27 @@ pub(crate) fn define_core_async(
                 IteratorState::ArrayIter { index, length, .. } => {
                     return value::encode_bool(*index as usize >= *length as usize);
                 }
-                IteratorState::MapKeyIter { index, keys } => {
-                    return value::encode_bool(*index as usize >= keys.len());
+                IteratorState::MapKeyIter { index, map_handle } => {
+                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    let done = if *map_handle < table.len() as u32 {
+                        *index as usize >= table[*map_handle as usize].keys.len()
+                    } else {
+                        true
+                    };
+                    drop(table);
+                    return value::encode_bool(done);
                 }
-                IteratorState::MapValueIter { index, values } => {
+                IteratorState::MapValueIter { index, map_handle } => {
+                    let table = caller.data().map_table.lock().expect("map table mutex");
+                    let done = if *map_handle < table.len() as u32 {
+                        *index as usize >= table[*map_handle as usize].values.len()
+                    } else {
+                        true
+                    };
+                    drop(table);
+                    return value::encode_bool(done);
+                }
+                IteratorState::IndexValueIter { index, values } => {
                     return value::encode_bool(*index as usize >= values.len());
                 }
                 IteratorState::TypedArrayValueIter { index, length, .. }

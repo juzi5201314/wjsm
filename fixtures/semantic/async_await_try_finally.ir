@@ -91,29 +91,29 @@ module {
       suspend %17, state=1
       jump bb9
     bb4:
+      %44 = const c33
+      %45 = call builtin.console.log(%44)
+      %46 = is_exception %45
+      branch %46, bb19, bb18
+    bb5:
+      %49 = const c34
+      %50 = load var $1.$promise
+      promise_resolve %50, %49
+      return
+    bb6:
       %26 = load var $tmp.0
       store var $4.e, %26
       %27 = load var $4.e
       %28 = call builtin.console.log(%27)
       %29 = is_exception %28
       branch %29, bb13, bb12
-    bb5:
-      %44 = const c33
-      %45 = call builtin.console.log(%44)
-      %46 = is_exception %45
-      branch %46, bb19, bb18
-    bb6:
-      %49 = const c34
-      %50 = load var $1.$promise
-      promise_resolve %50, %49
-      return
     bb7:
       %19 = load var $1.$resume_val
       %20 = load var $1.$is_rejected
       branch %20, bb8, bb9
     bb8:
       store var $tmp.0, %19
-      jump bb4
+      jump bb6
     bb9:
       %21 = load var $1.$resume_val
       %22 = const c29
@@ -121,11 +121,11 @@ module {
       %24 = is_exception %23
       branch %24, bb11, bb10
     bb10:
-      jump bb5
+      jump bb4
     bb11:
       %25 = call builtin.exception_value(%23)
       store var $tmp.0, %25
-      jump bb4
+      jump bb6
     bb12:
       %37 = const c31
       %38 = const c32
@@ -157,7 +157,7 @@ module {
       promise_reject %42, %41
       return
     bb18:
-      jump bb6
+      jump bb5
     bb19:
       %47 = call builtin.exception_value(%45)
       %48 = load var $1.$promise

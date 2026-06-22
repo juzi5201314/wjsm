@@ -217,23 +217,43 @@ pub(super) fn register_common_bridges(
                     let pending = {
                         let mut iters = caller.data().iterators.lock().expect("iters");
                         match iters.get_mut(handle_idx) {
-                            Some(IteratorState::MapKeyIter { keys, index }) => {
-                                if (*index as usize) < keys.len() {
-                                    let value = keys[*index as usize];
-                                    *index += 1;
-                                    Some(PendingIteratorValue::Value(value))
+                            Some(IteratorState::MapKeyIter { map_handle, index }) => {
+                                let table =
+                                    caller.data().map_table.lock().expect("map table mutex");
+                                let pending = if *map_handle < table.len() as u32 {
+                                    let entry = &table[*map_handle as usize];
+                                    let idx = *index as usize;
+                                    if idx < entry.keys.len() {
+                                        let value = entry.keys[idx];
+                                        *index += 1;
+                                        Some(PendingIteratorValue::Value(value))
+                                    } else {
+                                        None
+                                    }
                                 } else {
                                     None
-                                }
+                                };
+                                drop(table);
+                                pending
                             }
-                            Some(IteratorState::MapValueIter { values, index }) => {
-                                if (*index as usize) < values.len() {
-                                    let value = values[*index as usize];
-                                    *index += 1;
-                                    Some(PendingIteratorValue::Value(value))
+                            Some(IteratorState::MapValueIter { map_handle, index }) => {
+                                let table =
+                                    caller.data().map_table.lock().expect("map table mutex");
+                                let pending = if *map_handle < table.len() as u32 {
+                                    let entry = &table[*map_handle as usize];
+                                    let idx = *index as usize;
+                                    if idx < entry.values.len() {
+                                        let value = entry.values[idx];
+                                        *index += 1;
+                                        Some(PendingIteratorValue::Value(value))
+                                    } else {
+                                        None
+                                    }
                                 } else {
                                     None
-                                }
+                                };
+                                drop(table);
+                                pending
                             }
                             Some(IteratorState::TypedArrayValueIter {
                                 entry,
@@ -265,6 +285,15 @@ pub(super) fn register_common_bridges(
                                         entry,
                                         index: current,
                                     })
+                                } else {
+                                    None
+                                }
+                            }
+                            Some(IteratorState::IndexValueIter { values, index }) => {
+                                if (*index as usize) < values.len() {
+                                    let val = values[*index as usize];
+                                    *index += 1;
+                                    Some(PendingIteratorValue::Value(val))
                                 } else {
                                     None
                                 }

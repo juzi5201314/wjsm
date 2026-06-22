@@ -76,49 +76,47 @@ module {
       %21 = const c20
       %22 = call builtin.console.log(%21)
       %23 = is_exception %22
-      branch %23, bb6, bb5
+      branch %23, bb5, bb4
     bb2:
-      jump bb3
-    bb3:
       %34 = const c24
       %35 = call builtin.console.log(%34)
       %36 = is_exception %35
-      branch %36, bb12, bb11
-    bb4:
+      branch %36, bb11, bb10
+    bb3:
       %38 = const c25
       %39 = call builtin.console.log(%38)
       %40 = is_exception %39
-      branch %40, bb14, bb13
-    bb5:
+      branch %40, bb13, bb12
+    bb4:
       %29 = const c22
       %30 = const c23
       %31 = call builtin.console.log(%30)
       %32 = is_exception %31
-      branch %32, bb10, bb9
-    bb6:
+      branch %32, bb9, bb8
+    bb5:
       %24 = call builtin.exception_value(%22)
       %25 = const c21
       %26 = call builtin.console.log(%25)
       %27 = is_exception %26
-      branch %27, bb8, bb7
-    bb7:
+      branch %27, bb7, bb6
+    bb6:
       throw %24
-    bb8:
+    bb7:
       %28 = call builtin.exception_value(%26)
       throw %28
-    bb9:
+    bb8:
       return %29
-    bb10:
+    bb9:
       %33 = call builtin.exception_value(%31)
       throw %33
+    bb10:
+      jump bb3
     bb11:
-      jump bb4
-    bb12:
       %37 = call builtin.exception_value(%35)
       throw %37
-    bb13:
+    bb12:
       return
-    bb14:
+    bb13:
       %41 = call builtin.exception_value(%39)
       throw %41
 }

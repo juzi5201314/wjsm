@@ -299,14 +299,39 @@ pub(crate) fn define_core(
                             value::encode_undefined()
                         }
                     }
-                    IteratorState::MapKeyIter { keys, index } => {
-                        if (*index as usize) < keys.len() {
-                            keys[*index as usize]
+                    IteratorState::MapKeyIter { map_handle, index } => {
+                        let table = caller.data().map_table.lock().expect("map table mutex");
+                        let val = if *map_handle < table.len() as u32 {
+                            let entry = &table[*map_handle as usize];
+                            let idx = *index as usize;
+                            if idx < entry.keys.len() {
+                                Some(entry.keys[idx])
+                            } else {
+                                None
+                            }
                         } else {
-                            value::encode_undefined()
-                        }
+                            None
+                        };
+                        drop(table);
+                        val.unwrap_or(value::encode_undefined())
                     }
-                    IteratorState::MapValueIter { values, index } => {
+                    IteratorState::MapValueIter { map_handle, index } => {
+                        let table = caller.data().map_table.lock().expect("map table mutex");
+                        let val = if *map_handle < table.len() as u32 {
+                            let entry = &table[*map_handle as usize];
+                            let idx = *index as usize;
+                            if idx < entry.values.len() {
+                                Some(entry.values[idx])
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        drop(table);
+                        val.unwrap_or(value::encode_undefined())
+                    }
+                    IteratorState::IndexValueIter { values, index } => {
                         if (*index as usize) < values.len() {
                             values[*index as usize]
                         } else {
@@ -1341,6 +1366,9 @@ pub(crate) async fn iterator_from_impl_async(
     caller: &mut Caller<'_, RuntimeState>,
     val: i64,
 ) -> i64 {
+    if value::is_iterator(val) {
+        return val;
+    }
     if let Some(string_data) = read_value_string_bytes(caller, val) {
         let mut iters = caller.data().iterators.lock().expect("iterators mutex");
         let handle = iters.len() as u32;

@@ -963,6 +963,37 @@ pub(crate) fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i
     val
 }
 
+/// ToObject 抽象操作 (ECMAScript 7.1.13)：原始值包装为对象，已是对象则原样返回。
+pub(crate) fn to_object(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
+    if value::is_js_object(val) {
+        return val;
+    }
+    if value::is_undefined(val) || value::is_null(val) {
+        return val;
+    }
+    let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    if value::is_string(val) {
+        let s = get_string_value(caller, val);
+        let len = utf16_len(&s);
+        let cap = (len.saturating_add(1)).max(1) as u32;
+        let obj = alloc_host_object(caller, &env, cap);
+        for (i, ch) in s.chars().enumerate() {
+            let idx_str = i.to_string();
+            let ch_val = store_runtime_string(caller, ch.to_string());
+            let _ = define_host_data_property_from_caller(caller, obj, &idx_str, ch_val);
+        }
+        let _ = define_host_data_property_from_caller(
+            caller,
+            obj,
+            "length",
+            value::encode_f64(len as f64),
+        );
+        return obj;
+    }
+    // 其他原始类型：分配空壳对象（Object.assign 等无自有可枚举属性可复制）
+    alloc_host_object(caller, &env, 0)
+}
+
 pub(crate) fn utf16_len(s: &str) -> usize {
     s.chars()
         .map(|ch| if ch as u32 > 0xFFFF { 2 } else { 1 })

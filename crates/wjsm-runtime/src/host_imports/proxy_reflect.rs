@@ -360,18 +360,8 @@ async fn is_prototype_circular_chain(
         if current == target {
             return true;
         }
-        if value::is_proxy(current) {
-            let handle = value::decode_proxy_handle(current);
-            if !visited.insert(handle) {
-                break;
-            }
-        } else if value::is_object(current) {
-            let handle = value::decode_object_handle(current);
-            if !visited.insert(handle) {
-                break;
-            }
-        } else if value::is_array(current) {
-            let handle = value::decode_array_handle(current);
+        if value::is_js_object(current) {
+            let handle = handle_index_of(caller, current) as u32;
             if !visited.insert(handle) {
                 break;
             }
@@ -572,32 +562,45 @@ pub(crate) async fn proxy_own_keys_trap_async(
     let Some(t_ptr) = resolve_handle(caller, entry.target) else {
         return value::encode_undefined();
     };
-    let target_keys = collect_own_property_names(caller, t_ptr, false);
+    let target_keys_str = collect_own_property_names(caller, t_ptr, false);
+    let target_keys_sym: Vec<i64> =
+        collect_own_property_key_values(caller, t_ptr, true);
     let mut trap_keys_str = Vec::new();
+    let mut trap_keys_sym = Vec::new();
     for &k in &keys {
         if value::is_symbol(k) {
-            continue;
-        }
-        if let Ok(k_str) = render_value(caller, k) {
+            trap_keys_sym.push(k);
+        } else if let Ok(k_str) = render_value(caller, k) {
             trap_keys_str.push(k_str);
         }
     }
     if !ext {
         let mut match_all = true;
-        for tk in &target_keys {
+        for tk in &target_keys_str {
             if !trap_keys_str.contains(tk) {
                 match_all = false;
                 break;
             }
         }
-        if !match_all || trap_keys_str.len() != target_keys.len() {
+        if match_all {
+            for &tk in &target_keys_sym {
+                if !trap_keys_sym.iter().any(|&s| same_value_zero(s, tk)) {
+                    match_all = false;
+                    break;
+                }
+            }
+        }
+        if !match_all
+            || trap_keys_str.len() != target_keys_str.len()
+            || trap_keys_sym.len() != target_keys_sym.len()
+        {
             return make_type_error_exception(
                 caller,
                 "Proxy ownKeys invariant violated: target is non-extensible and keys do not match target keys",
             );
         }
     } else {
-        for tk in &target_keys {
+        for tk in &target_keys_str {
             if let Some(tk_c) = find_memory_c_string(caller, tk)
                 && let Some((_, flags, _)) =
                     find_property_slot_by_name_id(caller, t_ptr, tk_c)
@@ -610,6 +613,22 @@ pub(crate) async fn proxy_own_keys_trap_async(
                             "Proxy ownKeys invariant violated: non-configurable property '{}' is missing in trap result",
                             tk
                         ),
+                    );
+                }
+            }
+        }
+        for &sym_key in &target_keys_sym {
+            let Some(name_id) = symbol_value_to_name_id(sym_key) else {
+                continue;
+            };
+            if let Some((_, flags, _)) = find_property_slot_by_name_id(caller, t_ptr, name_id) {
+                let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
+                if !configurable
+                    && !trap_keys_sym.iter().any(|&s| same_value_zero(s, sym_key))
+                {
+                    return make_type_error_exception(
+                        caller,
+                        "Proxy ownKeys invariant violated: non-configurable Symbol property is missing in trap result",
                     );
                 }
             }
