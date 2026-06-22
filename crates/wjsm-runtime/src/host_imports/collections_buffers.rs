@@ -1982,6 +1982,8 @@ pub(crate) fn define_collections_buffers(
                         .map(|b| String::from_utf8_lossy(&b).into_owned())
                         .unwrap_or_default();
                     parse_date_string(&s).unwrap_or(f64::NAN)
+                } else if value::is_object(arg) {
+                    read_date_ms(&mut caller, arg)
                 } else {
                     f64::NAN
                 }
