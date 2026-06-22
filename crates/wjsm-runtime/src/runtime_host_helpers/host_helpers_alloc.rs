@@ -132,8 +132,10 @@ fn construct_array_with_constructor_sync(
         };
         let func = table
             .get(&mut *caller, func_idx as u64)
-            .and_then(|r| r.cloned())
-            .and_then(|r| r.func().cloned());
+            .and_then(|r| match r {
+                wasmtime::Ref::Func(Some(f)) => Some(f),
+                _ => None,
+            });
         let Some(func) = func else {
             caller
                 .data()
