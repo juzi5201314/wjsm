@@ -312,7 +312,7 @@ pub(crate) fn define_array_object(
                     total_len += 1;
                 }
             }
-            let new_arr = alloc_array(&mut caller, total_len as u32);
+            let new_arr = array_species_create(&mut caller, this_val, total_len as u32);
             let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
                 return value::encode_undefined();
             };
@@ -386,7 +386,7 @@ pub(crate) fn define_array_object(
                 len
             };
             let count = (end - start).max(0) as u32;
-            let new_arr = alloc_array(&mut caller, count);
+            let new_arr = array_species_create(&mut caller, this_val, count);
             let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
                 return value::encode_undefined();
             };
@@ -520,7 +520,7 @@ pub(crate) fn define_array_object(
             }
             let mut elements = Vec::new();
             flatten(&mut caller, this_val, depth, &mut elements);
-            let new_arr = alloc_array(&mut caller, elements.len() as u32);
+            let new_arr = array_species_create(&mut caller, this_val, elements.len() as u32);
             let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
                 return value::encode_undefined();
             };
@@ -778,7 +778,7 @@ pub(crate) fn define_array_object(
                 }
             }
             // 收集被删除的元素
-            let deleted_arr = alloc_array(&mut caller, actual_delete as u32);
+            let deleted_arr = array_species_create(&mut caller, this_val, actual_delete as u32);
             let Some(deleted_ptr) = resolve_array_ptr(&mut caller, deleted_arr) else {
                 return value::encode_undefined();
             };
