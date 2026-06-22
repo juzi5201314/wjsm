@@ -144,6 +144,49 @@ impl Compiler {
         self.emit(WasmInstruction::I64Const(value::TAG_ARRAY as i64));
         self.emit(WasmInstruction::I64Eq);
     }
+    /// 发射 `(boxed >> 32) & 0xF == tag` → i32 bool（栈顶）。
+    pub(super) fn emit_tag_eq(&mut self, val_l: u32, tag: u64) {
+        self.emit(WasmInstruction::LocalGet(val_l));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(tag as i64));
+        self.emit(WasmInstruction::I64Eq);
+    }
+
+    /// 两操作数均为 BigInt 时调用 `bigint_*` host；否则执行 f64 二元运算（结果 i64 留栈）。
+    pub(super) fn emit_bigint_or_f64_binary(
+        &mut self,
+        lhs_l: u32,
+        rhs_l: u32,
+        bigint_builtin: Builtin,
+        f64_op: WasmInstruction,
+    ) -> anyhow::Result<()> {
+        self.emit_tag_eq(lhs_l, value::TAG_BIGINT);
+        self.emit_tag_eq(rhs_l, value::TAG_BIGINT);
+        self.emit(WasmInstruction::I32And);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(lhs_l));
+        self.emit(WasmInstruction::LocalGet(rhs_l));
+        let func_idx = self
+            .builtin_func_indices
+            .get(&bigint_builtin)
+            .copied()
+            .with_context(|| format!("no WASM func index for {bigint_builtin}"))?;
+        self.emit(WasmInstruction::Call(func_idx));
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::LocalGet(lhs_l));
+        self.emit(WasmInstruction::F64ReinterpretI64);
+        self.emit(WasmInstruction::LocalGet(rhs_l));
+        self.emit(WasmInstruction::F64ReinterpretI64);
+        self.emit(f64_op);
+        self.emit(WasmInstruction::I64ReinterpretF64);
+        self.emit(WasmInstruction::End);
+        Ok(())
+    }
+
+
 
     /// 发射命名属性读取：`obj_get(obj, symbol_property_key(key))`（结果 i64 留栈上）。
     pub(super) fn emit_named_get(&mut self, obj_l: u32, key_l: u32, sym_key: u32, obj_get: u32) {
