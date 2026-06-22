@@ -84,6 +84,8 @@ impl Lowerer {
             function_super_call_allowed_stack: Vec::new(),
             function_is_arrow_stack: Vec::new(),
             function_is_method_stack: Vec::new(),
+            lexical_home_object: None,
+            function_lexical_home_object_stack: Vec::new(),
             shared_env_stack: Vec::new(),
             current_module_id: None,
             import_bindings: std::collections::HashMap::new(),
@@ -204,6 +206,9 @@ impl Lowerer {
         self.function_scope_id_stack.push(fn_scope_id);
         self.captured_names_stack.push(Vec::new());
         self.is_arrow_fn_stack.push(false); // 默认非箭头函数，箭头函数会单独设置
+        self.function_lexical_home_object_stack
+            .push(self.lexical_home_object);
+        self.lexical_home_object = None;
         self.function_super_allowed_stack.push(self.super_allowed);
         self.function_super_call_allowed_stack
             .push(self.super_call_allowed);
@@ -258,6 +263,10 @@ impl Lowerer {
             .function_super_call_allowed_stack
             .pop()
             .expect("super call context stack underflow");
+        self.lexical_home_object = self
+            .function_lexical_home_object_stack
+            .pop()
+            .expect("lexical home object stack underflow");
         if self.shared_env_stack.len() > 1 {
             self.shared_env_stack.pop();
         }
@@ -322,6 +331,47 @@ impl Lowerer {
             && !captured.contains(&binding)
         {
             captured.push(binding);
+        }
+    }
+
+    /// 构造器 ID 在类体 lowering 完成前未知时使用的占位符（随后由 patch 替换）。
+    pub(crate) const PENDING_CTOR_FUNCTION_ID: FunctionId = FunctionId(u32::MAX);
+
+    pub(crate) fn set_lexical_home_object_for_enclosing_method(
+        &mut self,
+        method_function_id: FunctionId,
+        is_static: bool,
+    ) {
+        self.lexical_home_object = Some(if is_static {
+            HomeObject::Constructor(method_function_id)
+        } else {
+            HomeObject::Prototype(method_function_id)
+        });
+    }
+
+    pub(crate) fn patch_pending_ctor_home_object_references(
+        &mut self,
+        ctor_function_id: FunctionId,
+    ) {
+        let pending = Self::PENDING_CTOR_FUNCTION_ID;
+        let count = self.module.functions().len();
+        for idx in 0..count {
+            let id = FunctionId(idx as u32);
+            let Some(function) = self.module.function_mut(id) else {
+                continue;
+            };
+            let Some(home) = function.home_object else {
+                continue;
+            };
+            function.home_object = Some(match home {
+                HomeObject::Prototype(id) if id == pending => {
+                    HomeObject::Prototype(ctor_function_id)
+                }
+                HomeObject::Constructor(id) if id == pending => {
+                    HomeObject::Constructor(ctor_function_id)
+                }
+                other => other,
+            });
         }
     }
 

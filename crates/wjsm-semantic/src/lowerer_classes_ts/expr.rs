@@ -16,6 +16,19 @@ impl Lowerer {
             self.anon_counter += 1;
         }
 
+        // Named class expression: bind the name only inside the class body (block scope).
+        let class_body_name = class_expr.ident.as_ref().map(|id| id.sym.to_string());
+        let class_body_name_scope = if let Some(ref name) = class_body_name {
+            self.scopes.push_scope(ScopeKind::Block);
+            let scope_id = self
+                .scopes
+                .declare(name, VarKind::Const, false)
+                .map_err(|msg| self.error(class_expr.span(), msg))?;
+            Some((name.clone(), scope_id))
+        } else {
+            None
+        };
+
         // 查找构造函数
         let constructor = class_expr
             .class
@@ -40,6 +53,10 @@ impl Lowerer {
                 self.push_function_context(&fn_name, BasicBlockId(0));
                 self.is_method = true;
                 self.super_allowed = true;
+                self.set_lexical_home_object_for_enclosing_method(
+                    Self::PENDING_CTOR_FUNCTION_ID,
+                    is_static,
+                );
                 let env_scope_id = self
                     .scopes
                     .declare("$env", VarKind::Let, true)
@@ -111,6 +128,7 @@ impl Lowerer {
         self.push_function_context(&ctor_name, BasicBlockId(0));
         self.is_method = true;
         self.super_allowed = true;
+        self.set_lexical_home_object_for_enclosing_method(Self::PENDING_CTOR_FUNCTION_ID, false);
         self.super_call_allowed = class_expr.class.super_class.is_some();
 
         // 声明 $env（闭包环境对象）
@@ -287,6 +305,7 @@ impl Lowerer {
         if let Some(function) = self.module.function_mut(ctor_function_id) {
             function.home_object = Some(HomeObject::Prototype(ctor_function_id));
         }
+        self.patch_pending_ctor_home_object_references(ctor_function_id);
         for (_, is_static, func_id) in &private_method_ids {
             if let Some(function) = self.module.function_mut(*func_id) {
                 function.home_object = Some(if *is_static {
@@ -412,6 +431,10 @@ impl Lowerer {
                         self.push_function_context(&fn_name, BasicBlockId(0));
                         self.is_method = true;
                         self.super_allowed = true;
+                        self.set_lexical_home_object_for_enclosing_method(
+                            ctor_function_id,
+                            is_static,
+                        );
 
                         let env_scope_id = self
                             .scopes
@@ -557,6 +580,10 @@ impl Lowerer {
                         self.push_function_context(&fn_name, BasicBlockId(0));
                         self.is_method = true;
                         self.super_allowed = true;
+                        self.set_lexical_home_object_for_enclosing_method(
+                            ctor_function_id,
+                            is_static,
+                        );
 
                         let env_scope_id = self
                             .scopes
@@ -662,6 +689,7 @@ impl Lowerer {
                     self.push_function_context(&fn_name, BasicBlockId(0));
                     self.is_method = true;
                     self.super_allowed = true;
+                    self.set_lexical_home_object_for_enclosing_method(ctor_function_id, true);
 
                     let env_scope_id = self
                         .scopes
@@ -869,6 +897,21 @@ impl Lowerer {
                 value: proto_dest,
             },
         );
+
+        if let Some((name, scope_id)) = class_body_name_scope {
+            self.scopes
+                .mark_initialised(&name)
+                .map_err(|msg| self.error(class_expr.span(), msg))?;
+            let ir_name = format!("${scope_id}.{name}");
+            self.current_function.append_instruction(
+                block,
+                Instruction::StoreVar {
+                    name: ir_name,
+                    value: ctor_dest,
+                },
+            );
+            self.scopes.pop_scope();
+        }
 
         Ok(ctor_dest)
     }
