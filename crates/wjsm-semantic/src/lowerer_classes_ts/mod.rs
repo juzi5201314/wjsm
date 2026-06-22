@@ -37,7 +37,13 @@ impl Visit for DerivedCtorPreSuperUse {
 
     fn visit_function(&mut self, _: &swc_ast::Function) {}
 
-    fn visit_arrow_expr(&mut self, _: &swc_ast::ArrowExpr) {}
+    fn visit_arrow_expr(&mut self, arrow: &swc_ast::ArrowExpr) {
+        if self.invalid_span.is_some() {
+            return;
+        }
+        // 箭头函数词法捕获外层 this；派生构造器 super() 前禁止访问该 this。
+        arrow.visit_children_with(self);
+    }
 
     fn visit_class(&mut self, _: &swc_ast::Class) {}
 }
