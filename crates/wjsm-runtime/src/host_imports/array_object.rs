@@ -621,9 +621,8 @@ pub(crate) fn define_array_object(
             let idx = if args_count > 0 {
                 let i_f64 = value::decode_f64(read_shadow_arg(&mut caller, args_base, 0));
                 if i_f64.is_nan() {
-                    return value::encode_undefined();
-                }
-                if i_f64 < 0.0 {
+                    0
+                } else if i_f64 < 0.0 {
                     len + i_f64 as i32
                 } else {
                     i_f64 as i32
@@ -689,18 +688,30 @@ pub(crate) fn define_array_object(
                 raw_end.min(len)
             };
             let count = (end - start).min(len - target).max(0) as u32;
-            // 复制元素（处理重叠：从后往前复制）
+            // 复制元素（处理重叠：从后往前复制；源为 hole 时目标也为 hole）
             if target < start {
                 for i in 0..count {
-                    let elem = read_array_elem(&mut caller, ptr, (start as u32) + i)
-                        .unwrap_or(value::encode_undefined());
-                    write_array_elem(&mut caller, ptr, (target as u32) + i, elem);
+                    let from = (start as u32) + i;
+                    let to = (target as u32) + i;
+                    if array_elem_present(&mut caller, ptr, from) {
+                        let elem = read_array_elem(&mut caller, ptr, from)
+                            .unwrap_or(value::encode_undefined());
+                        write_array_elem(&mut caller, ptr, to, elem);
+                    } else {
+                        write_array_hole(&mut caller, ptr, to);
+                    }
                 }
             } else {
                 for i in (0..count).rev() {
-                    let elem = read_array_elem(&mut caller, ptr, (start as u32) + i)
-                        .unwrap_or(value::encode_undefined());
-                    write_array_elem(&mut caller, ptr, (target as u32) + i, elem);
+                    let from = (start as u32) + i;
+                    let to = (target as u32) + i;
+                    if array_elem_present(&mut caller, ptr, from) {
+                        let elem = read_array_elem(&mut caller, ptr, from)
+                            .unwrap_or(value::encode_undefined());
+                        write_array_elem(&mut caller, ptr, to, elem);
+                    } else {
+                        write_array_hole(&mut caller, ptr, to);
+                    }
                 }
             }
             this_val
