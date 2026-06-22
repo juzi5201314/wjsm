@@ -34,6 +34,7 @@ mod runtime_typedarray;
 mod runtime_value_adapter;
 mod shared_buffer;
 mod startup_snapshot;
+pub mod startup_snapshot_remap;
 mod runtime_linker;
 mod runtime_startup;
 
