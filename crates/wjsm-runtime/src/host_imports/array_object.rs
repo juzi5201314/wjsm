@@ -481,10 +481,19 @@ pub(crate) fn define_array_object(
          args_base: i32,
          args_count: i32|
          -> i64 {
-            // 读取 depth 参数（默认 1）
+            // depth: default 1; ToIntegerOrInfinity; depth <= 0 means no flattening
             let depth = if args_count > 0 {
                 let d = value::decode_f64(read_shadow_arg(&mut caller, args_base, 0));
-                if d.is_nan() { 0 } else { d as u32 }
+                if d.is_nan() {
+                    0
+                } else {
+                    let i = d.trunc() as i64;
+                    if i <= 0 {
+                        0
+                    } else {
+                        i as u32
+                    }
+                }
             } else {
                 1
             };
@@ -493,13 +502,7 @@ pub(crate) fn define_array_object(
                 caller: &mut Caller<'_, RuntimeState>,
                 arr: i64,
                 depth: u32,
-                result: &mut Vec<i64>,
             ) {
-                if depth == 0 {
-                    // 不再展平，直接添加数组引用
-                    result.push(arr);
-                    return;
-                }
                 let Some(ptr) = resolve_array_ptr(caller, arr) else {
                     result.push(arr);
                     return;
@@ -507,7 +510,7 @@ pub(crate) fn define_array_object(
                 let len = read_array_length(caller, ptr).unwrap_or(0);
                 for i in 0..len {
                     if let Some(elem) = read_array_elem(caller, ptr, i) {
-                        if value::is_array(elem) {
+                        if depth > 0 && value::is_array(elem) {
                             flatten(caller, elem, depth - 1, result);
                         } else {
                             result.push(elem);
