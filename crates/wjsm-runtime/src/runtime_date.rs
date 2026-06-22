@@ -59,14 +59,24 @@ pub(crate) fn write_date_ms(caller: &mut Caller<'_, RuntimeState>, this_val: i64
     }
 }
 
+/// ES-style floor division on f64 (quotient toward −∞).
+fn f64_euclid_div(ms: f64, divisor: f64) -> f64 {
+    (ms / divisor).floor()
+}
+
+/// Non-negative remainder: `ms - divisor * f64_euclid_div(ms, divisor)` (like `rem_euclid`).
+fn f64_euclid_rem(ms: f64, divisor: f64) -> f64 {
+    ms - divisor * f64_euclid_div(ms, divisor)
+}
+
 /// Milliseconds within the current second (0 ≤ m < 1000), per ES `mod` / floor division.
 fn ms_within_second(ms: f64) -> f64 {
-    ms - 1000.0 * (ms / 1000.0).floor()
+    f64_euclid_rem(ms, 1000.0)
 }
 
 /// Whole-second part of a time value using floor division (not trunc toward zero).
 fn floor_ms_to_secs(ms: f64) -> i64 {
-    (ms / 1000.0).floor() as i64
+    f64_euclid_div(ms, 1000.0) as i64
 }
 
 /// Non-negative millisecond fraction for ISO strings and sub-second preservation.
@@ -330,27 +340,32 @@ pub(crate) fn date_args_to_ms(args: &[i64], is_utc: bool) -> f64 {
         return f64::NAN;
     }
 
-    let y = year as i32;
-    let m = month_val as u32;
-    let d = day as u32;
-    let h = hour as u32;
-    let min = minute as u32;
-    let s = second as u32;
-    let ms = millisecond as u32;
-
-    let adjusted_year = if (0..=99).contains(&y) { 1900 + y } else { y };
+    let year_adj = if (0.0..=99.0).contains(&year.floor()) {
+        year.floor() + 1900.0
+    } else {
+        year
+    };
 
     if is_utc {
-        Utc.with_ymd_and_hms(adjusted_year, m + 1, d.max(1), h, min, s)
-            .single()
-            .map(|dt: DateTime<Utc>| dt.timestamp_millis() as f64 + ms as f64)
-            .unwrap_or(f64::NAN)
+        utc_ms_from_ymd_hms_ms(
+            year_adj,
+            month_val,
+            day,
+            hour,
+            minute,
+            second,
+            millisecond,
+        )
     } else {
-        Local
-            .with_ymd_and_hms(adjusted_year, m + 1, d.max(1), h, min, s)
-            .single()
-            .map(|dt: DateTime<Local>| dt.timestamp_millis() as f64 + ms as f64)
-            .unwrap_or(f64::NAN)
+        local_ms_from_ymd_hms_ms(
+            year_adj,
+            month_val,
+            day,
+            hour,
+            minute,
+            second,
+            millisecond,
+        )
     }
 }
 
