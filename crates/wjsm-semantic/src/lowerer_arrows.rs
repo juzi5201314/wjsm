@@ -12,11 +12,13 @@ impl Lowerer {
         }
         let inherited_home_object = self.lexical_home_object;
         let outer_super_allowed = self.super_allowed;
+        let outer_super_call_allowed = self.super_call_allowed;
         let name = format!("arrow_{}", self.module.functions().len());
         self.push_function_context(&name, BasicBlockId(0));
         // 标记当前为箭头函数；箭头函数继承外层 super 绑定。
         self.is_arrow = true;
         *self.is_arrow_fn_stack.last_mut().unwrap() = true;
+        self.lexical_home_object = inherited_home_object;
         self.super_allowed = outer_super_allowed;
         self.super_call_allowed = outer_super_call_allowed;
         // 声明 $env（闭包环境对象）
@@ -147,16 +149,19 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         let inherited_home_object = self.lexical_home_object;
         let outer_super_allowed = self.super_allowed;
+        let outer_super_call_allowed = self.super_call_allowed;
         let name = format!("arrow_{}", self.module.functions().len());
         let async_name = format!("{name}$async");
 
         self.push_function_context(&async_name, BasicBlockId(0));
         self.is_async_fn = true;
         self.async_state_counter = 1;
+        let outer_super_call_allowed = self.super_call_allowed;
         self.captured_var_slots.clear();
         self.async_resume_blocks.clear();
         self.is_arrow = true;
         *self.is_arrow_fn_stack.last_mut().unwrap() = true;
+        self.lexical_home_object = inherited_home_object;
         self.super_allowed = outer_super_allowed;
         self.super_call_allowed = outer_super_call_allowed;
         let env_scope_id = self
