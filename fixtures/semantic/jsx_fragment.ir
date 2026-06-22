@@ -89,7 +89,7 @@ module {
       %33 = const c24
       %34 = get_prop %32, %33
       %35 = const c25
-      %36 = stricteq %34, %35
+      %36 = call builtin.strict_eq(%34, %35)
       %37 = call builtin.console.log(%36)
       %38 = is_exception %37
       branch %38, bb4, bb3

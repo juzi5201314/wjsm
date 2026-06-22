@@ -279,16 +279,36 @@ impl Lowerer {
                     },
                 );
             }
-            // === 和 !== 仍使用 Compare 指令
-            _ => {
-                let op = match bin.op {
-                    swc_ast::BinaryOp::EqEqEq => CompareOp::StrictEq,
-                    swc_ast::BinaryOp::NotEqEq => CompareOp::StrictNotEq,
-                    _ => unreachable!(),
-                };
-                self.current_function
-                    .append_instruction(current_block, Instruction::Compare { dest, op, lhs, rhs });
+            swc_ast::BinaryOp::EqEqEq => {
+                self.current_function.append_instruction(
+                    current_block,
+                    Instruction::CallBuiltin {
+                        dest: Some(dest),
+                        builtin: Builtin::StrictEq,
+                        args: vec![lhs, rhs],
+                    },
+                );
             }
+            swc_ast::BinaryOp::NotEqEq => {
+                let eq_result = self.alloc_value();
+                self.current_function.append_instruction(
+                    current_block,
+                    Instruction::CallBuiltin {
+                        dest: Some(eq_result),
+                        builtin: Builtin::StrictEq,
+                        args: vec![lhs, rhs],
+                    },
+                );
+                self.current_function.append_instruction(
+                    current_block,
+                    Instruction::Unary {
+                        dest,
+                        op: UnaryOp::Not,
+                        value: eq_result,
+                    },
+                );
+            }
+            _ => unreachable!("lower_comparison called with non-comparison op"),
         }
 
         Ok(dest)

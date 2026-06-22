@@ -1219,6 +1219,15 @@ pub(crate) fn define_core(
     );
     linker.define(&mut store, "env", "abstract_eq", f)?;
 
+    // ── strict_eq(i64, i64) → i64 — ECMAScript §7.2.16 ─────────────────────
+    let f = Func::wrap(
+        &mut store,
+        |mut caller: Caller<'_, RuntimeState>, a: i64, b: i64| -> i64 {
+            strict_eq(&mut caller, a, b)
+        },
+    );
+    linker.define(&mut store, "env", "strict_eq", f)?;
+
     // ── Import 20: abstract_compare(i64, i64) → i64 ──────────────────────────────
     let f = Func::wrap(
         &mut store,

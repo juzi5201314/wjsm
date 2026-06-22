@@ -338,14 +338,10 @@ pub(crate) fn define_primitive_core(
     let symbol_for_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, key: i64| -> i64 {
-            let key_str = if value::is_string(key) {
-                read_value_string_bytes(&mut caller, key)
-                    .map(|b| String::from_utf8_lossy(&b).to_string())
-            } else {
-                render_value(&mut caller, key).ok()
-            }
-            .unwrap_or_default();
-            let key_str = key_str.trim_end_matches('\0').to_string();
+            let key_str = match json_parse_to_string(&mut caller, key) {
+                Ok(s) => s,
+                Err(exception) => return exception,
+            };
             let mut table = caller
                 .data()
                 .symbol_table
@@ -371,9 +367,12 @@ pub(crate) fn define_primitive_core(
     // ── Import 107: symbol_key_for(i64) → i64 ─────────────────────────
     let symbol_key_for_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, sym: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, sym: i64| -> i64 {
             if !value::is_symbol(sym) {
-                return value::encode_undefined();
+                return make_type_error_exception(
+                    &mut caller,
+                    "TypeError: sym is not a Symbol",
+                );
             }
             let handle = value::decode_symbol_handle(sym) as usize;
             let table = caller
@@ -384,7 +383,7 @@ pub(crate) fn define_primitive_core(
             let key_to_return = table.get(handle).and_then(|entry| entry.global_key.clone());
             drop(table);
             if let Some(key) = key_to_return {
-                return store_runtime_string(&caller, key);
+                return store_runtime_string(&mut caller, key);
             }
             value::encode_undefined()
         },
@@ -392,11 +391,11 @@ pub(crate) fn define_primitive_core(
     linker.define(&mut store, "env", "symbol_key_for", symbol_key_for_fn)?;
 
     // ECMAScript § 6.1.5.1 Well-Known Symbols
-    // 返回预分配的 well-known symbol（id=0..7）
+    // 返回预分配的 well-known symbol（id 与 symbol_table 启动条目索引一致）
     let symbol_well_known_fn = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, id: i32| -> i64 {
-            if !(0..=7).contains(&id) {
+            if id < 0 {
                 return value::encode_undefined();
             }
             let table = caller
@@ -404,7 +403,8 @@ pub(crate) fn define_primitive_core(
                 .symbol_table
                 .lock()
                 .expect("symbol_table mutex");
-            if (id as usize) < table.len() {
+            let id_usize = id as usize;
+            if id_usize < table.len() {
                 value::encode_symbol_handle(id as u32)
             } else {
                 value::encode_undefined()
