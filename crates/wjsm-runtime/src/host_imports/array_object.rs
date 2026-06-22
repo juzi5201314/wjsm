@@ -623,6 +623,7 @@ pub(crate) fn define_array_object(
             let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
             let idx = if args_count > 0 {
                 let i_f64 = value::decode_f64(read_shadow_arg(&mut caller, args_base, 0));
+                // ToIntegerOrInfinity(NaN) => 0 (ES2024 §6.1.6)
                 if i_f64.is_nan() {
                     0
                 } else if i_f64 < 0.0 {
