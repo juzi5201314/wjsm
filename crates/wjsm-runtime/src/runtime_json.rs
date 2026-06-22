@@ -605,7 +605,7 @@ fn make_exception(caller: &mut Caller<'_, RuntimeState>, name: &str, message: St
     value::encode_exception(idx)
 }
 
-fn json_parse_to_string(caller: &mut Caller<'_, RuntimeState>, value: i64) -> Result<String, i64> {
+pub(crate) fn json_parse_to_string(caller: &mut Caller<'_, RuntimeState>, value: i64) -> Result<String, i64> {
     if value::is_string(value) {
         return Ok(read_runtime_string(caller, value));
     }
@@ -754,10 +754,8 @@ async fn apply_reviver_async(
                 None => return value::encode_undefined(),
             };
             for i in 0..len {
-                let elem_val = match read_array_elem(caller, ptr, i) {
-                    Some(v) => v,
-                    None => continue,
-                };
+                let elem_val = read_array_elem(caller, ptr, i)
+                    .unwrap_or_else(value::encode_undefined);
                 let new_val = Box::pin(apply_reviver_async(
                     caller,
                     reviver,
@@ -767,7 +765,7 @@ async fn apply_reviver_async(
                 ))
                 .await;
                 if value::is_undefined(new_val) {
-                    write_array_elem(caller, ptr, i, value::encode_undefined());
+                    write_array_hole(caller, ptr, i);
                 } else {
                     write_array_elem(caller, ptr, i, new_val);
                 }
@@ -776,7 +774,7 @@ async fn apply_reviver_async(
     } else if value::is_object(val) {
         let env = WasmEnv::from_caller(caller).expect("WasmEnv");
         if let Some(obj_ptr) = resolve_handle(caller, val) {
-            let mut props: Vec<(u32, i64)> = Vec::new();
+            let mut name_ids: Vec<u32> = Vec::new();
             {
                 let data = env.memory.data(&*caller);
                 if obj_ptr + 16 <= data.len() {
@@ -797,25 +795,17 @@ async fn apply_reviver_async(
                             data[slot_off + 2],
                             data[slot_off + 3],
                         ]);
-                        let prop_val = i64::from_le_bytes([
-                            data[slot_off + 8],
-                            data[slot_off + 9],
-                            data[slot_off + 10],
-                            data[slot_off + 11],
-                            data[slot_off + 12],
-                            data[slot_off + 13],
-                            data[slot_off + 14],
-                            data[slot_off + 15],
-                        ]);
-                        props.push((name_id, prop_val));
+                        name_ids.push(name_id);
                     }
                 }
             }
-            for (name_id, prop_val) in &props {
+            for name_id in &name_ids {
                 let name_bytes = read_string_bytes_mem(caller, &env.memory, *name_id);
                 let name = String::from_utf8_lossy(&name_bytes);
+                let prop_val = read_object_property_by_name_id(caller, obj_ptr, *name_id)
+                    .unwrap_or_else(value::encode_undefined);
                 let new_val =
-                    Box::pin(apply_reviver_async(caller, reviver, val, &name, *prop_val)).await;
+                    Box::pin(apply_reviver_async(caller, reviver, val, &name, prop_val)).await;
                 if value::is_undefined(new_val) {
                     delete_property_by_name_id(caller, &env, val, *name_id);
                 } else {

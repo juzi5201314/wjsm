@@ -933,6 +933,13 @@ pub(crate) fn store_runtime_string_in_state(state: &RuntimeState, string: String
     value::encode_runtime_string_handle(handle)
 }
 
+fn normalize_negative_zero(x: f64) -> f64 {
+    if x == 0.0 && x.is_sign_negative() {
+        0.0
+    } else {
+        x
+    }
+}
 pub(crate) fn format_number_js(x: f64) -> String {
     if x == 0.0 {
         return "0".to_string();
@@ -953,6 +960,7 @@ pub(crate) fn format_number_to_fixed_js(x: f64, digits: i32) -> String {
     if x.is_infinite() {
         return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
     }
+    let x = normalize_negative_zero(x);
     format!("{:.1$}", x, digits as usize)
 }
 
@@ -963,6 +971,7 @@ pub(crate) fn format_number_to_exponential_js(x: f64, digits: Option<i32>) -> St
     if x.is_infinite() {
         return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
     }
+    let x = normalize_negative_zero(x);
     if x == 0.0 {
         if let Some(digits) = digits
             && digits > 0
@@ -986,6 +995,7 @@ pub(crate) fn format_number_to_precision_js(x: f64, precision: Option<i32>) -> S
     if x.is_infinite() {
         return if x > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
     }
+    let x = normalize_negative_zero(x);
     let Some(precision) = precision else {
         return format_number_js(x);
     };

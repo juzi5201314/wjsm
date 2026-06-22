@@ -123,16 +123,16 @@ module {
       %48 = is_exception %47
       branch %48, bb12, bb11
     bb8:
+      unreachable
+    bb9:
+      return
+    bb10:
       %55 = load var $tmp.0
       store var $3.e, %55
       %56 = const c28
       %57 = call builtin.console.log(%56)
       %58 = is_exception %57
       branch %58, bb16, bb15
-    bb9:
-      unreachable
-    bb10:
-      return
     bb11:
       store var $2.v, %47
       %50 = const c27
@@ -143,15 +143,15 @@ module {
     bb12:
       %49 = call builtin.exception_value(%47)
       store var $tmp.0, %49
-      jump bb8
-    bb13:
       jump bb10
+    bb13:
+      jump bb9
     bb14:
       %54 = call builtin.exception_value(%52)
       store var $tmp.0, %54
-      jump bb8
-    bb15:
       jump bb10
+    bb15:
+      jump bb9
     bb16:
       %59 = call builtin.exception_value(%57)
       throw %59

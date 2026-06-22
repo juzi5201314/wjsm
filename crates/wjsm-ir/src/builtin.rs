@@ -28,6 +28,7 @@ pub enum Builtin {
     In,
     InstanceOf,
     AbstractEq,
+    StrictEq,
     AbstractCompare,
     // 对象属性描述符
     DefineProperty,
@@ -495,6 +496,7 @@ impl Builtin {
             Self::TypeOf => "typeof",
             Self::In => "op_in",
             Self::InstanceOf => "op_instanceof",
+            Self::StrictEq => "strict_eq",
             Self::AbstractEq => "abstract_eq",
             Self::AbstractCompare => "abstract_compare",
             Self::DefineProperty => "define_property",

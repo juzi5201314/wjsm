@@ -124,7 +124,7 @@ fn async_reentry_json_parse_reviver() -> Result<()> {
         console.log(v.a);
         "#,
     )?;
-    assert_eq!(output, "1\n");
+    assert_eq!(output, "2\n");
     Ok(())
 }
 

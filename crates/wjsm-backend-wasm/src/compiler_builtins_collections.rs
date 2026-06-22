@@ -94,6 +94,22 @@ impl Compiler {
                 }
                 Ok(Some(()))
             }
+            Builtin::StrictEq => {
+                let lhs = args.first().context("StrictEq expects 2 args")?;
+                let rhs = args.get(1).context("StrictEq expects 2 args")?;
+                self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                let func_idx = self
+                    .builtin_func_indices
+                    .get(builtin)
+                    .copied()
+                    .context("no WASM func index for StrictEq")?;
+                self.emit(WasmInstruction::Call(func_idx));
+                if let Some(d) = dest {
+                    self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                }
+                Ok(Some(()))
+            }
             Builtin::AbstractCompare => {
                 // abstract_compare(a, b) -> bool (a < b)
                 let lhs = args.first().context("AbstractCompare expects 2 args")?;

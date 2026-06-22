@@ -137,7 +137,7 @@ module {
       store var $0.p2, %29
       %32 = load var $0.p
       %33 = load var $0.p2
-      %34 = stricteq %32, %33
+      %34 = call builtin.strict_eq(%32, %33)
       %35 = call builtin.console.log(%34)
       %36 = is_exception %35
       branch %36, bb6, bb5

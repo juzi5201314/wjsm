@@ -80,7 +80,7 @@ module {
     bb2:
       %23 = load var $0.x
       %24 = const c22
-      %25 = stricteq %23, %24
+      %25 = call builtin.strict_eq(%23, %24)
       branch %25, bb4, bb5
     bb3:
       %34 = const c25

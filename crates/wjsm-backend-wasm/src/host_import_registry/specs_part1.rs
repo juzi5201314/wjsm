@@ -136,6 +136,12 @@ pub(crate) static SPECS_PART1: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "strict_eq",
+        type_idx: 2,
+        key: Some(HostImportKey::Builtin(Builtin::StrictEq)),
+        group: None,
+    },
+    HostImportSpec {
         name: "abstract_compare",
         type_idx: 2,
         key: Some(HostImportKey::Builtin(Builtin::AbstractCompare)),

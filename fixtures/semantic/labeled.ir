@@ -84,7 +84,7 @@ module {
     bb2:
       %26 = load var $0.i
       %27 = const c23
-      %28 = stricteq %26, %27
+      %28 = call builtin.strict_eq(%26, %27)
       branch %28, bb5, bb6
     bb3:
       %35 = load var $0.i
@@ -102,7 +102,7 @@ module {
     bb6:
       %29 = load var $0.i
       %30 = const c24
-      %31 = stricteq %29, %30
+      %31 = call builtin.strict_eq(%29, %30)
       branch %31, bb7, bb8
     bb7:
       jump bb4

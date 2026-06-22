@@ -37,12 +37,12 @@ module {
     bb0:
       %0 = load var $1.p
       %1 = const c24
-      %2 = stricteq %0, %1
+      %2 = call builtin.strict_eq(%0, %1)
       branch %2, bb2, bb1
     bb1:
       %3 = load var $1.p
       %4 = const c25
-      %5 = stricteq %3, %4
+      %5 = call builtin.strict_eq(%3, %4)
       jump bb2
     bb2:
       %6 = phi [(bb0, %2), (bb1, %5)]

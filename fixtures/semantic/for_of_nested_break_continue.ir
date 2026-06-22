@@ -87,7 +87,7 @@ module {
       store var $0.total, %29
       %30 = load var $0.total
       %31 = const c23
-      %32 = stricteq %30, %31
+      %32 = call builtin.strict_eq(%30, %31)
       branch %32, bb6, bb7
     bb3:
       call builtin.iterator.next(%23)
