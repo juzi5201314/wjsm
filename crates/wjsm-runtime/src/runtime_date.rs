@@ -74,6 +74,61 @@ pub(crate) fn ms_to_datetime_local(ms: f64) -> Option<DateTime<Local>> {
     Some(utc_dt.with_timezone(&Local))
 }
 
+/// Parse a date string per ECMAScript `Date.parse` / `new Date(string)` expectations.
+/// Supports ISO 8601 (RFC3339), common chrono formats, `Date.prototype.toString()` output,
+/// and `Date.prototype.toUTCString()` output.
+pub(crate) fn parse_date_string(s: &str) -> Option<f64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let s = s
+        .trim_end()
+        .trim_end_matches("(Coordinated Universal Time)")
+        .trim();
+
+    if let Ok(dt) = DateTime::parse_from_rfc3339(s) {
+        return Some(dt.timestamp_millis() as f64);
+    }
+
+    const NAIVE_FMTS: &[&str] = &[
+        "%Y-%m-%dT%H:%M:%S%.f",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%d",
+        "%b %d, %Y",
+        "%B %d, %Y",
+        "%d %b %Y %H:%M:%S",
+    ];
+    for fmt in NAIVE_FMTS {
+        if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, fmt) {
+            return Some(ndt.and_utc().timestamp_millis() as f64);
+        }
+        if let Ok(nd) = chrono::NaiveDate::parse_from_str(s, fmt) {
+            if let Some(ndt) = nd.and_hms_opt(0, 0, 0) {
+                return Some(ndt.and_utc().timestamp_millis() as f64);
+            }
+        }
+    }
+
+    // `Date.prototype.toUTCString()`: "Wed, 22 Jun 2026 12:00:00 GMT"
+    if let Ok(ndt) = chrono::NaiveDateTime::parse_from_str(s, "%a, %d %b %Y %H:%M:%S GMT") {
+        return Some(ndt.and_utc().timestamp_millis() as f64);
+    }
+
+    // `Date.prototype.toString()`: "Tue Jun 22 2026 12:00:00 GMT+0000"
+    let gmt_stripped = s.replace("GMT", "");
+    let gmt_stripped = gmt_stripped.trim();
+    if let Ok(dt) = DateTime::parse_from_str(gmt_stripped, "%a %b %e %Y %H:%M:%S %z") {
+        return Some(dt.timestamp_millis() as f64);
+    }
+    if let Ok(dt) = DateTime::parse_from_str(gmt_stripped, "%a %b %e %Y %H:%M:%S %:z") {
+        return Some(dt.timestamp_millis() as f64);
+    }
+
+    None
+}
+
+
 pub(crate) fn date_args_to_ms(args: &[i64], is_utc: bool) -> f64 {
     if args.is_empty() {
         return f64::NAN;
