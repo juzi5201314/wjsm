@@ -2029,6 +2029,9 @@ pub(crate) fn define_collections_buffers(
                 to_string_fn,
                 to_date_string_fn,
                 to_time_string_fn,
+                to_locale_string_fn,
+                to_locale_date_string_fn,
+                to_locale_time_string_fn,
                 to_iso_string_fn,
                 to_utc_string_fn,
                 to_json_fn,
@@ -2071,6 +2074,9 @@ pub(crate) fn define_collections_buffers(
                     create_date_method(state, DateMethodKind::ToString),
                     create_date_method(state, DateMethodKind::ToDateString),
                     create_date_method(state, DateMethodKind::ToTimeString),
+                    create_date_method(state, DateMethodKind::ToLocaleString),
+                    create_date_method(state, DateMethodKind::ToLocaleDateString),
+                    create_date_method(state, DateMethodKind::ToLocaleTimeString),
                     create_date_method(state, DateMethodKind::ToISOString),
                     create_date_method(state, DateMethodKind::ToUTCString),
                     create_date_method(state, DateMethodKind::ToJSON),
@@ -2080,7 +2086,7 @@ pub(crate) fn define_collections_buffers(
 
             let obj = {
                 let _wjsm_env = WasmEnv::from_caller(&mut caller).expect("WasmEnv");
-                alloc_host_object(&mut caller, &_wjsm_env, 40)
+                alloc_host_object(&mut caller, &_wjsm_env, 43)
             };
             let ms_val = value::encode_f64(ms);
             let _ = define_host_data_property_from_caller(&mut caller, obj, "__date_ms__", ms_val);
@@ -2254,6 +2260,24 @@ pub(crate) fn define_collections_buffers(
                 obj,
                 "toTimeString",
                 to_time_string_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "toLocaleString",
+                to_locale_string_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "toLocaleDateString",
+                to_locale_date_string_fn,
+            );
+            let _ = define_host_data_property_from_caller(
+                &mut caller,
+                obj,
+                "toLocaleTimeString",
+                to_locale_time_string_fn,
             );
             let _ = define_host_data_property_from_caller(
                 &mut caller,
