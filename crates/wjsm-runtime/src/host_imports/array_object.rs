@@ -502,18 +502,19 @@ pub(crate) fn define_array_object(
                 caller: &mut Caller<'_, RuntimeState>,
                 arr: i64,
                 depth: u32,
+                elements: &mut Vec<i64>,
             ) {
                 let Some(ptr) = resolve_array_ptr(caller, arr) else {
-                    result.push(arr);
+                    elements.push(arr);
                     return;
                 };
                 let len = read_array_length(caller, ptr).unwrap_or(0);
                 for i in 0..len {
                     if let Some(elem) = read_array_elem(caller, ptr, i) {
                         if depth > 0 && value::is_array(elem) {
-                            flatten(caller, elem, depth - 1, result);
+                            flatten(caller, elem, depth - 1, elements);
                         } else {
-                            result.push(elem);
+                            elements.push(elem);
                         }
                     }
                 }
