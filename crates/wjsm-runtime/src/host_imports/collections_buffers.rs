@@ -1981,30 +1981,7 @@ pub(crate) fn define_collections_buffers(
                     let s = read_value_string_bytes(&mut caller, arg)
                         .map(|b| String::from_utf8_lossy(&b).into_owned())
                         .unwrap_or_default();
-                    if s.is_empty() {
-                        f64::NAN
-                    } else {
-                        match DateTime::parse_from_rfc3339(&s) {
-                            Ok(dt) => dt.timestamp_millis() as f64,
-                            Err(_) => {
-                                match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S")
-                                {
-                                    Ok(ndt) => ndt.and_utc().timestamp_millis() as f64,
-                                    Err(_) => {
-                                        match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                                            Ok(nd) => nd
-                                                .and_hms_opt(0, 0, 0)
-                                                .unwrap()
-                                                .and_utc()
-                                                .timestamp_millis()
-                                                as f64,
-                                            Err(_) => f64::NAN,
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    parse_date_string(&s).unwrap_or(f64::NAN)
                 } else {
                     f64::NAN
                 }
@@ -2314,50 +2291,7 @@ pub(crate) fn define_collections_buffers(
             if s.is_empty() {
                 return value::encode_f64(f64::NAN);
             }
-            match DateTime::parse_from_rfc3339(&s) {
-                Ok(dt) => value::encode_f64(dt.timestamp_millis() as f64),
-                Err(_) => match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S") {
-                    Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
-                    Err(_) => {
-                        match chrono::NaiveDateTime::parse_from_str(&s, "%Y-%m-%dT%H:%M:%S%.f") {
-                            Ok(ndt) => value::encode_f64(ndt.and_utc().timestamp_millis() as f64),
-                            Err(_) => match chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                                Ok(nd) => value::encode_f64(
-                                    nd.and_hms_opt(0, 0, 0)
-                                        .unwrap()
-                                        .and_utc()
-                                        .timestamp_millis()
-                                        as f64,
-                                ),
-                                Err(_) => {
-                                    match chrono::NaiveDateTime::parse_from_str(&s, "%b %d, %Y") {
-                                        Ok(ndt) => value::encode_f64(
-                                            ndt.and_utc().timestamp_millis() as f64,
-                                        ),
-                                        Err(_) => match chrono::NaiveDateTime::parse_from_str(
-                                            &s,
-                                            "%B %d, %Y",
-                                        ) {
-                                            Ok(ndt) => value::encode_f64(
-                                                ndt.and_utc().timestamp_millis() as f64,
-                                            ),
-                                            Err(_) => match chrono::NaiveDateTime::parse_from_str(
-                                                &s,
-                                                "%d %b %Y %H:%M:%S",
-                                            ) {
-                                                Ok(ndt) => value::encode_f64(
-                                                    ndt.and_utc().timestamp_millis() as f64,
-                                                ),
-                                                Err(_) => value::encode_f64(f64::NAN),
-                                            },
-                                        },
-                                    }
-                                }
-                            },
-                        }
-                    }
-                },
-            }
+            value::encode_f64(parse_date_string(&s).unwrap_or(f64::NAN))
         },
     );
     linker.define(&mut store, "env", "date_parse", date_parse_fn)?;
