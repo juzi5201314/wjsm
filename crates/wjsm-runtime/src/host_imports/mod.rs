@@ -52,7 +52,7 @@ mod timers_arrays;
 mod typedarray_new_methods;
 mod weakref_finalization;
 
-pub(crate) use array_object::{define_array_object, push_array_value};
+pub(crate) use array_object::define_array_object;
 pub(crate) use atomics::define_atomics;
 pub(crate) use collections_buffers::define_collections_buffers;
 pub(crate) use core::define_core;
