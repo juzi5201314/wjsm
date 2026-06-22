@@ -79,19 +79,17 @@ impl Compiler {
                         self.emit(WasmInstruction::End);
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
-                    // 其他算术运算（f64 操作）
+                    // 算术：两操作数均为 BigInt 时走 bigint_* host（除法截断 toward zero）
                     BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
-                        self.emit(WasmInstruction::F64ReinterpretI64);
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                        self.emit(WasmInstruction::F64ReinterpretI64);
-                        match op {
-                            BinaryOp::Sub => self.emit(WasmInstruction::F64Sub),
-                            BinaryOp::Mul => self.emit(WasmInstruction::F64Mul),
-                            BinaryOp::Div => self.emit(WasmInstruction::F64Div),
+                        let lhs_l = self.local_idx(lhs.0);
+                        let rhs_l = self.local_idx(rhs.0);
+                        let (bigint_builtin, f64_op) = match op {
+                            BinaryOp::Sub => (Builtin::BigIntSub, WasmInstruction::F64Sub),
+                            BinaryOp::Mul => (Builtin::BigIntMul, WasmInstruction::F64Mul),
+                            BinaryOp::Div => (Builtin::BigIntDiv, WasmInstruction::F64Div),
                             _ => unreachable!(),
-                        }
-                        self.emit(WasmInstruction::I64ReinterpretF64);
+                        };
+                        self.emit_bigint_or_f64_binary(lhs_l, rhs_l, bigint_builtin, f64_op)?;
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     // 位运算（i32 操作）
