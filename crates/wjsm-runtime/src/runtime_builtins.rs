@@ -553,10 +553,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
             if value::is_object(this_val) {
                 Some(this_val)
             } else {
-                Some({
-                    let _wjsm_env = WasmEnv::from_caller(caller).expect("WasmEnv");
-                    alloc_host_object(caller, &_wjsm_env, 4)
-                })
+                Some(alloc_array(caller, 0))
             }
         }
         NativeCallable::ObjectConstructor => {

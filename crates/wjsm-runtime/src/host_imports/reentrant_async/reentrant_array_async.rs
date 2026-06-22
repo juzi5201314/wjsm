@@ -200,7 +200,7 @@ async fn arr_proto_map_async(
         return value::encode_undefined();
     };
     let len = read_array_length(caller, ptr).unwrap_or(0);
-    let new_arr = alloc_array(caller, len);
+    let new_arr = array_species_create_async(caller, this_val, len).await;
     let Some(new_ptr) = resolve_array_ptr(caller, new_arr) else {
         return value::encode_undefined();
     };
@@ -264,7 +264,7 @@ async fn arr_proto_filter_async(
             passed.push(elem);
         }
     }
-    let new_arr = alloc_array(caller, passed.len() as u32);
+    let new_arr = array_species_create_async(caller, this_val, passed.len() as u32).await;
     let Some(new_ptr) = resolve_array_ptr(caller, new_arr) else {
         return value::encode_undefined();
     };
@@ -558,7 +558,7 @@ async fn arr_proto_flat_map_async(
             elements.push(mapped);
         }
     }
-    let new_arr = alloc_array(caller, elements.len() as u32);
+    let new_arr = array_species_create_async(caller, this_val, elements.len() as u32).await;
     let Some(new_ptr) = resolve_array_ptr(caller, new_arr) else {
         return value::encode_undefined();
     };

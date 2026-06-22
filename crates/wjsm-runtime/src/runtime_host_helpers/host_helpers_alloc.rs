@@ -1,4 +1,241 @@
 use super::*;
+use std::sync::atomic::Ordering;
+
+/// Well-known `Symbol.species` table index (see `RuntimeState::symbol_table` init order).
+const WELL_KNOWN_SYMBOL_SPECIES: u32 = 1;
+
+fn default_array_constructor(caller: &mut Caller<'_, RuntimeState>) -> i64 {
+    create_native_callable(caller.data(), NativeCallable::ArrayConstructor)
+}
+
+fn is_native_array_constructor(caller: &mut Caller<'_, RuntimeState>, constructor: i64) -> bool {
+    if !value::is_native_callable(constructor) {
+        return false;
+    }
+    let idx = value::decode_native_callable_idx(constructor) as usize;
+    let table = caller
+        .data()
+        .native_callables
+        .lock()
+        .expect("native callable table mutex");
+    matches!(
+        table.get(idx),
+        Some(NativeCallable::ArrayConstructor)
+    )
+}
+
+/// ES2024 `SpeciesConstructor(O, %Array%)` for Array exotic objects.
+pub(crate) fn array_species_constructor(
+    caller: &mut Caller<'_, RuntimeState>,
+    exemplar: i64,
+) -> i64 {
+    let default_ctor = default_array_constructor(caller);
+    if !value::is_object(exemplar) {
+        return default_ctor;
+    }
+    let Some(exemplar_ptr) = resolve_handle(caller, exemplar) else {
+        return default_ctor;
+    };
+    let mut constructor = read_object_property_by_name(caller, exemplar_ptr, "constructor")
+        .unwrap_or_else(value::encode_undefined);
+    if value::is_object(constructor) {
+        if let Some(ctor_ptr) = resolve_handle(caller, constructor) {
+            let species = read_object_property_by_name_id(
+                caller,
+                ctor_ptr,
+                encode_symbol_name_id(WELL_KNOWN_SYMBOL_SPECIES),
+            )
+            .unwrap_or_else(value::encode_undefined);
+            if value::is_null(species) {
+                constructor = value::encode_undefined();
+            } else if !value::is_undefined(species) {
+                constructor = species;
+            }
+        }
+    }
+    if value::is_undefined(constructor) {
+        default_ctor
+    } else {
+        constructor
+    }
+}
+
+fn construct_array_with_constructor_sync(
+    caller: &mut Caller<'_, RuntimeState>,
+    constructor: i64,
+    length: u32,
+) -> i64 {
+    if is_native_array_constructor(caller, constructor) {
+        return alloc_array(caller, length);
+    }
+    if !is_constructor_in_runtime(caller, constructor) {
+        return value::encode_undefined();
+    }
+    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+        Some(m) => m,
+        None => return value::encode_undefined(),
+    };
+    let shadow_sp_global = match caller
+        .get_export("__shadow_sp")
+        .and_then(|e| e.into_global())
+    {
+        Some(g) => g,
+        None => return value::encode_undefined(),
+    };
+    let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap_or(0);
+    let len_val = value::encode_f64(length as f64);
+    if memory
+        .write(&mut *caller, shadow_sp as usize, &len_val.to_le_bytes())
+        .is_err()
+    {
+        return value::encode_undefined();
+    }
+    let previous_new_target = caller
+        .data()
+        .new_target
+        .swap(constructor, Ordering::Relaxed);
+    let result = if value::is_native_callable(constructor) {
+        call_native_callable_with_args_from_caller(
+            caller,
+            constructor,
+            value::encode_undefined(),
+            vec![len_val],
+        )
+        .unwrap_or_else(value::encode_undefined)
+    } else {
+        let (func_idx, env_obj) = if value::is_closure(constructor) {
+            let idx = value::decode_closure_idx(constructor);
+            let closures = caller.data().closures.lock().expect("closures mutex");
+            let entry = &closures[idx as usize];
+            (entry.func_idx, entry.env_obj)
+        } else if value::is_function(constructor) {
+            (
+                value::decode_function_idx(constructor),
+                value::encode_undefined(),
+            )
+        } else {
+            caller
+                .data()
+                .new_target
+                .store(previous_new_target, Ordering::Relaxed);
+            return value::encode_undefined();
+        };
+        let table = match caller.get_export("__table").and_then(|e| e.into_table()) {
+            Some(t) => t,
+            None => {
+                caller
+                    .data()
+                    .new_target
+                    .store(previous_new_target, Ordering::Relaxed);
+                return value::encode_undefined();
+            }
+        };
+        let func = table
+            .get(&mut *caller, func_idx as u64)
+            .and_then(|r| r.cloned())
+            .and_then(|r| r.func().cloned());
+        let Some(func) = func else {
+            caller
+                .data()
+                .new_target
+                .store(previous_new_target, Ordering::Relaxed);
+            return value::encode_undefined();
+        };
+        let mut results = [Val::I64(0)];
+        let call_ok = func
+            .call(
+                &mut *caller,
+                &[
+                    Val::I64(env_obj),
+                    Val::I64(value::encode_undefined()),
+                    Val::I32(shadow_sp),
+                    Val::I32(1),
+                ],
+                &mut results,
+            )
+            .is_ok();
+        if call_ok {
+            results[0].unwrap_i64()
+        } else {
+            value::encode_undefined()
+        }
+    };
+    caller
+        .data()
+        .new_target
+        .store(previous_new_target, Ordering::Relaxed);
+    if value::is_object(result) {
+        result
+    } else {
+        value::encode_undefined()
+    }
+}
+
+/// ES2024 `ArraySpeciesCreate(O, length)` — sync host paths (concat, slice, flat, splice).
+pub(crate) fn array_species_create(
+    caller: &mut Caller<'_, RuntimeState>,
+    exemplar: i64,
+    length: u32,
+) -> i64 {
+    let constructor = array_species_constructor(caller, exemplar);
+    construct_array_with_constructor_sync(caller, constructor, length)
+}
+
+/// ES2024 `ArraySpeciesCreate(O, length)` — async host paths (map, filter, flatMap).
+pub(crate) async fn array_species_create_async(
+    caller: &mut Caller<'_, RuntimeState>,
+    exemplar: i64,
+    length: u32,
+) -> i64 {
+    let constructor = array_species_constructor(caller, exemplar);
+    if is_native_array_constructor(caller, constructor) {
+        return alloc_array(caller, length);
+    }
+    if !is_constructor_in_runtime(caller, constructor) {
+        return value::encode_undefined();
+    }
+    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+        Some(m) => m,
+        None => return value::encode_undefined(),
+    };
+    let shadow_sp_global = match caller
+        .get_export("__shadow_sp")
+        .and_then(|e| e.into_global())
+    {
+        Some(g) => g,
+        None => return value::encode_undefined(),
+    };
+    let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap_or(0);
+    let len_val = value::encode_f64(length as f64);
+    if memory
+        .write(&mut *caller, shadow_sp as usize, &len_val.to_le_bytes())
+        .is_err()
+    {
+        return value::encode_undefined();
+    }
+    let previous_new_target = caller
+        .data()
+        .new_target
+        .swap(constructor, Ordering::Relaxed);
+    let result = resolve_and_call_async(
+        caller,
+        constructor,
+        value::encode_undefined(),
+        shadow_sp,
+        1,
+    )
+    .await;
+    caller
+        .data()
+        .new_target
+        .store(previous_new_target, Ordering::Relaxed);
+    if value::is_object(result) {
+        result
+    } else {
+        value::encode_undefined()
+    }
+}
+
 pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
