@@ -156,7 +156,6 @@ impl Lowerer {
         self.push_function_context(&async_name, BasicBlockId(0));
         self.is_async_fn = true;
         self.async_state_counter = 1;
-        let outer_super_call_allowed = self.super_call_allowed;
         self.captured_var_slots.clear();
         self.async_resume_blocks.clear();
         self.is_arrow = true;
