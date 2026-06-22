@@ -3,7 +3,7 @@
 //! `RuntimeRoots`：impl RootProvider，扫描 shadow stack + host 侧表。
 //!
 //! Root 来源：
-//! - shadow stack：[0, sp) 每 8B 槽读 i64，解析为 handle（含 closure→env_obj）。
+//! - shadow stack：[stack_base, sp) 每 8B 槽读 i64，解析为 handle（含 closure→env_obj）。
 //! - IR function property objects（function_props_base..+num_ir_functions）：永久存活。
 //! - primordial 原型（Array/Object/AsyncIterator/AsyncGenerator.prototype）：永久存活。
 //! - fixed-point host 侧表（移植自 trace_runtime_side_table_roots_fixed_point）：
@@ -25,7 +25,7 @@
 //! Shadow stack 位于 WASM 线性内存的前 64KB（由 `SHADOW_STACK_SIZE` 定义）。
 //! 编译器通过 `global.set $shadow_sp` 维护栈指针（以字节为单位）。
 //!
-//! **不变量 INV-SP**：在任何 GC 安全点（safepoint），shadow stack 的 `[0, sp)` 区间
+//! **不变量 INV-SP**：在任何 GC 安全点（safepoint），shadow stack 的 `[stack_base, sp)` 区间
 //! 包含所有活跃的 root 值。GC 通过 `tag_needs_root` 过滤标量值（如 smallint、bool），
 //! 只保留真正的 handle。
 //!
@@ -42,7 +42,7 @@
 //! 1. **恢复 sp**：`global.set $shadow_sp` 将 sp 恢复为 `saved_sp`
 //!
 //! **不变量 INV-C（Compiler Guarantee）**：编译器保证在 GC 期间不修改 shadow stack
-//! 中已 spill 的值。这意味着 GC 可以安全地读取 `[0, sp)` 而不担心并发修改。
+//! 中已 spill 的值。这意味着 GC 可以安全地读取 `[stack_base, sp)` 而不担心并发修改。
 //!
 //! ## 优化策略
 //!
@@ -57,7 +57,7 @@
 //! 当 GC 被触发时（通常在 `obj_new`/`arr_new` 分配时）：
 //!
 //! 1. **Runtime 调用 `gc_collect`**：通过 host function 调用
-//! 2. **RuntimeRoots::for_each_shadow_stack_root**：扫描 `[0, sp)` 区间
+//! 2. **RuntimeRoots::for_each_shadow_stack_root**：扫描 `[stack_base, sp)` 区间
 //! 3. **tag_needs_root 过滤**：跳过标量值（smallint、bool、undefined 等）
 //! 4. **Mark 阶段**：标记所有从 root 可达的对象
 //! 5. **Sweep 阶段**：回收未标记的对象
@@ -73,8 +73,9 @@
 //! - **陈旧 handle**：指向已回收的对象，GC 会将其标记为 dead，不会访问
 //!
 //! 这允许编译器采用保守策略（宁可多 spill，也不漏 spill）。
-use crate::runtime_gc::api::{GcContext, Handle, RootProvider};
-use wjsm_ir::value;
+use wjsm_ir::{value, SHADOW_STACK_SIZE};
+use crate::runtime_gc::api::{Handle, RootProvider};
+use crate::runtime_gc::GcContext;
 
 /// 运行时 root 提供者：扫描 shadow stack + host 侧表（fixed-point 友好）。
 pub struct RuntimeRoots;
@@ -83,15 +84,18 @@ impl RootProvider for RuntimeRoots {
     fn for_each_shadow_stack_root(&mut self, ctx: &mut GcContext, visit: &mut dyn FnMut(Handle)) {
         let sp = ctx.shadow_sp();
         let end = ctx.shadow_stack_end();
-        // shadow stack 区间：[0, sp)（runtime 把 shadow stack 放在 memory 头部）。
-        // tag_needs_root 过滤标量；object_heap_start 之后是对象堆，tag 过滤不会误扫。
-        if sp == 0 || end == 0 || sp > end {
+        // shadow stack 区间：[stack_base, sp)；位于 handle table 之后，非从地址 0 起扫。
+        if end == 0 {
+            return;
+        }
+        let stack_base = end.saturating_sub(SHADOW_STACK_SIZE as usize);
+        if sp <= stack_base || sp > end {
             return;
         }
         // 先快照所有 raw 值（with_memory 借用周期短），再解析（解析可能 with_state）。
         let vals: Vec<i64> = ctx.with_memory(|_caller, data| {
             let mut out = Vec::new();
-            let mut addr = 0usize;
+            let mut addr = stack_base;
             while addr + 8 <= sp.min(data.len()) {
                 let val = i64::from_le_bytes([
                     data[addr],

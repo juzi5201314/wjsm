@@ -1267,13 +1267,12 @@ pub(crate) fn define_core(
 
     // gc_alloc_slow(size: i32, heap_type: i32, capacity: i32) -> i32
     //   fast-path bump 失败后的 slow-path：free list → bump → GC → grow。
-    //   返回**线性内存 ptr**（仅地址；handle 注册在 WASM $obj_new/$arr_new 中完成）。
-    //   真 OOM（无法分配）时返回 u32::MAX sentinel（调用方 unreachable trap）。
+    //   真 OOM（无法分配）时 host 返回 `Err` → Wasmtime trap（#117）；不再返回 sentinel。
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, size: i32, heap_type: i32, capacity: i32| -> i32 {
+        |mut caller: Caller<'_, RuntimeState>, size: i32, heap_type: i32, capacity: i32| -> wasmtime::Result<i32> {
             let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
-                return u32::MAX as i32;
+                return Err(wasmtime::Trap::AllocationTooLarge.into());
             };
             let size = size.max(0) as usize;
             let heap_type = heap_type.clamp(0, 255) as u8;
@@ -1287,7 +1286,7 @@ pub(crate) fn define_core(
                 let mut ctx =
                     crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
                 if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
-                    return ptr as i32;
+                    return Ok(ptr as i32);
                 }
             }
             // 2. collect 后重试
@@ -1303,7 +1302,7 @@ pub(crate) fn define_core(
                 let mut ctx =
                     crate::runtime_gc::GcContext::new(&mut caller, memory, gc.algorithm_name());
                 if let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity) {
-                    return ptr as i32;
+                    return Ok(ptr as i32);
                 }
             }
             // 3. grow + 重试（真 OOM 前最后手段）
@@ -1314,11 +1313,11 @@ pub(crate) fn define_core(
                 if ctx.grow(1).is_ok()
                     && let Some(ptr) = gc.alloc_slow(&mut ctx, size, heap_type, capacity)
                 {
-                    return ptr as i32;
+                    return Ok(ptr as i32);
                 }
             }
-            // 真 OOM：返回 sentinel（u32::MAX），调用方应 unreachable trap。
-            u32::MAX as i32
+            // 真 OOM：trap 中止执行，避免 u32::MAX/-1 被当作线性内存地址（#117）。
+            Err(wasmtime::Trap::AllocationTooLarge.into())
         },
     );
     linker.define(&mut store, "env", "gc_alloc_slow", f)?;

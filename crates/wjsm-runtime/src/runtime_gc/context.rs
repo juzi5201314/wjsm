@@ -25,6 +25,41 @@ pub fn read_i32_global(caller: &mut Caller<'_, crate::RuntimeState>, name: &str)
     None
 }
 
+/// GC 已知的堆对象布局分类（issue #119：禁止把未知 tag 静默当成 OBJECT 而不告警）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum GcHeapLayout {
+    /// 数组：len@+8，元素 8B。
+    Array,
+    /// 普通对象或 Arguments（属性槽布局与 OBJECT 相同）。
+    ObjectLike,
+}
+
+/// 将 header 中的 heap_type 映射为 GC 扫描/计大小用的布局；未知 tag 会 debug_assert 并在 release 打日志。
+pub(crate) fn gc_heap_layout(heap_type: u8) -> GcHeapLayout {
+    match heap_type {
+        wjsm_ir::HEAP_TYPE_ARRAY => GcHeapLayout::Array,
+        wjsm_ir::HEAP_TYPE_OBJECT | wjsm_ir::HEAP_TYPE_ARGUMENTS => GcHeapLayout::ObjectLike,
+        tag => {
+            debug_assert!(
+                false,
+                "GC: unhandled heap_type 0x{tag:02x}; extend gc_heap_layout / mark / sweep"
+            );
+            #[cfg(not(debug_assertions))]
+            eprintln!(
+                "wjsm GC warning: unhandled heap_type 0x{tag:02x}, assuming OBJECT layout"
+            );
+            GcHeapLayout::ObjectLike
+        }
+    }
+}
+
+fn object_cap_and_elem_size(heap_type: u8) -> (usize, usize) {
+    match gc_heap_layout(heap_type) {
+        GcHeapLayout::Array => (12usize, ARRAY_ELEM_SIZE),
+        GcHeapLayout::ObjectLike => (8usize, OBJECT_ELEM_SIZE),
+    }
+}
+
 /// 从 memory 现场读对象 header，算对象总大小（HEADER + payload）。
 ///
 /// 对象布局：proto(4) heap_type(1) pad(3) capacity(4) num_props/len(4) [payload]。
@@ -37,11 +72,7 @@ pub fn object_size_from_memory(data: &[u8], ptr: usize) -> Option<usize> {
         return None;
     }
     let heap_type = data[ptr + 4];
-    let (cap_off, elem_size) = if heap_type == wjsm_ir::HEAP_TYPE_ARRAY {
-        (12usize, ARRAY_ELEM_SIZE)
-    } else {
-        (8usize, OBJECT_ELEM_SIZE)
-    };
+    let (cap_off, elem_size) = object_cap_and_elem_size(heap_type);
     let capacity = u32::from_le_bytes([
         data[ptr + cap_off],
         data[ptr + cap_off + 1],

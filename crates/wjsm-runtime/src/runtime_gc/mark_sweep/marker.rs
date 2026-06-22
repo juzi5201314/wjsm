@@ -18,8 +18,10 @@
 //! raw values（递归收敛），最后 mark_bits.mark_if_new + push。mark_bits 是 collector 字段，
 //! 与 ctx 借用独立，无冲突。
 use crate::runtime_gc::api::{GcContext, Handle};
+use crate::runtime_gc::context::GcHeapLayout;
 use crate::runtime_gc::mark_sweep::MarkSweepCollector;
 use wjsm_ir::value;
+
 
 /// 标记 roots 并 drain worklist。
 pub fn mark_roots_and_drain(
@@ -98,57 +100,60 @@ fn collect_child_raw_values(
 
     // type byte 决定数组还是对象
     let heap_type = data[obj_ptr + 4];
-    if heap_type == wjsm_ir::HEAP_TYPE_ARRAY {
-        // 数组：elements（offset 16 + i*8）
-        let len = u32::from_le_bytes([
-            data[obj_ptr + 8],
-            data[obj_ptr + 9],
-            data[obj_ptr + 10],
-            data[obj_ptr + 11],
-        ]) as usize;
-        for i in 0..len {
-            let off = obj_ptr + 16 + i * 8;
-            if off + 8 > data.len() {
-                break;
-            }
-            let elem = i64::from_le_bytes([
-                data[off],
-                data[off + 1],
-                data[off + 2],
-                data[off + 3],
-                data[off + 4],
-                data[off + 5],
-                data[off + 6],
-                data[off + 7],
-            ]);
-            out.push(elem);
-        }
-    } else {
-        // 对象：属性槽 [name_id(4) flags(4) value(8) getter(8) setter(8)] = 32B
-        let num_props = u32::from_le_bytes([
-            data[obj_ptr + 12],
-            data[obj_ptr + 13],
-            data[obj_ptr + 14],
-            data[obj_ptr + 15],
-        ]) as usize;
-        for i in 0..num_props {
-            let slot = obj_ptr + 16 + i * 32;
-            if slot + 32 > data.len() {
-                break;
-            }
-            // value@+8, getter@+16, setter@+24
-            for val_off in [8usize, 16, 24] {
-                let v = i64::from_le_bytes([
-                    data[slot + val_off],
-                    data[slot + val_off + 1],
-                    data[slot + val_off + 2],
-                    data[slot + val_off + 3],
-                    data[slot + val_off + 4],
-                    data[slot + val_off + 5],
-                    data[slot + val_off + 6],
-                    data[slot + val_off + 7],
+    match crate::runtime_gc::context::gc_heap_layout(heap_type) {
+        GcHeapLayout::Array => {
+            // 数组：elements（offset 16 + i*8）
+            let len = u32::from_le_bytes([
+                data[obj_ptr + 8],
+                data[obj_ptr + 9],
+                data[obj_ptr + 10],
+                data[obj_ptr + 11],
+            ]) as usize;
+            for i in 0..len {
+                let off = obj_ptr + 16 + i * 8;
+                if off + 8 > data.len() {
+                    break;
+                }
+                let elem = i64::from_le_bytes([
+                    data[off],
+                    data[off + 1],
+                    data[off + 2],
+                    data[off + 3],
+                    data[off + 4],
+                    data[off + 5],
+                    data[off + 6],
+                    data[off + 7],
                 ]);
-                out.push(v);
+                out.push(elem);
+            }
+        }
+        GcHeapLayout::ObjectLike => {
+            // 对象 / Arguments：属性槽 [name_id(4) flags(4) value(8) getter(8) setter(8)] = 32B
+            let num_props = u32::from_le_bytes([
+                data[obj_ptr + 12],
+                data[obj_ptr + 13],
+                data[obj_ptr + 14],
+                data[obj_ptr + 15],
+            ]) as usize;
+            for i in 0..num_props {
+                let slot = obj_ptr + 16 + i * 32;
+                if slot + 32 > data.len() {
+                    break;
+                }
+                // value@+8, getter@+16, setter@+24
+                for val_off in [8usize, 16, 24] {
+                    let v = i64::from_le_bytes([
+                        data[slot + val_off],
+                        data[slot + val_off + 1],
+                        data[slot + val_off + 2],
+                        data[slot + val_off + 3],
+                        data[slot + val_off + 4],
+                        data[slot + val_off + 5],
+                        data[slot + val_off + 6],
+                        data[slot + val_off + 7],
+                    ]);
+                    out.push(v);
+                }
             }
         }
     }
