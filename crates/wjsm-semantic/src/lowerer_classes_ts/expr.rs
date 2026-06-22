@@ -329,6 +329,20 @@ impl Lowerer {
             },
         );
 
+        if let Some((ref name, scope_id)) = class_body_name_scope {
+            self.scopes
+                .mark_initialised(name)
+                .map_err(|msg| self.error(class_expr.span(), msg))?;
+            let ir_name = format!("${scope_id}.{name}");
+            self.current_function.append_instruction(
+                block,
+                Instruction::StoreVar {
+                    name: ir_name,
+                    value: ctor_dest,
+                },
+            );
+        }
+
         // 创建 prototype 对象
         let proto_dest = self.alloc_value();
         // 计算非构造函数方法数量，作为原型对象的容量
@@ -898,20 +912,10 @@ impl Lowerer {
             },
         );
 
-        if let Some((name, scope_id)) = class_body_name_scope {
-            self.scopes
-                .mark_initialised(&name)
-                .map_err(|msg| self.error(class_expr.span(), msg))?;
-            let ir_name = format!("${scope_id}.{name}");
-            self.current_function.append_instruction(
-                block,
-                Instruction::StoreVar {
-                    name: ir_name,
-                    value: ctor_dest,
-                },
-            );
+        if class_body_name_scope.is_some() {
             self.scopes.pop_scope();
         }
+
 
         Ok(ctor_dest)
     }
