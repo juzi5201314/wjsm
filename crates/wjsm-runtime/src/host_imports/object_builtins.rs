@@ -71,12 +71,12 @@ pub(crate) fn define_object_builtins(
                 return value::encode_undefined();
             }
             for i in 0..args_count as u32 {
-                let source = read_shadow_arg(&mut caller, args_base, i);
+                let mut source = read_shadow_arg(&mut caller, args_base, i);
                 if value::is_undefined(source) || value::is_null(source) {
                     continue;
                 }
                 if !value::is_js_object(source) {
-                    continue;
+                    source = to_object(&mut caller, source);
                 }
                 let Some(source_ptr) = resolve_handle(&mut caller, source) else {
                     continue;
@@ -224,12 +224,17 @@ pub(crate) fn define_object_builtins(
             let Some(ptr) = resolve_handle(&mut caller, target) else {
                 return value::encode_undefined();
             };
-            let prop_name = match render_value(&mut caller, prop) {
-                Ok(name) => name,
-                Err(_) => return value::encode_undefined(),
-            };
-            let Some(name_id) = find_memory_c_string(&mut caller, &prop_name) else {
-                return value::encode_undefined();
+            let name_id = if let Some(name_id) = symbol_value_to_name_id(prop) {
+                name_id
+            } else {
+                let prop_name = match render_value(&mut caller, prop) {
+                    Ok(name) => name,
+                    Err(_) => return value::encode_undefined(),
+                };
+                let Some(name_id) = find_memory_c_string(&mut caller, &prop_name) else {
+                    return value::encode_undefined();
+                };
+                name_id
             };
             let Some((slot_offset, flags, val)) =
                 find_property_slot_by_name_id(&mut caller, ptr, name_id)

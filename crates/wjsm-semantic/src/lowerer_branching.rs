@@ -553,7 +553,6 @@ impl Lowerer {
         let block = self.ensure_open(flow)?;
 
         let try_body = self.current_function.new_block();
-        let catch_entry = self.current_function.new_block();
         let finally_entry = self.current_function.new_block();
         let exit = self.current_function.new_block();
 
@@ -563,9 +562,14 @@ impl Lowerer {
         // 推入 try context 以便 lower_throw 能重定向到 catch
         let exc_var = self.alloc_temp_name();
         let has_catch = try_stmt.handler.is_some();
+        let catch_entry = if has_catch {
+            Some(self.current_function.new_block())
+        } else {
+            None
+        };
         let mut try_ctx_popped = false;
         self.try_contexts.push(TryContext {
-            catch_entry: if has_catch { Some(catch_entry) } else { None },
+            catch_entry,
             exception_var: exc_var,
             label_depth: self.label_stack.len(),
         });
@@ -590,6 +594,7 @@ impl Lowerer {
 
             // Lower catch body if present
             if let Some(catch) = &try_stmt.handler {
+                let catch_entry = catch_entry.expect("has_catch implies catch_entry");
                 // Lower catch clause: bind parameter if present
                 self.scopes.push_scope(ScopeKind::Block);
                 if let Some(param) = &catch.param {
@@ -656,12 +661,8 @@ impl Lowerer {
                     .current_function
                     .ensure_jump_or_terminated(catch_body_flow, finally_entry);
                 self.scopes.pop_scope();
-            } else {
-                // No catch: rethrow from catch_entry goes to finally
-                let _ = self
-                    .current_function
-                    .ensure_jump_or_terminated(StmtFlow::Open(catch_entry), finally_entry);
             }
+
             self.active_finalizers.pop();
 
             // Lower finally
@@ -672,6 +673,7 @@ impl Lowerer {
 
             self.finally_stack.pop();
         } else if let Some(catch) = &try_stmt.handler {
+            let catch_entry = catch_entry.expect("handler present");
             // try/catch without finally
             self.scopes.push_scope(ScopeKind::Block);
             if let Some(param) = &catch.param {

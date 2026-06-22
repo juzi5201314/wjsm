@@ -230,6 +230,11 @@ fn try_finally_fixture_matches_ir_snapshot() {
 }
 
 #[test]
+fn try_finally_no_catch_fixture_matches_ir_snapshot() {
+    assert_snapshot("try_finally_no_catch");
+}
+
+#[test]
 fn try_catch_finally_fixture_matches_ir_snapshot() {
     assert_snapshot("try_catch_finally");
 }

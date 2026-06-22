@@ -1,0 +1,1 @@
+try { throw new Error("test"); } finally { console.log("finally"); }

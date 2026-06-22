@@ -1162,19 +1162,49 @@ pub(crate) async fn advance_async_from_sync_async(
                     Some((true, value::encode_undefined()))
                 }
             }
-            Some(IteratorState::MapKeyIter { keys, index }) => {
-                if (*index as usize) < keys.len() {
-                    let val = keys[*index as usize];
-                    *index += 1;
-                    Some((false, val))
+            Some(IteratorState::MapKeyIter { map_handle, index }) => {
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if *map_handle < table.len() as u32 {
+                    let entry = &table[*map_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.keys.len() {
+                        let val = entry.keys[idx];
+                        *index += 1;
+                        drop(table);
+                        Some((false, val))
+                    } else {
+                        drop(table);
+                        Some((true, value::encode_undefined()))
+                    }
                 } else {
+                    drop(table);
                     Some((true, value::encode_undefined()))
                 }
             }
-            Some(IteratorState::MapValueIter { values, index }) => {
+            Some(IteratorState::MapValueIter { map_handle, index }) => {
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                if *map_handle < table.len() as u32 {
+                    let entry = &table[*map_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.values.len() {
+                        let val = entry.values[idx];
+                        *index += 1;
+                        drop(table);
+                        Some((false, val))
+                    } else {
+                        drop(table);
+                        Some((true, value::encode_undefined()))
+                    }
+                } else {
+                    drop(table);
+                    Some((true, value::encode_undefined()))
+                }
+            }
+            Some(IteratorState::IndexValueIter { values, index }) => {
                 if (*index as usize) < values.len() {
                     let val = values[*index as usize];
                     *index += 1;
+                    drop(iters);
                     Some((false, val))
                 } else {
                     Some((true, value::encode_undefined()))

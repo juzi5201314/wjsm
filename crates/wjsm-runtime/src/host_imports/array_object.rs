@@ -923,12 +923,12 @@ pub(crate) fn define_array_object(
                 None => return target,
             };
             for i in 0..args_count {
-                let source_val = read_shadow_arg(&mut caller, args_base, i as u32);
-                if !value::is_object(source_val)
-                    && !value::is_function(source_val)
-                    && !value::is_array(source_val)
-                {
+                let mut source_val = read_shadow_arg(&mut caller, args_base, i as u32);
+                if value::is_undefined(source_val) || value::is_null(source_val) {
                     continue;
+                }
+                if !value::is_js_object(source_val) {
+                    source_val = to_object(&mut caller, source_val);
                 }
                 let Some(source_ptr) = resolve_handle(&mut caller, source_val) else {
                     continue;

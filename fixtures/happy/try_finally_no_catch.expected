@@ -1,0 +1,6 @@
+exit_code: 2
+--- stdout ---
+finally
+Uncaught exception: Error: test
+--- stderr ---
+Runtime error: Uncaught exception: Error: test

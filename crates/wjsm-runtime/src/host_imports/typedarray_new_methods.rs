@@ -918,7 +918,7 @@ pub(crate) fn define_typedarray_new_methods(
             {
                 let mut iter_table = caller.data().iterators.lock().expect("iterators mutex");
                 handle = iter_table.len() as u32;
-                iter_table.push(IteratorState::MapValueIter { values, index: 0 });
+                iter_table.push(IteratorState::IndexValueIter { values, index: 0 });
             }
             value::encode_handle(value::TAG_ITERATOR, handle)
         },

@@ -487,6 +487,18 @@ pub(crate) fn define_primitive_core(
                 }
             }
 
+            // u 和 v 标志不能同时出现（ECMAScript 22.2.2.1）
+            if seen['u' as usize] && seen['v' as usize] {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") = Some(
+                    "SyntaxError: Invalid regular expression flags: u and v cannot be combined".to_string(),
+                );
+                return value::encode_undefined();
+            }
+
             // 仅将引擎相关标志传给 regress
             let engine_flags: String = flags
                 .chars()
@@ -868,14 +880,27 @@ pub(crate) fn define_primitive_core(
                 }
             } else {
                 // 非全局：返回 exec 结果（数组或 null）
-                match entry.compiled.find(&s) {
-                    Some(m) => build_match_result(
-                        &mut caller,
-                        &m,
-                        &s,
-                        (m.captures.len() + 1) as u32,
-                        &entry.flags,
-                    ),
+                let is_sticky = entry.flags.contains('y');
+                let last_idx = entry.last_index as usize;
+                let match_result = if is_sticky {
+                    entry.compiled.find_from(&s, last_idx).next()
+                } else {
+                    entry.compiled.find(&s)
+                };
+                match match_result {
+                    Some(m) => {
+                        if is_sticky && m.start() != last_idx {
+                            value::encode_null()
+                        } else {
+                            build_match_result(
+                                &mut caller,
+                                &m,
+                                &s,
+                                (m.captures.len() + 1) as u32,
+                                &entry.flags,
+                            )
+                        }
+                    }
                     None => value::encode_null(),
                 }
             }
@@ -904,19 +929,34 @@ pub(crate) fn define_primitive_core(
                     }
                 };
             }
-
             let handle = value::decode_regexp_handle(regexp);
-            let table = caller.data().regex_table.lock().unwrap();
-            let entry = match table.get(handle as usize) {
-                Some(e) => e.clone(),
-                None => return value::encode_f64(-1.0),
+            let (entry, prev_last_index) = {
+                let mut table = caller.data().regex_table.lock().unwrap();
+                let entry = match table.get_mut(handle as usize) {
+                    Some(e) => e,
+                    None => return value::encode_f64(-1.0),
+                };
+                let prev = entry.last_index;
+                let is_global_or_sticky = entry.flags.contains('g') || entry.flags.contains('y');
+                if is_global_or_sticky {
+                    entry.last_index = 0;
+                }
+                (entry.clone(), prev)
             };
-            drop(table);
 
-            match entry.compiled.find(&s) {
+            let result = match entry.compiled.find(&s) {
                 Some(m) => value::encode_f64(m.start() as f64),
                 None => value::encode_f64(-1.0),
+            };
+
+            // 恢复 lastIndex（ECMAScript 22.2.6.11 §4）
+            {
+                let mut table = caller.data().regex_table.lock().unwrap();
+                if let Some(e) = table.get_mut(handle as usize) {
+                    e.last_index = prev_last_index;
+                }
             }
+            result
         },
     );
     linker.define(&mut store, "env", "string_search", string_search_fn)?;
@@ -990,7 +1030,7 @@ pub(crate) fn define_primitive_core(
                     }
                     let start = m.start();
                     let end = m.end();
-                    if start > last_end {
+                    if start >= last_end {
                         // 添加匹配前的文本部分
                         parts.push(store_runtime_string(
                             &caller,
@@ -1013,7 +1053,7 @@ pub(crate) fn define_primitive_core(
                     last_end = end;
                 }
                 // 添加最后一部分
-                if parts.len() < limit_val && last_end < s.len() {
+                if parts.len() < limit_val && last_end <= s.len() {
                     parts.push(store_runtime_string(&caller, s[last_end..].to_string()));
                 }
 

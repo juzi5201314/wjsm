@@ -14,7 +14,8 @@
       "Bash(cargo check 2>&1 | tail -20)",
       "Bash(cargo build 2>&1 | tail -10)",
       "Bash(cargo build --quiet 2>&1 | grep -E \"^error\" | head -5)",
-      "Bash(cargo build --package wjsm-runtime 2>&1 | tail -50)"
+      "Bash(cargo build --package wjsm-runtime 2>&1 | tail -50)",
+      "Bash(cd /home/soeur/project/wjsm && git commit --amend -m \"$\\(cat <<'EOF'\nfix: 修复 string.match/search 临时 RegExp 内存泄漏 \\(#236\\)\n\nstring.match/search 接收非 RegExp 参数时，会将临时编译的正则推入\nregex_table 但从不回收，导致表无限增长。改为直接使用临时编译结果\n完成匹配，不再写入 regex_table。\nEOF\n\\)\")"
     ]
   }
 }
