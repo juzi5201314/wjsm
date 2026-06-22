@@ -1,0 +1,4 @@
+const [a, b, c] = [1];
+console.log(a);
+console.log(b);
+console.log(c);

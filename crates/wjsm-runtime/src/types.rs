@@ -827,6 +827,11 @@ pub(crate) enum IteratorState {
         map_handle: u32,
         index: u32,
     },
+    /// Set 值迭代：读取 set_table.values，勿与 MapValueIter 混用
+    SetValueIter {
+        set_handle: u32,
+        index: u32,
+    },
     /// 预物化索引序列（如 TypedArray.prototype.keys 的 0..length）
     IndexValueIter {
         values: Vec<i64>,

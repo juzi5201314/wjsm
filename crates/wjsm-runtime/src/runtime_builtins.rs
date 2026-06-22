@@ -1253,6 +1253,25 @@ pub(crate) async fn advance_async_from_sync_async(
                     Some((true, value::encode_undefined()))
                 }
             }
+            Some(IteratorState::SetValueIter { set_handle, index }) => {
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                if *set_handle < table.len() as u32 {
+                    let entry = &table[*set_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.values.len() {
+                        let val = entry.values[idx];
+                        *index += 1;
+                        drop(table);
+                        Some((false, val))
+                    } else {
+                        drop(table);
+                        Some((true, value::encode_undefined()))
+                    }
+                } else {
+                    drop(table);
+                    Some((true, value::encode_undefined()))
+                }
+            }
             Some(IteratorState::IndexValueIter { values, index }) => {
                 if (*index as usize) < values.len() {
                     let val = values[*index as usize];
