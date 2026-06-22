@@ -5,7 +5,7 @@
 //! 算法：
 //! 1. 收集所有已分配块信息（含已死）。依赖 INV-A（obj_table 完整索引）。
 //! 2. sort_by_ptr（resize INV-B 破坏 handle→ptr 单调性，sort 必需）。
-//! 3. 线性扫描合并相邻 unmarked 块 → free_list.add_free_region。
+//! 3. 线性扫描合并相邻 unmarked 块（暂存）；步骤 5 与 abandoned 一并邻接合并后写入 free list。
 //! 4. 清空 unmarked handle 的 obj_table 槽（置 0），推入 freed_handles（IMPL-10/#7 复用）。
 use crate::runtime_gc::api::GcContext;
 use crate::runtime_gc::context::object_size_from_memory;
@@ -17,6 +17,31 @@ struct BlockInfo {
     size: usize,
     handle: u32,
     marked: bool,
+}
+
+/// 按 ptr 升序合并物理相邻区间（next.ptr == prev_end）。
+fn merge_adjacent_free_intervals(mut intervals: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    if intervals.is_empty() {
+        return intervals;
+    }
+    intervals.sort_by_key(|(ptr, _)| *ptr);
+    let mut merged: Vec<(usize, usize)> = Vec::new();
+    let (mut cur_ptr, mut cur_end) = {
+        let (p, s) = intervals[0];
+        (p, p.saturating_add(s))
+    };
+    for &(ptr, size) in intervals.iter().skip(1) {
+        let end = ptr.saturating_add(size);
+        if ptr == cur_end {
+            cur_end = end;
+        } else {
+            merged.push((cur_ptr, cur_end - cur_ptr));
+            cur_ptr = ptr;
+            cur_end = end;
+        }
+    }
+    merged.push((cur_ptr, cur_end - cur_ptr));
+    merged
 }
 
 pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
@@ -55,8 +80,8 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
     let mut blocks = blocks;
     blocks.sort_by_key(|b| b.ptr);
 
-    // 3. 线性扫描合并相邻 unmarked 块 → add_free_region
-    collector.free_list.clear();
+    // 3. 线性扫描合并相邻 unmarked 块（暂不写入 free list，步骤 5 与 abandoned 一并邻接合并）
+    let mut sweep_free_runs: Vec<(usize, usize)> = Vec::new();
     let mut i = 0;
     while i < blocks.len() {
         if blocks[i].marked {
@@ -74,9 +99,7 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
             run_end = blocks[i].ptr + blocks[i].size;
             i += 1;
         }
-        collector
-            .free_list
-            .add_free_region(run_ptr, run_end - run_ptr);
+        sweep_free_runs.push((run_ptr, run_end - run_ptr));
     }
 
     // 4. 清空 unmarked handle 槽 + 推入 freed_handles
@@ -93,18 +116,20 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
         }
     });
 
-    // 5. 回收 resize-abandoned 区域（P4-blocker #1，INV-B）。
+    // 5. 回收 resize-abandoned 区域（P4-blocker #1，INV-B），并与 sweep 空闲区按 ptr 邻接合并（#116）。
     //    grow_array/grow_object 重写 obj_table 槽到新 ptr 后，旧 ptr 区域不再被
     //    obj_table 索引，步骤 1-3 的块扫描看不到 → 单独注册到 abandoned_regions。
-    //    这里把它们并入 free list（按 ptr 进表，alloc_slow best-fit 合并），然后清空。
     let abandoned: Vec<(usize, usize)> = ctx.with_state(|st| {
         st.abandoned_regions_for_gc()
             .map(|mut g| std::mem::take(&mut *g))
             .unwrap_or_default()
     });
-    for (ptr, size) in abandoned {
-        collector.free_list.add_free_region(ptr, size);
-    }
+    let mut all_free = sweep_free_runs;
+    all_free.extend(abandoned);
+    let coalesced = merge_adjacent_free_intervals(all_free);
+    collector
+        .free_list
+        .rebuild_from_coalesced_regions(&coalesced);
 
     ctx.stats.swept = freed.len();
     let freed_bytes: usize = blocks.iter().filter(|b| !b.marked).map(|b| b.size).sum();
@@ -115,6 +140,7 @@ pub fn sweep(collector: &mut MarkSweepCollector, ctx: &mut GcContext) {
 #[cfg(test)]
 mod tests {
     use crate::runtime_gc::mark_sweep::MarkSweepCollector;
+    use super::merge_adjacent_free_intervals;
 
     /// P4-blocker #1：验证 resize-abandoned 区域经 sweeper 步骤 5 路径进入 free list。
     /// grow_array/grow_object 重写 obj_table 槽后旧 ptr 不可达；这里单独验证
@@ -131,15 +157,16 @@ mod tests {
         assert_eq!(collector.free_list.alloc(80), None);
     }
 
-    /// abandoned 区域与 sweep 释放的 unmarked 块独立入表，互不干扰。
+    /// #116：sweep 空闲区与物理相邻的 abandoned 区合并为一块后再入表。
     #[test]
-    fn abandoned_coexists_with_swept_blocks() {
+    fn adjacent_abandoned_coalesces_with_sweep_free_run() {
+        let merged = merge_adjacent_free_intervals(vec![(1000, 144), (1144, 80)]);
+        assert_eq!(merged, vec![(1000, 224)]);
         let mut collector = MarkSweepCollector::new();
-        // sweep 步骤 3 释放一块
-        collector.free_list.add_free_region(1000, 144);
-        // abandoned 注入另一块（不同 ptr）
-        collector.free_list.add_free_region(5000, 272);
-        assert_eq!(collector.free_list.alloc(144), Some(1000));
-        assert_eq!(collector.free_list.alloc(272), Some(5000));
+        collector
+            .free_list
+            .rebuild_from_coalesced_regions(&merged);
+        assert_eq!(collector.free_list.alloc(224), Some(1000));
+        assert_eq!(collector.free_list.total_free_regions(), 0);
     }
 }

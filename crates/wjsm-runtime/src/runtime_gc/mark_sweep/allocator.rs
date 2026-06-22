@@ -1,7 +1,7 @@
 //! Segregated free list（spec §9）。
 //!
 //! 分离适配（segregated-fit）分配器：size class table + 每 class 一个 free list。
-//! 分配 O(class 数)；sweep 时按 ptr sort 线性合并后 add_free_region。
+//! 分配 O(class 数)；sweep 在写入前按 ptr 邻接合并，再 rebuild_from_coalesced_regions。
 //!
 //! size class table 冻结初始值（spec §9.1，P0 验证覆盖率）。
 use std::collections::VecDeque;
@@ -52,7 +52,7 @@ impl SegregatedFreeList {
     }
 
     /// 接收空闲区，按 size class 入表（spec §9.4）。
-    /// 不在此处做邻接合并（sweep 已线性合并过）。
+    /// 邻接合并由 sweep 在写入前完成（#116）；此处仅入表。
     pub fn add_free_region(&mut self, ptr: usize, size: usize) {
         if size < MIN_BLOCK {
             // 太小不入表（碎片，等同泄漏直到下次 sweep）；保守起见仍记录到最小 class
@@ -64,6 +64,14 @@ impl SegregatedFreeList {
             self.big_list.push_back((ptr, size));
         } else {
             self.lists[cls].push_back((ptr, size));
+        }
+    }
+
+    /// sweep 结束：用已按 ptr 邻接合并的区间重建整张 free list（#116）。
+    pub fn rebuild_from_coalesced_regions(&mut self, regions: &[(usize, usize)]) {
+        self.clear();
+        for &(ptr, size) in regions {
+            self.add_free_region(ptr, size);
         }
     }
 

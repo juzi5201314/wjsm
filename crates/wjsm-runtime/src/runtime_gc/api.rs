@@ -38,7 +38,7 @@ pub trait HeapObjectQuery {
 pub trait Allocator {
     /// fast-path bump 失败后调用。策略决定：free list / GC / grow。
     /// 返回分配到的**线性内存 ptr**（仅地址，不含 handle 注册——调用方自己 take_or_alloc_handle）；
-    /// None 表示真 OOM（由 trampoline trap）。
+    /// None 表示真 OOM（`gc_alloc_slow` host import 返回 Err → trap，#117）。
     fn alloc_slow(
         &mut self,
         ctx: &mut GcContext,
@@ -85,7 +85,7 @@ pub trait Marker {
 
 // ── Sweep 策略 ──
 pub trait Sweeper {
-    /// 一次性 sweep：按 ptr sort → 线性合并相邻 unmarked → add_free_region
+    /// 一次性 sweep：按 ptr sort → 合并 unmarked → 与 abandoned 邻接合并 → 重建 free list
     /// → 清空 unmarked handle 槽 → process weak refs（IMPL-7 sort 必需）。
     fn sweep(&mut self, ctx: &mut GcContext);
     /// 预留：concurrent sweep 步进。默认一次性完成。
