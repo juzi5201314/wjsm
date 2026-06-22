@@ -65,112 +65,19 @@ fn construct_array_with_constructor_sync(
     constructor: i64,
     length: u32,
 ) -> i64 {
-    if is_native_array_constructor(caller, constructor) {
-        return alloc_array(caller, length);
-    }
-    if !is_constructor_in_runtime(caller, constructor) {
-        return value::encode_undefined();
-    }
-    let memory = match caller.get_export("memory").and_then(|e| e.into_memory()) {
-        Some(m) => m,
-        None => return value::encode_undefined(),
-    };
-    let shadow_sp_global = match caller
-        .get_export("__shadow_sp")
-        .and_then(|e| e.into_global())
-    {
-        Some(g) => g,
-        None => return value::encode_undefined(),
-    };
-    let shadow_sp = shadow_sp_global.get(&mut *caller).i32().unwrap_or(0);
-    let len_val = value::encode_f64(length as f64);
-    if memory
-        .write(&mut *caller, shadow_sp as usize, &len_val.to_le_bytes())
-        .is_err()
-    {
-        return value::encode_undefined();
-    }
-    let previous_new_target = caller
-        .data()
-        .new_target
-        .swap(constructor, Ordering::Relaxed);
-    let result = if value::is_native_callable(constructor) {
-        call_native_callable_with_args_from_caller(
+    // 仅原生 Array 构造器走快速路径；自定义构造器降级为 Array（避免同步 WASM 重入）
+    if is_native_array_constructor(caller, constructor) || value::is_native_callable(constructor) {
+        let len_val = value::encode_f64(length as f64);
+        return call_native_callable_with_args_from_caller(
             caller,
             constructor,
             value::encode_undefined(),
             vec![len_val],
         )
-        .unwrap_or_else(value::encode_undefined)
-    } else {
-        let (func_idx, env_obj) = if value::is_closure(constructor) {
-            let idx = value::decode_closure_idx(constructor);
-            let closures = caller.data().closures.lock().expect("closures mutex");
-            let entry = &closures[idx as usize];
-            (entry.func_idx, entry.env_obj)
-        } else if value::is_function(constructor) {
-            (
-                value::decode_function_idx(constructor),
-                value::encode_undefined(),
-            )
-        } else {
-            caller
-                .data()
-                .new_target
-                .store(previous_new_target, Ordering::Relaxed);
-            return value::encode_undefined();
-        };
-        let table = match caller.get_export("__table").and_then(|e| e.into_table()) {
-            Some(t) => t,
-            None => {
-                caller
-                    .data()
-                    .new_target
-                    .store(previous_new_target, Ordering::Relaxed);
-                return value::encode_undefined();
-            }
-        };
-        let func = table
-            .get(&mut *caller, func_idx as u64)
-            .and_then(|r| match r {
-                wasmtime::Ref::Func(Some(f)) => Some(f),
-                _ => None,
-            });
-        let Some(func) = func else {
-            caller
-                .data()
-                .new_target
-                .store(previous_new_target, Ordering::Relaxed);
-            return value::encode_undefined();
-        };
-        let mut results = [Val::I64(0)];
-        let call_ok = func
-            .call(
-                &mut *caller,
-                &[
-                    Val::I64(env_obj),
-                    Val::I64(value::encode_undefined()),
-                    Val::I32(shadow_sp),
-                    Val::I32(1),
-                ],
-                &mut results,
-            )
-            .is_ok();
-        if call_ok {
-            results[0].unwrap_i64()
-        } else {
-            value::encode_undefined()
-        }
-    };
-    caller
-        .data()
-        .new_target
-        .store(previous_new_target, Ordering::Relaxed);
-    if value::is_object(result) {
-        result
-    } else {
-        value::encode_undefined()
+        .unwrap_or_else(|| alloc_array(caller, length));
     }
+    // 降级：用户自定义构造器不可安全同步调用 → 回退到普通 Array
+    alloc_array(caller, length)
 }
 
 /// ES2024 `ArraySpeciesCreate(O, length)` — sync host paths (concat, slice, flat, splice).
