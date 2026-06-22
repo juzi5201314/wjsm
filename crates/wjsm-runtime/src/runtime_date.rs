@@ -460,12 +460,7 @@ pub(crate) fn call_date_method_from_caller(
             if d.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_local(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let new_dt = dt.with_day(d as u32).unwrap_or(dt);
-            let new_ms = new_dt.timestamp_millis() as f64 + ms_within_second(ms);
+            let new_ms = apply_local_date_setter(ms, None, None, Some(d), None, None, None, None);
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -480,19 +475,16 @@ pub(crate) fn call_date_method_from_caller(
             if m.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_local(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let mut new_dt = dt.with_month0(m as u32).unwrap_or(dt);
-            if let Some(d_arg) = args.get(1) {
+            let day = if let Some(d_arg) = args.get(1) {
                 let d = value::decode_f64(*d_arg);
                 if d.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
-            }
-            let new_ms = new_dt.timestamp_millis() as f64 + ms_within_second(ms);
+                Some(d)
+            } else {
+                None
+            };
+            let new_ms = apply_local_date_setter(ms, None, Some(m), day, None, None, None, None);
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -507,26 +499,25 @@ pub(crate) fn call_date_method_from_caller(
             if y.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_local(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let mut new_dt = dt.with_year(y as i32).unwrap_or(dt);
-            if let Some(m_arg) = args.get(1) {
+            let month0 = if let Some(m_arg) = args.get(1) {
                 let m = value::decode_f64(*m_arg);
                 if m.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_month0(m as u32).unwrap_or(new_dt);
-            }
-            if let Some(d_arg) = args.get(2) {
+                Some(m)
+            } else {
+                None
+            };
+            let day = if let Some(d_arg) = args.get(2) {
                 let d = value::decode_f64(*d_arg);
                 if d.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
-            }
-            let new_ms = new_dt.timestamp_millis() as f64 + ms_within_second(ms);
+                Some(d)
+            } else {
+                None
+            };
+            let new_ms = apply_local_date_setter(ms, Some(y), month0, day, None, None, None, None);
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -541,34 +532,36 @@ pub(crate) fn call_date_method_from_caller(
             if h.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_local(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let mut new_dt = dt.with_hour(h as u32).unwrap_or(dt);
-            if let Some(m_arg) = args.get(1) {
+            let minute = if let Some(m_arg) = args.get(1) {
                 let m = value::decode_f64(*m_arg);
                 if m.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_minute(m as u32).unwrap_or(new_dt);
-            }
-            if let Some(s_arg) = args.get(2) {
+                Some(m)
+            } else {
+                None
+            };
+            let second = if let Some(s_arg) = args.get(2) {
                 let s = value::decode_f64(*s_arg);
                 if s.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
-            }
-            let new_ms = if let Some(ms_arg) = args.get(3) {
+                Some(s)
+            } else {
+                None
+            };
+            let millis = if let Some(ms_arg) = args.get(3) {
                 let ms_val = value::decode_f64(*ms_arg);
                 if ms_val.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+                Some(ms_val)
             } else {
-                new_dt.timestamp_millis() as f64 + ms_within_second(ms)
+                None
             };
+            let new_ms = apply_local_date_setter(
+                ms, None, None, None, Some(h), minute, second, millis,
+            );
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -583,27 +576,27 @@ pub(crate) fn call_date_method_from_caller(
             if m.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_local(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let mut new_dt = dt.with_minute(m as u32).unwrap_or(dt);
-            if let Some(s_arg) = args.get(1) {
+            let second = if let Some(s_arg) = args.get(1) {
                 let s = value::decode_f64(*s_arg);
                 if s.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
-            }
-            let new_ms = if let Some(ms_arg) = args.get(2) {
+                Some(s)
+            } else {
+                None
+            };
+            let millis = if let Some(ms_arg) = args.get(2) {
                 let ms_val = value::decode_f64(*ms_arg);
                 if ms_val.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+                Some(ms_val)
             } else {
-                new_dt.timestamp_millis() as f64 + ms_within_second(ms)
+                None
             };
+            let new_ms = apply_local_date_setter(
+                ms, None, None, None, None, Some(m), second, millis,
+            );
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -618,20 +611,18 @@ pub(crate) fn call_date_method_from_caller(
             if s.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_local(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let new_dt = dt.with_second(s as u32).unwrap_or(dt);
-            let new_ms = if let Some(ms_arg) = args.get(1) {
+            let millis = if let Some(ms_arg) = args.get(1) {
                 let ms_val = value::decode_f64(*ms_arg);
                 if ms_val.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+                Some(ms_val)
             } else {
-                new_dt.timestamp_millis() as f64 + ms_within_second(ms)
+                None
             };
+            let new_ms = apply_local_date_setter(
+                ms, None, None, None, None, None, Some(s), millis,
+            );
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -646,8 +637,9 @@ pub(crate) fn call_date_method_from_caller(
             if ms_arg.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let base_ms = 1000.0 * (ms / 1000.0).floor();
-            let new_ms = base_ms + ms_arg.trunc();
+            let new_ms = apply_local_date_setter(
+                ms, None, None, None, None, None, None, Some(ms_arg),
+            );
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -662,12 +654,7 @@ pub(crate) fn call_date_method_from_caller(
             if d.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_utc(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let new_dt = dt.with_day(d as u32).unwrap_or(dt);
-            let new_ms = new_dt.timestamp_millis() as f64 + ms_within_second(ms);
+            let new_ms = apply_utc_date_setter(ms, None, None, Some(d), None, None, None, None);
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -682,19 +669,16 @@ pub(crate) fn call_date_method_from_caller(
             if m.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_utc(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let mut new_dt = dt.with_month0(m as u32).unwrap_or(dt);
-            if let Some(d_arg) = args.get(1) {
+            let day = if let Some(d_arg) = args.get(1) {
                 let d = value::decode_f64(*d_arg);
                 if d.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
-            }
-            let new_ms = new_dt.timestamp_millis() as f64 + ms_within_second(ms);
+                Some(d)
+            } else {
+                None
+            };
+            let new_ms = apply_utc_date_setter(ms, None, Some(m), day, None, None, None, None);
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -709,26 +693,25 @@ pub(crate) fn call_date_method_from_caller(
             if y.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_utc(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let mut new_dt = dt.with_year(y as i32).unwrap_or(dt);
-            if let Some(m_arg) = args.get(1) {
+            let month0 = if let Some(m_arg) = args.get(1) {
                 let m = value::decode_f64(*m_arg);
                 if m.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_month0(m as u32).unwrap_or(new_dt);
-            }
-            if let Some(d_arg) = args.get(2) {
+                Some(m)
+            } else {
+                None
+            };
+            let day = if let Some(d_arg) = args.get(2) {
                 let d = value::decode_f64(*d_arg);
                 if d.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_day(d as u32).unwrap_or(new_dt);
-            }
-            let new_ms = new_dt.timestamp_millis() as f64 + ms_within_second(ms);
+                Some(d)
+            } else {
+                None
+            };
+            let new_ms = apply_utc_date_setter(ms, Some(y), month0, day, None, None, None, None);
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -743,34 +726,36 @@ pub(crate) fn call_date_method_from_caller(
             if h.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_utc(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let mut new_dt = dt.with_hour(h as u32).unwrap_or(dt);
-            if let Some(m_arg) = args.get(1) {
+            let minute = if let Some(m_arg) = args.get(1) {
                 let m = value::decode_f64(*m_arg);
                 if m.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_minute(m as u32).unwrap_or(new_dt);
-            }
-            if let Some(s_arg) = args.get(2) {
+                Some(m)
+            } else {
+                None
+            };
+            let second = if let Some(s_arg) = args.get(2) {
                 let s = value::decode_f64(*s_arg);
                 if s.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
-            }
-            let new_ms = if let Some(ms_arg) = args.get(3) {
+                Some(s)
+            } else {
+                None
+            };
+            let millis = if let Some(ms_arg) = args.get(3) {
                 let ms_val = value::decode_f64(*ms_arg);
                 if ms_val.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+                Some(ms_val)
             } else {
-                new_dt.timestamp_millis() as f64 + ms_within_second(ms)
+                None
             };
+            let new_ms = apply_utc_date_setter(
+                ms, None, None, None, Some(h), minute, second, millis,
+            );
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -785,27 +770,27 @@ pub(crate) fn call_date_method_from_caller(
             if m.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_utc(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let mut new_dt = dt.with_minute(m as u32).unwrap_or(dt);
-            if let Some(s_arg) = args.get(1) {
+            let second = if let Some(s_arg) = args.get(1) {
                 let s = value::decode_f64(*s_arg);
                 if s.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt = new_dt.with_second(s as u32).unwrap_or(new_dt);
-            }
-            let new_ms = if let Some(ms_arg) = args.get(2) {
+                Some(s)
+            } else {
+                None
+            };
+            let millis = if let Some(ms_arg) = args.get(2) {
                 let ms_val = value::decode_f64(*ms_arg);
                 if ms_val.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+                Some(ms_val)
             } else {
-                new_dt.timestamp_millis() as f64 + ms_within_second(ms)
+                None
             };
+            let new_ms = apply_utc_date_setter(
+                ms, None, None, None, None, Some(m), second, millis,
+            );
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -820,20 +805,18 @@ pub(crate) fn call_date_method_from_caller(
             if s.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let dt = match ms_to_datetime_utc(ms) {
-                Some(dt) => dt,
-                None => return value::encode_f64(f64::NAN),
-            };
-            let new_dt = dt.with_second(s as u32).unwrap_or(dt);
-            let new_ms = if let Some(ms_arg) = args.get(1) {
+            let millis = if let Some(ms_arg) = args.get(1) {
                 let ms_val = value::decode_f64(*ms_arg);
                 if ms_val.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                new_dt.timestamp_millis() as f64 + ms_val.trunc()
+                Some(ms_val)
             } else {
-                new_dt.timestamp_millis() as f64 + ms_within_second(ms)
+                None
             };
+            let new_ms = apply_utc_date_setter(
+                ms, None, None, None, None, None, Some(s), millis,
+            );
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
@@ -848,8 +831,9 @@ pub(crate) fn call_date_method_from_caller(
             if ms_arg.is_nan() {
                 return value::encode_f64(f64::NAN);
             }
-            let base_ms = 1000.0 * (ms / 1000.0).floor();
-            let new_ms = base_ms + ms_arg.trunc();
+            let new_ms = apply_utc_date_setter(
+                ms, None, None, None, None, None, None, Some(ms_arg),
+            );
             write_date_ms(caller, this_val, new_ms);
             value::encode_f64(new_ms)
         }
