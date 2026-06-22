@@ -166,6 +166,9 @@ async fn arr_proto_for_each_async(
     };
     let len = read_array_length(caller, ptr).unwrap_or(0);
     for i in 0..len {
+        if !array_elem_present(caller, ptr, i) {
+            continue;
+        }
         let elem = read_array_elem(caller, ptr, i).unwrap_or(value::encode_undefined());
         let idx_val = value::encode_f64(i as f64);
         if call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val])
@@ -202,6 +205,10 @@ async fn arr_proto_map_async(
         return value::encode_undefined();
     };
     for i in 0..len {
+        if !array_elem_present(caller, ptr, i) {
+            write_array_hole(caller, new_ptr, i);
+            continue;
+        }
         let elem = read_array_elem(caller, ptr, i).unwrap_or(value::encode_undefined());
         let idx_val = value::encode_f64(i as f64);
         let result = match call_wasm_callback_async(
@@ -242,6 +249,9 @@ async fn arr_proto_filter_async(
     let len = read_array_length(caller, ptr).unwrap_or(0);
     let mut passed: Vec<i64> = Vec::new();
     for i in 0..len {
+        if !array_elem_present(caller, ptr, i) {
+            continue;
+        }
         let elem = read_array_elem(caller, ptr, i).unwrap_or(value::encode_undefined());
         let idx_val = value::encode_f64(i as f64);
         let ok = match call_wasm_callback_async(caller, cb, this_arg, &[elem, idx_val, this_val])
