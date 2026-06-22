@@ -889,6 +889,15 @@ pub(crate) fn call_date_method_from_caller(
                 None => store_runtime_string(caller, "Invalid Date".to_string()),
             }
         }
+        DateMethodKind::ToLocaleString => {
+            return call_date_method_from_caller(caller, this_val, DateMethodKind::ToString, args);
+        }
+        DateMethodKind::ToLocaleDateString => {
+            return call_date_method_from_caller(caller, this_val, DateMethodKind::ToDateString, args);
+        }
+        DateMethodKind::ToLocaleTimeString => {
+            return call_date_method_from_caller(caller, this_val, DateMethodKind::ToTimeString, args);
+        }
         DateMethodKind::ToISOString => {
             if ms.is_nan() {
                 return value::encode_f64(f64::NAN);
