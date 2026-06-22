@@ -306,10 +306,16 @@ pub(crate) fn define_primitive_core(
         |mut caller: Caller<'_, RuntimeState>, desc: i64| -> i64 {
             let description = if value::is_undefined(desc) {
                 None
+            } else if value::is_string(desc) {
+                // 字符串直接使用原始值，不裁剪引号（ES §20.4.1.1）
+                Some(get_string_value(&mut caller, desc))
             } else {
-                let s = render_value(&mut caller, desc).unwrap_or_default();
-                // 去掉符号描述可能有的额外引号
-                Some(s.trim_matches('"').to_string())
+                Some(
+                    render_value(&mut caller, desc)
+                        .unwrap_or_default()
+                        .trim_matches('"')
+                        .to_string(),
+                )
             };
             let mut table = caller
                 .data()
