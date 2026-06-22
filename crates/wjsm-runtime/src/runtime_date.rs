@@ -213,8 +213,9 @@ fn local_ms_from_ymd_hms_ms(
         Some(dt) => dt,
         None => return f64::NAN,
     };
-    local_dt.timestamp_millis() as f64 + ms_within_second(time_ms)
+    local_dt.timestamp_millis() as f64
 }
+
 
 fn utc_ms_from_ymd_hms_ms(
     year: f64,
