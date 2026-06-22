@@ -3,18 +3,29 @@ use wasmtime::Store;
 use wasmtime::{Caller, Func, Linker};
 
 use crate::*;
+/// Maximum array length per ECMAScript (2^32 - 1).
+const MAX_ARRAY_LENGTH: u32 = u32::MAX;
+const ARRAY_LENGTH_RANGE_ERROR: &str = "Invalid array length";
 
-fn push_array_value(caller: &mut Caller<'_, RuntimeState>, arr: i64, val: i64) -> Option<()> {
-    let mut ptr = resolve_array_ptr(caller, arr)?;
+fn array_length_would_overflow(len: u32, add: u32) -> bool {
+    len.checked_add(add).is_none_or(|n| n > MAX_ARRAY_LENGTH)
+}
+
+pub(crate) fn push_array_value(caller: &mut Caller<'_, RuntimeState>, arr: i64, val: i64) -> Result<(), i64> {
+    let mut ptr = resolve_array_ptr(caller, arr).ok_or_else(value::encode_undefined)?;
     let len = read_array_length(caller, ptr).unwrap_or(0);
+    if array_length_would_overflow(len, 1) {
+        return Err(make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR));
+    }
     let cap = read_array_capacity(caller, ptr).unwrap_or(0);
     if len >= cap {
         let new_cap = cap.max(1) * 2;
-        ptr = grow_array(caller, ptr, arr, new_cap.max(len + 1))?;
+        ptr = grow_array(caller, ptr, arr, new_cap.max(len + 1))
+            .ok_or_else(value::encode_undefined)?;
     }
     write_array_elem(caller, ptr, len, val);
     write_array_length(caller, ptr, len + 1);
-    Some(())
+    Ok(())
 }
 
 async fn push_iterator_values_async(
@@ -58,7 +69,10 @@ async fn push_iterator_values_async(
         }
         let val = read_object_property_by_name(caller, result_ptr, "value")
             .unwrap_or_else(value::encode_undefined);
-        let _ = push_array_value(caller, arr, val);
+        if push_array_value(caller, arr, val).is_err() {
+            set_runtime_error(caller.data(), ARRAY_LENGTH_RANGE_ERROR.to_string());
+            return false;
+        }
     }
 }
 
@@ -73,7 +87,10 @@ pub(crate) async fn array_push_spread_impl_async(
         let len = read_array_length(caller, ptr).unwrap_or(0);
         for i in 0..len {
             let val = read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
-            let _ = push_array_value(caller, arr, val);
+            if push_array_value(caller, arr, val).is_err() {
+                set_runtime_error(caller.data(), ARRAY_LENGTH_RANGE_ERROR.to_string());
+                return value::encode_undefined();
+            }
         }
         return value::encode_undefined();
     }
@@ -81,7 +98,10 @@ pub(crate) async fn array_push_spread_impl_async(
     if let Some(bytes) = read_value_string_bytes(caller, iterable) {
         for byte in bytes {
             let val = store_runtime_string(caller, (byte as char).to_string());
-            let _ = push_array_value(caller, arr, val);
+            if push_array_value(caller, arr, val).is_err() {
+                set_runtime_error(caller.data(), ARRAY_LENGTH_RANGE_ERROR.to_string());
+                return value::encode_undefined();
+            }
         }
         return value::encode_undefined();
     }
@@ -118,8 +138,11 @@ pub(crate) fn define_array_object(
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
             let count = args_count as u32;
+            if array_length_would_overflow(len, count) {
+                return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
+            }
+            let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
             let mut ptr = ptr;
             if len + count > cap {
                 let new_cap = cap.max(1) * 2;
@@ -549,8 +572,12 @@ pub(crate) fn define_array_object(
                 return value::encode_undefined();
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            let add = args_count as u32;
+            if array_length_would_overflow(len, add) {
+                return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
+            }
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
-            let new_len = len + args_count as u32;
+            let new_len = len + add;
             let mut ptr = ptr;
             if new_len > cap {
                 let new_cap = cap.max(1) * 2;
@@ -721,6 +748,9 @@ pub(crate) fn define_array_object(
             let actual_delete = delete_count.min(len - start_idx);
             let insert_count = (args_count - 2).max(0);
             let new_len = len - actual_delete + insert_count;
+            if new_len < 0 || new_len as u64 > u64::from(MAX_ARRAY_LENGTH) {
+                return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
+            }
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0) as i32;
             let mut ptr = ptr;
             if new_len > cap {

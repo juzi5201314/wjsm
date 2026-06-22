@@ -8,12 +8,21 @@ use std::sync::atomic::Ordering;
 /// "Runtime error:" 暴露。Proxy 不变量违反 / 撤销代理访问 / private 品牌检查失败
 /// 等规范要求“同步抛出 TypeError”的场景应使用本函数。
 pub(crate) fn make_type_error_exception(caller: &mut Caller<'_, RuntimeState>, msg: &str) -> i64 {
+    make_error_exception(caller, "TypeError", msg)
+}
+
+/// 构造可捕获的 RangeError（如数组长度超过 2^32 - 1）。
+pub(crate) fn make_range_error_exception(caller: &mut Caller<'_, RuntimeState>, msg: &str) -> i64 {
+    make_error_exception(caller, "RangeError", msg)
+}
+
+fn make_error_exception(caller: &mut Caller<'_, RuntimeState>, error_name: &str, msg: &str) -> i64 {
     let msg_val = store_runtime_string(caller, msg.to_string());
-    let error_obj = create_error_object(caller, "TypeError", msg_val);
+    let error_obj = create_error_object(caller, error_name, msg_val);
     let mut errors = caller.data().error_table.lock().expect("error table mutex");
     let idx = errors.len() as u32;
     errors.push(crate::ErrorEntry {
-        name: "TypeError".to_string(),
+        name: error_name.to_string(),
         message: msg.to_string(),
         value: error_obj,
     });
