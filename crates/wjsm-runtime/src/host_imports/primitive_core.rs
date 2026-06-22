@@ -801,20 +801,8 @@ pub(crate) fn define_primitive_core(
                 let pattern = get_string_value(&mut caller, regexp);
                 match regress::Regex::with_flags(&pattern, "") {
                     Ok(compiled) => {
-                        let mut table = caller.data_mut().regex_table.lock().unwrap();
-                        let new_handle = table.len() as u32;
-                        table.push(RegexEntry {
-                            pattern: pattern.clone(),
-                            flags: String::new(),
-                            compiled,
-                            last_index: 0,
-                        });
-                        // 继续使用新创建的 RegExp 进行匹配
-                        let entry = table.get(new_handle as usize).unwrap().clone();
-                        drop(table);
-
-                        // 非全局匹配：返回第一个匹配结果
-                        match entry.compiled.find(&s) {
+                        // 临时 RegExp，仅在当次调用中使用，无需加入 regex_table（#236）
+                        match compiled.find(&s) {
                             Some(m) => {
                                 return build_match_result(
                                     &mut caller,
@@ -902,31 +890,22 @@ pub(crate) fn define_primitive_core(
             let s = get_string_value(&mut caller, receiver);
 
             // 根据 ECMAScript 22.1.3.21，非 RegExp 参数应转换为 RegExp
-            let handle = if value::is_regexp(regexp) {
-                value::decode_regexp_handle(regexp)
-            } else {
-                // 将参数转换为字符串，然后创建 RegExp
+            if !value::is_regexp(regexp) {
+                // 将参数转换为字符串，创建临时 RegExp 直接匹配，不存入 regex_table（#236）
                 let pattern = get_string_value(&mut caller, regexp);
-                // 使用空 flags 创建 RegExp
-                match regress::Regex::with_flags(&pattern, "") {
-                    Ok(compiled) => {
-                        let mut table = caller.data().regex_table.lock().unwrap();
-                        let handle = table.len() as u32;
-                        table.push(RegexEntry {
-                            pattern,
-                            flags: String::new(),
-                            compiled,
-                            last_index: 0,
-                        });
-                        handle
-                    }
+                return match regress::Regex::with_flags(&pattern, "") {
+                    Ok(compiled) => match compiled.find(&s) {
+                        Some(m) => value::encode_f64(m.start() as f64),
+                        None => value::encode_f64(-1.0),
+                    },
                     Err(_) => {
                         // 正则编译失败，返回 -1（不抛出错误，因为原始值可能不是有效的正则模式）
-                        return value::encode_f64(-1.0);
+                        value::encode_f64(-1.0)
                     }
-                }
-            };
+                };
+            }
 
+            let handle = value::decode_regexp_handle(regexp);
             let table = caller.data().regex_table.lock().unwrap();
             let entry = match table.get(handle as usize) {
                 Some(e) => e.clone(),
