@@ -55,24 +55,16 @@ pub(crate) fn define_timers_arrays(
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64| -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return value::encode_undefined();
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
-            let mut ptr = ptr;
-            if len >= cap {
-                let new_cap = cap.max(1) * 2;
-                let needed = (len + 1).max(new_cap);
-                if let Some(new_ptr) = grow_array(&mut caller, ptr, arr, needed) {
-                    ptr = new_ptr;
-                } else {
-                    return value::encode_undefined();
+            match super::array_object::push_array_value(&mut caller, arr, val) {
+                Ok(()) => {
+                    let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
+                        return value::encode_undefined();
+                    };
+                    let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+                    value::encode_f64(len as f64)
                 }
+                Err(exc) => exc,
             }
-            write_array_elem(&mut caller, ptr, len, val);
-            write_array_length(&mut caller, ptr, len + 1);
-            value::encode_f64((len + 1) as f64)
         },
     );
     linker.define(&mut store, "env", "arr_push", f)?;
