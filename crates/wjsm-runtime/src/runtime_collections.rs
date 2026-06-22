@@ -399,6 +399,20 @@ pub(crate) fn call_map_set_method_from_caller(
                     return value::encode_handle(value::TAG_ITERATOR, iter_handle);
                 }
             }
+            if let Some(sh) = set_handle {
+                let set_handle_u32 = value::decode_f64(sh) as u32;
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                if (set_handle_u32 as usize) < table.len() {
+                    drop(table);
+                    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+                    let iter_handle = iters.len() as u32;
+                    iters.push(IteratorState::SetValueIter {
+                        set_handle: set_handle_u32,
+                        index: 0,
+                    });
+                    return value::encode_handle(value::TAG_ITERATOR, iter_handle);
+                }
+            }
             value::encode_undefined()
         }
         MapSetMethodKind::Entries => value::encode_undefined(),

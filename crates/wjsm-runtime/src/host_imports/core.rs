@@ -170,6 +170,145 @@ pub(crate) fn op_in_impl(caller: &mut Caller<'_, RuntimeState>, object: i64, pro
         }
     }
 }
+
+/// `IteratorValue` 宿主实现：按迭代器状态返回当前元素值
+/// 被同步 `iterator_value` 与 `core_async::iterator_step_value_async` 共用
+pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle: i64) -> i64 {
+    let handle_idx = value::decode_handle(handle) as usize;
+    let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+    if let Some(iter) = iters.get_mut(handle_idx) {
+        match iter {
+            IteratorState::StringIter { data, byte_pos } => {
+                if *byte_pos < data.len() {
+                    let ch = data[*byte_pos] as char;
+                    drop(iters);
+                    store_runtime_string(caller, ch.to_string())
+                } else {
+                    value::encode_undefined()
+                }
+            }
+            IteratorState::ArrayIter { ptr, index, length } => {
+                if *index < *length {
+                    let idx = *index;
+                    let arr_ptr = *ptr;
+                    drop(iters);
+                    read_array_elem(caller, arr_ptr, idx).unwrap_or(value::encode_undefined())
+                } else {
+                    value::encode_undefined()
+                }
+            }
+            IteratorState::MapKeyIter { map_handle, index } => {
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                let val = if *map_handle < table.len() as u32 {
+                    let entry = &table[*map_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.keys.len() {
+                        Some(entry.keys[idx])
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                drop(table);
+                val.unwrap_or(value::encode_undefined())
+            }
+            IteratorState::MapValueIter { map_handle, index } => {
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                let val = if *map_handle < table.len() as u32 {
+                    let entry = &table[*map_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.values.len() {
+                        Some(entry.values[idx])
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                drop(table);
+                val.unwrap_or(value::encode_undefined())
+            }
+            IteratorState::SetValueIter { set_handle, index } => {
+                let table = caller.data().set_table.lock().expect("set table mutex");
+                let val = if *set_handle < table.len() as u32 {
+                    let entry = &table[*set_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.values.len() {
+                        Some(entry.values[idx])
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                drop(table);
+                val.unwrap_or(value::encode_undefined())
+            }
+            IteratorState::IndexValueIter { values, index } => {
+                if (*index as usize) < values.len() {
+                    values[*index as usize]
+                } else {
+                    value::encode_undefined()
+                }
+            }
+            IteratorState::TypedArrayValueIter {
+                entry,
+                index,
+                length,
+            } => {
+                if *index < *length {
+                    let entry = entry.clone();
+                    let idx = *index;
+                    drop(iters);
+                    typedarray_element_read_entry(caller, &entry, idx)
+                        .unwrap_or_else(value::encode_undefined)
+                } else {
+                    value::encode_undefined()
+                }
+            }
+            IteratorState::TypedArrayEntryIter {
+                entry,
+                index,
+                length,
+            } => {
+                if *index < *length {
+                    let typedarray_entry = entry.clone();
+                    let idx = *index;
+                    drop(iters);
+                    let entry = alloc_array(caller, 2);
+                    if let Some(entry_ptr) = resolve_array_ptr(caller, entry) {
+                        let elem = typedarray_element_read_entry(caller, &typedarray_entry, idx)
+                            .unwrap_or_else(value::encode_undefined);
+                        write_array_elem(
+                            caller,
+                            entry_ptr,
+                            0,
+                            value::encode_f64(idx as f64),
+                        );
+                        write_array_elem(caller, entry_ptr, 1, elem);
+                        write_array_length(caller, entry_ptr, 2);
+                    }
+                    entry
+                } else {
+                    value::encode_undefined()
+                }
+            }
+            IteratorState::ObjectIter { current_value, .. } => *current_value,
+            IteratorState::Error => {
+                *caller
+                    .data()
+                    .runtime_error
+                    .lock()
+                    .expect("runtime error mutex") =
+                    Some("TypeError: value is not iterable".to_string());
+                value::encode_undefined()
+            }
+        }
+    } else {
+        value::encode_undefined()
+    }
+}
 pub(crate) fn define_core(
     linker: &mut Linker<RuntimeState>,
     mut store: &mut Store<RuntimeState>,
@@ -275,129 +414,7 @@ pub(crate) fn define_core(
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, handle: i64| -> i64 {
-            let handle_idx = value::decode_handle(handle) as usize;
-            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
-            if let Some(iter) = iters.get_mut(handle_idx) {
-                match iter {
-                    IteratorState::StringIter { data, byte_pos } => {
-                        if *byte_pos < data.len() {
-                            let ch = data[*byte_pos] as char;
-                            drop(iters);
-                            store_runtime_string(&caller, ch.to_string())
-                        } else {
-                            value::encode_undefined()
-                        }
-                    }
-                    IteratorState::ArrayIter { ptr, index, length } => {
-                        if *index < *length {
-                            let idx = *index;
-                            let arr_ptr = *ptr;
-                            drop(iters);
-                            read_array_elem(&mut caller, arr_ptr, idx)
-                                .unwrap_or(value::encode_undefined())
-                        } else {
-                            value::encode_undefined()
-                        }
-                    }
-                    IteratorState::MapKeyIter { map_handle, index } => {
-                        let table = caller.data().map_table.lock().expect("map table mutex");
-                        let val = if *map_handle < table.len() as u32 {
-                            let entry = &table[*map_handle as usize];
-                            let idx = *index as usize;
-                            if idx < entry.keys.len() {
-                                Some(entry.keys[idx])
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-                        drop(table);
-                        val.unwrap_or(value::encode_undefined())
-                    }
-                    IteratorState::MapValueIter { map_handle, index } => {
-                        let table = caller.data().map_table.lock().expect("map table mutex");
-                        let val = if *map_handle < table.len() as u32 {
-                            let entry = &table[*map_handle as usize];
-                            let idx = *index as usize;
-                            if idx < entry.values.len() {
-                                Some(entry.values[idx])
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-                        drop(table);
-                        val.unwrap_or(value::encode_undefined())
-                    }
-                    IteratorState::IndexValueIter { values, index } => {
-                        if (*index as usize) < values.len() {
-                            values[*index as usize]
-                        } else {
-                            value::encode_undefined()
-                        }
-                    }
-                    IteratorState::TypedArrayValueIter {
-                        entry,
-                        index,
-                        length,
-                    } => {
-                        if *index < *length {
-                            let entry = entry.clone();
-                            let idx = *index;
-                            drop(iters);
-                            typedarray_element_read_entry(&mut caller, &entry, idx)
-                                .unwrap_or_else(value::encode_undefined)
-                        } else {
-                            value::encode_undefined()
-                        }
-                    }
-                    IteratorState::TypedArrayEntryIter {
-                        entry,
-                        index,
-                        length,
-                    } => {
-                        if *index < *length {
-                            let typedarray_entry = entry.clone();
-                            let idx = *index;
-                            drop(iters);
-                            let entry = alloc_array(&mut caller, 2);
-                            if let Some(entry_ptr) = resolve_array_ptr(&mut caller, entry) {
-                                let elem = typedarray_element_read_entry(
-                                    &mut caller,
-                                    &typedarray_entry,
-                                    idx,
-                                )
-                                .unwrap_or_else(value::encode_undefined);
-                                write_array_elem(
-                                    &mut caller,
-                                    entry_ptr,
-                                    0,
-                                    value::encode_f64(idx as f64),
-                                );
-                                write_array_elem(&mut caller, entry_ptr, 1, elem);
-                                write_array_length(&mut caller, entry_ptr, 2);
-                            }
-                            entry
-                        } else {
-                            value::encode_undefined()
-                        }
-                    }
-                    IteratorState::ObjectIter { current_value, .. } => *current_value,
-                    IteratorState::Error => {
-                        *caller
-                            .data()
-                            .runtime_error
-                            .lock()
-                            .expect("runtime error mutex") =
-                            Some("TypeError: value is not iterable".to_string());
-                        value::encode_undefined()
-                    }
-                }
-            } else {
-                value::encode_undefined()
-            }
+            iterator_value_impl(&mut caller, handle)
         },
     );
     linker.define(&mut store, "env", "iterator_value", f)?;
@@ -1400,6 +1417,26 @@ pub(crate) async fn iterator_from_impl_async(
         });
         return value::encode_handle(value::TAG_ITERATOR, handle);
     }
+
+    // Set 快速路径：按插入顺序迭代 set_table.values
+    if (value::is_object(val) || value::is_function(val))
+        && let Some(ptr) = resolve_handle(caller, val)
+        && let Some(sh) = read_object_property_by_name(caller, ptr, "__set_handle__")
+    {
+        let set_handle_u32 = value::decode_f64(sh) as u32;
+        let table = caller.data().set_table.lock().expect("set table mutex");
+        if (set_handle_u32 as usize) < table.len() {
+            drop(table);
+            let mut iters = caller.data().iterators.lock().expect("iterators mutex");
+            let handle = iters.len() as u32;
+            iters.push(IteratorState::SetValueIter {
+                set_handle: set_handle_u32,
+                index: 0,
+            });
+            return value::encode_handle(value::TAG_ITERATOR, handle);
+        }
+    }
+
 
     if (value::is_object(val) || value::is_function(val))
         && let Some(ptr) = resolve_handle(caller, val)

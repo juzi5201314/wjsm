@@ -3,7 +3,7 @@
 use anyhow::Result;
 use wasmtime::{Caller, Linker};
 
-use super::core::op_in_impl;
+use super::core::{iterator_value_impl, op_in_impl};
 use crate::*;
 
 pub(crate) fn define_core_async(
@@ -242,6 +242,10 @@ pub(crate) fn define_core_async(
                     *index += 1;
                     return value::encode_undefined();
                 }
+                IteratorState::SetValueIter { index, .. } => {
+                    *index += 1;
+                    return value::encode_undefined();
+                }
                 IteratorState::IndexValueIter { index, .. } => {
                     *index += 1;
                     return value::encode_undefined();
@@ -376,6 +380,16 @@ pub(crate) fn define_core_async(
                     drop(table);
                     return value::encode_bool(done);
                 }
+                IteratorState::SetValueIter { index, set_handle } => {
+                    let table = caller.data().set_table.lock().expect("set table mutex");
+                    let done = if *set_handle < table.len() as u32 {
+                        *index as usize >= table[*set_handle as usize].values.len()
+                    } else {
+                        true
+                    };
+                    drop(table);
+                    return value::encode_bool(done);
+                }
                 IteratorState::IndexValueIter { index, values } => {
                     return value::encode_bool(*index as usize >= values.len());
                 }
@@ -468,6 +482,17 @@ pub(crate) fn define_core_async(
         }
     }
 
+    /// 合并 IteratorDone + IteratorValue + IteratorNext，供数组解构等线性 IR 使用
+    async fn iterator_step_value_async(caller: &mut Caller<'_, RuntimeState>, handle: i64) -> i64 {
+        let done = iterator_done_async(caller, handle).await;
+        if value::decode_bool(done) {
+            return value::encode_undefined();
+        }
+        let value = iterator_value_impl(caller, handle);
+        let _ = iterator_next_async(caller, handle).await;
+        value
+    }
+
     linker.func_wrap_async(
         "env",
         "iterator_from",
@@ -497,6 +522,14 @@ pub(crate) fn define_core_async(
         "iterator_close",
         |mut caller: Caller<'_, RuntimeState>, (handle,): (i64,)| {
             Box::new(async move { iterator_close_async(&mut caller, handle).await })
+        },
+    )?;
+
+    linker.func_wrap_async(
+        "env",
+        "iterator_step_value",
+        |mut caller: Caller<'_, RuntimeState>, (handle,): (i64,)| {
+            Box::new(async move { iterator_step_value_async(&mut caller, handle).await })
         },
     )?;
 

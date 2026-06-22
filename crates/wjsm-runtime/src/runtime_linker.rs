@@ -255,6 +255,25 @@ pub(super) fn register_common_bridges(
                                 drop(table);
                                 pending
                             }
+                            Some(IteratorState::SetValueIter { set_handle, index }) => {
+                                let table =
+                                    caller.data().set_table.lock().expect("set table mutex");
+                                let pending = if *set_handle < table.len() as u32 {
+                                    let entry = &table[*set_handle as usize];
+                                    let idx = *index as usize;
+                                    if idx < entry.values.len() {
+                                        let value = entry.values[idx];
+                                        *index += 1;
+                                        Some(PendingIteratorValue::Value(value))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                };
+                                drop(table);
+                                pending
+                            }
                             Some(IteratorState::TypedArrayValueIter {
                                 entry,
                                 index,

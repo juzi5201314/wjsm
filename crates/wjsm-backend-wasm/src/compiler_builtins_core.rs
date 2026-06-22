@@ -394,15 +394,17 @@ impl Compiler {
                 self.emit(WasmInstruction::Unreachable);
                 Ok(Some(()))
             }
-            Builtin::IteratorFrom | Builtin::EnumeratorFrom => {
+            Builtin::IteratorFrom | Builtin::EnumeratorFrom | Builtin::IteratorStepValue => {
                 let val = args
                     .first()
-                    .context("IteratorFrom/EnumeratorFrom expects 1 arg")?;
+                    .context("IteratorFrom/EnumeratorFrom/IteratorStepValue expects 1 arg")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(val.0)));
                 let func_idx = self.builtin_func_indices.get(builtin).copied().unwrap_or(0);
                 self.emit(WasmInstruction::Call(func_idx));
                 if let Some(d) = dest {
                     self.emit(WasmInstruction::LocalSet(self.local_idx(d.0)));
+                } else {
+                    self.emit(WasmInstruction::Drop);
                 }
                 Ok(Some(()))
             }
