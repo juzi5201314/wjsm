@@ -184,9 +184,11 @@ impl Compiler {
                     UnaryOp::Pos => {
                         // +x 应执行 ToNumber(x):
                         //   f64 → 原值; null → 0; true → 1; false → 0;
-                        //   undefined / string / object / 其他 → NaN
+                        //   其他类型 → 调用 to_number 宿主函数
                         let val_local = self.local_idx(value.0);
                         let box_base = value::BOX_BASE as i64;
+                        let to_number_idx = self.special_host_import_indices
+                            [&crate::host_import_registry::SpecialHostImport::ToNumber];
 
                         // 检查是否为 NaN-boxed 值
                         self.emit(WasmInstruction::LocalGet(val_local));
@@ -234,8 +236,9 @@ impl Compiler {
                         self.emit(WasmInstruction::I64Const(0));
                         self.emit(WasmInstruction::End);
                         self.emit(WasmInstruction::Else);
-                        // 其他 boxed 类型 → NaN
-                        self.emit(WasmInstruction::I64Const(value::BOX_BASE as i64));
+                        // 其他 boxed 类型 → 调用 to_number 宿主函数
+                        self.emit(WasmInstruction::LocalGet(val_local));
+                        self.emit(WasmInstruction::Call(to_number_idx));
                         self.emit(WasmInstruction::End);
                         self.emit(WasmInstruction::End);
                         self.emit(WasmInstruction::Else);

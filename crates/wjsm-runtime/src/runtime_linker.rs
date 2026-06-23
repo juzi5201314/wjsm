@@ -420,6 +420,14 @@ pub(super) fn register_common_bridges(
         },
     );
     linker.define(&mut *store, "env", "typedarray_set_by_index", f)?;
+    // to_number：ToNumber 抽象操作，将任意值转换为 Number
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i64 {
+            to_number(&mut caller, val)
+        },
+    );
+    linker.define(&mut *store, "env", "to_number", f)?;
     Ok(())
 }
 

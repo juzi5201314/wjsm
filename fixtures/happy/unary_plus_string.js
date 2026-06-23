@@ -1,0 +1,16 @@
+console.log(+"123");
+console.log(+"3.14");
+console.log(+"-5");
+console.log(+"0x10");
+console.log(+"0XFF");
+console.log(+"");
+console.log(+" \t\n ");
+console.log(+"Infinity");
+console.log(+"-Infinity");
+console.log(+"abc");
+console.log(+"123abc");
+console.log(+null);
+console.log(+true);
+console.log(+false);
+console.log(+undefined);
+console.log(+42);

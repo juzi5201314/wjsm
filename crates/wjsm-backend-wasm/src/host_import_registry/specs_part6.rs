@@ -452,6 +452,12 @@ pub(crate) static SPECS_PART6: &[HostImportSpec] = &[
         group: None,
     },
     HostImportSpec {
+        name: "to_number",
+        type_idx: 3,
+        key: Some(HostImportKey::Special(SpecialHostImport::ToNumber)),
+        group: None,
+    },
+    HostImportSpec {
         name: "iterator_step_value",
         type_idx: 3,
         key: Some(HostImportKey::Builtin(Builtin::IteratorStepValue)),
