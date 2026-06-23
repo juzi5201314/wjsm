@@ -1,0 +1,6 @@
+exit_code: 0
+--- stdout ---
+4n
+21n
+2n
+--- stderr ---

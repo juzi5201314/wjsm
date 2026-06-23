@@ -1,2 +1,2 @@
 var now = Date.now();
-console.log(now > 0);
+console.log(now > 1700000000000);

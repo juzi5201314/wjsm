@@ -28,39 +28,15 @@ impl Lowerer {
         let loaded = self.lower_eval_env_read(name, block);
         let rhs = self.lower_expr(assign.right.as_ref(), block)?;
         let dest = self.alloc_value();
-        match bin_op {
-            BinaryOp::Mod => {
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::CallBuiltin {
-                        dest: Some(dest),
-                        builtin: Builtin::F64Mod,
-                        args: vec![loaded, rhs],
-                    },
-                );
-            }
-            BinaryOp::Exp => {
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::CallBuiltin {
-                        dest: Some(dest),
-                        builtin: Builtin::F64Exp,
-                        args: vec![loaded, rhs],
-                    },
-                );
-            }
-            _ => {
-                self.current_function.append_instruction(
-                    block,
-                    Instruction::Binary {
-                        dest,
-                        op: bin_op,
-                        lhs: loaded,
-                        rhs,
-                    },
-                );
-            }
-        }
+        self.current_function.append_instruction(
+            block,
+            Instruction::Binary {
+                dest,
+                op: bin_op,
+                lhs: loaded,
+                rhs,
+            },
+        );
         let block = self.append_eval_env_write(name, dest, block)?;
         self.expr_merge_block = Some(block);
         Ok(dest)
@@ -131,39 +107,15 @@ impl Lowerer {
                 );
                 let rhs = self.lower_expr(assign.right.as_ref(), current_block)?;
                 let dest = self.alloc_value();
-                match bin_op {
-                    BinaryOp::Mod => {
-                        self.current_function.append_instruction(
-                            current_block,
-                            Instruction::CallBuiltin {
-                                dest: Some(dest),
-                                builtin: Builtin::F64Mod,
-                                args: vec![loaded, rhs],
-                            },
-                        );
-                    }
-                    BinaryOp::Exp => {
-                        self.current_function.append_instruction(
-                            current_block,
-                            Instruction::CallBuiltin {
-                                dest: Some(dest),
-                                builtin: Builtin::F64Exp,
-                                args: vec![loaded, rhs],
-                            },
-                        );
-                    }
-                    _ => {
-                        self.current_function.append_instruction(
-                            current_block,
-                            Instruction::Binary {
-                                dest,
-                                op: bin_op,
-                                lhs: loaded,
-                                rhs,
-                            },
-                        );
-                    }
-                }
+                self.current_function.append_instruction(
+                    current_block,
+                    Instruction::Binary {
+                        dest,
+                        op: bin_op,
+                        lhs: loaded,
+                        rhs,
+                    },
+                );
                 // 写回 env 对象
                 let key_val2 = self.append_env_key_const(current_block, binding);
                 self.current_function.append_instruction(

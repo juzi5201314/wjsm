@@ -139,7 +139,15 @@ impl Compiler {
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     BinaryOp::Mod | BinaryOp::Exp => {
-                        bail!("Mod/Exp should be lowered to CallBuiltin, not Binary op");
+                        let lhs_l = self.local_idx(lhs.0);
+                        let rhs_l = self.local_idx(rhs.0);
+                        let (bigint_builtin, f64_builtin) = match op {
+                            BinaryOp::Mod => (Builtin::BigIntMod, Builtin::F64Mod),
+                            BinaryOp::Exp => (Builtin::BigIntPow, Builtin::F64Exp),
+                            _ => unreachable!(),
+                        };
+                        self.emit_bigint_or_f64_host_binary(lhs_l, rhs_l, bigint_builtin, f64_builtin)?;
+                        self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                 }
                 Ok(false)

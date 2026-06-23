@@ -172,39 +172,15 @@ impl Lowerer {
                         self.error(assign.span, "unsupported compound assignment operator")
                     })?;
                     let result = self.alloc_value();
-                    match bin_op {
-                        BinaryOp::Mod => {
-                            self.current_function.append_instruction(
-                                current_block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(result),
-                                    builtin: Builtin::F64Mod,
-                                    args: vec![old_val, rhs_val],
-                                },
-                            );
-                        }
-                        BinaryOp::Exp => {
-                            self.current_function.append_instruction(
-                                current_block,
-                                Instruction::CallBuiltin {
-                                    dest: Some(result),
-                                    builtin: Builtin::F64Exp,
-                                    args: vec![old_val, rhs_val],
-                                },
-                            );
-                        }
-                        _ => {
-                            self.current_function.append_instruction(
-                                current_block,
-                                Instruction::Binary {
-                                    dest: result,
-                                    op: bin_op,
-                                    lhs: old_val,
-                                    rhs: rhs_val,
-                                },
-                            );
-                        }
-                    }
+                    self.current_function.append_instruction(
+                        current_block,
+                        Instruction::Binary {
+                            dest: result,
+                            op: bin_op,
+                            lhs: old_val,
+                            rhs: rhs_val,
+                        },
+                    );
                     let dest = self.alloc_value();
                     self.current_function.append_instruction(
                         current_block,
@@ -286,41 +262,16 @@ impl Lowerer {
 
             let rhs = self.lower_expr_then_continue(assign.right.as_ref(), &mut current_block)?;
             let dest = self.alloc_value();
+            self.current_function.append_instruction(
+                current_block,
+                Instruction::Binary {
+                    dest,
+                    op: bin_op,
+                    lhs: loaded,
+                    rhs,
+                },
+            );
 
-            // Mod 和 Exp 需要使用 CallBuiltin
-            match bin_op {
-                BinaryOp::Mod => {
-                    self.current_function.append_instruction(
-                        current_block,
-                        Instruction::CallBuiltin {
-                            dest: Some(dest),
-                            builtin: Builtin::F64Mod,
-                            args: vec![loaded, rhs],
-                        },
-                    );
-                }
-                BinaryOp::Exp => {
-                    self.current_function.append_instruction(
-                        current_block,
-                        Instruction::CallBuiltin {
-                            dest: Some(dest),
-                            builtin: Builtin::F64Exp,
-                            args: vec![loaded, rhs],
-                        },
-                    );
-                }
-                _ => {
-                    self.current_function.append_instruction(
-                        current_block,
-                        Instruction::Binary {
-                            dest,
-                            op: bin_op,
-                            lhs: loaded,
-                            rhs,
-                        },
-                    );
-                }
-            }
             let instr = if is_computed {
                 Instruction::SetElem {
                     object: obj_val,
@@ -514,40 +465,15 @@ impl Lowerer {
                 let rhs = self.lower_expr(assign.right.as_ref(), block)?;
                 let dest = self.alloc_value();
 
-                // Mod 和 Exp 需要使用 CallBuiltin
-                match bin_op {
-                    BinaryOp::Mod => {
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::CallBuiltin {
-                                dest: Some(dest),
-                                builtin: Builtin::F64Mod,
-                                args: vec![loaded, rhs],
-                            },
-                        );
-                    }
-                    BinaryOp::Exp => {
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::CallBuiltin {
-                                dest: Some(dest),
-                                builtin: Builtin::F64Exp,
-                                args: vec![loaded, rhs],
-                            },
-                        );
-                    }
-                    _ => {
-                        self.current_function.append_instruction(
-                            block,
-                            Instruction::Binary {
-                                dest,
-                                op: bin_op,
-                                lhs: loaded,
-                                rhs,
-                            },
-                        );
-                    }
-                }
+                self.current_function.append_instruction(
+                    block,
+                    Instruction::Binary {
+                        dest,
+                        op: bin_op,
+                        lhs: loaded,
+                        rhs,
+                    },
+                );
 
                 self.current_function.append_instruction(
                     block,
