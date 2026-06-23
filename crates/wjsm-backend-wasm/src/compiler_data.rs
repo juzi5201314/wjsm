@@ -135,7 +135,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(val_local));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(value::TAG_UNDEFINED as i64));
         self.emit(WasmInstruction::I64Eq);
@@ -143,7 +143,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(val_local));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(value::TAG_NULL as i64));
         self.emit(WasmInstruction::I64Eq);

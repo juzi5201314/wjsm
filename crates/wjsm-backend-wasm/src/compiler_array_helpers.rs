@@ -153,11 +153,11 @@ impl Compiler {
             let mut func = Function::new(vec![(2, ValType::I32)]);
 
             // 检查是否为 TAG_ARRAY
-            // ((boxed >> 32) & 0xF) == TAG_ARRAY
+            // ((boxed >> 32) & TAG_MASK) == TAG_ARRAY
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I64Const(32));
             func.instruction(&WasmInstruction::I64ShrU);
-            func.instruction(&WasmInstruction::I64Const(0xF));
+            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
             func.instruction(&WasmInstruction::I64And);
             func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
             func.instruction(&WasmInstruction::I64Eq);
@@ -237,7 +237,7 @@ impl Compiler {
             func.instruction(&WasmInstruction::LocalGet(0));
             func.instruction(&WasmInstruction::I64Const(32));
             func.instruction(&WasmInstruction::I64ShrU);
-            func.instruction(&WasmInstruction::I64Const(0xF));
+            func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
             func.instruction(&WasmInstruction::I64And);
             func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
             func.instruction(&WasmInstruction::I64Eq);

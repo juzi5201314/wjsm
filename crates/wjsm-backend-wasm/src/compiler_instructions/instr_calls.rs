@@ -532,11 +532,11 @@ impl Compiler {
         key: Option<&ValueId>,
         _is_call: bool,
     ) -> Result<()> {
-        // 提取 tag: (object >> 32) & 0xF
+        // 提取 tag: (object >> 32) & TAG_MASK
         self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
         self.emit(WasmInstruction::I64And);
 
         // 检查是否为 TAG_NULL (0x3) 或 TAG_UNDEFINED (0x2)
@@ -586,7 +586,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
         self.emit(WasmInstruction::I64And);
 
         self.emit(WasmInstruction::LocalTee(self.string_concat_scratch_idx));
@@ -627,7 +627,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(0xA));
         self.emit(WasmInstruction::I64Eq);

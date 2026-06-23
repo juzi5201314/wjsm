@@ -776,7 +776,7 @@ fn emit_elem_get() -> Function {
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::I64Const(32));
     func.instruction(&WasmInstruction::I64ShrU);
-    func.instruction(&WasmInstruction::I64Const(0xF));
+    func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
     func.instruction(&WasmInstruction::I64And);
     func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
     func.instruction(&WasmInstruction::I64Eq);
@@ -834,7 +834,7 @@ fn emit_elem_set() -> Function {
     func.instruction(&WasmInstruction::LocalGet(0));
     func.instruction(&WasmInstruction::I64Const(32));
     func.instruction(&WasmInstruction::I64ShrU);
-    func.instruction(&WasmInstruction::I64Const(0xF));
+    func.instruction(&WasmInstruction::I64Const(value::TAG_MASK as i64));
     func.instruction(&WasmInstruction::I64And);
     func.instruction(&WasmInstruction::I64Const(value::TAG_ARRAY as i64));
     func.instruction(&WasmInstruction::I64Eq);
