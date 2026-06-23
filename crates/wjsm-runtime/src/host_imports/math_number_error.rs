@@ -221,6 +221,9 @@ pub(crate) fn define_math_number_error(
             for i in 0..args_count as u32 {
                 let val = read_shadow_arg(&mut caller, args_base, i);
                 let x = value::decode_f64(val);
+                if x.is_nan() {
+                    return value::encode_f64(f64::NAN);
+                }
                 if x > result || (x == 0.0 && result == 0.0 && x.is_sign_positive()) {
                     result = x;
                 }
@@ -239,6 +242,9 @@ pub(crate) fn define_math_number_error(
             for i in 0..args_count as u32 {
                 let val = read_shadow_arg(&mut caller, args_base, i);
                 let x = value::decode_f64(val);
+                if x.is_nan() {
+                    return value::encode_f64(f64::NAN);
+                }
                 if x < result || (x == 0.0 && result == 0.0 && x.is_sign_negative()) {
                     result = x;
                 }
