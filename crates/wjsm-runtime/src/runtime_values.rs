@@ -878,6 +878,10 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
         // 尝试解析字符串为数字
         // 先尝试 trim，然后解析
         let trimmed = s.trim();
+        // 空字符串或仅空白 → 0（规范要求）
+        if trimmed.is_empty() {
+            return 0.0f64.to_bits() as i64;
+        }
         if let Ok(num) = trimmed.parse::<f64>() {
             return num.to_bits() as i64;
         }
