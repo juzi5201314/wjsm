@@ -136,24 +136,32 @@ pub(crate) async fn native_call_from_caller_async(
         }
         return value::encode_undefined();
     }
+    if value::is_bound(callable) {
+        return resolve_and_call_async(caller, callable, this_val, args_base, args_count).await;
+    }
 
-    if !value::is_undefined(new_target_val) {
+    if value::is_native_callable(callable) {
+        if !value::is_undefined(new_target_val) {
+            caller
+                .data()
+                .new_target
+                .store(new_target_val, Ordering::Relaxed);
+        }
+        let args = (0..args_count.max(0))
+            .map(|index| read_shadow_arg(caller, args_base, index as u32))
+            .collect();
+        let result =
+            call_native_callable_with_args_from_caller_async(caller, callable, this_val, args)
+                .await
+                .unwrap_or_else(value::encode_undefined);
         caller
             .data()
             .new_target
-            .store(new_target_val, Ordering::Relaxed);
+            .store(value::encode_undefined(), Ordering::Relaxed);
+        return result;
     }
-    let args = (0..args_count.max(0))
-        .map(|index| read_shadow_arg(caller, args_base, index as u32))
-        .collect();
-    let result = call_native_callable_with_args_from_caller_async(caller, callable, this_val, args)
-        .await
-        .unwrap_or_else(value::encode_undefined);
-    caller
-        .data()
-        .new_target
-        .store(value::encode_undefined(), Ordering::Relaxed);
-    result
+
+    resolve_callable_and_call_async(caller, callable, this_val, args_base, args_count).await
 }
 
 pub(crate) fn define_misc_async(
