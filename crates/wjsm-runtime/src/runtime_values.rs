@@ -1,6 +1,12 @@
 use super::*;
 use crate::wasm_env::WasmEnv;
 
+/// 对象属性容量倍增并至少容纳 needed；溢出或超出 u32 容量时返回 None。
+fn grown_object_capacity(capacity: usize, needed: usize) -> Option<u32> {
+    let doubled = capacity.max(1).checked_mul(2)?;
+    let grown = doubled.max(needed);
+    u32::try_from(grown).ok()
+}
 /// 计算 boxed value 在 obj_table 中的 handle 索引。
 /// 函数值低 32 位是函数表索引；其属性对象 handle 从 __function_props_base 起算
 //（startup snapshot 拆分后 primordial 原型占据更低 handle）。其余值的 handle 即低 32 位。
@@ -600,7 +606,9 @@ pub(crate) fn write_object_property_by_name_id(
             (num, cap)
         };
         if num_props >= capacity {
-            let new_cap = std::cmp::max(capacity * 2, 4) as u32;
+            let Some(new_cap) = grown_object_capacity(capacity, 4) else {
+                return;
+            };
             let _ = grow_object(caller, obj_ptr, obj_handle, new_cap);
         }
         let num_props = {
@@ -1618,8 +1626,13 @@ pub(crate) fn obj_spread_impl(caller: &mut Caller<'_, RuntimeState>, dest: i64, 
             data[dest_ptr + 14],
             data[dest_ptr + 15],
         ]) as usize;
-        if num_props + new_count > capacity {
-            let new_cap = (capacity * 2).max(num_props + new_count).max(1) as u32;
+        let Some(needed_props) = num_props.checked_add(new_count) else {
+            return;
+        };
+        if needed_props > capacity {
+            let Some(new_cap) = grown_object_capacity(capacity, needed_props) else {
+                return;
+            };
             let Some(new_ptr) = grow_object(caller, dest_ptr, dest, new_cap) else {
                 return;
             };

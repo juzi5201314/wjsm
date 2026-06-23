@@ -2,6 +2,15 @@ use anyhow::Result;
 use wasmtime::{Caller, Linker};
 
 use crate::*;
+
+/// 对象槽位容量倍增（capacity 为 0 时视为 1），乘法溢出时返回 None。
+fn doubled_object_capacity_usize(cap: usize) -> Option<usize> {
+    if cap == 0 {
+        Some(1)
+    } else {
+        cap.checked_mul(2)
+    }
+}
 fn concat_operand_bytes(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec<u8> {
     if value::is_string(val) {
         return read_value_string_bytes(caller, val).unwrap_or_default();
@@ -280,12 +289,7 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                     if let Some(entry_ptr) = resolve_array_ptr(caller, entry) {
                         let elem = typedarray_element_read_entry(caller, &typedarray_entry, idx)
                             .unwrap_or_else(value::encode_undefined);
-                        write_array_elem(
-                            caller,
-                            entry_ptr,
-                            0,
-                            value::encode_f64(idx as f64),
-                        );
+                        write_array_elem(caller, entry_ptr, 0, value::encode_f64(idx as f64));
                         write_array_elem(caller, entry_ptr, 1, elem);
                         write_array_length(caller, entry_ptr, 2);
                     }
@@ -920,9 +924,15 @@ pub(crate) fn define_core(
                         crate::runtime_values::handle_index_of(&mut caller, obj) as u32;
 
                     // 计算新容量和新大小
-                    let new_capacity = if capacity == 0 { 1 } else { capacity * 2 };
-                    let new_size = 16 + new_capacity * 32;
-
+                    let Some(new_capacity) = doubled_object_capacity_usize(capacity) else {
+                        return;
+                    };
+                    let Some(new_size) = new_capacity
+                        .checked_mul(32)
+                        .and_then(|payload| 16_usize.checked_add(payload))
+                    else {
+                        return;
+                    };
                     // 复制旧数据到新位置并更新元数据
                     {
                         let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
@@ -1287,7 +1297,11 @@ pub(crate) fn define_core(
     //   真 OOM（无法分配）时 host 返回 `Err` → Wasmtime trap（#117）；不再返回 sentinel。
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, size: i32, heap_type: i32, capacity: i32| -> wasmtime::Result<i32> {
+        |mut caller: Caller<'_, RuntimeState>,
+         size: i32,
+         heap_type: i32,
+         capacity: i32|
+         -> wasmtime::Result<i32> {
             let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
                 return Err(wasmtime::Trap::AllocationTooLarge.into());
             };
@@ -1436,7 +1450,6 @@ pub(crate) async fn iterator_from_impl_async(
             return value::encode_handle(value::TAG_ITERATOR, handle);
         }
     }
-
 
     if (value::is_object(val) || value::is_function(val))
         && let Some(ptr) = resolve_handle(caller, val)

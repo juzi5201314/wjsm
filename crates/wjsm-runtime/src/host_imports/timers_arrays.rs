@@ -93,14 +93,13 @@ pub(crate) fn define_timers_arrays(
                 return value::encode_bool(false);
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            for i in 0..len {
-                if let Some(elem) = read_array_elem(&mut caller, ptr, i)
-                    && elem == val
-                {
-                    return value::encode_bool(true);
-                }
-            }
-            value::encode_bool(false)
+            super::array_object::array_includes_from(
+                &mut caller,
+                ptr,
+                len,
+                val,
+                value::encode_undefined(),
+            )
         },
     );
     linker.define(&mut store, "env", "arr_includes", f)?;
@@ -110,25 +109,8 @@ pub(crate) fn define_timers_arrays(
             let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
                 return value::encode_f64(-1.0);
             };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0) as i32;
-            let from_idx = if value::is_f64(from_val) {
-                value::decode_f64(from_val) as i32
-            } else {
-                0
-            };
-            let start = if from_idx >= 0 {
-                (from_idx as usize).min(len as usize)
-            } else {
-                ((len + from_idx).max(0)) as usize
-            };
-            for i in start..len as usize {
-                if let Some(elem) = read_array_elem(&mut caller, ptr, i as u32)
-                    && elem == val
-                {
-                    return value::encode_f64(i as f64);
-                }
-            }
-            value::encode_f64(-1.0)
+            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+            super::array_object::array_index_of_from(&mut caller, ptr, len, val, from_val)
         },
     );
     linker.define(&mut store, "env", "arr_index_of", f)?;
@@ -143,7 +125,10 @@ pub(crate) fn define_timers_arrays(
             let mut parts = Vec::new();
             for i in 0..len {
                 if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
-                    parts.push(render_value(&mut caller, elem).unwrap_or_else(|_| "".to_string()));
+                    parts.push(super::array_object::array_join_element_string(
+                        &mut caller,
+                        elem,
+                    ));
                 } else {
                     parts.push(String::new());
                 }
@@ -154,15 +139,15 @@ pub(crate) fn define_timers_arrays(
     linker.define(&mut store, "env", "arr_join", f)?;
     let f = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _arr1: i64, _arr2: i64| -> i64 {
-            unimplemented!("Array.prototype.concat is not yet implemented in wjsm")
+        |mut caller: Caller<'_, RuntimeState>, arr1: i64, arr2: i64| -> i64 {
+            super::array_object::array_concat_two(&mut caller, arr1, arr2)
         },
     );
     linker.define(&mut store, "env", "arr_concat", f)?;
     let f = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _arr: i64, _start: i64, _end: i64| -> i64 {
-            unimplemented!("Array.prototype.slice is not yet implemented in wjsm")
+        |mut caller: Caller<'_, RuntimeState>, arr: i64, start: i64, end: i64| -> i64 {
+            super::array_object::array_slice_range(&mut caller, arr, start, end)
         },
     );
     linker.define(&mut store, "env", "arr_slice", f)?;

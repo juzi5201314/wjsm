@@ -11,7 +11,265 @@ fn array_length_would_overflow(len: u32, add: u32) -> bool {
     len.checked_add(add).is_none_or(|n| n > MAX_ARRAY_LENGTH)
 }
 
-pub(crate) fn push_array_value(caller: &mut Caller<'_, RuntimeState>, arr: i64, val: i64) -> Result<(), i64> {
+/// 将容量按倍增策略翻倍（至少为 1），溢出时返回 None。
+fn doubled_capacity_u32(cap: u32) -> Option<u32> {
+    cap.max(1).checked_mul(2)
+}
+
+/// 数组扩容目标容量：翻倍后与 needed 取较大值，且不超过 ECMAScript 数组长度上限。
+fn array_grow_capacity_u32(cap: u32, needed: u32) -> Option<u32> {
+    let doubled = doubled_capacity_u32(cap)?;
+    let grown = needed.max(doubled);
+    if grown > MAX_ARRAY_LENGTH {
+        None
+    } else {
+        Some(grown)
+    }
+}
+
+/// 对象槽位扩容目标容量：翻倍后与 needed 取较大值，且必须能表示为 u32。
+fn object_grow_capacity_usize(cap: usize, needed: usize) -> Option<u32> {
+    let doubled = cap.max(1).checked_mul(2)?;
+    let grown = needed.max(doubled);
+    u32::try_from(grown).ok()
+}
+/// Array.prototype.join 对单个元素：null/undefined/空洞渲染为空字符串。
+pub(crate) fn array_join_element_string(
+    caller: &mut Caller<'_, RuntimeState>,
+    elem: i64,
+) -> String {
+    if value::is_null(elem) || value::is_undefined(elem) {
+        return String::new();
+    }
+    render_value(caller, elem).unwrap_or_default()
+}
+
+/// 将 fromIndex 规范为 [0, len] 内的起始下标（与 indexOf/includes 共用）。
+fn array_relative_start(len: u32, from_index: i64) -> u32 {
+    if value::is_undefined(from_index) {
+        return 0;
+    }
+    if !value::is_f64(from_index) {
+        return 0;
+    }
+    let f = value::decode_f64(from_index);
+    if f.is_nan() {
+        return 0;
+    }
+    if f == f64::INFINITY {
+        return len;
+    }
+    if f == f64::NEG_INFINITY {
+        return 0;
+    }
+    let len_i = len as i64;
+    if f < 0.0 {
+        let k = f as i64;
+        return (len_i + k).max(0).min(len_i) as u32;
+    }
+    let k = f as i64;
+    k.max(0).min(len_i) as u32
+}
+
+pub(crate) fn array_index_of_from(
+    caller: &mut Caller<'_, RuntimeState>,
+    ptr: usize,
+    len: u32,
+    search: i64,
+    from_index: i64,
+) -> i64 {
+    let start = array_relative_start(len, from_index);
+    for i in start..len {
+        if let Some(elem) = read_array_elem(caller, ptr, i)
+            && elem == search
+        {
+            return value::encode_f64(i as f64);
+        }
+    }
+    value::encode_f64(-1.0)
+}
+
+pub(crate) fn array_includes_from(
+    caller: &mut Caller<'_, RuntimeState>,
+    ptr: usize,
+    len: u32,
+    search: i64,
+    from_index: i64,
+) -> i64 {
+    let start = array_relative_start(len, from_index);
+    for i in start..len {
+        if let Some(elem) = read_array_elem(caller, ptr, i)
+            && same_value_zero(elem, search)
+        {
+            return value::encode_bool(true);
+        }
+    }
+    value::encode_bool(false)
+}
+
+pub(crate) fn array_concat_two(
+    caller: &mut Caller<'_, RuntimeState>,
+    left: i64,
+    right: i64,
+) -> i64 {
+    let Some(left_ptr) = resolve_array_ptr(caller, left) else {
+        return value::encode_undefined();
+    };
+    let left_len = read_array_length(caller, left_ptr).unwrap_or(0);
+    let mut total_len = left_len as usize;
+    if value::is_array(right) {
+        if let Some(right_ptr) = resolve_array_ptr(caller, right) {
+            total_len += read_array_length(caller, right_ptr).unwrap_or(0) as usize;
+        }
+    } else {
+        total_len += 1;
+    }
+    let new_arr = array_species_create(caller, left, total_len as u32);
+    let Some(new_ptr) = resolve_array_ptr(caller, new_arr) else {
+        return value::encode_undefined();
+    };
+    let mut write_idx = 0u32;
+    for i in 0..left_len {
+        if let Some(elem) = read_array_elem(caller, left_ptr, i) {
+            write_array_elem(caller, new_ptr, write_idx, elem);
+            write_idx += 1;
+        }
+    }
+    if value::is_array(right) {
+        if let Some(right_ptr) = resolve_array_ptr(caller, right) {
+            let right_len = read_array_length(caller, right_ptr).unwrap_or(0);
+            for j in 0..right_len {
+                if let Some(elem) = read_array_elem(caller, right_ptr, j) {
+                    write_array_elem(caller, new_ptr, write_idx, elem);
+                    write_idx += 1;
+                }
+            }
+        }
+    } else {
+        write_array_elem(caller, new_ptr, write_idx, right);
+        write_idx += 1;
+    }
+    write_array_length(caller, new_ptr, write_idx);
+    new_arr
+}
+
+pub(crate) fn array_concat_args(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    args_base: i32,
+    args_count: i32,
+) -> i64 {
+    let Some(this_ptr) = resolve_array_ptr(caller, this_val) else {
+        return value::encode_undefined();
+    };
+    let this_len = read_array_length(caller, this_ptr).unwrap_or(0);
+    let mut total_len = this_len as usize;
+    for i in 0..args_count as u32 {
+        let arg = read_shadow_arg(caller, args_base, i);
+        let add = if value::is_array(arg) {
+            resolve_array_ptr(caller, arg)
+                .and_then(|ptr| read_array_length(caller, ptr))
+                .unwrap_or(0) as usize
+        } else {
+            1
+        };
+        let Some(next_len) = total_len.checked_add(add) else {
+            return make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR);
+        };
+        total_len = next_len;
+    }
+    let Ok(total_len_u32) = u32::try_from(total_len) else {
+        return make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR);
+    };
+    let new_arr = array_species_create(caller, this_val, total_len_u32);
+    let Some(new_ptr) = resolve_array_ptr(caller, new_arr) else {
+        return value::encode_undefined();
+    };
+    let mut write_idx = 0u32;
+    for i in 0..this_len {
+        if let Some(elem) = read_array_elem(caller, this_ptr, i) {
+            write_array_elem(caller, new_ptr, write_idx, elem);
+            write_idx += 1;
+        }
+    }
+    for i in 0..args_count as u32 {
+        let arg = read_shadow_arg(caller, args_base, i);
+        if value::is_array(arg) {
+            if let Some(arg_ptr) = resolve_array_ptr(caller, arg) {
+                let arg_len = read_array_length(caller, arg_ptr).unwrap_or(0);
+                for j in 0..arg_len {
+                    if let Some(elem) = read_array_elem(caller, arg_ptr, j) {
+                        write_array_elem(caller, new_ptr, write_idx, elem);
+                        write_idx += 1;
+                    }
+                }
+            }
+        } else {
+            write_array_elem(caller, new_ptr, write_idx, arg);
+            write_idx += 1;
+        }
+    }
+    write_array_length(caller, new_ptr, write_idx);
+    new_arr
+}
+
+pub(crate) fn array_slice_range(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr: i64,
+    start_arg: i64,
+    end_arg: i64,
+) -> i64 {
+    let Some(ptr) = resolve_array_ptr(caller, arr) else {
+        return value::encode_undefined();
+    };
+    let len = read_array_length(caller, ptr).unwrap_or(0) as i32;
+    let start = if value::is_undefined(start_arg) {
+        0
+    } else if value::is_f64(start_arg) {
+        let s_f64 = value::decode_f64(start_arg);
+        if s_f64.is_nan() {
+            0
+        } else if s_f64 < 0.0 {
+            (len + s_f64 as i32).max(0)
+        } else {
+            (s_f64 as i32).min(len)
+        }
+    } else {
+        0
+    };
+    let end = if value::is_undefined(end_arg) {
+        len
+    } else if value::is_f64(end_arg) {
+        let e_f64 = value::decode_f64(end_arg);
+        if e_f64.is_nan() {
+            len
+        } else if e_f64 < 0.0 {
+            (len + e_f64 as i32).max(0)
+        } else {
+            (e_f64 as i32).min(len)
+        }
+    } else {
+        len
+    };
+    let count = (end - start).max(0) as u32;
+    let new_arr = array_species_create(caller, arr, count);
+    let Some(new_ptr) = resolve_array_ptr(caller, new_arr) else {
+        return value::encode_undefined();
+    };
+    for i in 0..count {
+        let elem =
+            read_array_elem(caller, ptr, start as u32 + i).unwrap_or(value::encode_undefined());
+        write_array_elem(caller, new_ptr, i, elem);
+    }
+    write_array_length(caller, new_ptr, count);
+    new_arr
+}
+
+pub(crate) fn push_array_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr: i64,
+    val: i64,
+) -> Result<(), i64> {
     let mut ptr = resolve_array_ptr(caller, arr).ok_or_else(value::encode_undefined)?;
     let len = read_array_length(caller, ptr).unwrap_or(0);
     if array_length_would_overflow(len, 1) {
@@ -19,9 +277,10 @@ pub(crate) fn push_array_value(caller: &mut Caller<'_, RuntimeState>, arr: i64, 
     }
     let cap = read_array_capacity(caller, ptr).unwrap_or(0);
     if len >= cap {
-        let new_cap = cap.max(1) * 2;
-        ptr = grow_array(caller, ptr, arr, new_cap.max(len + 1))
-            .ok_or_else(value::encode_undefined)?;
+        let Some(needed) = array_grow_capacity_u32(cap, len + 1) else {
+            return Err(make_range_error_exception(caller, ARRAY_LENGTH_RANGE_ERROR));
+        };
+        ptr = grow_array(caller, ptr, arr, needed).ok_or_else(value::encode_undefined)?;
     }
     write_array_elem(caller, ptr, len, val);
     write_array_length(caller, ptr, len + 1);
@@ -145,8 +404,9 @@ pub(crate) fn define_array_object(
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0);
             let mut ptr = ptr;
             if len + count > cap {
-                let new_cap = cap.max(1) * 2;
-                let needed = (len + count).max(new_cap);
+                let Some(needed) = array_grow_capacity_u32(cap, len + count) else {
+                    return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
+                };
                 if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed) {
                     ptr = new_ptr;
                 } else {
@@ -195,21 +455,19 @@ pub(crate) fn define_array_object(
          _env_obj: i64,
          this_val: i64,
          args_base: i32,
-         _args_count: i32|
+         args_count: i32|
          -> i64 {
-            let val = read_shadow_arg(&mut caller, args_base, 0);
+            let search = read_shadow_arg(&mut caller, args_base, 0);
+            let from_index = if args_count > 1 {
+                read_shadow_arg(&mut caller, args_base, 1)
+            } else {
+                value::encode_undefined()
+            };
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_bool(false);
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            for i in 0..len {
-                if let Some(elem) = read_array_elem(&mut caller, ptr, i)
-                    && elem == val
-                {
-                    return value::encode_bool(true);
-                }
-            }
-            value::encode_bool(false)
+            array_includes_from(&mut caller, ptr, len, search, from_index)
         },
     );
     linker.define(
@@ -226,21 +484,19 @@ pub(crate) fn define_array_object(
          _env_obj: i64,
          this_val: i64,
          args_base: i32,
-         _args_count: i32|
+         args_count: i32|
          -> i64 {
-            let val = read_shadow_arg(&mut caller, args_base, 0);
+            let search = read_shadow_arg(&mut caller, args_base, 0);
+            let from_index = if args_count > 1 {
+                read_shadow_arg(&mut caller, args_base, 1)
+            } else {
+                value::encode_undefined()
+            };
             let Some(ptr) = resolve_array_ptr(&mut caller, this_val) else {
                 return value::encode_f64(-1.0);
             };
             let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            for i in 0..len {
-                if let Some(elem) = read_array_elem(&mut caller, ptr, i)
-                    && elem == val
-                {
-                    return value::encode_f64(i as f64);
-                }
-            }
-            value::encode_f64(-1.0)
+            array_index_of_from(&mut caller, ptr, len, search, from_index)
         },
     );
     linker.define(
@@ -277,7 +533,7 @@ pub(crate) fn define_array_object(
             let mut parts = Vec::new();
             for i in 0..len {
                 if let Some(elem) = read_array_elem(&mut caller, ptr, i) {
-                    parts.push(render_value(&mut caller, elem).unwrap_or_else(|_| "".to_string()));
+                    parts.push(array_join_element_string(&mut caller, elem));
                 } else {
                     parts.push(String::new());
                 }
@@ -295,56 +551,7 @@ pub(crate) fn define_array_object(
          this_val: i64,
          args_base: i32,
          args_count: i32|
-         -> i64 {
-            let Some(this_ptr) = resolve_array_ptr(&mut caller, this_val) else {
-                return value::encode_undefined();
-            };
-            let this_len = read_array_length(&mut caller, this_ptr).unwrap_or(0);
-            // 计算总元素数
-            let mut total_len = this_len as usize;
-            for i in 0..args_count as u32 {
-                let arg = read_shadow_arg(&mut caller, args_base, i);
-                if value::is_array(arg) {
-                    if let Some(arg_ptr) = resolve_array_ptr(&mut caller, arg) {
-                        total_len += read_array_length(&mut caller, arg_ptr).unwrap_or(0) as usize;
-                    }
-                } else {
-                    total_len += 1;
-                }
-            }
-            let new_arr = array_species_create(&mut caller, this_val, total_len as u32);
-            let Some(new_ptr) = resolve_array_ptr(&mut caller, new_arr) else {
-                return value::encode_undefined();
-            };
-            let mut write_idx = 0u32;
-            // 复制 this 元素
-            for i in 0..this_len {
-                if let Some(elem) = read_array_elem(&mut caller, this_ptr, i) {
-                    write_array_elem(&mut caller, new_ptr, write_idx, elem);
-                    write_idx += 1;
-                }
-            }
-            // 复制参数元素
-            for i in 0..args_count as u32 {
-                let arg = read_shadow_arg(&mut caller, args_base, i);
-                if value::is_array(arg) {
-                    if let Some(arg_ptr) = resolve_array_ptr(&mut caller, arg) {
-                        let arg_len = read_array_length(&mut caller, arg_ptr).unwrap_or(0);
-                        for j in 0..arg_len {
-                            if let Some(elem) = read_array_elem(&mut caller, arg_ptr, j) {
-                                write_array_elem(&mut caller, new_ptr, write_idx, elem);
-                                write_idx += 1;
-                            }
-                        }
-                    }
-                } else {
-                    write_array_elem(&mut caller, new_ptr, write_idx, arg);
-                    write_idx += 1;
-                }
-            }
-            write_array_length(&mut caller, new_ptr, write_idx);
-            new_arr
-        },
+         -> i64 { array_concat_args(&mut caller, this_val, args_base, args_count) },
     );
     linker.define(&mut store, "env", "arr_proto_concat", arr_proto_concat_fn)?;
 
@@ -584,8 +791,9 @@ pub(crate) fn define_array_object(
             let new_len = len + add;
             let mut ptr = ptr;
             if new_len > cap {
-                let new_cap = cap.max(1) * 2;
-                let needed = new_len.max(new_cap);
+                let Some(needed) = array_grow_capacity_u32(cap, new_len) else {
+                    return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
+                };
                 if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed) {
                     ptr = new_ptr;
                 } else {
@@ -770,9 +978,12 @@ pub(crate) fn define_array_object(
             let cap = read_array_capacity(&mut caller, ptr).unwrap_or(0) as i32;
             let mut ptr = ptr;
             if new_len > cap {
-                let new_cap = cap.max(1) * 2;
-                let needed = new_len.max(new_cap);
-                if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed as u32) {
+                let new_len_u32 = new_len as u32;
+                let cap_u32 = cap.max(0) as u32;
+                let Some(needed) = array_grow_capacity_u32(cap_u32, new_len_u32) else {
+                    return make_range_error_exception(&mut caller, ARRAY_LENGTH_RANGE_ERROR);
+                };
+                if let Some(new_ptr) = grow_array(&mut caller, ptr, this_val, needed) {
                     ptr = new_ptr;
                 } else {
                     return value::encode_undefined();
@@ -1078,7 +1289,9 @@ pub(crate) fn define_array_object(
                             ]) as usize;
                             (n, c)
                         };
-                        let new_cap = (cap * 2).max(num + new_count) as u32;
+                        let Some(new_cap) = object_grow_capacity_usize(cap, num + new_count) else {
+                            return value::encode_undefined();
+                        };
                         if let Some(new_ptr) = grow_object(&mut caller, target_ptr, target, new_cap)
                         {
                             target_ptr = new_ptr;
