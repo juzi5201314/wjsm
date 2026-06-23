@@ -6,9 +6,10 @@ impl Lowerer {
         for_in: &swc_ast::ForInStmt,
         flow: StmtFlow,
     ) -> Result<StmtFlow, LoweringError> {
-        let block = self.ensure_open(flow)?;
+        let mut block = self.ensure_open(flow)?;
 
         let rhs = self.lower_expr(&for_in.right, block)?;
+        block = self.resolve_store_block(block);
 
         // Create enumerator from object
         let enum_handle = self.alloc_value();
@@ -77,9 +78,9 @@ impl Lowerer {
             },
         );
 
-        self.lower_for_in_of_lhs(&for_in.left, key_val, body_block)?;
+        let body_entry = self.lower_for_in_of_lhs(&for_in.left, key_val, body_block)?;
 
-        let body_flow = self.lower_stmt(&for_in.body, StmtFlow::Open(body_block))?;
+        let body_flow = self.lower_stmt(&for_in.body, StmtFlow::Open(body_entry))?;
         let _ = self
             .current_function
             .ensure_jump_or_terminated(body_flow, next);
@@ -111,9 +112,10 @@ impl Lowerer {
         if for_of.is_await {
             return self.lower_for_await_of(for_of, flow);
         }
-        let block = self.ensure_open(flow)?;
+        let mut block = self.ensure_open(flow)?;
 
         let iterable = self.lower_expr(&for_of.right, block)?;
+        block = self.resolve_store_block(block);
 
         // Create iterator from iterable
         let iter_handle = self.alloc_value();
@@ -185,9 +187,9 @@ impl Lowerer {
             },
         );
 
-        self.lower_for_in_of_lhs(&for_of.left, value_val, body_block)?;
+        let body_entry = self.lower_for_in_of_lhs(&for_of.left, value_val, body_block)?;
 
-        let body_flow = self.lower_stmt(&for_of.body, StmtFlow::Open(body_block))?;
+        let body_flow = self.lower_stmt(&for_of.body, StmtFlow::Open(body_entry))?;
         let _ = self
             .current_function
             .ensure_jump_or_terminated(body_flow, next_block);
@@ -235,9 +237,10 @@ impl Lowerer {
             ));
         }
 
-        let block = self.ensure_open(flow)?;
+        let mut block = self.ensure_open(flow)?;
 
         let iterable = self.lower_expr(&for_of.right, block)?;
+        block = self.resolve_store_block(block);
 
         let iter_handle = self.alloc_value();
         self.current_function.append_instruction(
@@ -460,9 +463,9 @@ impl Lowerer {
             },
         );
 
-        self.lower_for_in_of_lhs(&for_of.left, value_val, body_block)?;
+        let body_entry = self.lower_for_in_of_lhs(&for_of.left, value_val, body_block)?;
 
-        let body_flow = self.lower_stmt(&for_of.body, StmtFlow::Open(body_block))?;
+        let body_flow = self.lower_stmt(&for_of.body, StmtFlow::Open(body_entry))?;
         let _ = self
             .current_function
             .ensure_jump_or_terminated(body_flow, header);
@@ -498,7 +501,7 @@ impl Lowerer {
         left: &swc_ast::ForHead,
         value: ValueId,
         block: BasicBlockId,
-    ) -> Result<(), LoweringError> {
+    ) -> Result<BasicBlockId, LoweringError> {
         match left {
             swc_ast::ForHead::Pat(pat) => match &**pat {
                 swc_ast::Pat::Ident(binding) => {
@@ -515,7 +518,7 @@ impl Lowerer {
                             value,
                         },
                     );
-                    Ok(())
+                    Ok(block)
                 }
                 swc_ast::Pat::Object(_) | swc_ast::Pat::Array(_) | swc_ast::Pat::Assign(_) => {
                     Err(self.error(
@@ -534,6 +537,7 @@ impl Lowerer {
                     swc_ast::VarDeclKind::Let => VarKind::Let,
                     swc_ast::VarDeclKind::Const => VarKind::Const,
                 };
+                let mut block = block;
                 for declarator in &var_decl.decls {
                     match &declarator.name {
                         swc_ast::Pat::Ident(binding) => {
@@ -555,11 +559,16 @@ impl Lowerer {
                             );
                         }
                         _ => {
-                            self.lower_destructure_pattern(&declarator.name, value, block, kind)?;
+                            block = self.lower_destructure_pattern(
+                                &declarator.name,
+                                value,
+                                block,
+                                kind,
+                            )?;
                         }
                     }
                 }
-                Ok(())
+                Ok(block)
             }
             swc_ast::ForHead::UsingDecl(_) => Err(self.error(
                 DUMMY_SP,
