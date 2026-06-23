@@ -318,10 +318,10 @@ impl Compiler {
                 // 对于两个 plain f64（非 NaN-boxed），使用 f64.eq：
                 //   - 0 === -0 → true ✓
                 //   - NaN === NaN → false ✓
-                // 对于两个 NaN-boxed 值，使用 i64 eq 比较原始位：
+                // 对于两个 NaN-boxed 值，调用 strict_eq 宿主函数进行值比较：
+                //   - 字符串按字符序列比较 ✓
+                //   - BigInt 按值比较 ✓
                 //   - null === null → true ✓
-                //   - null === undefined → false（tag 不同）✓
-                //   - bool/string/handle 同类型同值 → true ✓
                 // 混合类型（一个 f64 一个 NaN-boxed）→ false ✓
 
                 // 检查 lhs 是否为 plain f64：(lhs & BOX_BASE) != BOX_BASE
@@ -349,10 +349,19 @@ impl Compiler {
                 self.emit(WasmInstruction::F64ReinterpretI64);
                 self.emit(WasmInstruction::F64Eq);
                 self.emit(WasmInstruction::Else);
-                // 至少一个是 NaN-boxed：使用 i64 位比较
+                // 至少一个是 NaN-boxed：调用 strict_eq 宿主函数进行值比较（正确处理字符串、BigInt 等）
+                let strict_eq_idx = self
+                    .builtin_func_indices
+                    .get(&Builtin::StrictEq)
+                    .copied()
+                    .context("no WASM func index for StrictEq")?;
                 self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
                 self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
-                self.emit(WasmInstruction::I64Eq);
+                self.emit(WasmInstruction::Call(strict_eq_idx));
+                // strict_eq 返回 NaN-boxed bool (i64)，提取 payload bit → i32
+                self.emit(WasmInstruction::I64Const(1));
+                self.emit(WasmInstruction::I64And);
+                self.emit(WasmInstruction::I32WrapI64);
                 self.emit(WasmInstruction::End);
 
                 if matches!(op, CompareOp::StrictNotEq) {

@@ -154,6 +154,71 @@ impl Compiler {
         self.emit(WasmInstruction::I64Const(tag as i64));
         self.emit(WasmInstruction::I64Eq);
     }
+    /// 发射 WASM 指令将任意 i64 NaN-boxed 值转换为 f64（以 i64 位表示）。
+    /// 实现 ToNumber 抽象操作的内联快速路径：
+    /// - f64 → 原值
+    /// - null → +0
+    /// - true → 1.0，false → 0.0
+    /// - 其他 boxed 类型 → 调用 to_number 宿主函数
+    /// 执行后栈顶为 ToNumber 结果（i64）。
+    pub(crate) fn emit_to_number(&mut self, val_local: u32) -> Result<()> {
+        let box_base = value::BOX_BASE as i64;
+        let to_number_idx = self.special_host_import_indices
+            [&crate::host_import_registry::SpecialHostImport::ToNumber];
+
+        // 检查是否为 NaN-boxed 值
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I64Const(box_base));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(box_base));
+        self.emit(WasmInstruction::I64Eq);
+
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        // boxed: 按 tag 分派
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0x1F));
+        self.emit(WasmInstruction::I64And);
+        // TAG_NULL?
+        self.emit(WasmInstruction::I64Const(value::TAG_NULL as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::I64Const(0)); // null → +0
+        self.emit(WasmInstruction::Else);
+        // TAG_BOOL?
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0x1F));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_BOOL as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        // boolean: 检查 payload
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I64Const(1));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(1));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::I64Const(1.0f64.to_bits() as i64)); // true → 1.0
+        self.emit(WasmInstruction::Else);
+        self.emit(WasmInstruction::I64Const(0)); // false → 0.0
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::Else);
+        // 其他 boxed 类型 → 调用 to_number 宿主函数
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::Call(to_number_idx));
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::Else);
+        // not boxed → raw f64，返回原值
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::End);
+        Ok(())
+    }
+
 
     /// 混合 BigInt/Number 二元运算：返回可捕获的 TypeError 异常值。
     fn emit_bigint_mixed_type_error_value(&mut self) -> anyhow::Result<()> {

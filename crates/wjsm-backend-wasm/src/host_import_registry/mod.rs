@@ -53,6 +53,7 @@ pub enum SpecialHostImport {
     PrimitiveNumberGetMethod,
     TypedArraySetByIndex,
     ToNumber,
+    ToBool,
     // ── P4 GC framework host imports ──
     /// gc_alloc_slow(size, heap_type, capacity) -> handle：fast-path bump 失败后的 slow-path。
     GcAllocSlow,

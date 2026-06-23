@@ -162,12 +162,16 @@ impl Compiler {
     /// This is the unified truthiness check for all control flow conditions.
     pub(crate) fn emit_to_bool_i32(&mut self, val_id: u32) {
         let val_local = self.local_idx(val_id);
+        let to_bool_idx = self.special_host_import_indices
+            [&crate::host_import_registry::SpecialHostImport::ToBool];
         // Strategy:
         // 1. Check if it's undefined (TAG_UNDEFINED) → falsy
         // 2. Check if it's null (TAG_NULL) → falsy
         // 3. Check if it's bool (TAG_BOOL) → decode payload bit
-        // 4. Check if it's f64 (no tag) → check 0.0 and NaN
-        // 5. Otherwise (string, handle) → truthy
+        // 4. Check if it's string → compile期首字节或宿主 to_bool（运行时串）
+        // 5. Check if it's bigint → 宿主 to_bool（0n falsy）
+        // 6. Check if it's f64 (no tag) → check 0.0 and NaN
+        // 7. Otherwise (object, etc.) → truthy
         //
         // Implementation using a series of nested if/else:
 
@@ -186,7 +190,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(val_local));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64Const(0x1F));
         self.emit(WasmInstruction::I64And);
 
         // Check TAG_UNDEFINED (0x2)
@@ -200,7 +204,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(val_local));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64Const(0x1F));
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(value::TAG_NULL as i64));
         self.emit(WasmInstruction::I64Eq);
@@ -212,7 +216,7 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(val_local));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64Const(0x1F));
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(value::TAG_BOOL as i64));
         self.emit(WasmInstruction::I64Eq);
@@ -227,12 +231,12 @@ impl Compiler {
         self.emit(WasmInstruction::LocalGet(val_local));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
-        self.emit(WasmInstruction::I64Const(0xF));
+        self.emit(WasmInstruction::I64Const(0x1F));
         self.emit(WasmInstruction::I64And);
         self.emit(WasmInstruction::I64Const(value::TAG_STRING as i64));
         self.emit(WasmInstruction::I64Eq);
         self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
-        // 运行时字符串句柄不对应线性内存指针；当前运行时只会产生非空字符串。
+        // 运行时字符串句柄：宿主 to_bool 检查是否为空
         self.emit(WasmInstruction::LocalGet(val_local));
         self.emit(WasmInstruction::I64Const(
             (value::STRING_RUNTIME_HANDLE_FLAG << 32) as i64,
@@ -243,7 +247,8 @@ impl Compiler {
         ));
         self.emit(WasmInstruction::I64Eq);
         self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
-        self.emit(WasmInstruction::I32Const(1));
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::Call(to_bool_idx));
         self.emit(WasmInstruction::Else);
         // 编译期字符串：提取低 32 位作为内存指针，读取首字节
         self.emit(WasmInstruction::LocalGet(val_local));
@@ -262,8 +267,21 @@ impl Compiler {
         self.emit(WasmInstruction::End); // end empty string check
         self.emit(WasmInstruction::End); // end runtime string check
         self.emit(WasmInstruction::Else);
-        // Other NaN-boxed types (handle, etc.) → truthy
+        // Check TAG_BIGINT (0xD)：0n falsy，非零 truthy
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(0x1F));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_BIGINT as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I32)));
+        self.emit(WasmInstruction::LocalGet(val_local));
+        self.emit(WasmInstruction::Call(to_bool_idx));
+        self.emit(WasmInstruction::Else);
+        // Other NaN-boxed types (object, symbol, etc.) → truthy
         self.emit(WasmInstruction::I32Const(1));
+        self.emit(WasmInstruction::End); // end TAG_BIGINT check
         self.emit(WasmInstruction::End); // end TAG_STRING check
 
         self.emit(WasmInstruction::End); // end TAG_BOOL check

@@ -94,11 +94,11 @@ impl Compiler {
                     }
                     // 位运算（i32 操作）
                     BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
-                        // 左操作数：ToInt32
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                        // 左操作数：ToNumber → ToInt32
+                        self.emit_to_number(self.local_idx(lhs.0))?;
                         self.emit(WasmInstruction::Call(self.to_int32_func_idx));
-                        // 右操作数：ToInt32
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                        // 右操作数：ToNumber → ToInt32
+                        self.emit_to_number(self.local_idx(rhs.0))?;
                         self.emit(WasmInstruction::Call(self.to_int32_func_idx));
                         // 执行位运算
                         match op {
@@ -114,11 +114,11 @@ impl Compiler {
                     }
                     // 移位运算（需要掩码右操作数）
                     BinaryOp::Shl | BinaryOp::Shr | BinaryOp::UShr => {
-                        // 左操作数：ToInt32
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(lhs.0)));
+                        // 左操作数：ToNumber → ToInt32
+                        self.emit_to_number(self.local_idx(lhs.0))?;
                         self.emit(WasmInstruction::Call(self.to_int32_func_idx));
-                        // 右操作数：ToInt32 并掩码 0x1F
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(rhs.0)));
+                        // 右操作数：ToNumber → ToInt32 并掩码 0x1F
+                        self.emit_to_number(self.local_idx(rhs.0))?;
                         self.emit(WasmInstruction::Call(self.to_int32_func_idx));
                         self.emit(WasmInstruction::I32Const(0x1F));
                         self.emit(WasmInstruction::I32And);
@@ -190,76 +190,13 @@ impl Compiler {
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     UnaryOp::Pos => {
-                        // +x 应执行 ToNumber(x):
-                        //   f64 → 原值; null → 0; true → 1; false → 0;
-                        //   其他类型 → 调用 to_number 宿主函数
-                        let val_local = self.local_idx(value.0);
-                        let box_base = value::BOX_BASE as i64;
-                        let to_number_idx = self.special_host_import_indices
-                            [&crate::host_import_registry::SpecialHostImport::ToNumber];
-
-                        // 检查是否为 NaN-boxed 值
-                        self.emit(WasmInstruction::LocalGet(val_local));
-                        self.emit(WasmInstruction::I64Const(box_base));
-                        self.emit(WasmInstruction::I64And);
-                        self.emit(WasmInstruction::I64Const(box_base));
-                        self.emit(WasmInstruction::I64Eq);
-
-                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                        // boxed: 按 tag 分派
-                        // 提取 tag
-                        self.emit(WasmInstruction::LocalGet(val_local));
-                        self.emit(WasmInstruction::I64Const(32));
-                        self.emit(WasmInstruction::I64ShrU);
-                        self.emit(WasmInstruction::I64Const(0xF));
-                        self.emit(WasmInstruction::I64And);
-                        // TAG_NULL?
-                        self.emit(WasmInstruction::I64Const(value::TAG_NULL as i64));
-                        self.emit(WasmInstruction::I64Eq);
-                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                        // null → +0
-                        self.emit(WasmInstruction::I64Const(0)); // encode_f64(0.0)
-                        self.emit(WasmInstruction::Else);
-                        // 提取 tag
-                        self.emit(WasmInstruction::LocalGet(val_local));
-                        self.emit(WasmInstruction::I64Const(32));
-                        self.emit(WasmInstruction::I64ShrU);
-                        self.emit(WasmInstruction::I64Const(0xF));
-                        self.emit(WasmInstruction::I64And);
-                        // TAG_BOOL?
-                        self.emit(WasmInstruction::I64Const(value::TAG_BOOL as i64));
-                        self.emit(WasmInstruction::I64Eq);
-                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                        // boolean: 检查 payload
-                        self.emit(WasmInstruction::LocalGet(val_local));
-                        self.emit(WasmInstruction::I64Const(1));
-                        self.emit(WasmInstruction::I64And);
-                        self.emit(WasmInstruction::I64Const(1));
-                        self.emit(WasmInstruction::I64Eq);
-                        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
-                        // true → 1.0
-                        self.emit(WasmInstruction::I64Const(1.0f64.to_bits() as i64));
-                        self.emit(WasmInstruction::Else);
-                        // false → 0.0
-                        self.emit(WasmInstruction::I64Const(0));
-                        self.emit(WasmInstruction::End);
-                        self.emit(WasmInstruction::Else);
-                        // 其他 boxed 类型 → 调用 to_number 宿主函数
-                        self.emit(WasmInstruction::LocalGet(val_local));
-                        self.emit(WasmInstruction::Call(to_number_idx));
-                        self.emit(WasmInstruction::End);
-                        self.emit(WasmInstruction::End);
-                        self.emit(WasmInstruction::Else);
-                        // not boxed → raw f64, 返回原值
-                        self.emit(WasmInstruction::LocalGet(val_local));
-                        self.emit(WasmInstruction::End);
-
+                        self.emit_to_number(self.local_idx(value.0))?;
                         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                     }
                     UnaryOp::BitNot => {
                         // ~x: ToInt32(x) XOR 0xFFFFFFFF
-                        // 1. Load value and convert to i32 (ToInt32)
-                        self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
+                        // 1. ToNumber → ToInt32(x)
+                        self.emit_to_number(self.local_idx(value.0))?;
                         self.emit(WasmInstruction::Call(self.to_int32_func_idx));
                         // 2. XOR with -1 (all ones)
                         self.emit(WasmInstruction::I32Const(-1));
