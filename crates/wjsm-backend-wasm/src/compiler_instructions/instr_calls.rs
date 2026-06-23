@@ -601,7 +601,6 @@ impl Compiler {
         self.emit(WasmInstruction::I64Const(value::encode_undefined()));
         self.emit(WasmInstruction::Else);
 
-        // 正常 Call 路径（内联 compile_call 逻辑）
         self.emit(WasmInstruction::GlobalGet(self.shadow_sp_global_idx));
         self.emit(WasmInstruction::LocalSet(self.shadow_sp_scratch_idx));
 
@@ -621,15 +620,68 @@ impl Compiler {
             self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
         }
 
+        // 与 compile_call_with_new_target 一致的可调用类型分发（无 new.target）
         let call_func_idx_scratch = self.call_func_idx_scratch();
         let call_env_obj_scratch = self.call_env_obj_scratch();
+
 
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
         self.emit(WasmInstruction::I64Const(32));
         self.emit(WasmInstruction::I64ShrU);
         self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
         self.emit(WasmInstruction::I64And);
-        self.emit(WasmInstruction::I64Const(0xA));
+        self.emit(WasmInstruction::I64Const(value::TAG_NATIVE_CALLABLE as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NativeCall],
+        ));
+        self.emit(WasmInstruction::Else);
+
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_PROXY as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::ProxyApply],
+        ));
+        self.emit(WasmInstruction::Else);
+
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_BOUND as i64));
+        self.emit(WasmInstruction::I64Eq);
+        self.emit(WasmInstruction::If(BlockType::Result(ValType::I64)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::LocalGet(self.local_idx(this_val.0)));
+        self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
+        self.emit(WasmInstruction::I32Const(args.len() as i32));
+        self.emit(WasmInstruction::Call(
+            self.special_host_import_indices[&SpecialHostImport::NativeCall],
+        ));
+        self.emit(WasmInstruction::Else);
+
+        self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
+        self.emit(WasmInstruction::I64Const(32));
+        self.emit(WasmInstruction::I64ShrU);
+        self.emit(WasmInstruction::I64Const(value::TAG_MASK as i64));
+        self.emit(WasmInstruction::I64And);
+        self.emit(WasmInstruction::I64Const(value::TAG_CLOSURE as i64));
         self.emit(WasmInstruction::I64Eq);
         self.emit(WasmInstruction::If(BlockType::Empty));
         self.emit(WasmInstruction::LocalGet(self.local_idx(callee.0)));
@@ -661,7 +713,10 @@ impl Compiler {
             type_index: 12,
             table_index: 0,
         });
-
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::End);
+        self.emit(WasmInstruction::End);
         self.emit(WasmInstruction::LocalGet(self.shadow_sp_scratch_idx));
         self.emit(WasmInstruction::GlobalSet(self.shadow_sp_global_idx));
 
