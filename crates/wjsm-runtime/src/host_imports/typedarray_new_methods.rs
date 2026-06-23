@@ -427,7 +427,7 @@ pub(crate) fn define_typedarray_new_methods(
             } else {
                 let f = value::decode_f64(from_index);
                 if f < 0.0 {
-                    length as i32 + (f as i32).max(0)
+                    (length as i32 + f as i32).max(0)
                 } else {
                     (f as i32).min(length as i32)
                 }
@@ -485,7 +485,7 @@ pub(crate) fn define_typedarray_new_methods(
             } else {
                 let f = value::decode_f64(from_index);
                 if f < 0.0 {
-                    length as i32 + (f as i32).max(-1)
+                    (length as i32 + f as i32).max(-1)
                 } else {
                     (f as i32).min(length as i32 - 1)
                 }

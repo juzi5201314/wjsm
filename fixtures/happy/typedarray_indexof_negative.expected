@@ -1,0 +1,9 @@
+exit_code: 0
+--- stdout ---
+indexOf -5: 5
+lastIndexOf -5: 5
+indexOf -10: 1
+indexOf past length: -1
+indexOf default: 1
+lastIndexOf default: 1
+--- stderr ---
