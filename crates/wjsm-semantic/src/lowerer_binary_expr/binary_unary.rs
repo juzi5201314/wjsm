@@ -86,35 +86,15 @@ impl Lowerer {
                     .append_instruction(current_block, Instruction::Binary { dest, op, lhs, rhs });
                 Ok(dest)
             }
-            // Mod / Exp → CallBuiltin
-            Mod => {
+            // Mod / Exp → Binary（后端按 BigInt / Number 分派）
+            Mod | Exp => {
                 let mut current_block = block;
                 let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
                 let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
                 let dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    current_block,
-                    Instruction::CallBuiltin {
-                        dest: Some(dest),
-                        builtin: Builtin::F64Mod,
-                        args: vec![lhs, rhs],
-                    },
-                );
-                Ok(dest)
-            }
-            Exp => {
-                let mut current_block = block;
-                let lhs = self.lower_expr_then_continue(bin.left.as_ref(), &mut current_block)?;
-                let rhs = self.lower_expr_then_continue(bin.right.as_ref(), &mut current_block)?;
-                let dest = self.alloc_value();
-                self.current_function.append_instruction(
-                    current_block,
-                    Instruction::CallBuiltin {
-                        dest: Some(dest),
-                        builtin: Builtin::F64Exp,
-                        args: vec![lhs, rhs],
-                    },
-                );
+                let op = if bin.op == Mod { BinaryOp::Mod } else { BinaryOp::Exp };
+                self.current_function
+                    .append_instruction(current_block, Instruction::Binary { dest, op, lhs, rhs });
                 Ok(dest)
             }
             // Bitwise operators — convert to i32, operate, NaN-box back
