@@ -1,0 +1,13 @@
+const a = [1, 2, 3, 2, 1];
+console.log(a.indexOf(2, 2));
+console.log(a.includes(1, 2));
+console.log([1, null, 2, undefined, 3].join('-'));
+console.log([1].concat([2, 3]).join(','));
+console.log([1, 2, 3].slice(1).join(','));
+const r = [1, 2, 3];
+const same = r.reverse();
+console.log(r === same);
+console.log(r.join(','));
+const f = [1, 2, 3, 4, 5];
+f.fill(0, 1, 3);
+console.log(f.join(','));

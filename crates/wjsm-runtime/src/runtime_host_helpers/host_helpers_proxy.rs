@@ -41,7 +41,10 @@ fn define_property_on_normal_object(
             if let Some(new_enum) = desc.enumerable
                 && new_enum != old_enumerable
             {
-                return Err("TypeError: Cannot redefine enumerable attribute of non-configurable property".to_string());
+                return Err(
+                    "TypeError: Cannot redefine enumerable attribute of non-configurable property"
+                        .to_string(),
+                );
             }
             let is_new_accessor = desc.get.is_some() || desc.set.is_some();
             if is_new_accessor != old_accessor {
@@ -68,16 +71,14 @@ fn define_property_on_normal_object(
                     && new_getter != old_getter
                 {
                     return Err(
-                        "TypeError: Cannot change getter of non-configurable property"
-                            .to_string(),
+                        "TypeError: Cannot change getter of non-configurable property".to_string(),
                     );
                 }
                 if let Some(new_setter) = desc.set
                     && new_setter != old_setter
                 {
                     return Err(
-                        "TypeError: Cannot change setter of non-configurable property"
-                            .to_string(),
+                        "TypeError: Cannot change setter of non-configurable property".to_string(),
                     );
                 }
             }
@@ -209,8 +210,15 @@ pub(crate) fn write_new_property_to_memory(
         // 函数 target 的属性对象 handle 经 __function_props_base 重定位，故走 handle_index_of。
         let handle_idx = crate::runtime_values::handle_index_of(caller, target) as u32;
 
-        let new_capacity = if capacity == 0 { 1 } else { capacity * 2 };
-        let new_size = 16 + new_capacity * 32;
+        let Some(new_capacity) = capacity.max(1).checked_mul(2) else {
+            return;
+        };
+        let Some(new_size) = new_capacity
+            .checked_mul(32)
+            .and_then(|payload| 16_usize.checked_add(payload))
+        else {
+            return;
+        };
 
         {
             let Some(Extern::Memory(memory)) = caller.get_export("memory") else {

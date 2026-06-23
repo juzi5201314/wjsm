@@ -252,6 +252,14 @@ pub(crate) fn define_string_methods(
          args_base: i32,
          args_count: i32|
          -> i64 {
+            if value::is_array(this_val) {
+                return super::array_object::array_concat_args(
+                    &mut caller,
+                    this_val,
+                    args_base,
+                    args_count,
+                );
+            }
             let mut result = get_string_value(&mut caller, this_val);
             let parts: Vec<String> = (0..args_count as u32)
                 .map(|i| {
@@ -291,6 +299,18 @@ pub(crate) fn define_string_methods(
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
+            if value::is_array(receiver)
+                && let Some(ptr) = resolve_array_ptr(&mut caller, receiver)
+            {
+                let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+                return super::array_object::array_includes_from(
+                    &mut caller,
+                    ptr,
+                    len,
+                    search,
+                    pos,
+                );
+            }
             let s = get_string_value(&mut caller, receiver);
             let start_utf16 = if pos == value::encode_undefined() {
                 0
@@ -306,6 +326,18 @@ pub(crate) fn define_string_methods(
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, pos: i64| -> i64 {
+            if value::is_array(receiver)
+                && let Some(ptr) = resolve_array_ptr(&mut caller, receiver)
+            {
+                let len = read_array_length(&mut caller, ptr).unwrap_or(0);
+                return super::array_object::array_index_of_from(
+                    &mut caller,
+                    ptr,
+                    len,
+                    search,
+                    pos,
+                );
+            }
             let s = get_string_value(&mut caller, receiver);
             let search_str = get_string_value(&mut caller, search);
             let start_utf16 = if pos == value::encode_undefined() {
@@ -565,6 +597,9 @@ pub(crate) fn define_string_methods(
     let f = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, start: i64, end: i64| -> i64 {
+            if value::is_array(receiver) {
+                return super::array_object::array_slice_range(&mut caller, receiver, start, end);
+            }
             let s = get_string_value(&mut caller, receiver);
             let len = utf16_len(&s) as i64;
             let si = if value::is_f64(start) {

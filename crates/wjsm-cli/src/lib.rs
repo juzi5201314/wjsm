@@ -62,21 +62,32 @@ struct PipelineTimings {
     parse_us: u64,
     lower_us: u64,
     compile_us: u64,
+    execute_us: u64,
 }
 
 impl PipelineTimings {
     fn print(&self, verbose: u8) {
+        let exec = if self.execute_us > 0 {
+            if verbose >= 1 {
+                format!(", execute={}µs", self.execute_us)
+            } else {
+                format!(", execute={}ms", self.execute_us / 1000)
+            }
+        } else {
+            String::new()
+        };
         if verbose >= 1 {
             eprintln!(
-                "Timing: parse={}µs, lower={}µs, compile={}µs",
-                self.parse_us, self.lower_us, self.compile_us
+                "Timing: parse={}µs, lower={}µs, compile={}µs{}",
+                self.parse_us, self.lower_us, self.compile_us, exec
             );
         } else {
             eprintln!(
-                "Timing: parse={}ms, lower={}ms, compile={}ms",
+                "Timing: parse={}ms, lower={}ms, compile={}ms{}",
                 self.parse_us / 1000,
                 self.lower_us / 1000,
-                self.compile_us / 1000
+                self.compile_us / 1000,
+                exec
             );
         }
     }
@@ -223,7 +234,7 @@ fn cmd_build(
                 }
             }
         }
-        Stage::Compile | Stage::Execute => {
+        Stage::Compile => {
             let wasm = if input == "-" {
                 let mut source = String::new();
                 io::stdin().read_to_string(&mut source)?;
@@ -245,42 +256,58 @@ fn cmd_build(
                 eprintln!("Output: {} bytes", wasm.len());
             }
         }
+        Stage::Execute => {
+            let result = if input == "-" {
+                let mut source = String::new();
+                io::stdin().read_to_string(&mut source)?;
+                compile_source_to_pipeline_result(&source, cli.target, false, cli.verbose >= 1)?
+            } else {
+                compile_file_input_to_pipeline_result(
+                    input,
+                    root,
+                    cli.target,
+                    false,
+                    cli.verbose >= 1,
+                )?
+            };
+
+            let wasm = result
+                .wasm
+                .as_ref()
+                .context("compile stage produced no WASM")?;
+
+            if output == "-" {
+                io::stdout().write_all(wasm)?;
+            } else {
+                fs::write(output, wasm)?;
+                if cli.verbose >= 1 {
+                    eprintln!("Wrote {} bytes to {}", wasm.len(), output);
+                }
+            }
+
+            return run_compile_then_execute(cli, result);
+        }
     }
 
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
 fn cmd_run(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<ExitCode> {
-    let wasm = if input == "-" {
-        // stdin can't be a module
+    let verbose_compile = cli.verbose >= 1;
+    let result = if input == "-" {
         let mut source = String::new();
         io::stdin().read_to_string(&mut source)?;
-        compile_source(&source, cli.target, script)?
+        compile_source_to_pipeline_result(&source, cli.target, script, verbose_compile)?
     } else {
-        compile_from_file_input(input, root, cli.target, script)?
+        compile_file_input_to_pipeline_result(input, root, cli.target, script, verbose_compile)?
     };
 
-    if let Err(e) = block_on_wasm_execute(&wasm) {
-        eprintln!("Runtime error: {:#}", e);
-        return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
-    }
-
-    if cli.stats {
-        // TODO: print stats for module compilation
-    }
-
-    Ok(ExitCode::from(EXIT_SUCCESS))
+    run_compile_then_execute(cli, result)
 }
 
 fn cmd_run_eval(cli: &Cli, code: &str, script: bool) -> Result<ExitCode> {
-    let wasm = compile_source(code, cli.target, script)?;
-
-    if let Err(e) = block_on_wasm_execute(&wasm) {
-        eprintln!("Runtime error: {:#}", e);
-        return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
-    }
-
-    Ok(ExitCode::from(EXIT_SUCCESS))
+    let result = compile_source_to_pipeline_result(code, cli.target, script, cli.verbose >= 1)?;
+    run_compile_then_execute(cli, result)
 }
 
 fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<ExitCode> {
@@ -291,7 +318,6 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
         bail!("Input file '{}' does not exist", input);
     }
 
-    // Determine watch target: root directory if provided, otherwise just the input file
     let watch_target = root
         .map(PathBuf::from)
         .unwrap_or_else(|| input_path.clone());
@@ -300,8 +326,6 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
     } else {
         RecursiveMode::NonRecursive
     };
-
-    // Initial run
     eprintln!("Watching {} for changes...", watch_target.display());
     let mut last_exit = match cmd_run(cli, input, root, script) {
         Ok(code) => code,
@@ -411,17 +435,35 @@ fn cmd_dump_ast(cli: &Cli, input: &str) -> Result<ExitCode> {
     Ok(ExitCode::from(EXIT_SUCCESS))
 }
 
-fn cmd_dump_wat(cli: &Cli, input: &str, _root: Option<&str>) -> Result<ExitCode> {
-    let source = read_input(input)?;
+fn cmd_dump_wat(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> {
+    let result = if input == "-" {
+        let mut source = String::new();
+        io::stdin().read_to_string(&mut source)?;
+        run_pipeline(
+            &source,
+            Stage::Compile,
+            cli.verbose,
+            cli.time,
+            cli.target,
+            false,
+        )?
+    } else {
+        let pipeline = compile_file_input_to_pipeline_result(
+            input,
+            root,
+            cli.target,
+            false,
+            cli.verbose >= 1,
+        )?;
+        if cli.time {
+            pipeline.timings.print(cli.verbose);
+        }
+        pipeline
+    };
 
-    let result = run_pipeline(
-        &source,
-        Stage::Compile,
-        cli.verbose,
-        cli.time,
-        cli.target,
-        false,
-    )?;
+    if cli.stats {
+        print_stats(&result);
+    }
 
     if let Some(wasm) = &result.wasm {
         let wat = wasmprinter::print_bytes(wasm)?;
@@ -434,10 +476,7 @@ fn cmd_dump_wat(cli: &Cli, input: &str, _root: Option<&str>) -> Result<ExitCode>
 fn cmd_fmt(input: &str, write: bool) -> Result<ExitCode> {
     let source = fs::read_to_string(input)?;
 
-    // Parse
     let module = parser::parse_module(&source)?;
-
-    // Use SWC codegen to emit formatted code
     let formatted = emit_js(&module)?;
 
     if write {
@@ -673,7 +712,6 @@ fn read_input(input: &str) -> Result<String> {
     }
 }
 
-
 // ============================================================================
 // SWC Codegen (for fmt command)
 // ============================================================================
@@ -754,6 +792,113 @@ fn bundle_plan_from_root(input: PathBuf, root: PathBuf) -> Result<CompilePlan> {
         entry,
         root: canonical_root,
     })
+}
+
+fn run_compile_then_execute(cli: &Cli, mut result: PipelineResult) -> Result<ExitCode> {
+    let wasm = result
+        .wasm
+        .as_ref()
+        .context("compile stage produced no WASM")?;
+
+    if cli.stats {
+        print_stats(&result);
+    }
+
+    let start = Instant::now();
+    let exec_result = block_on_wasm_execute(wasm);
+    result.timings.execute_us = start.elapsed().as_micros() as u64;
+
+    if cli.time {
+        result.timings.print(cli.verbose);
+    }
+
+    if let Err(e) = exec_result {
+        eprintln!("Runtime error: {:#}", e);
+        return Ok(ExitCode::from(EXIT_RUNTIME_ERROR));
+    }
+
+    Ok(ExitCode::from(EXIT_SUCCESS))
+}
+
+fn compile_source_to_pipeline_result(
+    source: &str,
+    target: Target,
+    script: bool,
+    verbose: bool,
+) -> Result<PipelineResult> {
+    let mut result = PipelineResult {
+        ast: None,
+        program: None,
+        wasm: None,
+        timings: PipelineTimings::default(),
+    };
+
+    if verbose {
+        eprintln!("Parsing...");
+    }
+    let start = Instant::now();
+    let module = if script {
+        parser::parse_script_as_module(source)?
+    } else {
+        parser::parse_module(source)?
+    };
+    result.timings.parse_us = start.elapsed().as_micros() as u64;
+    result.ast = Some(module);
+
+    if verbose {
+        eprintln!("Lowering to IR...");
+    }
+    let start = Instant::now();
+    let program = semantic::lower_module(result.ast.take().unwrap(), script)?;
+    result.timings.lower_us = start.elapsed().as_micros() as u64;
+    result.program = Some(program);
+
+    if verbose {
+        eprintln!("Compiling to WASM...");
+    }
+    let start = Instant::now();
+    let wasm = match target {
+        Target::Wasm => backend_wasm::compile(result.program.as_ref().unwrap())?,
+        Target::Jit => bail!("JIT backend is not implemented yet"),
+    };
+    result.timings.compile_us = start.elapsed().as_micros() as u64;
+    result.wasm = Some(wasm);
+
+    Ok(result)
+}
+
+fn compile_file_input_to_pipeline_result(
+    input: &str,
+    root: Option<&str>,
+    target: Target,
+    script: bool,
+    verbose: bool,
+) -> Result<PipelineResult> {
+    let plan = build_compile_plan(Path::new(input), root)?;
+    match plan {
+        CompilePlan::Bundle { entry, root } => {
+            if verbose {
+                eprintln!("Bundling modules...");
+            }
+            let start = Instant::now();
+            let wasm = wjsm_module::bundle(&entry, &root)?;
+            let mut result = PipelineResult {
+                ast: None,
+                program: None,
+                wasm: None,
+                timings: PipelineTimings::default(),
+            };
+            result.timings.compile_us = start.elapsed().as_micros() as u64;
+            match target {
+                Target::Wasm => result.wasm = Some(wasm),
+                Target::Jit => bail!("JIT backend is not implemented yet"),
+            }
+            Ok(result)
+        }
+        CompilePlan::SingleSource(source) => {
+            compile_source_to_pipeline_result(&source, target, script, verbose)
+        }
+    }
 }
 
 fn compile_from_file_input(
