@@ -265,6 +265,111 @@ pub(crate) fn array_slice_range(
     new_arr
 }
 
+/// Array.prototype.fill 的宿主实现：在 [start, end) 范围内写入 val。
+pub(crate) fn array_fill_range(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr: i64,
+    val: i64,
+    start_arg: i64,
+    end_arg: i64,
+) -> i64 {
+    let Some(ptr) = resolve_array_ptr(caller, arr) else {
+        return arr;
+    };
+    let len = read_array_length(caller, ptr).unwrap_or(0) as i32;
+    let start = if value::is_undefined(start_arg) {
+        0
+    } else if value::is_f64(start_arg) {
+        let s_f64 = value::decode_f64(start_arg);
+        if s_f64.is_nan() {
+            0
+        } else if s_f64 < 0.0 {
+            (len + s_f64 as i32).max(0)
+        } else {
+            (s_f64 as i32).min(len)
+        }
+    } else {
+        0
+    };
+    let end = if value::is_undefined(end_arg) {
+        len
+    } else if value::is_f64(end_arg) {
+        let e_f64 = value::decode_f64(end_arg);
+        if e_f64.is_nan() {
+            len
+        } else if e_f64 < 0.0 {
+            (len + e_f64 as i32).max(0)
+        } else {
+            (e_f64 as i32).min(len)
+        }
+    } else {
+        len
+    };
+    for i in start..end {
+        write_array_elem(caller, ptr, i as u32, val);
+    }
+    arr
+}
+
+
+/// Array.prototype.flat 的宿主实现：按 depth 展平数组，返回新数组。
+pub(crate) fn array_flat_with_depth(
+    caller: &mut Caller<'_, RuntimeState>,
+    arr: i64,
+    depth_arg: i64,
+) -> i64 {
+    let depth = if value::is_undefined(depth_arg) {
+        1u32
+    } else if value::is_f64(depth_arg) {
+        let d = value::decode_f64(depth_arg);
+        if d.is_nan() {
+            0
+        } else {
+            let i = d.trunc() as i64;
+            if i <= 0 {
+                0
+            } else {
+                i as u32
+            }
+        }
+    } else {
+        1
+    };
+    fn flatten(
+        caller: &mut Caller<'_, RuntimeState>,
+        arr: i64,
+        depth: u32,
+        elements: &mut Vec<i64>,
+    ) {
+        let Some(ptr) = resolve_array_ptr(caller, arr) else {
+            elements.push(arr);
+            return;
+        };
+        let len = read_array_length(caller, ptr).unwrap_or(0);
+        for i in 0..len {
+            if let Some(elem) = read_array_elem(caller, ptr, i) {
+                if depth > 0 && value::is_array(elem) {
+                    flatten(caller, elem, depth - 1, elements);
+                } else {
+                    elements.push(elem);
+                }
+            }
+        }
+    }
+    let mut elements = Vec::new();
+    flatten(caller, arr, depth, &mut elements);
+    let new_arr = array_species_create(caller, arr, elements.len() as u32);
+    let Some(new_ptr) = resolve_array_ptr(caller, new_arr) else {
+        return value::encode_undefined();
+    };
+    for (i, elem) in elements.iter().enumerate() {
+        write_array_elem(caller, new_ptr, i as u32, *elem);
+    }
+    write_array_length(caller, new_ptr, elements.len() as u32);
+    new_arr
+}
+
+
 pub(crate) fn push_array_value(
     caller: &mut Caller<'_, RuntimeState>,
     arr: i64,
