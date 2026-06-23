@@ -355,8 +355,13 @@ pub(crate) async fn array_push_spread_impl_async(
     }
 
     if let Some(bytes) = read_value_string_bytes(caller, iterable) {
-        for byte in bytes {
-            let val = store_runtime_string(caller, (byte as char).to_string());
+        let mut byte_pos = 0usize;
+        while byte_pos < bytes.len() {
+            let ch_len = super::utf8_code_unit_len(bytes[byte_pos]);
+            let end = (byte_pos + ch_len).min(bytes.len());
+            let s = String::from_utf8_lossy(&bytes[byte_pos..end]).into_owned();
+            byte_pos += ch_len;
+            let val = store_runtime_string(caller, s);
             if push_array_value(caller, arr, val).is_err() {
                 set_runtime_error(caller.data(), ARRAY_LENGTH_RANGE_ERROR.to_string());
                 return value::encode_undefined();

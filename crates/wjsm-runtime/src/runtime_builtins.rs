@@ -1324,10 +1324,14 @@ pub(crate) async fn advance_async_from_sync_async(
             }
             Some(IteratorState::StringIter { byte_pos, data }) => {
                 if *byte_pos < data.len() {
-                    let ch = data[*byte_pos] as char;
-                    *byte_pos += 1;
+                    let pos = *byte_pos;
+                    let bytes = data.clone();
+                    let ch_len = utf8_code_unit_len(bytes[pos]);
+                    *byte_pos += ch_len;
                     drop(iters);
-                    let val = store_runtime_string(caller, ch.to_string());
+                    let end = (pos + ch_len).min(bytes.len());
+                    let s = String::from_utf8_lossy(&bytes[pos..end]).into_owned();
+                    let val = store_runtime_string(caller, s);
                     Some((false, val))
                 } else {
                     Some((true, value::encode_undefined()))
