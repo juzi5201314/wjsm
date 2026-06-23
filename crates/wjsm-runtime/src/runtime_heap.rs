@@ -4,26 +4,28 @@ use crate::wasm_env::WasmEnv;
 use wjsm_ir::SHADOW_STACK_SIZE;
 
 /// handle 表上界（止于 shadow stack 基址），与 WASM emit_handle_table_alloc_check 一致。
-fn handle_table_end_byte(env: &WasmEnv, ctx: &impl AsContext<Data = RuntimeState>) -> usize {
+fn handle_table_end_byte<C: AsContextMut<Data = RuntimeState>>(env: &WasmEnv, ctx: &mut C) -> usize {
     let Some(g) = env.shadow_stack_end else {
-        return env.memory.data(ctx).len();
+        return env.memory.data(&*ctx).len();
     };
-    let end = g.get(ctx).i32().unwrap_or(0).max(0) as usize;
+    let end = g.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
     end.saturating_sub(SHADOW_STACK_SIZE as usize)
 }
 
-/// 新 handle 槽位是否仍在 handle 表内。
-fn host_handle_slot_fits(env: &WasmEnv, ctx: &impl AsContext<Data = RuntimeState>, candidate: u32) -> bool {
-    let obj_table_ptr = env.obj_table_ptr.get(ctx).i32().unwrap_or(0).max(0) as usize;
+pub(crate) fn host_handle_slot_fits<C: AsContextMut<Data = RuntimeState>>(
+    env: &WasmEnv,
+    ctx: &mut C,
+    candidate: u32,
+) -> bool {
+    let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0).max(0) as usize;
     let need_end = obj_table_ptr
-        .saturating_add(candidate as usize)
-        .saturating_mul(4)
+        .saturating_add((candidate as usize).saturating_mul(4))
         .saturating_add(4);
     need_end <= handle_table_end_byte(env, ctx)
 }
 
 /// 线性内存不足时按页扩展，供 host 侧 bump / resize 使用。
-fn ensure_linear_memory_bytes<C: AsContextMut<Data = RuntimeState>>(
+pub(crate) fn ensure_linear_memory_bytes<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
     need_end: usize,
@@ -66,17 +68,17 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
     let obj_table_count = env.obj_table_count.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let obj_table_ptr = env.obj_table_ptr.get(&mut *ctx).i32().unwrap_or(0) as u32;
     let new_heap_ptr = heap_ptr.saturating_add(size);
+    ensure_linear_memory_bytes(ctx, env, new_heap_ptr as usize);
+    if new_heap_ptr as usize > env.memory.data(&*ctx).len() {
+        return value::encode_undefined();
+    }
+    if !host_handle_slot_fits(env, ctx, obj_table_count) {
+        return value::encode_undefined();
+    }
+    let ptr = heap_ptr as usize;
+    let slot_addr = obj_table_ptr as usize + obj_table_count as usize * 4;
     {
         let data = env.memory.data_mut(&mut *ctx);
-        let ptr = heap_ptr as usize;
-        if new_heap_ptr as usize > data.len() {
-            return value::encode_undefined();
-        }
-        let slot_addr = obj_table_ptr as usize + obj_table_count as usize * 4;
-        // obj_table 槽位耗尽时必须直接返回 undefined，不递增 obj_table_count、
-        if !host_handle_slot_fits(env, &*ctx, obj_table_count) {
-            return value::encode_undefined();
-        }
         data[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());
         data[ptr + 4] = wjsm_ir::HEAP_TYPE_OBJECT;
         data[ptr + 5..ptr + 8].fill(0);

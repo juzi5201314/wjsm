@@ -11,6 +11,7 @@ use crate::runtime_gc::api::{
     Allocator, GcAlgorithm, GcContext, GcStats, Handle, Marker, RootProvider, Sweeper,
 };
 use crate::runtime_gc::mark_bitmap::MarkBitmap;
+use crate::runtime_gc::weak_refs;
 use allocator::SegregatedFreeList;
 
 /// non-moving mark-sweep 收集器。
@@ -99,6 +100,7 @@ impl GcAlgorithm for MarkSweepCollector {
         self.sweep(ctx);
 
         // 4. 把 freed_handles 推入 RuntimeState.handle_free_list（P4 接管 fast-path 复用）
+        weak_refs::process_weak_refs_after_sweep(ctx, &self.freed_handles);
         ctx.with_state(|st| {
             if let Some(mut list) = st.handle_free_list_for_gc() {
                 list.extend_from_slice(&self.freed_handles);
@@ -156,7 +158,7 @@ impl GcAlgorithm for MarkSweepCollector {
 
         // 3. sweep
         self.sweep(ctx);
-
+        weak_refs::process_weak_refs_after_sweep(ctx, &self.freed_handles);
         ctx.with_state(|st| {
             if let Some(mut list) = st.handle_free_list_for_gc() {
                 list.extend_from_slice(&self.freed_handles);
@@ -185,6 +187,7 @@ impl MarkSweepCollector {
         self.mark(ctx, roots);
         self.sweep(ctx);
 
+        weak_refs::process_weak_refs_after_sweep(ctx, &self.freed_handles);
         ctx.with_state(|st| {
             if let Some(mut list) = st.handle_free_list_for_gc() {
                 list.extend_from_slice(&self.freed_handles);

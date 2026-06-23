@@ -1397,11 +1397,12 @@ pub(crate) fn weakref_deref_impl(caller: &mut Caller<'_, RuntimeState>, this_val
     if handle >= table.len() {
         return value::encode_undefined();
     }
-    let entry = &table[handle];
-    if entry.target_handle == 0 {
+    let target_handle = table[handle].target_handle;
+    drop(table);
+    if target_handle == 0 || !obj_table_handle_live(caller, target_handle) {
         return value::encode_undefined();
     }
-    value::encode_object_handle(entry.target_handle)
+    encode_handle_as_js_value(caller, target_handle).unwrap_or_else(value::encode_undefined)
 }
 pub(crate) fn fr_unregister_impl(
     caller: &mut Caller<'_, RuntimeState>,
@@ -1456,8 +1457,8 @@ pub(crate) fn fr_register_impl_with_args(
     if !value::is_js_object(target) {
         return value::encode_undefined();
     }
-    let target_handle = match resolve_handle(caller, target) {
-        Some(ptr) => ptr as u32,
+    let target_handle = match weak_target_handle_index_of(caller, target) {
+        Some(h) => h,
         None => return value::encode_undefined(),
     };
     if !value::is_object(this_val) {
