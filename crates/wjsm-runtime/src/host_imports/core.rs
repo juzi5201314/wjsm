@@ -11,6 +11,41 @@ fn doubled_object_capacity_usize(cap: usize) -> Option<usize> {
         cap.checked_mul(2)
     }
 }
+
+/// 根据 UTF-8 首字节返回该码点的字节长度（字符串迭代器按码点步进）。
+pub(crate) fn utf8_code_unit_len(lead: u8) -> usize {
+    match lead {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => 1,
+    }
+}
+
+/// 返回当前 `byte_pos` 处完整 UTF-8 码点对应的运行时字符串值（不推进位置）。
+pub(crate) fn string_iter_current_value(
+    caller: &Caller<'_, RuntimeState>,
+    data: &[u8],
+    byte_pos: usize,
+) -> i64 {
+    if byte_pos >= data.len() {
+        return value::encode_undefined();
+    }
+    let ch_len = utf8_code_unit_len(data[byte_pos]);
+    let end = (byte_pos + ch_len).min(data.len());
+    let s = String::from_utf8_lossy(&data[byte_pos..end]).into_owned();
+    store_runtime_string(caller, s)
+}
+
+/// 将字符串迭代器 `byte_pos` 推进到下一个码点。
+pub(crate) fn string_iter_advance_byte_pos(data: &[u8], byte_pos: &mut usize) {
+    if *byte_pos < data.len() {
+        let ch_len = utf8_code_unit_len(data[*byte_pos]);
+        *byte_pos += ch_len;
+    }
+}
+
 fn concat_operand_bytes(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Vec<u8> {
     if value::is_string(val) {
         return read_value_string_bytes(caller, val).unwrap_or_default();
@@ -189,9 +224,10 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
         match iter {
             IteratorState::StringIter { data, byte_pos } => {
                 if *byte_pos < data.len() {
-                    let ch = data[*byte_pos] as char;
+                    let pos = *byte_pos;
+                    let bytes = data.clone();
                     drop(iters);
-                    store_runtime_string(caller, ch.to_string())
+                    string_iter_current_value(caller, &bytes, pos)
                 } else {
                     value::encode_undefined()
                 }

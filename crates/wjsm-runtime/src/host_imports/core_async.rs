@@ -3,7 +3,7 @@
 use anyhow::Result;
 use wasmtime::{Caller, Linker};
 
-use super::core::{iterator_value_impl, op_in_impl};
+use super::core::{iterator_value_impl, op_in_impl, string_iter_advance_byte_pos};
 use crate::*;
 
 pub(crate) fn define_core_async(
@@ -226,8 +226,8 @@ pub(crate) fn define_core_async(
                 return value::encode_undefined();
             };
             match iter {
-                IteratorState::StringIter { byte_pos, .. } => {
-                    *byte_pos += 1;
+                IteratorState::StringIter { byte_pos, data } => {
+                    string_iter_advance_byte_pos(data, byte_pos);
                     return value::encode_undefined();
                 }
                 IteratorState::ArrayIter { index, .. } => {
