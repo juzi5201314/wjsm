@@ -85,7 +85,7 @@ module {
       store var $0.x, %21
       %22 = load var $0.x
       %23 = const c21
-      %24 = call builtin.f64.mod(%22, %23)
+      %24 = mod %22, %23
       store var $0.x, %24
       %25 = load var $0.x
       %26 = call builtin.console.log(%25)
@@ -96,7 +96,7 @@ module {
       store var $0.y, %29
       %30 = load var $0.y
       %31 = const c23
-      %32 = call builtin.f64.exp(%30, %31)
+      %32 = exp %30, %31
       store var $0.y, %32
       %33 = load var $0.y
       %34 = call builtin.console.log(%33)
