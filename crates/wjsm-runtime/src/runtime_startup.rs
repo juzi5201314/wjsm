@@ -173,6 +173,9 @@ pub(super) fn extract_wasm_env(instance: &Instance, store: &mut Store<RuntimeSta
         heap_ptr: heap_ptr_global,
         obj_table_ptr: obj_table_ptr_global,
         obj_table_count: obj_table_count_global,
+        shadow_stack_end: instance
+            .get_export(&mut *store, "__shadow_stack_end")
+            .and_then(|e| e.into_global()),
         object_proto_handle: object_proto_handle_global,
         array_proto_handle: array_proto_handle_global,
         object_heap_start: instance

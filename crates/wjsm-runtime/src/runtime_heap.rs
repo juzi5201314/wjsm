@@ -1,6 +1,40 @@
 use super::*;
 use crate::wasm_env::WasmEnv;
 
+use wjsm_ir::SHADOW_STACK_SIZE;
+
+/// handle 表上界（止于 shadow stack 基址），与 WASM emit_handle_table_alloc_check 一致。
+fn handle_table_end_byte(env: &WasmEnv, ctx: &impl AsContext<Data = RuntimeState>) -> usize {
+    let Some(g) = env.shadow_stack_end else {
+        return env.memory.data(ctx).len();
+    };
+    let end = g.get(ctx).i32().unwrap_or(0).max(0) as usize;
+    end.saturating_sub(SHADOW_STACK_SIZE as usize)
+}
+
+/// 新 handle 槽位是否仍在 handle 表内。
+fn host_handle_slot_fits(env: &WasmEnv, ctx: &impl AsContext<Data = RuntimeState>, candidate: u32) -> bool {
+    let obj_table_ptr = env.obj_table_ptr.get(ctx).i32().unwrap_or(0).max(0) as usize;
+    let need_end = obj_table_ptr
+        .saturating_add(candidate as usize)
+        .saturating_mul(4)
+        .saturating_add(4);
+    need_end <= handle_table_end_byte(env, ctx)
+}
+
+/// 线性内存不足时按页扩展，供 host 侧 bump / resize 使用。
+fn ensure_linear_memory_bytes<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    need_end: usize,
+) {
+    while env.memory.data(&*ctx).len() < need_end {
+        if env.memory.grow(&mut *ctx, 1).is_err() {
+            break;
+        }
+    }
+}
+
 fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
     ctx: &mut C,
     env: &WasmEnv,
@@ -40,8 +74,7 @@ fn alloc_host_object_impl<C: AsContextMut<Data = RuntimeState>>(
         }
         let slot_addr = obj_table_ptr as usize + obj_table_count as usize * 4;
         // obj_table 槽位耗尽时必须直接返回 undefined，不递增 obj_table_count、
-        // 不前进 heap_ptr，保持 handle->slot 映射与 obj_table_count 一致。
-        if slot_addr + 4 > data.len() {
+        if !host_handle_slot_fits(env, &*ctx, obj_table_count) {
             return value::encode_undefined();
         }
         data[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());

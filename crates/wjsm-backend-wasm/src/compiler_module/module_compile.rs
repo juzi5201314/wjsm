@@ -295,7 +295,7 @@ impl Compiler {
         // 需要在编译 bootstrap 之前确定初始值。
         let heap_start = (self.data_offset + 7) & !7; // align to 8 bytes
         let num_functions = self.num_ir_functions;
-        let handle_table_entries = std::cmp::max(2048, num_functions * 2);
+        let handle_table_entries = std::cmp::max(8192, num_functions * 4);
         let handle_table_size = handle_table_entries * 4;
         let shadow_stack_base = heap_start + handle_table_size;
         let object_heap_start = shadow_stack_base + SHADOW_STACK_SIZE;
