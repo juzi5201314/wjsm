@@ -311,6 +311,24 @@ fn emit_handle_bounds_check(func: &mut Function, handle_local: u32, sentinel: Op
     func.instruction(&WasmInstruction::LocalGet(handle_local));
 }
 
+/// 新 handle 分配前检查：candidate 槽位不得越过 handle 表（止于 shadow stack 基址）。
+fn emit_handle_table_alloc_check(func: &mut Function, candidate_local: u32) {
+    func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
+    func.instruction(&WasmInstruction::LocalGet(candidate_local));
+    func.instruction(&WasmInstruction::I32Const(4));
+    func.instruction(&WasmInstruction::I32Mul);
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::I32Const(4));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalGet(G_SHADOW_STACK_END));
+    func.instruction(&WasmInstruction::I32Const(wjsm_ir::SHADOW_STACK_SIZE as i32));
+    func.instruction(&WasmInstruction::I32Sub);
+    func.instruction(&WasmInstruction::I32GtU);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::Unreachable);
+    func.instruction(&WasmInstruction::End);
+}
+
 /// 属性名 ID 匹配：先比较整数相等，若不等且两者都不是 Symbol 则调用 string_eq。
 /// left_local / right_local 持有 name_id（i32）。
 /// 结果（i32）留在栈顶：1 = 匹配，0 = 不匹配。
@@ -375,6 +393,75 @@ fn emit_resolve_callable_for_helper(
     func.instruction(&WasmInstruction::End);
 }
 
+/// 对象扩容 bump：与 user wasm emit_heap_bump_for_object_resize 同逻辑（G_HEAP_PTR）。
+fn emit_heap_bump_for_object_resize_support(
+    func: &mut Function,
+    capacity_local: u32,
+    size_scratch_local: u32,
+) {
+    func.instruction(&WasmInstruction::LocalGet(capacity_local));
+    func.instruction(&WasmInstruction::I32Const(32));
+    func.instruction(&WasmInstruction::I32Mul);
+    func.instruction(&WasmInstruction::I32Const(16));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::LocalSet(size_scratch_local));
+
+    func.instruction(&WasmInstruction::Block(BlockType::Empty));
+    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::MemorySize(0));
+    func.instruction(&WasmInstruction::I64ExtendI32U);
+    func.instruction(&WasmInstruction::I64Const(65536));
+    func.instruction(&WasmInstruction::I64Mul);
+    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::I32LeU);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalSet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::Br(1));
+    func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::MemorySize(0));
+    func.instruction(&WasmInstruction::I64ExtendI32U);
+    func.instruction(&WasmInstruction::I64Const(65536));
+    func.instruction(&WasmInstruction::I64Mul);
+    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::I32Sub);
+    func.instruction(&WasmInstruction::I32Const(65535));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::I32Const(65536));
+    func.instruction(&WasmInstruction::I32DivU);
+    func.instruction(&WasmInstruction::MemoryGrow(0));
+    func.instruction(&WasmInstruction::I32Const(-1));
+    func.instruction(&WasmInstruction::I32Eq);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::Unreachable);
+    func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::MemorySize(0));
+    func.instruction(&WasmInstruction::I64ExtendI32U);
+    func.instruction(&WasmInstruction::I64Const(65536));
+    func.instruction(&WasmInstruction::I64Mul);
+    func.instruction(&WasmInstruction::I32WrapI64);
+    func.instruction(&WasmInstruction::I32LeU);
+    func.instruction(&WasmInstruction::If(BlockType::Empty));
+    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::LocalGet(size_scratch_local));
+    func.instruction(&WasmInstruction::I32Add);
+    func.instruction(&WasmInstruction::GlobalSet(G_HEAP_PTR));
+    func.instruction(&WasmInstruction::Br(1));
+    func.instruction(&WasmInstruction::End);
+    func.instruction(&WasmInstruction::Unreachable);
+    func.instruction(&WasmInstruction::End);
+}
+
 // ── obj_new (param $capacity i32) (result i32) — Type 0 ──
 // 移植自 compiler_helpers.rs::compile_object_helpers obj_new 段。
 fn emit_obj_new() -> Function {
@@ -401,6 +488,7 @@ fn emit_obj_new() -> Function {
     func.instruction(&WasmInstruction::Else);
     func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_COUNT));
     func.instruction(&WasmInstruction::LocalTee(3));
+    emit_handle_table_alloc_check(&mut func, 3);
     func.instruction(&WasmInstruction::I32Const(1));
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::GlobalSet(G_OBJ_TABLE_COUNT));
@@ -690,6 +778,7 @@ fn emit_arr_new() -> Function {
     func.instruction(&WasmInstruction::Else);
     func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_COUNT));
     func.instruction(&WasmInstruction::LocalTee(3));
+    emit_handle_table_alloc_check(&mut func, 3);
     func.instruction(&WasmInstruction::I32Const(1));
     func.instruction(&WasmInstruction::I32Add);
     func.instruction(&WasmInstruction::GlobalSet(G_OBJ_TABLE_COUNT));

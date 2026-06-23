@@ -362,6 +362,7 @@ fn emit_obj_set() -> Function {
         (1, ValType::I64),
         (3, ValType::I32),
         (1, ValType::I64),
+        (1, ValType::I32),
     ]);
     // ── 通过 handle 表解析 ptr（支持 TAG_OBJECT 和 TAG_FUNCTION）──
     func.instruction(&WasmInstruction::Block(BlockType::Empty));
@@ -787,15 +788,9 @@ fn emit_obj_set() -> Function {
     // new_ptr = heap_ptr
     func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
     func.instruction(&WasmInstruction::LocalSet(8));
-    // heap_ptr += 12 + new_capacity * 32
-    func.instruction(&WasmInstruction::GlobalGet(G_HEAP_PTR));
-    func.instruction(&WasmInstruction::LocalGet(7));
-    func.instruction(&WasmInstruction::I32Const(32));
-    func.instruction(&WasmInstruction::I32Mul);
-    func.instruction(&WasmInstruction::I32Const(16));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::GlobalSet(G_HEAP_PTR));
+    // heap_ptr += 16 + new_capacity * 32（扩容前 new_ptr 已写入 local 8）
+    emit_heap_bump_for_object_resize_support(&mut func, 7, 16);
+
     // 拷贝旧数据到新内存
     func.instruction(&WasmInstruction::I32Const(0));
     func.instruction(&WasmInstruction::LocalSet(5)); // copy_offset = 0

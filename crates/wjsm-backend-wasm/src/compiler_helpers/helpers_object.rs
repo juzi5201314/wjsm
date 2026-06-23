@@ -5,6 +5,7 @@ impl Compiler {
         let heap_global = self.heap_ptr_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
+        let shadow_stack_end_global = self.shadow_stack_end_global_idx;
         let num_ir_functions_global = self.num_ir_functions_global_idx;
         let function_props_base_global = self.function_props_base_global_idx;
 
@@ -43,9 +44,14 @@ impl Compiler {
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             // 已取到 freed handle（local 3 持有）
             func.instruction(&WasmInstruction::Else);
-            // 新分配：handle_idx = obj_table_count; obj_table_count++
             func.instruction(&WasmInstruction::GlobalGet(obj_table_count_global));
             func.instruction(&WasmInstruction::LocalTee(3));
+            Self::emit_handle_table_alloc_check(
+                &mut func,
+                obj_table_global,
+                shadow_stack_end_global,
+                3,
+            );
             func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::GlobalSet(obj_table_count_global));
@@ -526,6 +532,7 @@ impl Compiler {
                 (1, ValType::I64),
                 (3, ValType::I32),
                 (1, ValType::I64),
+                (1, ValType::I32),
             ]);
 
             // ── 通过 handle 表解析 ptr（支持 TAG_OBJECT 和 TAG_FUNCTION）──
@@ -959,15 +966,9 @@ impl Compiler {
             func.instruction(&WasmInstruction::GlobalGet(heap_global));
             func.instruction(&WasmInstruction::LocalSet(8));
 
-            // heap_ptr += 12 + new_capacity * 32
-            func.instruction(&WasmInstruction::GlobalGet(heap_global));
-            func.instruction(&WasmInstruction::LocalGet(7));
-            func.instruction(&WasmInstruction::I32Const(32));
-            func.instruction(&WasmInstruction::I32Mul);
-            func.instruction(&WasmInstruction::I32Const(16));
-            func.instruction(&WasmInstruction::I32Add);
-            func.instruction(&WasmInstruction::I32Add);
-            func.instruction(&WasmInstruction::GlobalSet(heap_global));
+            // heap_ptr += 16 + new_capacity * 32（扩容前 new_ptr 已写入 local 8）
+            Self::emit_heap_bump_for_object_resize(&mut func, heap_global, 7, 16);
+
 
             // 拷贝旧数据到新内存
             func.instruction(&WasmInstruction::I32Const(0));
