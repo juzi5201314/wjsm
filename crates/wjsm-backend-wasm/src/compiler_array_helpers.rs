@@ -6,6 +6,7 @@ impl Compiler {
         let heap_global = self.heap_ptr_global_idx;
         let obj_table_global = self.obj_table_global_idx;
         let obj_table_count_global = self.obj_table_count_global_idx;
+        let shadow_stack_end_global = self.shadow_stack_end_global_idx;
         let array_proto_global = self.array_proto_handle_global_idx;
 
         // ── $arr_new (param $capacity i32) (result i32) — Type 7 ──
@@ -41,9 +42,14 @@ impl Compiler {
             func.instruction(&WasmInstruction::If(BlockType::Empty));
             // 已取到 freed handle
             func.instruction(&WasmInstruction::Else);
-            // 新分配：handle_idx = obj_table_count; obj_table_count++
             func.instruction(&WasmInstruction::GlobalGet(obj_table_count_global));
             func.instruction(&WasmInstruction::LocalTee(3));
+            Self::emit_handle_table_alloc_check(
+                &mut func,
+                obj_table_global,
+                shadow_stack_end_global,
+                3,
+            );
             func.instruction(&WasmInstruction::I32Const(1));
             func.instruction(&WasmInstruction::I32Add);
             func.instruction(&WasmInstruction::GlobalSet(obj_table_count_global));

@@ -11,6 +11,7 @@ pub(crate) struct WasmEnv {
     pub heap_ptr: Global,
     pub obj_table_ptr: Global,
     pub obj_table_count: Global,
+    pub shadow_stack_end: Option<Global>,
     pub object_proto_handle: Global,
     pub array_proto_handle: Global,
     pub object_heap_start: Option<Global>,
@@ -34,6 +35,9 @@ impl WasmEnv {
             heap_ptr: caller.get_export("__heap_ptr")?.into_global()?,
             obj_table_ptr: caller.get_export("__obj_table_ptr")?.into_global()?,
             obj_table_count: caller.get_export("__obj_table_count")?.into_global()?,
+            shadow_stack_end: caller
+                .get_export("__shadow_stack_end")
+                .and_then(Extern::into_global),
             object_proto_handle: caller.get_export("__object_proto_handle")?.into_global()?,
             array_proto_handle: caller.get_export("__array_proto_handle")?.into_global()?,
             object_heap_start: caller
