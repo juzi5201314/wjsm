@@ -31,6 +31,7 @@ mod runtime_json;
 mod runtime_microtask;
 mod runtime_promises;
 mod runtime_typedarray;
+mod runtime_string_to_number;
 mod runtime_value_adapter;
 mod shared_buffer;
 mod startup_snapshot;

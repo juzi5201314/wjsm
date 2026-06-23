@@ -1,0 +1,23 @@
+exit_code: 0
+--- stdout ---
+123
+3.14
+-5
+16
+255
+0
+0
+Infinity
+-Infinity
+NaN
+NaN
+0
+1
+0
+NaN
+15
+5
+1000
+42
+42
+--- stderr ---

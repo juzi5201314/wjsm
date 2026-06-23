@@ -928,18 +928,8 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
             read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
         };
 
-        // 尝试解析字符串为数字
-        // 先尝试 trim，然后解析
-        let trimmed = s.trim();
-        // 空字符串或仅空白 → 0（规范要求）
-        if trimmed.is_empty() {
-            return 0.0f64.to_bits() as i64;
-        }
-        if let Ok(num) = trimmed.parse::<f64>() {
-            return num.to_bits() as i64;
-        }
-        // 解析失败返回 NaN
-        return f64::NAN.to_bits() as i64;
+        let num = crate::runtime_string_to_number::js_string_content_to_f64(&s);
+        return num.to_bits() as i64;
     }
 
     // BigInt → ToNumber: 转为 f64（可能丢失精度）
