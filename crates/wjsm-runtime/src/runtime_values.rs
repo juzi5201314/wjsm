@@ -25,6 +25,41 @@ pub(crate) fn handle_index_of(caller: &mut Caller<'_, RuntimeState>, val: i64) -
     handle_idx
 }
 
+/// WeakRef / FinalizationRegistry：从目标 JS 对象值提取 obj_table handle 索引（不是堆指针）。
+pub(crate) fn weak_target_handle_index_of(
+    caller: &mut Caller<'_, RuntimeState>,
+    target: i64,
+) -> Option<u32> {
+    if !value::is_js_object(target) {
+        return None;
+    }
+    Some(handle_index_of(caller, target) as u32)
+}
+
+/// sweep 将 obj_table 槽置 0 后，通过能否解析指针判断 handle 是否仍指向存活对象。
+pub(crate) fn obj_table_handle_live(caller: &mut Caller<'_, RuntimeState>, handle: u32) -> bool {
+    if handle == 0 {
+        return false;
+    }
+    resolve_handle_idx(caller, handle as usize).is_some()
+}
+
+/// 将 obj_table handle 重新装箱为与堆 header 一致的 NaN-boxed 值（object 或 array）。
+pub(crate) fn encode_handle_as_js_value(
+    caller: &mut Caller<'_, RuntimeState>,
+    handle: u32,
+) -> Option<i64> {
+    let ptr = resolve_handle_idx(caller, handle as usize)?;
+    let env = WasmEnv::from_caller(caller)?;
+    let data = env.memory.data(&*caller);
+    let heap_type = data.get(ptr + 4).copied()?;
+    Some(if heap_type == wjsm_ir::HEAP_TYPE_ARRAY {
+        value::encode_handle(value::TAG_ARRAY, handle)
+    } else {
+        value::encode_object_handle(handle)
+    })
+}
+
 /// 通过 handle 表解析 boxed value 的真实对象指针。
 /// 函数值低 32 位是函数表索引；函数属性对象 handle 从 __function_props_base 起算。
 pub(crate) fn resolve_handle(caller: &mut Caller<'_, RuntimeState>, val: i64) -> Option<usize> {
@@ -239,6 +274,12 @@ pub(crate) fn grow_array(
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
         return None;
     };
+    let need_end = heap_ptr.saturating_add(new_size);
+    while mem.data(&*caller).len() < need_end {
+        if mem.grow(&mut *caller, 1).is_err() {
+            break;
+        }
+    }
     let d = mem.data_mut(&mut *caller);
     if heap_ptr + new_size > d.len() {
         return None;
@@ -294,6 +335,12 @@ pub(crate) fn grow_object(
     let Some(Extern::Memory(mem)) = caller.get_export("memory") else {
         return None;
     };
+    let need_end = heap_ptr.saturating_add(new_size);
+    while mem.data(&*caller).len() < need_end {
+        if mem.grow(&mut *caller, 1).is_err() {
+            break;
+        }
+    }
     let d = mem.data_mut(&mut *caller);
     if heap_ptr + new_size > d.len() {
         return None;

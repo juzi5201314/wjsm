@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime_heap::{ensure_linear_memory_bytes, host_handle_slot_fits};
 use std::sync::atomic::Ordering;
 
 /// Well-known `Symbol.species` table index (see `RuntimeState::symbol_table` init order).
@@ -156,17 +157,16 @@ pub(crate) fn alloc_array_with_env<C: AsContextMut<Data = RuntimeState>>(
     let size = 16u32.saturating_add(capacity.saturating_mul(8));
     let new_heap_ptr = heap_ptr.saturating_add(size);
     let proto = env.array_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
-    let d = env.memory.data_mut(&mut *ctx);
+    ensure_linear_memory_bytes(ctx, env, new_heap_ptr as usize);
+    if new_heap_ptr as usize > env.memory.data(&*ctx).len() {
+        return value::encode_undefined();
+    }
+    if !host_handle_slot_fits(env, ctx, obj_table_count) {
+        return value::encode_undefined();
+    }
     let ptr = heap_ptr as usize;
-    if (new_heap_ptr as usize) > d.len() {
-        return value::encode_undefined();
-    }
     let slot_addr = obj_table_ptr as usize + obj_table_count as usize * 4;
-    // obj_table 槽位耗尽时必须直接返回 undefined，不递增 obj_table_count、
-    // 不前进 heap_ptr，保持 handle->slot 映射与 obj_table_count 一致。
-    if slot_addr + 4 > d.len() {
-        return value::encode_undefined();
-    }
+    let d = env.memory.data_mut(&mut *ctx);
     d[ptr..ptr + 4].copy_from_slice(&proto.to_le_bytes());
     d[ptr + 4] = 1u8;
     d[ptr + 5..ptr + 8].fill(0);

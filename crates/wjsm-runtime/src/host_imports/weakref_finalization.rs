@@ -66,11 +66,10 @@ pub(crate) fn define_weakref_finalization(
                 let error_obj = create_error_object(&mut caller, "TypeError", msg_val);
                 return value::encode_exception(value::decode_object_handle(error_obj));
             }
-            // Resolve target's handle from the VM object table
-            let target_handle = match resolve_handle(&mut caller, target) {
-                Some(ptr) => ptr as u32,
+            // 记录目标在 obj_table 中的 handle 索引（非堆指针）
+            let target_handle = match weak_target_handle_index_of(&mut caller, target) {
+                Some(h) => h,
                 None => {
-                    // If handle resolution fails, target is not a heap-allocated object
                     let msg_val = store_runtime_string(
                         &caller,
                         "TypeError: WeakRef: cannot resolve target handle".to_string(),
@@ -87,8 +86,9 @@ pub(crate) fn define_weakref_finalization(
                     .weakref_table
                     .lock()
                     .expect("weakref table mutex");
+                let weakref_index = table.len() as u32;
                 table.push(WeakRefEntry { target_handle });
-                handle = table.len() as u32 - 1;
+                handle = weakref_index;
             }
             // Create the deref method NativeCallable
             let deref_fn = {
@@ -169,12 +169,13 @@ pub(crate) fn define_weakref_finalization(
                     .finalization_registry_table
                     .lock()
                     .expect("finalization registry table mutex");
+                let registry_index = table.len() as u32;
                 table.push(FinalizationRegistryEntry {
                     object_handle,
                     callback,
                     registrations: Vec::new(),
                 });
-                handle = table.len() as u32 - 1;
+                handle = registry_index;
             }
             // Create method NativeCallables for register/unregister
             let (register_fn, unregister_fn) = {
@@ -241,11 +242,10 @@ pub(crate) fn define_weakref_finalization(
                 return value::encode_undefined();
             }
             // Resolve target handle
-            let target_handle = match resolve_handle(&mut caller, target) {
-                Some(ptr) => ptr as u32,
+            let target_handle = match weak_target_handle_index_of(&mut caller, target) {
+                Some(h) => h,
                 None => return value::encode_undefined(),
             };
-            // Read the internal registry handle from this_val
             if !value::is_object(this_val) {
                 return value::encode_undefined();
             }
