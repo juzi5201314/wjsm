@@ -13,4 +13,8 @@ console.log(+null);
 console.log(+true);
 console.log(+false);
 console.log(+undefined);
+console.log(+"0o17");
+console.log(+"0b101");
+console.log(+"1e3");
+console.log(+"  42  ");
 console.log(+42);

@@ -1132,7 +1132,7 @@ fn eval_update_expr(
     let name = ident.sym.as_ref();
     let old_value = eval_read_binding(caller, scope_env, eval_locals, name)
         .unwrap_or_else(value::encode_undefined);
-    let old_number = eval_to_number(old_value);
+    let old_number = eval_to_number(caller, old_value);
     let new_number = match update.op {
         swc_ast::UpdateOp::PlusPlus => old_number + 1.0,
         swc_ast::UpdateOp::MinusMinus => old_number - 1.0,
@@ -1202,7 +1202,7 @@ pub(crate) fn eval_expr(
         }
         swc_ast::Expr::Unary(unary) => {
             let val = eval_expr(caller, &unary.arg, scope_env, eval_locals)?;
-            eval_unary(unary.op, val)
+            eval_unary(caller, unary.op, val)
         }
         swc_ast::Expr::Update(update) => eval_update_expr(caller, update, scope_env, eval_locals),
         swc_ast::Expr::Cond(cond) => {
@@ -1278,8 +1278,8 @@ pub(crate) fn eval_binary(
         ));
     }
 
-    let a = eval_to_number(lhs);
-    let b = eval_to_number(rhs);
+    let a = eval_to_number(caller, lhs);
+    let b = eval_to_number(caller, rhs);
     let result = match op {
         swc_ast::BinaryOp::Add => a + b,
         swc_ast::BinaryOp::Sub => a - b,
@@ -1319,10 +1319,14 @@ pub(crate) fn eval_logical(
     }
 }
 
-pub(crate) fn eval_unary(op: swc_ast::UnaryOp, val: i64) -> Result<i64, String> {
+pub(crate) fn eval_unary(
+    caller: &mut Caller<'_, RuntimeState>,
+    op: swc_ast::UnaryOp,
+    val: i64,
+) -> Result<i64, String> {
     match op {
-        swc_ast::UnaryOp::Minus => Ok(value::encode_f64(-eval_to_number(val))),
-        swc_ast::UnaryOp::Plus => Ok(value::encode_f64(eval_to_number(val))),
+        swc_ast::UnaryOp::Minus => Ok(value::encode_f64(-eval_to_number(caller, val))),
+        swc_ast::UnaryOp::Plus => Ok(value::encode_f64(eval_to_number(caller, val))),
         swc_ast::UnaryOp::Bang => Ok(value::encode_bool(value::is_falsy(val))),
         swc_ast::UnaryOp::Void => Ok(value::encode_undefined()),
         _ => Err("SyntaxError: unsupported eval unary operator".to_string()),
@@ -1751,16 +1755,8 @@ pub(crate) fn set_host_data_property_from_caller(
     }
 }
 
-pub(crate) fn eval_to_number(val: i64) -> f64 {
-    if value::is_f64(val) {
-        value::decode_f64(val)
-    } else if value::is_bool(val) {
-        if value::decode_bool(val) { 1.0 } else { 0.0 }
-    } else if value::is_null(val) {
-        0.0
-    } else {
-        f64::NAN
-    }
+pub(crate) fn eval_to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> f64 {
+    value::decode_f64(to_number(caller, val))
 }
 
 pub(crate) fn eval_to_string(caller: &mut Caller<'_, RuntimeState>, val: i64) -> String {
