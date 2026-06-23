@@ -428,6 +428,15 @@ pub(super) fn register_common_bridges(
         },
     );
     linker.define(&mut *store, "env", "to_number", f)?;
+    // to_bool：ToBoolean 抽象操作，将任意值转换为 i32 布尔值 (0 or 1)
+    let f = Func::wrap(
+        &mut *store,
+        |mut caller: Caller<'_, RuntimeState>, val: i64| -> i32 {
+            to_boolean(&mut caller, val) as i32
+        },
+    );
+    linker.define(&mut *store, "env", "to_bool", f)?;
+
     Ok(())
 }
 

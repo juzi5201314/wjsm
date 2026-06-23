@@ -837,6 +837,51 @@ pub(crate) fn allocate_descriptor_object(
 
 // ── 辅助函数用于 abstract_eq 和 abstract_compare ─────────────────────────
 
+/// ToBoolean 抽象操作 (ECMAScript 7.1.2)
+pub(crate) fn to_boolean(caller: &mut Caller<'_, RuntimeState>, val: i64) -> bool {
+    if value::is_undefined(val) || value::is_null(val) {
+        return false;
+    }
+    if value::is_bool(val) {
+        return value::decode_bool(val);
+    }
+    if value::is_f64(val) {
+        let f = value::decode_f64(val);
+        return f != 0.0 && !f.is_nan();
+    }
+    if value::is_string(val) {
+        if value::is_runtime_string_handle(val) {
+            let handle = value::decode_runtime_string_handle(val) as usize;
+            let strings = caller
+                .data()
+                .runtime_strings
+                .lock()
+                .expect("runtime strings mutex");
+            return !strings.get(handle).map(|s| s.is_empty()).unwrap_or(true);
+        }
+        let ptr = value::decode_string_ptr(val);
+        if let Some(Extern::Memory(memory)) = caller.get_export("memory") {
+            let bytes = read_string_bytes_mem(caller, &memory, ptr);
+            return !bytes.is_empty();
+        }
+        return true;
+    }
+    if value::is_bigint(val) {
+        let handle = value::decode_bigint_handle(val) as usize;
+        let table = caller
+            .data()
+            .bigint_table
+            .lock()
+            .expect("bigint_table mutex");
+        return table
+            .get(handle)
+            .map(|bi| *bi != num_bigint::BigInt::from(0))
+            .unwrap_or(true);
+    }
+    // 对象、函数、Symbol、RegExp 等 → truthy
+    true
+}
+
 /// ToNumber 抽象操作 (ECMAScript 7.1.4)
 /// 将值转换为 Number 类型
 pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 {
