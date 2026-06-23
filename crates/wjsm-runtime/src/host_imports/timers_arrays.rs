@@ -153,15 +153,8 @@ pub(crate) fn define_timers_arrays(
     linker.define(&mut store, "env", "arr_slice", f)?;
     let f = Func::wrap(
         &mut store,
-        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, _start: i64, _end: i64| -> i64 {
-            let Some(ptr) = resolve_array_ptr(&mut caller, arr) else {
-                return arr;
-            };
-            let len = read_array_length(&mut caller, ptr).unwrap_or(0);
-            for i in 0..len {
-                write_array_elem(&mut caller, ptr, i, val);
-            }
-            arr
+        |mut caller: Caller<'_, RuntimeState>, arr: i64, val: i64, start: i64, end: i64| -> i64 {
+            super::array_object::array_fill_range(&mut caller, arr, val, start, end)
         },
     );
     linker.define(&mut store, "env", "arr_fill", f)?;
@@ -185,8 +178,8 @@ pub(crate) fn define_timers_arrays(
     linker.define(&mut store, "env", "arr_reverse", f)?;
     let f = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _arr: i64, _depth: i64| -> i64 {
-            unimplemented!("Array.prototype.flat is not yet implemented in wjsm")
+        |mut caller: Caller<'_, RuntimeState>, arr: i64, depth: i64| -> i64 {
+            super::array_object::array_flat_with_depth(&mut caller, arr, depth)
         },
     );
     linker.define(&mut store, "env", "arr_flat", f)?;
