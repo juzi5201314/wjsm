@@ -234,7 +234,7 @@ fn cmd_build(
     match stage {
         Stage::Parse | Stage::Lower => {
             let source = read_input(input)?;
-            let result = run_pipeline(&source, stage, cli.verbose, cli.time, cli.target, false)?;
+            let result = run_pipeline(&source, Some(input), stage, cli.verbose, cli.time, cli.target, false)?;
 
             if matches!(stage, Stage::Parse) {
                 if let Some(ast) = &result.ast {
@@ -251,7 +251,7 @@ fn cmd_build(
             let wasm = if input == "-" {
                 let mut source = String::new();
                 io::stdin().read_to_string(&mut source)?;
-                compile_source(&source, cli.target, false)?
+                compile_source(&source, None, cli.target, false)?
             } else {
                 compile_from_file_input(input, root, cli.target, false)?
             };
@@ -273,7 +273,7 @@ fn cmd_build(
             let result = if input == "-" {
                 let mut source = String::new();
                 io::stdin().read_to_string(&mut source)?;
-                compile_source_to_pipeline_result(&source, cli.target, false, cli.verbose >= 1)?
+                compile_source_to_pipeline_result(&source, None, cli.target, false, cli.verbose >= 1)?
             } else {
                 compile_file_input_to_pipeline_result(
                     input,
@@ -310,7 +310,7 @@ fn cmd_run(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<E
     let result = if input == "-" {
         let mut source = String::new();
         io::stdin().read_to_string(&mut source)?;
-        compile_source_to_pipeline_result(&source, cli.target, script, verbose_compile)?
+        compile_source_to_pipeline_result(&source, None, cli.target, script, verbose_compile)?
     } else {
         compile_file_input_to_pipeline_result(input, root, cli.target, script, verbose_compile)?
     };
@@ -319,7 +319,7 @@ fn cmd_run(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<E
 }
 
 fn cmd_run_eval(cli: &Cli, code: &str, script: bool) -> Result<ExitCode> {
-    let result = compile_source_to_pipeline_result(code, cli.target, script, cli.verbose >= 1)?;
+    let result = compile_source_to_pipeline_result(code, None, cli.target, script, cli.verbose >= 1)?;
     run_compile_then_execute(cli, result)
 }
 
@@ -380,10 +380,11 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
 }
 
 fn cmd_check(cli: &Cli, input: &str) -> Result<ExitCode> {
-    let source = read_input(input)?;
+    let (source, filename) = read_input_for_parse(input)?;
 
     let result = run_pipeline(
         &source,
+        filename.as_deref(),
         Stage::Lower,
         cli.verbose,
         cli.time,
@@ -408,10 +409,11 @@ fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
 }
 
 fn cmd_dump_ir(cli: &Cli, input: &str, format: DumpFormat) -> Result<ExitCode> {
-    let source = read_input(input)?;
+    let (source, filename) = read_input_for_parse(input)?;
 
     let result = run_pipeline(
         &source,
+        filename.as_deref(),
         Stage::Lower,
         cli.verbose,
         cli.time,
@@ -430,10 +432,11 @@ fn cmd_dump_ir(cli: &Cli, input: &str, format: DumpFormat) -> Result<ExitCode> {
 }
 
 fn cmd_dump_ast(cli: &Cli, input: &str) -> Result<ExitCode> {
-    let source = read_input(input)?;
+    let (source, filename) = read_input_for_parse(input)?;
 
     let result = run_pipeline(
         &source,
+        filename.as_deref(),
         Stage::Parse,
         cli.verbose,
         cli.time,
@@ -455,6 +458,7 @@ fn cmd_dump_wat(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> 
         io::stdin().read_to_string(&mut source)?;
         run_pipeline(
             &source,
+            None,
             Stage::Compile,
             cli.verbose,
             cli.time,
@@ -490,7 +494,7 @@ fn cmd_dump_wat(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> 
 fn cmd_fmt(input: &str, write: bool) -> Result<ExitCode> {
     let source = fs::read_to_string(input)?;
 
-    let module = parser::parse_module(&source)?;
+    let module = parser::parse_module_with_filename(&source, input)?;
     let formatted = emit_js(&module)?;
 
     if write {
@@ -655,6 +659,7 @@ fn cmd_version(verbose: bool) -> Result<ExitCode> {
 
 fn run_pipeline(
     source: &str,
+    filename: Option<&str>,
     stop_at: Stage,
     verbose: u8,
     time: bool,
@@ -673,7 +678,13 @@ fn run_pipeline(
         eprintln!("Parsing...");
     }
     let start = Instant::now();
-    let module = parser::parse_module(source)?;
+    let module = if script {
+        parser::parse_script_as_module(source)?
+    } else if let Some(filename) = filename {
+        parser::parse_module_with_filename(source, filename)?
+    } else {
+        parser::parse_module(source)?
+    };
     result.timings.parse_us = start.elapsed().as_micros() as u64;
     result.ast = Some(module);
 
@@ -731,6 +742,17 @@ fn read_input(input: &str) -> Result<String> {
     }
 }
 
+/// 读取源码，并在输入为文件路径时返回用于选择解析语法的路径字符串。
+fn read_input_for_parse(input: &str) -> Result<(String, Option<String>)> {
+    let source = read_input(input)?;
+    let filename = if input == "-" {
+        None
+    } else {
+        Some(input.to_string())
+    };
+    Ok((source, filename))
+}
+
 // ============================================================================
 // SWC Codegen (for fmt command)
 // ============================================================================
@@ -763,7 +785,7 @@ fn emit_js(module: &swc_core::ecma::ast::Module) -> Result<String> {
 
 enum CompilePlan {
     Bundle { entry: String, root: PathBuf },
-    SingleSource(String),
+    SingleSource { source: String, filename: String },
 }
 
 fn build_compile_plan(input: &Path, root: Option<&str>) -> Result<CompilePlan> {
@@ -772,12 +794,16 @@ fn build_compile_plan(input: &Path, root: Option<&str>) -> Result<CompilePlan> {
     }
 
     let source = fs::read_to_string(input)?;
-    let module = parser::parse_module(&source)?;
+    let filename = input.to_string_lossy().into_owned();
+    let module = parser::parse_module_with_filename(&source, &filename)?;
     let is_esm = wjsm_module::is_es_module(&module);
     let is_cjs = wjsm_module::is_commonjs_module(&module);
 
     if !is_esm && !is_cjs {
-        return Ok(CompilePlan::SingleSource(source));
+        return Ok(CompilePlan::SingleSource {
+            source,
+            filename: input.to_string_lossy().into_owned(),
+        });
     }
 
     let canonical_input = input.canonicalize()?;
@@ -841,6 +867,7 @@ fn run_compile_then_execute(cli: &Cli, mut result: PipelineResult) -> Result<Exi
 
 fn compile_source_to_pipeline_result(
     source: &str,
+    filename: Option<&str>,
     target: Target,
     script: bool,
     verbose: bool,
@@ -858,6 +885,8 @@ fn compile_source_to_pipeline_result(
     let start = Instant::now();
     let module = if script {
         parser::parse_script_as_module(source)?
+    } else if let Some(filename) = filename {
+        parser::parse_module_with_filename(source, filename)?
     } else {
         parser::parse_module(source)?
     };
@@ -914,8 +943,8 @@ fn compile_file_input_to_pipeline_result(
             }
             Ok(result)
         }
-        CompilePlan::SingleSource(source) => {
-            compile_source_to_pipeline_result(&source, target, script, verbose)
+        CompilePlan::SingleSource { source, filename } => {
+            compile_source_to_pipeline_result(&source, Some(filename.as_str()), target, script, verbose)
         }
     }
 }
@@ -935,13 +964,22 @@ fn compile_from_file_input(
                 Target::Jit => bail!("JIT backend is not implemented yet"),
             }
         }
-        CompilePlan::SingleSource(source) => compile_source(&source, target, script),
+        CompilePlan::SingleSource { source, filename } => {
+            compile_source(&source, Some(filename.as_str()), target, script)
+        }
     }
 }
 
-fn compile_source(source: &str, target: Target, script: bool) -> Result<Vec<u8>> {
+fn compile_source(
+    source: &str,
+    filename: Option<&str>,
+    target: Target,
+    script: bool,
+) -> Result<Vec<u8>> {
     let module = if script {
         parser::parse_script_as_module(source)?
+    } else if let Some(filename) = filename {
+        parser::parse_module_with_filename(source, filename)?
     } else {
         parser::parse_module(source)?
     };
