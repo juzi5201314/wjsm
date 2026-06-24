@@ -25,6 +25,7 @@ impl Lowerer {
         let header = self.current_function.new_block();
         let body_block = self.current_function.new_block();
         let next = self.current_function.new_block();
+        let close = self.current_function.new_block();
         let exit = self.current_function.new_block();
 
         self.current_function
@@ -62,9 +63,9 @@ impl Lowerer {
         self.label_stack.push(LabelContext {
             label: self.pending_loop_label.take(),
             kind: LabelKind::Loop,
-            break_target: exit,
+            break_target: close,
             continue_target: Some(next),
-            iterator_to_close: None,
+            iterator_to_close: Some(enum_handle),
         });
 
         // body: get key, assign lhs
@@ -98,6 +99,18 @@ impl Lowerer {
             .set_terminator(next, Terminator::Jump { target: header });
 
         self.label_stack.pop();
+
+
+        self.current_function.append_instruction(
+            close,
+            Instruction::CallBuiltin {
+                dest: None,
+                builtin: Builtin::IteratorClose,
+                args: vec![enum_handle],
+            },
+        );
+        self.current_function
+            .set_terminator(close, Terminator::Jump { target: exit });
 
         Ok(StmtFlow::Open(exit))
     }
@@ -495,7 +508,7 @@ impl Lowerer {
     }
 
     /// Lower the LHS of a for...in or for...of loop.
-    /// Supports: simple identifier, or var declaration with single binding identifier.
+    /// Supports: identifier, assignment/destructuring patterns, or var declaration (incl. destructuring).
     pub(crate) fn lower_for_in_of_lhs(
         &mut self,
         left: &swc_ast::ForHead,
@@ -521,14 +534,11 @@ impl Lowerer {
                     Ok(block)
                 }
                 swc_ast::Pat::Object(_) | swc_ast::Pat::Array(_) | swc_ast::Pat::Assign(_) => {
-                    Err(self.error(
-                        pat.span(),
-                        "destructuring patterns in for...in/for...of are not yet supported",
-                    ))
+                    self.lower_destructure_pattern(pat, value, block, VarKind::Let)
                 }
                 _ => Err(self.error(
                     pat.span(),
-                    "destructuring patterns in for...in/for...of are not yet supported",
+                    "unsupported pattern in for...in/for...of",
                 )),
             },
             swc_ast::ForHead::VarDecl(var_decl) => {
