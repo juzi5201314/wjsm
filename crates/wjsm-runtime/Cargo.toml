@@ -24,6 +24,7 @@ wjsm-backend-wasm = { path = "../wjsm-backend-wasm" }
 wjsm-parser = { path = "../wjsm-parser" }
 wjsm-semantic = { path = "../wjsm-semantic" }
 reqwest = { workspace = true }
+base64 = "0.22"
 memchr = "2"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
