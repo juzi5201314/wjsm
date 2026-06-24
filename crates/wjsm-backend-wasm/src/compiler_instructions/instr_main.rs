@@ -375,6 +375,9 @@ impl Compiler {
                 Ok(false)
             }
             Instruction::GetProp { dest, object, key } => {
+                // GC safepoint：obj_get 内部经 host import 可能触发 GC。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 // Pass full boxed i64 value — helper resolves tag internally.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key: lower 32 bits (string pointer or name_id).
@@ -384,10 +387,14 @@ impl Compiler {
                 ));
                 // Call $obj_get(boxed, name_id) -> i64
                 self.emit(WasmInstruction::Call(self.obj_get_func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(false)
             }
             Instruction::SetProp { object, key, value } => {
+                // GC safepoint：obj_set 内部经 host import 可能触发 GC。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 // Pass full boxed i64 value — helper resolves tag internally.
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key.
@@ -399,9 +406,13 @@ impl Compiler {
                 self.emit(WasmInstruction::LocalGet(self.local_idx(value.0)));
                 // Call $obj_set(boxed, name_id, value)
                 self.emit(WasmInstruction::Call(self.obj_set_func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::DeleteProp { dest, object, key } => {
+                // GC safepoint：obj_delete 内部经 host import 可能触发 GC。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 // delete obj.prop -> bool (成功删除返回 true)
                 self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
                 // Key: lower 32 bits.
@@ -411,6 +422,7 @@ impl Compiler {
                 ));
                 // Call $obj_delete(boxed, name_id) -> i64 (NaN-boxed bool)
                 self.emit(WasmInstruction::Call(self.obj_delete_func_idx));
+                self.emit_safepoint_spill_epilogue(spill.len());
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(false)
             }
@@ -572,8 +584,13 @@ impl Compiler {
                 object,
                 index,
             } => {
+                // GC safepoint：emit_computed_get 内部调 elem_get/obj_get 等 support helper，
+                // 经 host import 可能触发 GC。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 // 按 key 运行期类型分派（见 emit_computed_get）：数字→$elem_get；字符串/symbol→命名属性或数组规范索引。
                 self.emit_computed_get(*object, *index);
+                self.emit_safepoint_spill_epilogue(spill.len());
                 self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 Ok(false)
             }
@@ -582,8 +599,13 @@ impl Compiler {
                 index,
                 value,
             } => {
+                // GC safepoint：emit_computed_set 内部调 elem_set/obj_set 等 support helper，
+                // 经 host import 可能触发 GC。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
                 // 按 key 运行期类型分派（见 emit_computed_set）：数字→$elem_set；字符串/symbol→命名属性或数组规范索引。
                 self.emit_computed_set(*object, *index, *value);
+                self.emit_safepoint_spill_epilogue(spill.len());
                 Ok(false)
             }
             Instruction::StringConcatVa { dest, parts } => {
@@ -598,12 +620,22 @@ impl Compiler {
                 self.emit_safepoint_spill_epilogue(spill.len());
                 r.map(|_| false)
             }
-            Instruction::OptionalGetProp { dest, object, key } => self
-                .compile_optional_get(dest, object, true, Some(key), false)
-                .map(|_| false),
-            Instruction::OptionalGetElem { dest, object, key } => self
-                .compile_optional_get(dest, object, false, Some(key), false)
-                .map(|_| false),
+            Instruction::OptionalGetProp { dest, object, key } => {
+                // GC safepoint：compile_optional_get 正常路径调 obj_get，可能触发 GC。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
+                let r = self.compile_optional_get(dest, object, true, Some(key), false);
+                self.emit_safepoint_spill_epilogue(spill.len());
+                r.map(|_| false)
+            }
+            Instruction::OptionalGetElem { dest, object, key } => {
+                // GC safepoint：compile_optional_get 正常路径调 emit_computed_get，可能触发 GC。
+                let spill = self.current_spill_locals();
+                self.emit_safepoint_spill_prologue(&spill);
+                let r = self.compile_optional_get(dest, object, false, Some(key), false);
+                self.emit_safepoint_spill_epilogue(spill.len());
+                r.map(|_| false)
+            }
             Instruction::OptionalCall {
                 dest,
                 callee,

@@ -236,6 +236,7 @@ impl Compiler {
             shadow_sp_global_idx: 0,
             shadow_sp_scratch_idx: 0,
             safepoint_sp_saved_idx: 0,
+            computed_idx_scratch_idx: 0,
             eval_var_base_local_idx: 0,
             alloc_counter_global_idx: 0,
             object_heap_start_global_idx: 6,
