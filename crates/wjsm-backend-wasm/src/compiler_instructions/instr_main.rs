@@ -621,19 +621,13 @@ impl Compiler {
                 r.map(|_| false)
             }
             Instruction::OptionalGetProp { dest, object, key } => {
-                // GC safepoint：compile_optional_get 正常路径调 obj_get，可能触发 GC。
                 let spill = self.current_spill_locals();
-                self.emit_safepoint_spill_prologue(&spill);
-                let r = self.compile_optional_get(dest, object, true, Some(key), false);
-                self.emit_safepoint_spill_epilogue(spill.len());
+                let r = self.compile_optional_get(dest, object, true, Some(*key), false, &spill);
                 r.map(|_| false)
             }
             Instruction::OptionalGetElem { dest, object, key } => {
-                // GC safepoint：compile_optional_get 正常路径调 emit_computed_get，可能触发 GC。
                 let spill = self.current_spill_locals();
-                self.emit_safepoint_spill_prologue(&spill);
-                let r = self.compile_optional_get(dest, object, false, Some(key), false);
-                self.emit_safepoint_spill_epilogue(spill.len());
+                let r = self.compile_optional_get(dest, object, false, Some(*key), false, &spill);
                 r.map(|_| false)
             }
             Instruction::OptionalCall {

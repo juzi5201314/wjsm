@@ -554,13 +554,16 @@ impl Compiler {
     }
 
     /// 编译可选链属性/索引访问：检查 object 是否为 null/undefined，是则返回 undefined
+    /// 正常路径（else 分支）内调用 host 函数可能触发 GC，故在 else 内 emit safepoint
+    /// spill prologue/epilogue，短路路径（null/undefined）则跳过。
     pub(crate) fn compile_optional_get(
         &mut self,
         dest: &ValueId,
         object: &ValueId,
         is_prop: bool,
-        key: Option<&ValueId>,
+        key: Option<ValueId>,
         _is_call: bool,
+        spill: &[u32],
     ) -> Result<()> {
         // 提取 tag: (object >> 32) & TAG_MASK
         self.emit(WasmInstruction::LocalGet(self.local_idx(object.0)));
@@ -584,6 +587,8 @@ impl Compiler {
         // null/undefined → 返回 encode_undefined()
         self.emit(WasmInstruction::I64Const(value::encode_undefined()));
         self.emit(WasmInstruction::Else);
+        // GC safepoint：正常路径调 obj_get/emit_computed_get（经 host import 可能触发 GC）
+        self.emit_safepoint_spill_prologue(spill);
         // 正常路径
         let Some(k) = key else {
             bail!("OptionalGet requires a key");
@@ -597,8 +602,9 @@ impl Compiler {
             self.emit(WasmInstruction::Call(self.obj_get_func_idx));
         } else {
             // OptionalGetElem：按 key 类型分派（数字→元素，字符串→命名属性）。
-            self.emit_computed_get(*object, *k);
+            self.emit_computed_get(*object, k);
         }
+        self.emit_safepoint_spill_epilogue(spill.len());
         self.emit(WasmInstruction::End);
         self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
         Ok(())
