@@ -26,6 +26,10 @@ impl Compiler {
                 | Instruction::PromiseResolve { .. }
                 | Instruction::PromiseReject { .. }
                 | Instruction::StringConcatVa { .. }
+                // BigInt/RegExp 字面量通过 host 函数分配堆对象（bigint_table / regexp 对象），
+                // 可能触发 GC；保守标记所有 Const 为 safepoint（非分配型 Const 无 live handles
+                // 时 spill prologue 直接 return，无额外开销）。
+                | Instruction::Const { .. }
         )
     }
 

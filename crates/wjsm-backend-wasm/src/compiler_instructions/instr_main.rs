@@ -16,6 +16,9 @@ impl Compiler {
                 if let Constant::BigInt(s) = constant {
                     let ptr = self.intern_data_string(s);
                     let len = (s.len() + 1) as i32; // 包含 nul terminator
+                    // GC safepoint：bigint_from_literal 在 bigint_table 中分配，可能触发 GC
+                    let spill = self.current_spill_locals();
+                    self.emit_safepoint_spill_prologue(&spill);
                     self.emit(WasmInstruction::I32Const(ptr as i32));
                     self.emit(WasmInstruction::I32Const(len));
                     let func_idx = self
@@ -24,6 +27,7 @@ impl Compiler {
                         .copied()
                         .expect("BigIntFromLiteral import must be registered");
                     self.emit(WasmInstruction::Call(func_idx));
+                    self.emit_safepoint_spill_epilogue(spill.len());
                     self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 } else if let Constant::RegExp { pattern, flags } = constant {
                     // RegExp 常量：嵌入 pattern 和 flags 到 data segment，运行时调用 regex_create
@@ -31,6 +35,9 @@ impl Compiler {
                     let pat_len = (pattern.len() + 1) as i32; // 包含 nul terminator
                     let flags_ptr = self.intern_data_string(flags);
                     let flags_len = (flags.len() + 1) as i32;
+                    // GC safepoint：regex_create 分配 regexp 堆对象，可能触发 GC
+                    let spill = self.current_spill_locals();
+                    self.emit_safepoint_spill_prologue(&spill);
                     self.emit(WasmInstruction::I32Const(pat_ptr as i32));
                     self.emit(WasmInstruction::I32Const(pat_len));
                     self.emit(WasmInstruction::I32Const(flags_ptr as i32));
@@ -41,6 +48,7 @@ impl Compiler {
                         .copied()
                         .ok_or_else(|| anyhow::anyhow!("no WASM func index for RegExpCreate"))?;
                     self.emit(WasmInstruction::Call(func_idx));
+                    self.emit_safepoint_spill_epilogue(spill.len());
                     self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 } else {
                     let encoded = self.encode_constant(constant, module)?;
