@@ -72,22 +72,26 @@ module {
     bb1:
       %23 = call builtin.enumerator.done(%22)
       %24 = not %23
-      branch %24, bb2, bb4
+      branch %24, bb2, bb5
     bb2:
       %25 = call builtin.enumerator.key(%22)
       store var $0.k, %25
       %26 = load var $0.k
       %27 = call builtin.console.log(%26)
       %28 = is_exception %27
-      branch %28, bb6, bb5
+      branch %28, bb7, bb6
     bb3:
       call builtin.enumerator.next(%22)
       jump bb1
     bb4:
-      return
+      call builtin.iterator.close(%22)
+      jump bb5
     bb5:
-      jump bb3
+      return
     bb6:
+      jump bb3
+    bb7:
       %29 = call builtin.exception_value(%27)
+      call builtin.iterator.close(%22)
       throw %29
 }
