@@ -26,9 +26,6 @@ pub struct Cli {
     #[arg(long, default_value = "wasm", global = true)]
     pub(crate) target: Target,
 
-    /// GC algorithm (runtime; mark-sweep is the only implementation now, generational/incremental reserved)
-    #[arg(long, default_value = "mark-sweep", global = true)]
-    pub(crate) gc_algorithm: GcAlgorithmChoice,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -47,14 +44,6 @@ pub(crate) enum Target {
     Jit,
 }
 
-/// GC 算法选择（运行期切换，spec §6 trait 框架）。当前仅 MarkSweep；预留 generational/incremental。
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub(crate) enum GcAlgorithmChoice {
-    /// Non-moving mark-sweep + segregated free list（默认实现，spec §8/§9）
-    #[value(alias = "mark_sweep")]
-    MarkSweep,
-    // 未来：Generational, Incremental（impl 新 struct，不改框架）
-}
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub(crate) enum DumpFormat {
