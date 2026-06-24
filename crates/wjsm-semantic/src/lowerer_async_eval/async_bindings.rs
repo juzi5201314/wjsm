@@ -59,7 +59,7 @@ impl Lowerer {
         let (successors, live_in) = {
             let blocks = self.current_function.blocks();
             let (successors, _predecessors) = build_cfg(blocks, &pending);
-            let (use_sets, def_sets) = compute_use_def(blocks);
+            let (use_sets, def_sets) = compute_use_def(blocks, self.module.constants());
             let live_in = compute_liveness(blocks, &successors, &use_sets, &def_sets);
             (successors, live_in)
         };
