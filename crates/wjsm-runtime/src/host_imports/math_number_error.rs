@@ -220,11 +220,11 @@ pub(crate) fn define_math_number_error(
             let mut result = f64::NEG_INFINITY;
             for i in 0..args_count as u32 {
                 let val = read_shadow_arg(&mut caller, args_base, i);
-                let x = value::decode_f64(val);
+                let x = value_to_number(val);
                 if x.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                if x > result || (x == 0.0 && result == 0.0 && x.is_sign_positive()) {
+                if x > result || (x == 0.0 && result == 0.0 && x.is_sign_negative()) {
                     result = x;
                 }
             }
@@ -241,11 +241,11 @@ pub(crate) fn define_math_number_error(
             let mut result = f64::INFINITY;
             for i in 0..args_count as u32 {
                 let val = read_shadow_arg(&mut caller, args_base, i);
-                let x = value::decode_f64(val);
+                let x = value_to_number(val);
                 if x.is_nan() {
                     return value::encode_f64(f64::NAN);
                 }
-                if x < result || (x == 0.0 && result == 0.0 && x.is_sign_negative()) {
+                if x < result || (x == 0.0 && result == 0.0 && x.is_sign_positive()) {
                     result = x;
                 }
             }
@@ -271,7 +271,18 @@ pub(crate) fn define_math_number_error(
         &mut store,
         |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
             let x = value_to_number(arg);
-            value::encode_f64(x.round())
+            if x.is_nan() || x.is_infinite() {
+                return value::encode_f64(x);
+            }
+            if x == 0.0 {
+                return value::encode_f64(x);
+            }
+            let fl = x.floor();
+            if fl + 0.5 <= x {
+                value::encode_f64(fl + 1.0)
+            } else {
+                value::encode_f64(fl)
+            }
         },
     );
     linker.define(&mut store, "env", "math_round", math_round_fn)?;
