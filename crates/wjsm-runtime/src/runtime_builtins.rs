@@ -550,6 +550,7 @@ pub(crate) fn call_native_callable_with_args_from_caller(
                 })
             }
         }
+        NativeCallable::ErrorProtoToString => Some(error_proto_to_string_impl(caller, this_val)),
         NativeCallable::ObjectProtoToString => Some(obj_proto_to_string_impl(caller, this_val)),
         NativeCallable::ObjectProtoValueOf => Some(this_val),
         NativeCallable::FunctionConstructor

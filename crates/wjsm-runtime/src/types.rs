@@ -451,6 +451,7 @@ pub(crate) enum NativeCallable {
     FinalizationRegistryUnregisterMethod,
     ArrayConstructor,
     ObjectConstructor,
+    ErrorProtoToString,
     ObjectProtoToString,
     ObjectProtoValueOf,
     FunctionConstructor,

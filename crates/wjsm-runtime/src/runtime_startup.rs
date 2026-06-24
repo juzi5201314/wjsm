@@ -546,6 +546,7 @@ pub(super) async fn run_bootstrap_only(bundle: &mut ExecuteInstanceBundle) -> Re
             .await
             .map_err(|e| anyhow::anyhow!("bootstrap_once failed: {e:?}"))?;
     }
+    crate::runtime_heap::ensure_error_prototypes_initialized(&mut bundle.store, &bundle.wasm_env);
     Ok(())
 }
 
