@@ -918,9 +918,14 @@ pub(crate) fn define_primitive_core(
                         Some(m) => value::encode_f64(m.start() as f64),
                         None => value::encode_f64(-1.0),
                     },
-                    Err(_) => {
-                        // 正则编译失败，返回 -1（不抛出错误，因为原始值可能不是有效的正则模式）
-                        value::encode_f64(-1.0)
+                    Err(e) => {
+                        *caller
+                            .data()
+                            .runtime_error
+                            .lock()
+                            .expect("runtime error mutex") =
+                            Some(format!("SyntaxError: Invalid regular expression: {}", e));
+                        return value::encode_undefined();
                     }
                 };
             }

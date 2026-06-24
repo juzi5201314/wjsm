@@ -583,8 +583,29 @@ pub(crate) fn define_string_methods(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, receiver: i64, search: i64, replace: i64| -> i64 {
             if value::is_regexp(search) {
-                *caller.data().runtime_error.lock().expect("runtime error mutex") = Some("TypeError: String.prototype.replaceAll called with a non-global RegExp argument".to_string());
-                return value::encode_undefined();
+                let handle = value::decode_regexp_handle(search);
+                let is_global = {
+                    let table = caller.data().regex_table.lock().unwrap();
+                    match table.get(handle as usize) {
+                        Some(e) => e.flags.contains('g'),
+                        None => false,
+                    }
+                };
+                if !is_global {
+                    *caller
+                        .data()
+                        .runtime_error
+                        .lock()
+                        .expect("runtime error mutex") = Some(
+                        "TypeError: String.prototype.replaceAll called with a non-global RegExp argument"
+                            .to_string(),
+                    );
+                    return value::encode_undefined();
+                }
+                let rt = tokio::runtime::Handle::current();
+                return rt.block_on(super::reentrant_async::string_replace_async_body(
+                    caller, receiver, search, replace,
+                ));
             }
             let s = get_string_value(&mut caller, receiver);
             let search_str = get_string_value(&mut caller, search);
