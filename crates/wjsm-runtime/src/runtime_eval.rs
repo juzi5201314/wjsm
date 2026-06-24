@@ -584,18 +584,19 @@ fn eval_exception_from_message(caller: &mut Caller<'_, RuntimeState>, msg: Strin
 }
 
 pub(crate) fn runtime_module_has_use_strict_directive(module: &swc_ast::Module) -> bool {
+    let mut found = false;
     for item in &module.body {
         let swc_ast::ModuleItem::Stmt(swc_ast::Stmt::Expr(expr_stmt)) = item else {
-            return false;
+            break;
         };
         let swc_ast::Expr::Lit(swc_ast::Lit::Str(string)) = expr_stmt.expr.as_ref() else {
-            return false;
+            break;
         };
         if string.value.as_str() == Some("use strict") {
-            return true;
+            found = true;
         }
     }
-    false
+    found
 }
 
 pub(crate) fn eval_module_items(

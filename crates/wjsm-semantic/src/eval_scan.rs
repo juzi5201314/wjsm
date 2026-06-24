@@ -97,18 +97,19 @@ pub(crate) fn skip_js_trivia(bytes: &[u8], index: &mut usize) {
 }
 
 pub(crate) fn module_has_use_strict_directive(module: &swc_ast::Module) -> bool {
+    let mut found = false;
     for item in &module.body {
         let swc_ast::ModuleItem::Stmt(swc_ast::Stmt::Expr(expr_stmt)) = item else {
-            return false;
+            break;
         };
         let swc_ast::Expr::Lit(swc_ast::Lit::Str(string)) = expr_stmt.expr.as_ref() else {
-            return false;
+            break;
         };
         if string.value.as_str() == Some("use strict") {
-            return true;
+            found = true;
         }
     }
-    false
+    found
 }
 
 pub fn eval_literal_binding_names(code: &str) -> Vec<String> {
