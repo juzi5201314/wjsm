@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [1..33]: with statement is not supported in strict/static scope mode
+Error: error: with statement is not supported in strict/static scope mode
+ --> errors/with_stmt.js:1:1
+1 | with ({}) { console.log("hi"); }
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+

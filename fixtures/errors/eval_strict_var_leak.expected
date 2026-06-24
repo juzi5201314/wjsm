@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [47..48]: undeclared identifier `x`
+Error: error: undeclared identifier `x`
+ --> errors/eval_strict_var_leak.js:3:13
+3 | console.log(x);
+  |             ^
+

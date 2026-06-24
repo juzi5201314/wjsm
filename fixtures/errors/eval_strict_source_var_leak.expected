@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [50..51]: undeclared identifier `y`
+Error: error: undeclared identifier `y`
+ --> errors/eval_strict_source_var_leak.js:2:13
+2 | console.log(y);
+  |             ^
+

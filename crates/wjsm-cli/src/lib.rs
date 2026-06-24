@@ -279,7 +279,7 @@ fn cmd_build(
                 io::stdin().read_to_string(&mut source)?;
                 compile_source(&source, None, cli.target, false)?
             } else {
-                compile_from_file_input(input, root, cli.target, false)?
+                compile_from_file_input(Path::new(input), root, cli.target, false)?
             };
 
             if output == "-" {
@@ -306,7 +306,7 @@ fn cmd_build(
                 compile_source_to_pipeline_result(&source, None, cli.target, false, cli.verbose >= 1)?
             } else {
                 compile_file_input_to_pipeline_result(
-                    input,
+                    Path::new(input),
                     root,
                     cli.target,
                     false,
@@ -342,7 +342,7 @@ fn cmd_run(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<E
         io::stdin().read_to_string(&mut source)?;
         compile_source_to_pipeline_result(&source, None, cli.target, script, verbose_compile)?
     } else {
-        compile_file_input_to_pipeline_result(input, root, cli.target, script, verbose_compile)?
+        compile_file_input_to_pipeline_result(Path::new(input), root, cli.target, script, verbose_compile)?
     };
 
     run_compile_then_execute(cli, result)
@@ -545,7 +545,7 @@ fn cmd_dump_wat(cli: &Cli, input: &str, root: Option<&str>) -> Result<ExitCode> 
         )?
     } else {
         let pipeline = compile_file_input_to_pipeline_result(
-            input,
+            Path::new(input),
             root,
             cli.target,
             false,
@@ -744,6 +744,24 @@ fn cmd_version(verbose: bool) -> Result<ExitCode> {
 // Pipeline Implementation
 // ============================================================================
 
+fn lower_parsed_module(
+    source: &str,
+    filename: Option<&str>,
+    module: swc_core::ecma::ast::Module,
+    script: bool,
+) -> Result<Program> {
+    let display_name = filename
+        .map(str::to_string)
+        .unwrap_or_else(|| if script { "input.js".into() } else { "input.ts".into() });
+    semantic::lower_module_with_source(
+        module,
+        script,
+        Some(std::sync::Arc::from(source)),
+        display_name,
+    )
+    .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
 fn run_pipeline(
     source: &str,
     filename: Option<&str>,
@@ -784,7 +802,7 @@ fn run_pipeline(
         eprintln!("Lowering to IR...");
     }
     let start = Instant::now();
-    let program = semantic::lower_module(result.ast.take().unwrap(), script)?;
+    let program = lower_parsed_module(source, filename, result.ast.take().unwrap(), script)?;
     result.timings.lower_us = start.elapsed().as_micros() as u64;
     result.program = Some(program);
 
@@ -869,6 +887,18 @@ fn run_file_input_pipeline(
 
 // ============================================================================
 // Input/Output Helpers
+
+/// 将路径转为字符串（非 UTF-8 字节用 U+FFFD 替换，与 `to_string_lossy` 一致，但保留 `Path` 入参避免 CLI 层过早丢失路径类型）
+fn path_to_lossy_string(path: &Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+/// 读取源码文件：按字节读取再 UTF-8 解码，避免对路径本身使用 lossy 转换
+fn read_source_file(path: &Path) -> Result<String> {
+    let bytes = fs::read(path).with_context(|| format!("Failed to read '{}'", path.display()))?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 // ============================================================================
 
 fn read_input(input: &str) -> Result<String> {
@@ -879,7 +909,7 @@ fn read_input(input: &str) -> Result<String> {
             .context("Failed to read from stdin")?;
         Ok(source)
     } else {
-        fs::read_to_string(input).with_context(|| format!("Failed to read '{}'", input))
+        read_source_file(Path::new(input))
     }
 }
 
@@ -934,8 +964,8 @@ fn build_compile_plan(input: &Path, root: Option<&str>) -> Result<CompilePlan> {
         return bundle_plan_from_root(input.to_path_buf(), PathBuf::from(root_path));
     }
 
-    let source = fs::read_to_string(input)?;
-    let filename = input.to_string_lossy().into_owned();
+    let source = read_source_file(input)?;
+    let filename = path_to_lossy_string(input);
     let module = parser::parse_module_with_filename(&source, &filename)?;
     let is_esm = wjsm_module::is_es_module(&module);
     let is_cjs = wjsm_module::is_commonjs_module(&module);
@@ -943,7 +973,7 @@ fn build_compile_plan(input: &Path, root: Option<&str>) -> Result<CompilePlan> {
     if !is_esm && !is_cjs {
         return Ok(CompilePlan::SingleSource {
             source,
-            filename: input.to_string_lossy().into_owned(),
+            filename: path_to_lossy_string(input),
         });
     }
 
@@ -1038,7 +1068,7 @@ fn compile_source_to_pipeline_result(
         eprintln!("Lowering to IR...");
     }
     let start = Instant::now();
-    let program = semantic::lower_module(result.ast.take().unwrap(), script)?;
+    let program = lower_parsed_module(source, filename, result.ast.take().unwrap(), script)?;
     result.timings.lower_us = start.elapsed().as_micros() as u64;
     result.program = Some(program);
 
@@ -1055,15 +1085,14 @@ fn compile_source_to_pipeline_result(
 
     Ok(result)
 }
-
 fn compile_file_input_to_pipeline_result(
-    input: &str,
+    input: &Path,
     root: Option<&str>,
     target: Target,
     script: bool,
     verbose: bool,
 ) -> Result<PipelineResult> {
-    let plan = build_compile_plan(Path::new(input), root)?;
+    let plan = build_compile_plan(input, root)?;
     match plan {
         CompilePlan::Bundle { entry, root } => {
             if verbose {
@@ -1089,14 +1118,13 @@ fn compile_file_input_to_pipeline_result(
         }
     }
 }
-
 fn compile_from_file_input(
-    input: &str,
+    input: &Path,
     root: Option<&str>,
     target: Target,
     script: bool,
 ) -> Result<Vec<u8>> {
-    let plan = build_compile_plan(Path::new(input), root)?;
+    let plan = build_compile_plan(input, root)?;
     match plan {
         CompilePlan::Bundle { entry, root } => {
             let wasm = wjsm_module::bundle(&entry, &root)?;
@@ -1124,7 +1152,7 @@ fn compile_source(
     } else {
         parser::parse_module(source)?
     };
-    let program = semantic::lower_module(module, script)?;
+    let program = lower_parsed_module(source, filename, module, script)?;
     match target {
         Target::Wasm => backend_wasm::compile(&program),
         Target::Jit => bail!("JIT backend is not implemented yet"),
@@ -1151,8 +1179,7 @@ pub fn run_file_in_process(input: &Path) -> (i32, Vec<u8>, Vec<u8>) {
         wjsm_runtime::install_embedded_support_cwasm(bytes);
     }
 
-    let input_str = input.to_string_lossy();
-    let wasm = match compile_from_file_input(&input_str, None, Target::Wasm, false) {
+    let wasm = match compile_from_file_input(input, None, Target::Wasm, false) {
         Ok(w) => w,
         Err(e) => {
             return (

@@ -39,8 +39,20 @@ pub(crate) use scan_await::has_top_level_await;
 // ── Public API ──────────────────────────────────────────────────────────
 
 pub fn lower_module(module: swc_ast::Module, script: bool) -> Result<Program, LoweringError> {
+    lower_module_with_source(module, script, None, "input")
+}
+
+/// 带源码上下文以降低错误诊断；`source` 为完整源文本，`filename` 用于错误展示。
+pub fn lower_module_with_source(
+    module: swc_ast::Module,
+    script: bool,
+    source: Option<std::sync::Arc<str>>,
+    filename: impl Into<String>,
+) -> Result<Program, LoweringError> {
     let mut lowerer = Lowerer::new();
     lowerer.script_mode = script;
+    lowerer.diagnostic_source = source;
+    lowerer.diagnostic_filename = filename.into();
     lowerer.lower_module(&module)
 }
 
@@ -91,6 +103,9 @@ pub struct Diagnostic {
     pub start: u32,
     pub end: u32,
     pub message: String,
+    /// 用于将字节偏移格式化为行/列；多模块编译时可能为空。
+    pub(crate) source: Option<std::sync::Arc<str>>,
+    pub(crate) filename: String,
 }
 
 impl Diagnostic {
@@ -99,17 +114,49 @@ impl Diagnostic {
             start,
             end: if end > start { end } else { start + 1 },
             message: message.into(),
+            source: None,
+            filename: "input".into(),
+        }
+    }
+
+    pub(crate) fn with_source_context(
+        start: u32,
+        end: u32,
+        message: impl Into<String>,
+        source: Option<std::sync::Arc<str>>,
+        filename: impl Into<String>,
+    ) -> Self {
+        Self {
+            start,
+            end: if end > start { end } else { start + 1 },
+            message: message.into(),
+            source,
+            filename: filename.into(),
         }
     }
 }
 
 impl std::fmt::Display for Diagnostic {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "semantic lowering error [{}..{}]: {}",
-            self.start, self.end, self.message
-        )
+        if let Some(ref src) = self.source {
+            write!(
+                formatter,
+                "{}",
+                wjsm_parser::format_byte_diagnostic(
+                    &self.filename,
+                    src,
+                    &self.message,
+                    self.start,
+                    self.end,
+                )
+            )
+        } else {
+            write!(
+                formatter,
+                "error: {}\n --> {}:{}:1",
+                self.message, self.filename, self.start
+            )
+        }
     }
 }
 

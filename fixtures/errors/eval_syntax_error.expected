@@ -1,4 +1,8 @@
 exit_code: 2
 --- stdout ---
 --- stderr ---
-Runtime error: SyntaxError: Parse error: Error { error: (5..8, ExpectedIdent) }
+Runtime error: SyntaxError: error: Expected ident
+ --> input.js:1:5
+1 | var var
+  |     ^^^
+

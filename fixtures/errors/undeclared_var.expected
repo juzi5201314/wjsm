@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [13..14]: undeclared identifier `z`
+Error: error: undeclared identifier `z`
+ --> errors/undeclared_var.js:1:13
+1 | console.log(z);
+  |             ^
+

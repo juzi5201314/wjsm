@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [99..108]: super is only valid inside methods
+Error: error: super is only valid inside methods
+ --> errors/class_super_outside.js:3:10
+3 |   return super.foo;
+  |          ^^^^^^^^^
+

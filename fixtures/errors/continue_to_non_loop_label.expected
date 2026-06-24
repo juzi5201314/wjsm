@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [33..48]: cannot continue to non-loop label `outer`
+Error: error: cannot continue to non-loop label `outer`
+ --> errors/continue_to_non_loop_label.js:3:3
+3 |   continue outer;
+  |   ^^^^^^^^^^^^^^^
+

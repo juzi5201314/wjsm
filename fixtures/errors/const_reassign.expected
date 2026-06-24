@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [14..19]: cannot reassign a const-declared variable `x`
+Error: error: cannot reassign a const-declared variable `x`
+ --> errors/const_reassign.js:2:1
+2 | x = 2;
+  | ^^^^^
+

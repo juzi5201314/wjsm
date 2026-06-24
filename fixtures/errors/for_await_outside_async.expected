@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [18..44]: for await...of is only valid in async functions
+Error: error: for await...of is only valid in async functions
+ --> errors/for_await_outside_async.js:1:18
+1 | function foo() { for await (let x of []) {} }
+  |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+

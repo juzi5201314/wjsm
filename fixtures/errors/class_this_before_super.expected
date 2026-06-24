@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [112..116]: derived constructor cannot access this or super before super()
+Error: error: derived constructor cannot access this or super before super()
+ --> errors/class_this_before_super.js:9:5
+9 |     this.x = 1;
+  |     ^^^^
+

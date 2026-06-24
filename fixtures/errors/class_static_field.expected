@@ -1,4 +1,8 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: semantic lowering error [197..203]: cannot access `Config` before initialisation
+Error: error: cannot access `Config` before initialisation
+ --> errors/class_static_field.js:6:12
+6 |     return Config.version;
+  |            ^^^^^^
+
