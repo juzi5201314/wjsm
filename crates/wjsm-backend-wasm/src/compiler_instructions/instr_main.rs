@@ -39,7 +39,7 @@ impl Compiler {
                         .builtin_func_indices
                         .get(&Builtin::RegExpCreate)
                         .copied()
-                        .unwrap_or(109);
+                        .ok_or_else(|| anyhow::anyhow!("no WASM func index for RegExpCreate"))?;
                     self.emit(WasmInstruction::Call(func_idx));
                     self.emit(WasmInstruction::LocalSet(self.local_idx(dest.0)));
                 } else {
