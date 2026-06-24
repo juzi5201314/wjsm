@@ -21,6 +21,10 @@ impl Lowerer {
     ) -> Result<ValueId, LoweringError> {
         let name = ident.sym.to_string();
 
+        if let Some(ns_obj) = self.static_namespace_import_objects.get(&name).copied() {
+            return Ok(ns_obj);
+        }
+
         if let Some(alias_ir_name) = self.import_aliases.get(&name).cloned() {
             let dest = self.alloc_value();
             self.current_function.append_instruction(

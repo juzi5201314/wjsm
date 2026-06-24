@@ -751,6 +751,17 @@ pub struct ImportBinding {
     /// 模块说明符（如 './foo'），用于动态 import 的 specifier 查找
     pub specifier: String,
 }
+/// 模块重导出说明（`export … from`），供 lower 阶段填充 `export_map`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReExportBinding {
+    /// 被重导出的源模块 ID
+    pub source_module: ModuleId,
+    /// `export { local as exported } from` 的 local；`export *` 时为 None
+    pub local_name: Option<String>,
+    /// 当前模块对外导出名；`export *` 时为 None（表示复制源模块全部导出）
+    pub exported_name: Option<String>,
+}
+
 
 // ── Shadow Stack Constants ──────────────────────────────────────────────
 /// 影子栈大小（64KB = 8192 个 i64 槽位）。

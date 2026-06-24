@@ -121,6 +121,16 @@ impl Lowerer {
 
         let mut current_block = block;
         let obj_val = self.lower_expr_then_continue(&member.obj, &mut current_block)?;
+        if let swc_ast::MemberProp::Ident(prop_ident) = &member.prop
+            && let swc_ast::Expr::Ident(obj_ident) = member.obj.as_ref()
+            && let Some(&ns_obj) = self
+                .static_namespace_import_objects
+                .get(&obj_ident.sym.to_string())
+            && ns_obj == obj_val
+        {
+            self.ensure_static_namespace_prop(ns_obj, &prop_ident.sym.to_string(), current_block);
+        }
+
         self.lower_member_expr_from_object(member, obj_val, &mut current_block)
     }
 

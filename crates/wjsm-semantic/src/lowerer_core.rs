@@ -96,6 +96,12 @@ impl Lowerer {
             dynamic_import_namespace_objects: std::collections::HashMap::new(),
             dynamic_import_specifier_map: std::collections::HashMap::new(),
             module_export_names: std::collections::HashMap::new(),
+            re_export_map: std::collections::HashMap::new(),
+            static_namespace_import_objects: std::collections::HashMap::new(),
+            static_namespace_import_sources: Vec::new(),
+            static_namespace_filled: std::collections::HashSet::new(),
+
+
             is_async_fn: false,
             is_async_generator_fn: false,
             async_state_counter: 0,

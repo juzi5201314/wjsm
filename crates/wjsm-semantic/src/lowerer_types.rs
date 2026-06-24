@@ -74,8 +74,23 @@ pub(crate) struct Lowerer {
         std::collections::HashMap<wjsm_ir::ModuleId, wjsm_ir::ValueId>,
     pub(crate) module_export_names:
         std::collections::HashMap<wjsm_ir::ModuleId, std::collections::BTreeSet<String>>,
+    /// 重导出声明（来自 analyze_module_links）
+    pub(crate) re_export_map:
+        std::collections::HashMap<wjsm_ir::ModuleId, Vec<wjsm_ir::ReExportBinding>>,
+    /// 静态 `import * as ns` 的命名空间对象 ValueId
+    pub(crate) static_namespace_import_objects:
+        std::collections::HashMap<String, wjsm_ir::ValueId>,
+    /// 待填充属性的静态命名空间：(local_name, source_module_id)
+    pub(crate) static_namespace_import_sources:
+        Vec<(String, wjsm_ir::ModuleId)>,
+    /// 已按需填充的静态命名空间属性：(ns 对象, 导出名)
+    pub(crate) static_namespace_filled:
+        std::collections::HashSet<(wjsm_ir::ValueId, String)>,
+
     pub(crate) is_async_fn: bool,
     pub(crate) is_async_generator_fn: bool,
+
+
     pub(crate) async_state_counter: u32,
     pub(crate) captured_var_slots: std::collections::HashMap<String, u32>,
     pub(crate) async_next_continuation_slot: u32,
