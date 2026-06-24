@@ -163,7 +163,7 @@ async fn call_replace_func_async(
     replace_callback_result_to_string(caller, result)
 }
 
-async fn string_replace_async_body(
+pub(crate) async fn string_replace_async_body(
     mut caller: Caller<'_, RuntimeState>,
     receiver: i64,
     search: i64,
