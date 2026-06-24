@@ -124,6 +124,192 @@ pub(crate) fn alloc_host_null_proto_object<C: AsContextMut<Data = RuntimeState>>
 ) -> i64 {
     alloc_host_object_impl(ctx, env, capacity, u32::MAX)
 }
+/// 各 Error 子类 prototype 对象（bootstrap 后由 `ensure_error_prototypes_initialized` 填充）。
+#[derive(Clone, Copy, Default)]
+pub(crate) struct ErrorPrototypes {
+    pub error: i64,
+    pub type_error: i64,
+    pub range_error: i64,
+    pub syntax_error: i64,
+    pub reference_error: i64,
+    pub uri_error: i64,
+    pub eval_error: i64,
+    pub aggregate_error: i64,
+}
+
+impl ErrorPrototypes {
+    pub(crate) fn is_initialized(self) -> bool {
+        value::is_object(self.error)
+    }
+
+    pub(crate) fn proto_for_error_name(self, error_name: &str) -> Option<i64> {
+        if !self.is_initialized() {
+            return None;
+        }
+        let proto = match error_name {
+            "Error" => self.error,
+            "TypeError" => self.type_error,
+            "RangeError" => self.range_error,
+            "SyntaxError" => self.syntax_error,
+            "ReferenceError" => self.reference_error,
+            "URIError" => self.uri_error,
+            "EvalError" => self.eval_error,
+            "AggregateError" => self.aggregate_error,
+            _ => self.error,
+        };
+        if value::is_object(proto) {
+            Some(proto)
+        } else {
+            None
+        }
+    }
+}
+
+fn set_object_proto_header<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+    obj: i64,
+    proto: i64,
+) {
+    let Some(obj_ptr) =
+        resolve_handle_idx_with_env(ctx, env, value::decode_object_handle(obj) as usize)
+    else {
+        return;
+    };
+    let proto_handle = if value::is_null(proto) {
+        0xFFFF_FFFF
+    } else if value::is_object(proto) {
+        value::decode_object_handle(proto)
+    } else {
+        return;
+    };
+    let data = env.memory.data_mut(ctx);
+    if obj_ptr + 4 > data.len() {
+        return;
+    }
+    data[obj_ptr..obj_ptr + 4].copy_from_slice(&proto_handle.to_le_bytes());
+}
+
+/// ECMAScript §20.5.3.4 Error.prototype.toString
+pub(crate) fn error_proto_to_string_impl(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+) -> i64 {
+    if !value::is_object(this_val) {
+        return make_type_error_exception(
+            caller,
+            "TypeError: Error.prototype.toString called on incompatible receiver",
+        );
+    }
+    let obj_ptr = resolve_handle_idx(caller, value::decode_object_handle(this_val) as usize);
+    let name_raw = obj_ptr.and_then(|p| read_object_property_by_name(caller, p, "name"));
+    let name = if let Some(v) = name_raw {
+        if value::is_undefined(v) {
+            "Error".to_string()
+        } else {
+            eval_to_string(caller, v)
+        }
+    } else {
+        "Error".to_string()
+    };
+    let message_raw = obj_ptr.and_then(|p| read_object_property_by_name(caller, p, "message"));
+    let message = if let Some(v) = message_raw {
+        if value::is_undefined(v) {
+            String::new()
+        } else {
+            eval_to_string(caller, v)
+        }
+    } else {
+        String::new()
+    };
+    if name.is_empty() {
+        store_runtime_string(caller, message)
+    } else if message.is_empty() {
+        store_runtime_string(caller, name)
+    } else {
+        store_runtime_string(caller, format!("{name}: {message}"))
+    }
+}
+
+/// 在 `__wjsm_bootstrap_once` 之后调用：建立 Error 原型链并挂到 RuntimeState。
+pub(crate) fn ensure_error_prototypes_initialized<C: AsContextMut<Data = RuntimeState>>(
+    ctx: &mut C,
+    env: &WasmEnv,
+) {
+    if ctx.as_context().data().error_prototypes.is_initialized() {
+        return;
+    }
+    let object_proto_handle = env.object_proto_handle.get(&mut *ctx).i32().unwrap_or(-1);
+    if object_proto_handle < 0 {
+        return;
+    }
+    let object_proto = value::encode_object_handle(object_proto_handle as u32);
+
+    let error_proto = alloc_host_object(ctx, env, 2);
+    set_object_proto_header(ctx, env, error_proto, object_proto);
+    let to_string = create_native_callable(ctx.as_context().data(), NativeCallable::ErrorProtoToString);
+    let _ = define_host_data_property_with_env(ctx, env, error_proto, "toString", to_string);
+
+    let mut make_subclass = |name: &str, parent_proto: i64| -> i64 {
+        let proto = alloc_host_object(ctx, env, 1);
+        set_object_proto_header(ctx, env, proto, parent_proto);
+        let name_val = store_runtime_string_in_state(ctx.as_context().data(), name.to_string());
+        let _ = define_host_data_property_with_env(ctx, env, proto, "name", name_val);
+        proto
+    };
+
+    let type_error = make_subclass("TypeError", error_proto);
+    let range_error = make_subclass("RangeError", error_proto);
+    let syntax_error = make_subclass("SyntaxError", error_proto);
+    let reference_error = make_subclass("ReferenceError", error_proto);
+    let uri_error = make_subclass("URIError", error_proto);
+    let eval_error = make_subclass("EvalError", error_proto);
+    let aggregate_error = make_subclass("AggregateError", error_proto);
+
+    ctx.as_context_mut().data_mut().error_prototypes = ErrorPrototypes {
+        error: error_proto,
+        type_error,
+        range_error,
+        syntax_error,
+        reference_error,
+        uri_error,
+        eval_error,
+        aggregate_error,
+    };
+}
+
+pub(crate) fn native_callable_error_prototype(
+    caller: &mut Caller<'_, RuntimeState>,
+    record: &NativeCallable,
+) -> Option<i64> {
+    let protos = {
+        if !caller.data().error_prototypes.is_initialized() {
+            if let Some(env) = WasmEnv::from_caller(caller) {
+                ensure_error_prototypes_initialized(caller, &env);
+            }
+        }
+        caller.data().error_prototypes
+    };
+    if !protos.is_initialized() {
+        return None;
+    }
+    let proto = match record {
+        NativeCallable::ErrorConstructor => protos.error,
+        NativeCallable::TypeErrorConstructor => protos.type_error,
+        NativeCallable::RangeErrorConstructor => protos.range_error,
+        NativeCallable::SyntaxErrorConstructor => protos.syntax_error,
+        NativeCallable::ReferenceErrorConstructor => protos.reference_error,
+        NativeCallable::URIErrorConstructor => protos.uri_error,
+        NativeCallable::EvalErrorConstructor => protos.eval_error,
+        NativeCallable::AggregateErrorConstructor => protos.aggregate_error,
+        _ => return None,
+    };
+    if value::is_object(proto) {
+        Some(proto)
+    } else {
+        None
+    }
+}
 
 /// 共享的错误对象创建逻辑：分配 host 对象，设置 name/message 属性和 __error_brand__ 隐藏标记。
 /// `create_error_object`（Caller 路径）和 `alloc_type_error_with_env`（泛型 C 路径）均委托此函数。
@@ -157,6 +343,12 @@ pub(crate) fn alloc_error_object_with_env<C: AsContextMut<Data = RuntimeState>>(
         brand_val,
         0,
     );
+    if let Some(proto) = {
+        let state = ctx.as_context().data();
+        state.error_prototypes.proto_for_error_name(error_name)
+    } {
+        set_object_proto_header(ctx, env, obj, proto);
+    }
     obj
 }
 
@@ -193,6 +385,7 @@ pub(crate) fn create_error_object(
         });
     }
     let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+    ensure_error_prototypes_initialized(caller, &env);
     alloc_error_object_with_env(caller, &env, error_name, message)
 }
 

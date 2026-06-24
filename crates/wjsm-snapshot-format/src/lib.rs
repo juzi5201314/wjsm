@@ -135,6 +135,7 @@ pub enum SnapshotNativeCallable {
     ArgumentsStrictCalleeGetter = 56,
     TypedArrayConstructor = 57,
     BigIntPrimitiveMethod = 58,
+    ErrorProtoToString = 59,
 }
 
 impl SnapshotNativeCallable {
@@ -199,6 +200,7 @@ impl SnapshotNativeCallable {
             56 => Some(Self::ArgumentsStrictCalleeGetter),
             57 => Some(Self::TypedArrayConstructor),
             58 => Some(Self::BigIntPrimitiveMethod),
+            59 => Some(Self::ErrorProtoToString),
             _ => None,
         }
     }

@@ -146,6 +146,21 @@ impl RootProvider for RuntimeRoots {
             ctx.with_state(|st| (st.async_iterator_prototype, st.async_gen_prototype));
         push_value_roots(ctx, async_iterator_proto, visit);
         push_value_roots(ctx, async_gen_proto, visit);
+        let protos = ctx.with_state(|st| st.error_prototypes);
+        if protos.is_initialized() {
+            for proto in [
+                protos.error,
+                protos.type_error,
+                protos.range_error,
+                protos.syntax_error,
+                protos.reference_error,
+                protos.uri_error,
+                protos.eval_error,
+                protos.aggregate_error,
+            ] {
+                push_value_roots(ctx, proto, visit);
+            }
+        }
         // 动态 root：host 侧表快照 → 解析每个 raw 值为 handle。
         let snapshot = collect_host_table_values(ctx);
         for val in snapshot {

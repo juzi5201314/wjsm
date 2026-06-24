@@ -82,6 +82,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             Self::NumberPrimitiveMethod => NativeCallable::NumberPrimitiveMethod { method },
             Self::ArgumentsStrictCalleeGetter => NativeCallable::ArgumentsStrictCalleeGetter,
             Self::TypedArrayConstructor => NativeCallable::TypedArrayConstructor(()),
+            Self::ErrorProtoToString => NativeCallable::ErrorProtoToString,
         }
     }
 
@@ -95,6 +96,7 @@ impl SnapshotNativeCallableBridge for SnapshotNativeCallable {
             NativeCallable::ArrayConstructor => Self::ArrayConstructor,
             NativeCallable::ObjectConstructor => Self::ObjectConstructor,
             NativeCallable::ObjectProtoToString => Self::ObjectProtoToString,
+            NativeCallable::ErrorProtoToString => Self::ErrorProtoToString,
             NativeCallable::ObjectProtoValueOf => Self::ObjectProtoValueOf,
             NativeCallable::FunctionConstructor => Self::FunctionConstructor,
             NativeCallable::StringConstructor => Self::StringConstructor,
