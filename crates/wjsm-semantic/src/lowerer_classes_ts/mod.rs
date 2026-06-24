@@ -179,6 +179,35 @@ pub(crate) fn validate_private_names(module: &swc_ast::Module) -> Result<(), Low
     Ok(())
 }
 
+/// 用于诊断的 ClassMember 源码区间。
+pub(super) fn class_member_span(member: &swc_ast::ClassMember) -> Span {
+    match member {
+        swc_ast::ClassMember::Constructor(c) => c.span,
+        swc_ast::ClassMember::Method(m) => m.span,
+        swc_ast::ClassMember::PrivateMethod(m) => m.span,
+        swc_ast::ClassMember::ClassProp(p) => p.span,
+        swc_ast::ClassMember::PrivateProp(p) => p.span,
+        swc_ast::ClassMember::StaticBlock(b) => b.span,
+        swc_ast::ClassMember::TsIndexSignature(t) => t.span,
+        swc_ast::ClassMember::Empty(e) => e.span,
+        swc_ast::ClassMember::AutoAccessor(a) => a.span,
+    }
+}
+/// 用于错误消息的 ClassMember 变体名称。
+pub(super) fn class_member_kind(member: &swc_ast::ClassMember) -> &'static str {
+    match member {
+        swc_ast::ClassMember::Constructor(_) => "constructor",
+        swc_ast::ClassMember::Method(_) => "method",
+        swc_ast::ClassMember::PrivateMethod(_) => "private method",
+        swc_ast::ClassMember::ClassProp(_) => "class property",
+        swc_ast::ClassMember::PrivateProp(_) => "private property",
+        swc_ast::ClassMember::StaticBlock(_) => "static block",
+        swc_ast::ClassMember::TsIndexSignature(_) => "index signature",
+        swc_ast::ClassMember::Empty(_) => "empty",
+        swc_ast::ClassMember::AutoAccessor(_) => "auto accessor",
+    }
+}
+
 impl Lowerer {
     fn emit_instance_initializers(
         &mut self,
@@ -204,7 +233,18 @@ impl Lowerer {
                         swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
                         swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
                         swc_ast::PropName::Num(n) => n.value.to_string(),
-                        _ => continue,
+                        swc_ast::PropName::Computed(_) => {
+                            return Err(self.error(
+                                prop.span,
+                                "unsupported computed key on instance class field",
+                            ));
+                        }
+                        other => {
+                            return Err(self.error(
+                                other.span(),
+                                "unsupported property key kind on instance class field",
+                            ));
+                        }
                     };
                     block = self.emit_field_init(
                         block,
@@ -214,7 +254,21 @@ impl Lowerer {
                         false,
                     )?;
                 }
-                _ => {}
+                swc_ast::ClassMember::Constructor(_)
+                | swc_ast::ClassMember::Method(_)
+                | swc_ast::ClassMember::PrivateMethod(_)
+                | swc_ast::ClassMember::StaticBlock(_) => {}
+                swc_ast::ClassMember::PrivateProp(p) if p.is_static => {}
+                swc_ast::ClassMember::ClassProp(p) if p.is_static => {}
+                other => {
+                    return Err(self.error(
+                        class_member_span(other),
+                        format!(
+                            "unsupported class member `{}` during instance field initialization",
+                            class_member_kind(other),
+                        ),
+                    ));
+                }
             }
         }
 
