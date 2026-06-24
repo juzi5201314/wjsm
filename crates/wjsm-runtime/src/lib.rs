@@ -769,6 +769,30 @@ impl RuntimeState {
                     description: Some("Symbol(Symbol.asyncDispose)".into()),
                     global_key: None,
                 },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.isConcatSpreadable)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.matchAll)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.replace)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.search)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.split)".into()),
+                    global_key: None,
+                },
+                SymbolEntry {
+                    description: Some("Symbol(Symbol.unscopables)".into()),
+                    global_key: None,
+                },
             ])),
             regex_table: Arc::new(Mutex::new(Vec::new())),
             promise_table: Arc::new(Mutex::new(Vec::new())),
