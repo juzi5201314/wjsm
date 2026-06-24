@@ -425,7 +425,12 @@ impl Lowerer {
                                 let key_dest = self.lower_prop_name(&method.key, block)?;
                                 ("<computed>".to_string(), key_dest)
                             }
-                            _ => continue,
+                            other => {
+                                return Err(self.error(
+                                    other.span(),
+                                    "unsupported property key kind on class method",
+                                ));
+                            }
                         };
 
                         let fn_name = format!("{}.{}", class_name, method_name);
@@ -574,7 +579,12 @@ impl Lowerer {
                                 let key_dest = self.lower_prop_name(&method.key, block)?;
                                 ("<computed>".to_string(), key_dest)
                             }
-                            _ => continue,
+                            other => {
+                                return Err(self.error(
+                                    other.span(),
+                                    "unsupported property key kind on class accessor",
+                                ));
+                            }
                         };
 
                         let fn_name = format!("{}.{}_{}", class_name, accessor, method_name);
@@ -807,7 +817,18 @@ impl Lowerer {
                         swc_ast::PropName::Ident(ident) => ident.sym.to_string(),
                         swc_ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
                         swc_ast::PropName::Num(n) => n.value.to_string(),
-                        _ => continue,
+                        swc_ast::PropName::Computed(_) => {
+                            return Err(self.error(
+                                prop.span,
+                                "unsupported computed key on static class field",
+                            ));
+                        }
+                        other => {
+                            return Err(self.error(
+                                other.span(),
+                                "unsupported property key kind on static class field",
+                            ));
+                        }
                     };
                     let key_const = self.module.add_constant(Constant::String(prop_name));
                     let key_dest = self.alloc_value();
@@ -841,7 +862,19 @@ impl Lowerer {
                         },
                     );
                 }
-                _ => {}
+                swc_ast::ClassMember::Constructor(_)
+                | swc_ast::ClassMember::PrivateMethod(_) => {}
+                swc_ast::ClassMember::PrivateProp(p) if !p.is_static => {}
+                swc_ast::ClassMember::ClassProp(p) if !p.is_static => {}
+                other => {
+                    return Err(self.error(
+                        class_member_span(other),
+                        format!(
+                            "unsupported class member `{}` during class expression lowering",
+                            class_member_kind(other),
+                        ),
+                    ));
+                }
             }
         }
 
