@@ -1928,6 +1928,24 @@ pub(crate) fn define_collections_buffers(
                 vec![]
             };
 
+            use std::sync::atomic::Ordering;
+
+            let new_target = caller.data().new_target.load(Ordering::Relaxed);
+            if value::is_undefined(new_target) {
+                let now_ms = chrono::Utc::now().timestamp_millis() as f64;
+                if now_ms.is_nan() {
+                    return store_runtime_string(&mut caller, "Invalid Date".to_string());
+                }
+                return match ms_to_datetime_local(now_ms) {
+                    Some(dt) => {
+                        let s = dt.format("%a %b %e %Y %H:%M:%S GMT%:z").to_string();
+                        store_runtime_string(&mut caller, s)
+                    }
+                    None => store_runtime_string(&mut caller, "Invalid Date".to_string()),
+                };
+            }
+
+
             let ms = if args.is_empty() {
                 let now = chrono::Utc::now();
                 now.timestamp_millis() as f64
@@ -2290,8 +2308,26 @@ pub(crate) fn define_collections_buffers(
 
     let date_utc_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, arg: i64| -> i64 {
-            let args = vec![arg];
+        |mut caller: Caller<'_, RuntimeState>, args_base: i32, args_count: i32| -> i64 {
+            let args: Vec<i64> = if args_count > 0 {
+                let Some(Extern::Memory(memory)) = caller.get_export("memory") else {
+                    return value::encode_f64(f64::NAN);
+                };
+                let data = memory.data(&caller);
+                let base = args_base as usize;
+                let mut result = Vec::with_capacity(args_count as usize);
+                for i in 0..args_count as usize {
+                    let offset = base + i * 8;
+                    if offset + 8 <= data.len() {
+                        let mut bytes = [0u8; 8];
+                        bytes.copy_from_slice(&data[offset..offset + 8]);
+                        result.push(i64::from_le_bytes(bytes));
+                    }
+                }
+                result
+            } else {
+                vec![]
+            };
             let ms = date_args_to_ms(&args, true);
             value::encode_f64(ms)
         },

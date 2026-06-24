@@ -397,7 +397,11 @@ impl Lowerer {
                     block,
                     Instruction::CallBuiltin {
                         dest: Some(dest),
-                        builtin,
+                        builtin: if builtin == Builtin::DateConstructor {
+                            Builtin::DateConstructorNew
+                        } else {
+                            builtin
+                        },
                         args: arg_vals,
                     },
                 );

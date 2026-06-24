@@ -231,7 +231,18 @@ fn utc_ms_from_ymd_hms_ms(
         return f64::NAN;
     }
     let time_ms = make_time(hour, minute, second, millis);
-    day_num * 86_400_000.0 + time_ms
+    let days_i32 = day_num as i32;
+    let nd = match chrono::NaiveDate::from_num_days_from_ce_opt(days_i32) {
+        Some(d) => d,
+        None => return f64::NAN,
+    };
+    let midnight = match nd.and_hms_opt(0, 0, 0) {
+        Some(ndt) => ndt,
+        None => return f64::NAN,
+    };
+    let ndt = midnight + chrono::Duration::milliseconds(time_ms as i64);
+    let utc_dt = chrono::TimeZone::from_utc_datetime(&chrono::Utc, &ndt);
+    utc_dt.timestamp_millis() as f64
 }
 
 fn apply_local_date_setter(
@@ -292,13 +303,12 @@ pub(crate) fn date_args_to_ms(args: &[i64], is_utc: bool) -> f64 {
     if first.is_nan() {
         return f64::NAN;
     }
-    if args.len() == 1 {
+    if args.len() == 1 && !is_utc {
         if first.is_infinite() {
             return f64::NAN;
         }
         return first;
     }
-    let year = first;
     let month_val = if args.len() > 1 {
         value::decode_f64(args[1])
     } else {
@@ -330,7 +340,7 @@ pub(crate) fn date_args_to_ms(args: &[i64], is_utc: bool) -> f64 {
         0.0
     };
 
-    if year.is_nan()
+    if first.is_nan()
         || month_val.is_nan()
         || day.is_nan()
         || hour.is_nan()
@@ -341,10 +351,10 @@ pub(crate) fn date_args_to_ms(args: &[i64], is_utc: bool) -> f64 {
         return f64::NAN;
     }
 
-    let year_adj = if (0.0..=99.0).contains(&year.floor()) {
-        year.floor() + 1900.0
+    let year_adj = if (0.0..=99.0).contains(&first.floor()) {
+        first.floor() + 1900.0
     } else {
-        year
+        first
     };
 
     if is_utc {
@@ -900,7 +910,7 @@ pub(crate) fn call_date_method_from_caller(
         }
         DateMethodKind::ToISOString => {
             if ms.is_nan() {
-                return value::encode_f64(f64::NAN);
+                return make_range_error_exception(caller, "Invalid time value");
             }
             match ms_to_datetime_utc(ms) {
                 Some(dt) => {
@@ -931,7 +941,7 @@ pub(crate) fn call_date_method_from_caller(
                     };
                     store_runtime_string(caller, s)
                 }
-                None => value::encode_f64(f64::NAN),
+                None => make_range_error_exception(caller, "Invalid time value"),
             }
         }
         DateMethodKind::ToUTCString => {
@@ -948,7 +958,7 @@ pub(crate) fn call_date_method_from_caller(
         }
         DateMethodKind::ToJSON => {
             if ms.is_nan() {
-                return value::encode_f64(f64::NAN);
+                return value::encode_null();
             }
             match ms_to_datetime_utc(ms) {
                 Some(dt) => {
@@ -979,7 +989,7 @@ pub(crate) fn call_date_method_from_caller(
                     };
                     store_runtime_string(caller, s)
                 }
-                None => value::encode_f64(f64::NAN),
+                None => value::encode_null(),
             }
         }
     }
