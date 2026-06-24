@@ -66,16 +66,37 @@ fn build_cfg(
 }
 
 /// 计算每个 block 的 use 和 def 集合，只考虑用户变量，排除 async 内部绑定。
-/// 闭包捕获会在 ensure_shared_env 中先降低为 LoadVar，因此 CreateClosure 本身无需额外建模。
-fn compute_use_def(blocks: &[BasicBlock]) -> (Vec<HashSet<String>>, Vec<HashSet<String>>) {
+/// 当前函数局部用 LoadVar/StoreVar；经 env 的 GetProp(键为 `$scope.name` 字符串) 须计入捕获 use。
+fn compute_use_def(
+    blocks: &[BasicBlock],
+    constants: &[Constant],
+) -> (Vec<HashSet<String>>, Vec<HashSet<String>>) {
     let mut use_sets: Vec<HashSet<String>> = vec![HashSet::new(); blocks.len()];
     let mut def_sets: Vec<HashSet<String>> = vec![HashSet::new(); blocks.len()];
 
     for block in blocks {
         let bid = block.id().0 as usize;
         let mut local_def: HashSet<String> = HashSet::new();
+        let instrs: Vec<_> = block.instructions().to_vec();
+        let mut const_strings: HashMap<ValueId, String> = HashMap::new();
+        let mut load_var_dests: HashMap<ValueId, String> = HashMap::new();
 
-        for instr in block.instructions() {
+        for instr in &instrs {
+            match instr {
+                Instruction::Const { dest, constant } => {
+                    let idx = constant.0 as usize;
+                    if let Some(Constant::String(s)) = constants.get(idx) {
+                        const_strings.insert(*dest, s.clone());
+                    }
+                }
+                Instruction::LoadVar { dest, name } => {
+                    load_var_dests.insert(*dest, name.clone());
+                }
+                _ => {}
+            }
+        }
+
+        for instr in &instrs {
             match instr {
                 Instruction::LoadVar { name, .. } => {
                     if !Lowerer::is_async_internal_binding(name) && !local_def.contains(name) {
@@ -85,6 +106,20 @@ fn compute_use_def(blocks: &[BasicBlock]) -> (Vec<HashSet<String>>, Vec<HashSet<
                 Instruction::StoreVar { name, .. } if !Lowerer::is_async_internal_binding(name) => {
                     local_def.insert(name.clone());
                     def_sets[bid].insert(name.clone());
+                }
+                Instruction::GetProp { object, key, .. } => {
+                    let env_load = load_var_dests.get(object).is_some_and(|n| {
+                        n.contains(".$shared_env") || n.ends_with(".$env") || n == "$eval_env"
+                    });
+                    if env_load
+                        && let Some(binding_ir) = const_strings.get(key)
+                        && binding_ir.starts_with('$')
+                        && binding_ir.contains('.')
+                        && !Lowerer::is_async_internal_binding(binding_ir)
+                        && !local_def.contains(binding_ir)
+                    {
+                        use_sets[bid].insert(binding_ir.clone());
+                    }
                 }
                 _ => {}
             }
