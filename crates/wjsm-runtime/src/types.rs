@@ -106,7 +106,7 @@ pub(crate) enum ResponseType {
     Opaque,
     OpaqueRedirect,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) enum RedirectMode {
     Follow,
     Error,

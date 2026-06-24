@@ -365,20 +365,23 @@ pub(crate) fn construct_headers(
     Some(obj)
 }
 
-pub(crate) fn construct_request(
+/// `fetch(input, init)` 与 `new Request(input, init)` 共用的请求参数解析。
+pub(crate) fn resolve_fetch_request_params(
     caller: &mut Caller<'_, RuntimeState>,
-    this_val: i64,
-    args: &[i64],
-) -> Option<i64> {
-    let input = args
-        .first()
-        .copied()
-        .unwrap_or_else(value::encode_undefined);
-    if value::is_undefined(input) {
-        return Some(type_error_exception(caller, "Request input is required"));
-    }
-
-    let (mut method, url, mut headers, mut body, redirect) =
+    input: i64,
+    init: i64,
+) -> std::result::Result<
+    (
+        String,
+        String,
+        u32,
+        Option<Vec<u8>>,
+        RedirectMode,
+        Option<u32>,
+    ),
+    i64,
+> {
+    let (mut method, url, mut headers, mut body, mut redirect, mut signal_handle) =
         if let Some(request_handle) = get_request_handle_from_object(caller, input) {
             let copied = {
                 let table = caller
@@ -393,11 +396,13 @@ pub(crate) fn construct_request(
                         entry.headers_handle,
                         entry.body.clone(),
                         entry.redirect,
+                        entry.signal_handle,
                     )
                 })
             };
-            let Some((method, url, headers_handle, body, redirect)) = copied else {
-                return Some(type_error_exception(caller, "invalid Request object"));
+            let Some((method, url, headers_handle, body, redirect, signal_handle)) = copied
+            else {
+                return Err(type_error_exception(caller, "invalid Request object"));
             };
             (
                 method,
@@ -405,29 +410,119 @@ pub(crate) fn construct_request(
                 clone_headers_handle(caller, headers_handle),
                 body,
                 redirect,
+                signal_handle,
             )
-        } else {
-            let url = match js_string_from_value(caller, input) {
-                Ok(url) => url,
-                Err(exception) => return Some(exception),
-            };
+        } else if value::is_string(input) {
+            let url = extract_string_from_value(caller, input);
             (
                 "GET".to_string(),
                 url,
                 create_empty_headers(caller),
                 None,
                 RedirectMode::Follow,
+                None,
             )
+        } else if value::is_object(input) {
+            let url = extract_string_property(caller, input, "url").unwrap_or_default();
+            (
+                "GET".to_string(),
+                url,
+                create_empty_headers(caller),
+                None,
+                RedirectMode::Follow,
+                None,
+            )
+        } else {
+            return Err(type_error_exception(
+                caller,
+                "Failed to parse URL from request.",
+            ));
         };
 
     if url_has_credentials(&url) {
-        return Some(type_error_exception(
+        return Err(type_error_exception(
             caller,
             "Request URL contains credentials",
         ));
     }
 
-    let mut redirect = redirect;
+    if value::is_object(init) {
+        match string_property(caller, init, "method") {
+            Ok(Some(init_method)) => {
+                let upper = init_method.to_ascii_uppercase();
+                if !valid_method(&upper) || forbidden_method(&upper) {
+                    return Err(type_error_exception(caller, "invalid Request method"));
+                }
+                method = upper;
+            }
+            Ok(None) => {}
+            Err(exception) => return Err(exception),
+        }
+        if let Some(init_headers) = object_property(caller, init, "headers")
+            && !value::is_undefined(init_headers)
+        {
+            match create_headers_from_init(caller, init_headers) {
+                Ok(handle) => headers = handle,
+                Err(exception) => return Err(exception),
+            }
+        }
+        if let Some(init_body) = object_property(caller, init, "body") {
+            match body_bytes_from_value(caller, init_body) {
+                Ok(parsed_body) => body = parsed_body,
+                Err(exception) => return Err(exception),
+            }
+        }
+        match string_property(caller, init, "redirect") {
+            Ok(Some(init_redirect)) => match parse_redirect_mode(caller, &init_redirect) {
+                Ok(mode) => redirect = mode,
+                Err(exception) => return Err(exception),
+            },
+            Ok(None) => {}
+            Err(exception) => return Err(exception),
+        }
+        if let Some(init_signal) = object_property(caller, init, "signal")
+            && !value::is_undefined(init_signal)
+            && let Some(handle) =
+                number_property(caller, init_signal, "__abort_signal_handle__")
+        {
+            signal_handle = Some(handle as u32);
+        }
+    }
+
+    if body.is_some() && matches!(method.as_str(), "GET" | "HEAD") {
+        return Err(type_error_exception(
+            caller,
+            "Request with GET/HEAD method cannot have body",
+        ));
+    }
+
+    Ok((method, url, headers, body, redirect, signal_handle))
+}
+
+
+pub(crate) fn construct_request(
+    caller: &mut Caller<'_, RuntimeState>,
+    this_val: i64,
+    args: &[i64],
+) -> Option<i64> {
+    let input = args
+        .first()
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    if value::is_undefined(input) {
+        return Some(type_error_exception(caller, "Request input is required"));
+    }
+
+    let init = args
+        .get(1)
+        .copied()
+        .unwrap_or_else(value::encode_undefined);
+    let (method, url, headers, body, redirect, signal_handle) =
+        match resolve_fetch_request_params(caller, input, init) {
+            Ok(v) => v,
+            Err(exception) => return Some(exception),
+        };
+
     let mut cache = "default".to_string();
     let mut credentials = "same-origin".to_string();
     let mut integrity = String::new();
@@ -448,43 +543,7 @@ pub(crate) fn construct_request(
         }
     }
 
-    let mut signal_handle = None;
-    if let Some(init) = args.get(1).copied()
-        && value::is_object(init)
-    {
-        match string_property(caller, init, "method") {
-            Ok(Some(init_method)) => {
-                let upper = init_method.to_ascii_uppercase();
-                if !valid_method(&upper) || forbidden_method(&upper) {
-                    return Some(type_error_exception(caller, "invalid Request method"));
-                }
-                method = upper;
-            }
-            Ok(None) => {}
-            Err(exception) => return Some(exception),
-        }
-        if let Some(init_headers) = object_property(caller, init, "headers")
-            && !value::is_undefined(init_headers)
-        {
-            match create_headers_from_init(caller, init_headers) {
-                Ok(handle) => headers = handle,
-                Err(exception) => return Some(exception),
-            }
-        }
-        if let Some(init_body) = object_property(caller, init, "body") {
-            match body_bytes_from_value(caller, init_body) {
-                Ok(parsed_body) => body = parsed_body,
-                Err(exception) => return Some(exception),
-            }
-        }
-        match string_property(caller, init, "redirect") {
-            Ok(Some(init_redirect)) => match parse_redirect_mode(caller, &init_redirect) {
-                Ok(mode) => redirect = mode,
-                Err(exception) => return Some(exception),
-            },
-            Ok(None) => {}
-            Err(exception) => return Some(exception),
-        }
+    if value::is_object(init) {
         match string_property(caller, init, "cache") {
             Ok(Some(init_cache)) => {
                 if !valid_request_cache(&init_cache) {
@@ -516,20 +575,6 @@ pub(crate) fn construct_request(
         if let Some(init_keepalive) = bool_property(caller, init, "keepalive") {
             keepalive = init_keepalive;
         }
-        if let Some(init_signal) = object_property(caller, init, "signal")
-            && !value::is_undefined(init_signal)
-            && let Some(handle) =
-                number_property(caller, init_signal, "__abort_signal_handle__")
-        {
-            signal_handle = Some(handle as u32);
-        }
-    }
-
-    if body.is_some() && matches!(method.as_str(), "GET" | "HEAD") {
-        return Some(type_error_exception(
-            caller,
-            "Request with GET/HEAD method cannot have body",
-        ));
     }
 
     let req = create_request_object(
