@@ -760,6 +760,9 @@ async fn apply_reviver_async(
                     elem_val,
                 ))
                 .await;
+                if value::is_exception(new_val) {
+                    return new_val;
+                }
                 if value::is_undefined(new_val) {
                     write_array_hole(caller, ptr, i);
                 } else {
@@ -802,6 +805,9 @@ async fn apply_reviver_async(
                     .unwrap_or_else(value::encode_undefined);
                 let new_val =
                     Box::pin(apply_reviver_async(caller, reviver, val, &name, prop_val)).await;
+                if value::is_exception(new_val) {
+                    return new_val;
+                }
                 if value::is_undefined(new_val) {
                     delete_property_by_name_id(caller, &env, val, *name_id);
                 } else {
@@ -823,9 +829,15 @@ async fn apply_reviver_async(
         }
     }
     let key_str = store_runtime_string(caller, key.to_string());
-    call_wasm_callback_async(caller, reviver, holder, &[key_str, val])
-        .await
-        .unwrap_or_else(|_| value::encode_undefined())
+    match call_wasm_callback_async(caller, reviver, holder, &[key_str, val]).await {
+        Ok(result) => {
+            if value::is_exception(result) {
+                return result;
+            }
+            result
+        }
+        Err(_) => value::encode_undefined(),
+    }
 }
 
 pub async fn json_parse_to_wasm_async(
