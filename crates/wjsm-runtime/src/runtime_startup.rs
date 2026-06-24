@@ -105,6 +105,7 @@ pub(super) fn startup_engine_config(use_epoch_async_yield: bool) -> Config {
     if use_epoch_async_yield {
         config.epoch_interruption(true);
     }
+    config.wasm_bulk_memory(true);
     config
 }
 

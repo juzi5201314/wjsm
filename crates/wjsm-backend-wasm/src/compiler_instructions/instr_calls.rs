@@ -126,7 +126,7 @@ impl Compiler {
         self.emit(WasmInstruction::I32Const(args.len() as i32));
         self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
         self.emit(WasmInstruction::CallIndirect {
-            type_index: 12,
+            type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
             table_index: 0,
         });
         self.emit(WasmInstruction::End); // close proxy if/else
@@ -275,7 +275,7 @@ impl Compiler {
         }
         self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
         self.emit(WasmInstruction::CallIndirect {
-            type_index: 12,
+            type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
             table_index: 0,
         });
         self.emit(WasmInstruction::End);
@@ -710,7 +710,7 @@ impl Compiler {
         self.emit(WasmInstruction::I32Const(args.len() as i32));
         self.emit(WasmInstruction::LocalGet(call_func_idx_scratch));
         self.emit(WasmInstruction::CallIndirect {
-            type_index: 12,
+            type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
             table_index: 0,
         });
         self.emit(WasmInstruction::End);

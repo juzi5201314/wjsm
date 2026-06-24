@@ -290,7 +290,7 @@ fn emit_obj_get() -> Function {
     func.instruction(&WasmInstruction::I32Const(0)); // args_count
     func.instruction(&WasmInstruction::LocalGet(9)); // func_idx
     func.instruction(&WasmInstruction::CallIndirect {
-        type_index: 12,
+        type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
         table_index: 0,
     });
     func.instruction(&WasmInstruction::End);
@@ -519,7 +519,7 @@ fn emit_obj_set() -> Function {
     func.instruction(&WasmInstruction::LocalGet(13)); // func_idx
     // call_indirect type 12, table 0
     func.instruction(&WasmInstruction::CallIndirect {
-        type_index: 12,
+        type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
         table_index: 0,
     });
     // 恢复 shadow_sp
@@ -698,7 +698,7 @@ fn emit_obj_set() -> Function {
     func.instruction(&WasmInstruction::I32Const(1)); // args_count
     func.instruction(&WasmInstruction::LocalGet(13)); // func_idx
     func.instruction(&WasmInstruction::CallIndirect {
-        type_index: 12,
+        type_index: crate::shared_types::JS_FUNC_TYPE_INDEX,
         table_index: 0,
     });
     // 恢复 shadow_sp
@@ -791,45 +791,18 @@ fn emit_obj_set() -> Function {
     // heap_ptr += 16 + new_capacity * 32（扩容前 new_ptr 已写入 local 8）
     emit_heap_bump_for_object_resize_support(&mut func, 7, 16);
 
-    // 拷贝旧数据到新内存
-    func.instruction(&WasmInstruction::I32Const(0));
-    func.instruction(&WasmInstruction::LocalSet(5)); // copy_offset = 0
-    func.instruction(&WasmInstruction::Block(BlockType::Empty));
-    func.instruction(&WasmInstruction::Loop(BlockType::Empty));
-    // copy_offset >= 12 + num_props * 32?
-    func.instruction(&WasmInstruction::LocalGet(5));
+    // 拷贝旧数据到新内存：memory.copy(dst=new_ptr, src=old_ptr, len=16+num_props*32)
+    func.instruction(&WasmInstruction::LocalGet(8));
+    func.instruction(&WasmInstruction::LocalGet(6));
     func.instruction(&WasmInstruction::LocalGet(4));
     func.instruction(&WasmInstruction::I32Const(32));
     func.instruction(&WasmInstruction::I32Mul);
     func.instruction(&WasmInstruction::I32Const(16));
     func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32GeU);
-    func.instruction(&WasmInstruction::BrIf(1)); // break
-    // new_ptr[copy_offset] = old_ptr[copy_offset] (i32)
-    func.instruction(&WasmInstruction::LocalGet(8));
-    func.instruction(&WasmInstruction::LocalGet(5));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::LocalGet(6));
-    func.instruction(&WasmInstruction::LocalGet(5));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::I32Load(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    func.instruction(&WasmInstruction::I32Store(MemArg {
-        offset: 0,
-        align: 2,
-        memory_index: 0,
-    }));
-    // copy_offset += 4
-    func.instruction(&WasmInstruction::LocalGet(5));
-    func.instruction(&WasmInstruction::I32Const(4));
-    func.instruction(&WasmInstruction::I32Add);
-    func.instruction(&WasmInstruction::LocalSet(5));
-    func.instruction(&WasmInstruction::Br(0));
-    func.instruction(&WasmInstruction::End); // end loop
-    func.instruction(&WasmInstruction::End); // end block
+    func.instruction(&WasmInstruction::MemoryCopy {
+        src_mem: 0,
+        dst_mem: 0,
+    });
     // 更新 handle 表：obj_table[handle_idx] = new_ptr
     func.instruction(&WasmInstruction::GlobalGet(G_OBJ_TABLE_PTR));
     func.instruction(&WasmInstruction::LocalGet(9));

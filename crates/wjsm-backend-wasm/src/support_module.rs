@@ -33,7 +33,7 @@ const TY_TO_INT32: u32 = 10; // (i64) -> i32
 const TY_GET_PROTO: u32 = 3; // (i64) -> i64
 const TY_BOOTSTRAP: u32 = 4; // () -> i64
 #[allow(dead_code)]
-const TY_CALL_INDIRECT: u32 = 12; // (i64, i64, i32, i32) -> i64 — call_indirect / native_call
+const TY_CALL_INDIRECT: u32 = crate::shared_types::JS_FUNC_TYPE_INDEX; // (i64, i64, i32, i32) -> i64
 
 // ── Host function imports ─────────────────────────────────────────────
 // support module 通过 `env` namespace import 它需要的 host 函数。
@@ -999,7 +999,7 @@ fn emit_get_proto_from_ctor() -> Function {
     // 调用 obj_get(ctor, "prototype") — "prototype" 的 name_id 在 support module
     // 是硬编码的 primordial 偏移 236（PRIMORDIAL_PROTOTYPE_OFFSET）
     func.instruction(&WasmInstruction::LocalGet(0));
-    func.instruction(&WasmInstruction::I32Const(236));
+    func.instruction(&WasmInstruction::I32Const(constants::PRIMORDIAL_PROTOTYPE_OFFSET as i32));
     func.instruction(&WasmInstruction::Call(FN_OBJ_GET));
     func.instruction(&WasmInstruction::LocalSet(1));
     // 检查 TAG_OBJECT (0x8)
