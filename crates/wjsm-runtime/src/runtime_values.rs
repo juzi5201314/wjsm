@@ -909,9 +909,7 @@ pub(crate) fn to_boolean(caller: &mut Caller<'_, RuntimeState>, val: i64) -> boo
             let handle = value::decode_runtime_string_handle(val) as usize;
             let strings = caller
                 .data()
-                .runtime_strings
-                .lock()
-                .expect("runtime strings mutex");
+                .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
             return !strings.get(handle).map(|s| s.is_empty()).unwrap_or(true);
         }
         let ptr = value::decode_string_ptr(val);
@@ -925,9 +923,7 @@ pub(crate) fn to_boolean(caller: &mut Caller<'_, RuntimeState>, val: i64) -> boo
         let handle = value::decode_bigint_handle(val) as usize;
         let table = caller
             .data()
-            .bigint_table
-            .lock()
-            .expect("bigint_table mutex");
+            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
         return table
             .get(handle)
             .map(|bi| *bi != num_bigint::BigInt::from(0))
@@ -967,9 +963,7 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
             let handle = value::decode_runtime_string_handle(val) as usize;
             let strings = caller
                 .data()
-                .runtime_strings
-                .lock()
-                .expect("runtime strings mutex");
+                .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
             strings.get(handle).cloned().unwrap_or_default()
         } else {
             read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
@@ -984,9 +978,7 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
         let handle = value::decode_bigint_handle(val) as usize;
         let table = caller
             .data()
-            .bigint_table
-            .lock()
-            .expect("bigint_table mutex");
+            .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(bi) = table.get(handle)
             && let Some(f) = bi.to_f64()
         {
@@ -1004,9 +996,7 @@ pub(crate) fn to_number(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i64 
     if value::is_symbol(val) {
         *caller
             .data()
-            .runtime_error
-            .lock()
-            .expect("runtime error mutex") =
+            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
             Some("TypeError: Cannot convert a Symbol value to a number".to_string());
         return f64::NAN.to_bits() as i64;
     }
@@ -1045,9 +1035,7 @@ pub(crate) fn to_primitive(caller: &mut Caller<'_, RuntimeState>, val: i64) -> i
         // 将字符串存入 runtime_strings
         let mut strings = caller
             .data()
-            .runtime_strings
-            .lock()
-            .expect("runtime strings mutex");
+            .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
         let handle = strings.len() as u32;
         strings.push(s);
         return value::encode_runtime_string_handle(handle);
@@ -1160,9 +1148,7 @@ pub(crate) fn strict_eq(caller: &mut Caller<'_, RuntimeState>, a: i64, b: i64) -
             let b_handle = value::decode_bigint_handle(b) as usize;
             let table = caller
                 .data()
-                .bigint_table
-                .lock()
-                .expect("bigint_table mutex");
+                .bigint_table.lock().unwrap_or_else(|e| e.into_inner());
             let eq = table
                 .get(a_handle)
                 .zip(table.get(b_handle))
@@ -1205,9 +1191,7 @@ pub(crate) fn get_string_value(caller: &mut Caller<'_, RuntimeState>, val: i64) 
         let handle = value::decode_runtime_string_handle(val) as usize;
         let strings = caller
             .data()
-            .runtime_strings
-            .lock()
-            .expect("runtime strings mutex");
+            .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
         strings.get(handle).cloned().unwrap_or_default()
     } else {
         read_string(caller, value::decode_string_ptr(val)).unwrap_or_default()
@@ -1229,7 +1213,7 @@ pub(crate) async fn resolve_and_call_async(
     if value::is_bound(func) {
         let bound_idx = value::decode_bound_idx(func);
         let (target_func, bound_this, bound_args_ref) = {
-            let bound = caller.data().bound_objects.lock().unwrap();
+            let bound = caller.data().bound_objects.lock().unwrap_or_else(|e| e.into_inner());
             let record = &bound[bound_idx as usize];
             (
                 record.target_func,
@@ -1298,7 +1282,7 @@ pub(crate) async fn resolve_callable_and_call_async(
 ) -> i64 {
     let (func_idx, env_obj) = if value::is_closure(callee) {
         let idx = value::decode_closure_idx(callee);
-        let closures = caller.data().closures.lock().unwrap();
+        let closures = caller.data().closures.lock().unwrap_or_else(|e| e.into_inner());
         let entry = &closures[idx as usize];
         (entry.func_idx, entry.env_obj)
     } else if value::is_function(callee) {
@@ -1314,7 +1298,7 @@ pub(crate) async fn resolve_callable_and_call_async(
     } else if value::is_proxy(callee) {
         let handle = value::decode_proxy_handle(callee) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().unwrap();
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -1450,7 +1434,7 @@ pub(crate) fn func_bind_impl(
             .unwrap();
         bound_args.push(i64::from_le_bytes(buf));
     }
-    let mut bound = caller.data().bound_objects.lock().unwrap();
+    let mut bound = caller.data().bound_objects.lock().unwrap_or_else(|e| e.into_inner());
     let idx = bound.len() as u32;
     bound.push(BoundRecord {
         target_func: func,

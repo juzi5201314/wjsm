@@ -287,7 +287,7 @@ pub(crate) async fn reflect_get_prototype_of_impl(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -528,7 +528,7 @@ pub(crate) async fn proxy_own_keys_trap_async(
     }
     let handle = value::decode_proxy_handle(target) as usize;
     let entry = {
-        let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+        let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
         table.get(handle).cloned()
     };
     let Some(entry) = entry else {
@@ -663,9 +663,7 @@ async fn descriptor_enumerable_on_proxy_async(
         let handle = value::decode_proxy_handle(obj) as usize;
         let entry = caller
             .data()
-            .proxy_table
-            .lock()
-            .expect("proxy_table mutex")
+            .proxy_table.lock().unwrap_or_else(|e| e.into_inner())
             .get(handle)
             .cloned();
         if let Some(entry) = entry {
@@ -689,7 +687,7 @@ async fn reflect_get_own_property_descriptor_on_object_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -875,7 +873,7 @@ pub(crate) async fn object_entries_async(caller: &mut Caller<'_, RuntimeState>, 
 fn proxy_type_error(caller: &mut Caller<'_, RuntimeState>, msg: &'static str) -> i64 {
     let msg_val = store_runtime_string(caller, msg.to_string());
     let error_obj = create_error_object(caller, "TypeError", msg_val);
-    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
     let idx = errors.len() as u32;
     errors.push(crate::ErrorEntry {
         name: "TypeError".to_string(),
@@ -900,7 +898,7 @@ pub(crate) fn define_proxy_reflect(
             }
             let handle;
             {
-                let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                let mut table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
                 handle = table.len() as u32;
                 table.push(ProxyEntry {
                     target,
@@ -923,7 +921,7 @@ pub(crate) fn define_proxy_reflect(
                 return proxy_type_error(&mut caller, "TypeError: Proxy handler must be an object");
             }
             let handle = {
-                let mut table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+                let mut table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
                 let handle = table.len() as u32;
                 table.push(ProxyEntry {
                     target,
@@ -934,7 +932,7 @@ pub(crate) fn define_proxy_reflect(
             };
             let proxy_val = value::encode_proxy_handle(handle);
             let revoke_fn = {
-                let mut native_callables = caller.data().native_callables.lock().unwrap();
+                let mut native_callables = caller.data().native_callables.lock().unwrap_or_else(|e| e.into_inner());
                 let idx = native_callables.len() as u32;
                 native_callables.push(NativeCallable::ProxyRevoker {
                     proxy_handle: handle,

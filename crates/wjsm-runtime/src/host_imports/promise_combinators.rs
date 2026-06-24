@@ -62,9 +62,7 @@ pub(crate) fn define_promise_combinators(
                     let elem_handle = value::decode_object_handle(elem) as usize;
                     let mut table = caller
                         .data()
-                        .promise_table
-                        .lock()
-                        .expect("promise table mutex");
+                        .promise_table.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
                         known_promise = true;
                         entry.handled = true; // §27.2.4.1.1 — 标记所有已知 promise 为已处理
@@ -167,9 +165,7 @@ pub(crate) fn define_promise_combinators(
                     {
                         let mut table = caller
                             .data()
-                            .promise_table
-                            .lock()
-                            .expect("promise table mutex");
+                            .promise_table.lock().unwrap_or_else(|e| e.into_inner());
                         if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
                             entry.handled = true; // 标记所有已知 promise 为已处理
                             match entry.state.clone() {
@@ -249,9 +245,7 @@ pub(crate) fn define_promise_combinators(
                     let elem_handle = value::decode_object_handle(elem) as usize;
                     let mut table = caller
                         .data()
-                        .promise_table
-                        .lock()
-                        .expect("promise table mutex");
+                        .promise_table.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
                         entry.handled = true; // 标记所有已知 promise 为已处理
                         match entry.state.clone() {
@@ -377,9 +371,7 @@ pub(crate) fn define_promise_combinators(
                     let elem_handle = value::decode_object_handle(elem) as usize;
                     let mut table = caller
                         .data()
-                        .promise_table
-                        .lock()
-                        .expect("promise table mutex");
+                        .promise_table.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(entry) = promise_entry_mut(&mut table, elem_handle) {
                         known_promise = true;
                         entry.handled = true; // 标记所有已知 promise 为已处理

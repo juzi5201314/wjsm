@@ -33,19 +33,15 @@ pub(crate) fn is_promise_value(state: &RuntimeState, val: i64) -> bool {
         return false;
     }
     let handle = value::decode_object_handle(val) as usize;
-    let table = state.promise_table.lock().expect("promise table mutex");
+    let table = state.promise_table.lock().unwrap_or_else(|e| e.into_inner());
     promise_entry(&table, handle).is_some()
 }
 
 pub(crate) fn create_native_callable(state: &RuntimeState, callable: NativeCallable) -> i64 {
     let mut table = state
-        .native_callables
-        .lock()
-        .expect("native callable table mutex");
+        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
     let mut free_slots = state
-        .native_callable_free_slots
-        .lock()
-        .expect("native callable free slots mutex");
+        .native_callable_free_slots.lock().unwrap_or_else(|e| e.into_inner());
     let handle = if let Some(slot) = free_slots.pop() {
         table[slot as usize] = callable;
         slot
@@ -64,9 +60,7 @@ pub(crate) fn recycle_native_callable(state: &RuntimeState, callable: i64) {
     }
     let idx = value::decode_native_callable_idx(callable) as usize;
     let record = state
-        .native_callables
-        .lock()
-        .expect("native callable table mutex")
+        .native_callables.lock().unwrap_or_else(|e| e.into_inner())
         .get(idx)
         .cloned();
     if matches!(
@@ -76,9 +70,7 @@ pub(crate) fn recycle_native_callable(state: &RuntimeState, callable: i64) {
         return;
     }
     state
-        .native_callable_free_slots
-        .lock()
-        .expect("native callable free slots mutex")
+        .native_callable_free_slots.lock().unwrap_or_else(|e| e.into_inner())
         .push(idx as u32);
 }
 
@@ -127,9 +119,7 @@ pub(crate) fn alloc_promise_from_caller(
         let handle = value::decode_object_handle(promise) as usize;
         let mut table = caller
             .data()
-            .promise_table
-            .lock()
-            .expect("promise table mutex");
+            .promise_table.lock().unwrap_or_else(|e| e.into_inner());
         insert_promise_entry(&mut table, handle, entry);
     }
     promise
@@ -155,7 +145,7 @@ pub(crate) fn new_promise_capability_from_caller(
 
 pub(crate) fn is_promise_settled(state: &RuntimeState, promise: i64) -> bool {
     let handle = raw_promise_handle(promise);
-    let table = state.promise_table.lock().expect("promise table mutex");
+    let table = state.promise_table.lock().unwrap_or_else(|e| e.into_inner());
     promise_entry(&table, handle)
         .map(|entry| !matches!(entry.state, PromiseState::Pending))
         .unwrap_or(true)
@@ -167,7 +157,7 @@ pub(crate) fn queue_promise_reactions(
     value: i64,
     is_rejected: bool,
 ) {
-    let mut queue = state.microtask_queue.lock().expect("microtask queue mutex");
+    let mut queue = state.microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
     for reaction in reactions {
         match reaction.kind {
             PromiseReactionKind::AsyncResume {
@@ -197,7 +187,7 @@ pub(crate) fn queue_promise_reactions(
 pub(crate) fn settle_promise(state: &RuntimeState, promise: i64, settlement: PromiseSettlement) {
     let handle = raw_promise_handle(promise);
     let (reactions, value, is_rejected) = {
-        let mut table = state.promise_table.lock().expect("promise table mutex");
+        let mut table = state.promise_table.lock().unwrap_or_else(|e| e.into_inner());
         let Some(entry) = promise_entry_mut(&mut table, handle) else {
             return;
         };
@@ -213,9 +203,7 @@ pub(crate) fn settle_promise(state: &RuntimeState, promise: i64, settlement: Pro
             PromiseSettlement::Reject(reason) => {
                 if !entry.handled {
                     state
-                        .pending_unhandled_rejections
-                        .lock()
-                        .expect("pending_unhandled_rejections mutex")
+                        .pending_unhandled_rejections.lock().unwrap_or_else(|e| e.into_inner())
                         .insert(handle);
                 }
                 let reactions = std::mem::take(&mut entry.reject_reactions);
@@ -232,7 +220,7 @@ pub(crate) fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
     let source_handle = raw_promise_handle(source);
     let mut queued = None;
     {
-        let mut table = state.promise_table.lock().expect("promise table mutex");
+        let mut table = state.promise_table.lock().unwrap_or_else(|e| e.into_inner());
         let Some(source_entry) = promise_entry_mut(&mut table, source_handle) else {
             return;
         };
@@ -260,7 +248,7 @@ pub(crate) fn adopt_promise(state: &RuntimeState, promise: i64, source: i64) {
         }
     }
     if let Some((reaction_type, argument)) = queued {
-        let mut queue = state.microtask_queue.lock().expect("microtask queue mutex");
+        let mut queue = state.microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
         queue.push_back(Microtask::PromiseReaction {
             promise: target_handle as i64,
             reaction_type,
@@ -300,9 +288,7 @@ pub(crate) fn resolve_promise<C: AsContextMut<Data = RuntimeState> + RuntimeStat
     {
         let mut queue = ctx
             .state_mut()
-            .microtask_queue
-            .lock()
-            .expect("microtask queue mutex");
+            .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
         queue.push_back(Microtask::PromiseResolveThenable {
             promise,
             thenable: resolution,
@@ -341,14 +327,14 @@ pub(crate) fn passive_reaction_settlement(
 }
 
 pub(crate) fn runtime_error_value(state: &RuntimeState, message: String) -> i64 {
-    let mut table = state.runtime_strings.lock().expect("runtime strings mutex");
+    let mut table = state.runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(message);
     value::encode_runtime_string_handle(handle)
 }
 
 pub(crate) fn set_runtime_error(state: &RuntimeState, message: String) {
-    let mut error_lock = state.runtime_error.lock().expect("runtime_error mutex");
+    let mut error_lock = state.runtime_error.lock().unwrap_or_else(|e| e.into_inner());
     if error_lock.is_none() {
         *error_lock = Some(message);
     }
@@ -389,9 +375,7 @@ mod lifecycle_tests {
         let idx2 = value::decode_native_callable_idx(resolve);
         assert_eq!(idx1, idx2);
         let record = state
-            .native_callables
-            .lock()
-            .expect("native callable table mutex")
+            .native_callables.lock().unwrap_or_else(|e| e.into_inner())
             .get(idx1 as usize)
             .cloned();
         assert!(matches!(

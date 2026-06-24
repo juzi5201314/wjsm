@@ -20,7 +20,7 @@ pub(crate) fn is_callable_in_runtime(caller: &mut Caller<'_, RuntimeState>, val:
     if value::is_proxy(val) {
         let handle = value::decode_proxy_handle(val) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry
@@ -39,7 +39,7 @@ pub(crate) fn is_constructor_in_runtime(caller: &mut Caller<'_, RuntimeState>, v
     if value::is_proxy(val) {
         let handle = value::decode_proxy_handle(val) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry
@@ -58,7 +58,7 @@ pub(crate) fn is_extensible_impl(caller: &mut Caller<'_, RuntimeState>, target: 
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -71,9 +71,7 @@ pub(crate) fn is_extensible_impl(caller: &mut Caller<'_, RuntimeState>, target: 
     }
     let set = caller
         .data()
-        .non_extensible_handles
-        .lock()
-        .expect("non_extensible_handles mutex");
+        .non_extensible_handles.lock().unwrap_or_else(|e| e.into_inner());
     !set.contains(&(target as u64))
 }
 
@@ -84,7 +82,7 @@ pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, tar
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -97,9 +95,7 @@ pub(crate) fn prevent_extensions_impl(caller: &mut Caller<'_, RuntimeState>, tar
     }
     let mut set = caller
         .data()
-        .non_extensible_handles
-        .lock()
-        .expect("non_extensible_handles mutex");
+        .non_extensible_handles.lock().unwrap_or_else(|e| e.into_inner());
     set.insert(target as u64);
     true
 }

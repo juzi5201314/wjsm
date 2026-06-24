@@ -15,7 +15,7 @@ pub(crate) fn define_async_fn(
                 value::decode_function_idx(fn_table_idx)
             } else if value::is_closure(fn_table_idx) {
                 let idx = value::decode_closure_idx(fn_table_idx);
-                let closures = caller.data().closures.lock().unwrap();
+                let closures = caller.data().closures.lock().unwrap_or_else(|e| e.into_inner());
                 closures.get(idx as usize).map(|e| e.func_idx).unwrap_or(0)
             } else {
                 nanbox_to_u32(fn_table_idx)
@@ -31,9 +31,7 @@ pub(crate) fn define_async_fn(
             {
                 let mut c_table = caller
                     .data()
-                    .continuation_table
-                    .lock()
-                    .expect("continuation table mutex");
+                    .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = c_table.get_mut(cont_handle as usize) {
                     entry.captured_vars[2] = outer_promise;
                 }
@@ -41,9 +39,7 @@ pub(crate) fn define_async_fn(
 
             let mut queue = caller
                 .data()
-                .microtask_queue
-                .lock()
-                .expect("microtask queue mutex");
+                .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
             queue.push_back(Microtask::AsyncResume {
                 fn_table_idx,
                 continuation: value::encode_object_handle(cont_handle),
@@ -75,7 +71,7 @@ pub(crate) fn define_async_fn(
                 value::decode_function_idx(fn_table_idx)
             } else if value::is_closure(fn_table_idx) {
                 let idx = value::decode_closure_idx(fn_table_idx);
-                let closures = caller.data().closures.lock().unwrap();
+                let closures = caller.data().closures.lock().unwrap_or_else(|e| e.into_inner());
                 closures.get(idx as usize).map(|e| e.func_idx).unwrap_or(0)
             } else {
                 nanbox_to_u32(fn_table_idx)
@@ -86,9 +82,7 @@ pub(crate) fn define_async_fn(
                 let cont_handle = value::decode_object_handle(continuation) as usize;
                 let mut c_table = caller
                     .data()
-                    .continuation_table
-                    .lock()
-                    .expect("continuation table mutex");
+                    .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(entry) = c_table.get_mut(cont_handle) {
                     while entry.captured_vars.len() < 2 {
                         entry.captured_vars.push(value::encode_undefined());
@@ -99,9 +93,7 @@ pub(crate) fn define_async_fn(
             }
             let mut queue = caller
                 .data()
-                .microtask_queue
-                .lock()
-                .expect("microtask queue mutex");
+                .microtask_queue.lock().unwrap_or_else(|e| e.into_inner());
             queue.push_back(Microtask::AsyncResume {
                 fn_table_idx: resolved_fn_idx,
                 continuation,
@@ -126,9 +118,7 @@ pub(crate) fn define_async_fn(
             let cont_fn_idx = {
                 let mut c_table = caller
                     .data()
-                    .continuation_table
-                    .lock()
-                    .expect("continuation table mutex");
+                    .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
                 let Some(entry) = c_table.get_mut(cont_handle) else {
                     return;
                 };
@@ -143,9 +133,7 @@ pub(crate) fn define_async_fn(
             let awaited_handle = value::decode_object_handle(awaited_promise) as usize;
             let mut p_table = caller
                 .data()
-                .promise_table
-                .lock()
-                .expect("promise table mutex");
+                .promise_table.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = promise_entry_mut(&mut p_table, awaited_handle) {
                 // §15.8.1 — await 标记 promise 为已处理
                 entry.handled = true;
@@ -210,7 +198,7 @@ pub(crate) fn define_async_fn(
                 value::decode_function_idx(fn_table_idx)
             } else if value::is_closure(fn_table_idx) {
                 let idx = value::decode_closure_idx(fn_table_idx);
-                let closures = caller.data().closures.lock().unwrap();
+                let closures = caller.data().closures.lock().unwrap_or_else(|e| e.into_inner());
                 closures.get(idx as usize).map(|e| e.func_idx).unwrap_or(0)
             } else {
                 nanbox_to_u32(fn_table_idx)
@@ -240,9 +228,7 @@ pub(crate) fn define_async_fn(
             let actual_slot = nanbox_to_usize(slot);
             let mut table = caller
                 .data()
-                .continuation_table
-                .lock()
-                .expect("continuation table mutex");
+                .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = table.get_mut(handle)
                 && actual_slot < entry.captured_vars.len()
             {
@@ -265,9 +251,7 @@ pub(crate) fn define_async_fn(
             let actual_slot = nanbox_to_usize(slot);
             let table = caller
                 .data()
-                .continuation_table
-                .lock()
-                .expect("continuation table mutex");
+                .continuation_table.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(entry) = table.get(handle)
                 && actual_slot < entry.captured_vars.len()
             {

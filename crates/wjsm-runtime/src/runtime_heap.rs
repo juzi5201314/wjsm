@@ -185,7 +185,7 @@ pub(crate) fn create_error_object(
         String::new()
     };
     {
-        let mut table = caller.data().error_table.lock().expect("error table mutex");
+        let mut table = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
         table.push(ErrorEntry {
             name: error_name.to_string(),
             message: message.clone(),

@@ -15,12 +15,12 @@ pub(crate) fn define_timers_arrays(
                 value::decode_function_idx(func_ref)
             } else if value::is_closure(func_ref) {
                 let idx = value::decode_closure_idx(func_ref) as usize;
-                let closures = caller.data().closures.lock().expect("closures mutex");
+                let closures = caller.data().closures.lock().unwrap_or_else(|e| e.into_inner());
                 closures.get(idx).map(|e| e.func_idx).unwrap_or(0)
             } else {
                 0
             };
-            let mut closures = caller.data().closures.lock().expect("closures mutex");
+            let mut closures = caller.data().closures.lock().unwrap_or_else(|e| e.into_inner());
             let idx = closures.len() as u32;
             closures.push(ClosureEntry { func_idx, env_obj });
             value::encode_closure_idx(idx)
@@ -31,7 +31,7 @@ pub(crate) fn define_timers_arrays(
     let f = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i32 {
-            let closures = caller.data().closures.lock().expect("closures mutex");
+            let closures = caller.data().closures.lock().unwrap_or_else(|e| e.into_inner());
             closures
                 .get(closure_idx as usize)
                 .map(|e| e.func_idx as i32)
@@ -43,7 +43,7 @@ pub(crate) fn define_timers_arrays(
     let f = Func::wrap(
         &mut store,
         |caller: Caller<'_, RuntimeState>, closure_idx: i32| -> i64 {
-            let closures = caller.data().closures.lock().expect("closures mutex");
+            let closures = caller.data().closures.lock().unwrap_or_else(|e| e.into_inner());
             closures
                 .get(closure_idx as usize)
                 .map(|e| e.env_obj)

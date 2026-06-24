@@ -1172,18 +1172,14 @@ pub(crate) fn define_array_object(
         |caller: Caller<'_, RuntimeState>, shadow_sp: i32, args_bytes: i32, stack_end: i32| {
             let mut buffer = caller
                 .data()
-                .output
-                .lock()
-                .expect("runtime output buffer mutex should not be poisoned");
+                .output.lock().unwrap_or_else(|e| e.into_inner());
             writeln!(
                 &mut *buffer,
                 "shadow stack overflow: sp=0x{shadow_sp:x} + {args_bytes} bytes > end=0x{stack_end:x}"
             ).ok();
             *caller
                 .data()
-                .runtime_error
-                .lock()
-                .expect("runtime error mutex") = Some(format!(
+                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(format!(
                 "shadow stack overflow: sp={shadow_sp} + {args_bytes} > end={stack_end}"
             ));
         },
@@ -1232,9 +1228,7 @@ pub(crate) fn define_array_object(
             if !value::is_object(obj) && !value::is_function(obj) && !value::is_array(obj) {
                 *caller
                     .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
+                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: hasOwnProperty called on non-object".to_string());
                 return value::encode_undefined();
             }
@@ -1279,9 +1273,7 @@ pub(crate) fn define_array_object(
             {
                 *caller
                     .data()
-                    .runtime_error
-                    .lock()
-                    .expect("runtime error mutex") =
+                    .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                     Some("TypeError: target is not an object".to_string());
                 return value::encode_undefined();
             }
@@ -1507,9 +1499,7 @@ pub(crate) fn define_array_object(
                         if current_handle == obj_handle {
                             *caller
                                 .data()
-                                .runtime_error
-                                .lock()
-                                .expect("runtime error mutex") =
+                                .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
                                 Some("TypeError: Cyclic __proto__ value".to_string());
                             return obj;
                         }

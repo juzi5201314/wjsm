@@ -713,9 +713,7 @@ impl RuntimeState {
         redirect: RedirectMode,
     ) -> std::result::Result<reqwest::Client, reqwest::Error> {
         let mut clients = self
-            .fetch_http_clients
-            .lock()
-            .expect("fetch_http_clients mutex");
+            .fetch_http_clients.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(client) = clients.get(&redirect) {
             return Ok(client.clone());
         }

@@ -213,7 +213,7 @@ pub(super) fn initialize_host_post_bootstrap(store: &mut Store<RuntimeState>, wa
     }
     let async_iterator_proto = alloc_host_object(store, wasm_env, 2);
     let async_iterator_symbol_async_iterator = {
-        let mut table = store.data().native_callables.lock().expect("native");
+        let mut table = store.data().native_callables.lock().unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(NativeCallable::AsyncIteratorProtoSymbolAsyncIterator);
         value::encode_native_callable_idx(handle)

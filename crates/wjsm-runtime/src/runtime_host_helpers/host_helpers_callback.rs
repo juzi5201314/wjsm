@@ -69,7 +69,7 @@ pub(crate) fn resolve_callback_target_with_env<
         }
         let handle = value::decode_proxy_handle(resolved) as usize;
         let entry = {
-            let table = ctx.state_mut().proxy_table.lock().unwrap();
+            let table = ctx.state_mut().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         let entry = match entry {
@@ -97,7 +97,7 @@ pub(crate) fn resolve_callback_target_with_env<
     }
     if value::is_bound(resolved) {
         let bound_idx = value::decode_bound_idx(resolved) as usize;
-        let bound = ctx.state_mut().bound_objects.lock().unwrap();
+        let bound = ctx.state_mut().bound_objects.lock().unwrap_or_else(|e| e.into_inner());
         let record = &bound[bound_idx];
         return Ok(CallbackTarget::Bound {
             target_func: record.target_func,
@@ -107,7 +107,7 @@ pub(crate) fn resolve_callback_target_with_env<
     }
     if value::is_closure(resolved) {
         let idx = value::decode_closure_idx(resolved) as usize;
-        let closures = ctx.state_mut().closures.lock().unwrap();
+        let closures = ctx.state_mut().closures.lock().unwrap_or_else(|e| e.into_inner());
         let entry = closures
             .get(idx)
             .ok_or_else(|| anyhow::anyhow!("closure index out of range"))?;
@@ -160,9 +160,7 @@ fn dispatch_native_callable_with_env<C: AsContextMut<Data = RuntimeState> + Runt
     let record = {
         let table = ctx
             .state_mut()
-            .native_callables
-            .lock()
-            .expect("native callable table mutex");
+            .native_callables.lock().unwrap_or_else(|e| e.into_inner());
         table.get(idx).cloned()
     }?;
     let argument = args
@@ -175,7 +173,7 @@ fn dispatch_native_callable_with_env<C: AsContextMut<Data = RuntimeState> + Runt
             already_resolved,
             kind,
         } => {
-            let mut already = already_resolved.lock().expect("promise resolver mutex");
+            let mut already = already_resolved.lock().unwrap_or_else(|e| e.into_inner());
             if *already {
                 return Some(value::encode_undefined());
             }

@@ -275,7 +275,7 @@ pub(crate) async fn proxy_or_target_get_prototype_of_impl_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -363,7 +363,7 @@ pub(crate) async fn proxy_or_target_is_extensible_impl_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -420,7 +420,7 @@ pub(crate) async fn proxy_or_target_prevent_extensions_impl_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -509,7 +509,7 @@ async fn define_property_on_target_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         let entry = match entry {
@@ -639,7 +639,7 @@ pub(crate) async fn reflect_get_impl_with_receiver_async(
     if value::is_proxy(target) {
         let handle = value::decode_proxy_handle(target) as usize;
         let entry = {
-            let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+            let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
             table.get(handle).cloned()
         };
         if let Some(entry) = entry {
@@ -818,9 +818,7 @@ pub(crate) fn alloc_promise(caller: &mut Caller<'_, RuntimeState>, entry: Promis
         let handle = value::decode_object_handle(promise) as usize;
         let mut table = caller
             .data()
-            .promise_table
-            .lock()
-            .expect("promise table mutex");
+            .promise_table.lock().unwrap_or_else(|e| e.into_inner());
         insert_promise_entry(&mut table, handle, entry);
     }
     promise

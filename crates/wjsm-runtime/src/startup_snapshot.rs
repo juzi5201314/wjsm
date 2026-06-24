@@ -106,9 +106,7 @@ pub(crate) fn capture_startup_snapshot(
     let runtime_strings: Vec<String> = {
         let strings = store
             .data()
-            .runtime_strings
-            .lock()
-            .expect("runtime strings mutex");
+            .runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
         strings.clone()
     };
 
@@ -116,9 +114,7 @@ pub(crate) fn capture_startup_snapshot(
     let (native_callables, native_callable_methods): (Vec<SnapshotNativeCallable>, Vec<u8>) = {
         let table = store
             .data()
-            .native_callables
-            .lock()
-            .expect("native callables mutex");
+            .native_callables.lock().unwrap_or_else(|e| e.into_inner());
         let mut ncs = Vec::with_capacity(table.len());
         let mut methods = Vec::with_capacity(table.len());
         for nc in table.iter() {
@@ -210,8 +206,8 @@ pub(crate) fn reset_primordial_heap_before_restore(
     let _ = env.object_proto_handle.set(&mut *store, Val::I32(-1));
 
     let state = store.data_mut();
-    state.runtime_strings.lock().expect("runtime strings").clear();
-    state.native_callables.lock().expect("native callables").clear();
+    state.runtime_strings.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    state.native_callables.lock().unwrap_or_else(|e| e.into_inner()).clear();
     state.async_iterator_prototype = value::encode_undefined();
     state.async_gen_prototype = value::encode_undefined();
     state
@@ -230,8 +226,8 @@ fn assert_excluded_tables_clean(store: &Store<crate::RuntimeState>) -> Result<()
         };
     }
     {
-        let t = data.timers.lock().expect("timers");
-        let c = data.cancelled_timers.lock().expect("ctimers");
+        let t = data.timers.lock().unwrap_or_else(|e| e.into_inner());
+        let c = data.cancelled_timers.lock().unwrap_or_else(|e| e.into_inner());
         if !t.is_empty() {
             bail!("capture: timers not empty ({} entries)", t.len());
         }
@@ -239,98 +235,96 @@ fn assert_excluded_tables_clean(store: &Store<crate::RuntimeState>) -> Result<()
             bail!("capture: cancelled_timers not empty");
         }
     }
-    check_empty!(*data.microtask_queue.lock().expect("m"), "microtask_queue");
-    check_empty!(*data.promise_table.lock().expect("p"), "promise_table");
+    check_empty!(*data.microtask_queue.lock().unwrap_or_else(|e| e.into_inner()), "microtask_queue");
+    check_empty!(*data.promise_table.lock().unwrap_or_else(|e| e.into_inner()), "promise_table");
     check_empty!(
-        *data.continuation_table.lock().expect("c"),
+        *data.continuation_table.lock().unwrap_or_else(|e| e.into_inner()),
         "continuation_table"
     );
     check_empty!(
-        *data.async_generator_table.lock().expect("ag"),
+        *data.async_generator_table.lock().unwrap_or_else(|e| e.into_inner()),
         "async_generator_table"
     );
-    check_empty!(*data.error_table.lock().expect("e"), "error_table");
-    check_empty!(*data.map_table.lock().expect("map"), "map_table");
-    check_empty!(*data.set_table.lock().expect("set"), "set_table");
-    check_empty!(*data.weakmap_table.lock().expect("wm"), "weakmap_table");
-    check_empty!(*data.weakset_table.lock().expect("ws"), "weakset_table");
-    check_empty!(*data.weakref_table.lock().expect("wr"), "weakref_table");
+    check_empty!(*data.error_table.lock().unwrap_or_else(|e| e.into_inner()), "error_table");
+    check_empty!(*data.map_table.lock().unwrap_or_else(|e| e.into_inner()), "map_table");
+    check_empty!(*data.set_table.lock().unwrap_or_else(|e| e.into_inner()), "set_table");
+    check_empty!(*data.weakmap_table.lock().unwrap_or_else(|e| e.into_inner()), "weakmap_table");
+    check_empty!(*data.weakset_table.lock().unwrap_or_else(|e| e.into_inner()), "weakset_table");
+    check_empty!(*data.weakref_table.lock().unwrap_or_else(|e| e.into_inner()), "weakref_table");
     check_empty!(
-        *data.finalization_registry_table.lock().expect("fr"),
+        *data.finalization_registry_table.lock().unwrap_or_else(|e| e.into_inner()),
         "finalization_registry"
     );
-    check_empty!(*data.proxy_table.lock().expect("px"), "proxy_table");
+    check_empty!(*data.proxy_table.lock().unwrap_or_else(|e| e.into_inner()), "proxy_table");
     check_empty!(
-        *data.arraybuffer_table.lock().expect("ab"),
+        *data.arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner()),
         "arraybuffer_table"
     );
-    check_empty!(*data.dataview_table.lock().expect("dv"), "dataview_table");
+    check_empty!(*data.dataview_table.lock().unwrap_or_else(|e| e.into_inner()), "dataview_table");
     check_empty!(
-        *data.typedarray_table.lock().expect("ta"),
+        *data.typedarray_table.lock().unwrap_or_else(|e| e.into_inner()),
         "typedarray_table"
     );
-    check_empty!(*data.headers_table.lock().expect("hdr"), "headers_table");
+    check_empty!(*data.headers_table.lock().unwrap_or_else(|e| e.into_inner()), "headers_table");
     check_empty!(
-        *data.fetch_response_table.lock().expect("fr"),
+        *data.fetch_response_table.lock().unwrap_or_else(|e| e.into_inner()),
         "fetch_response_table"
     );
     check_empty!(
-        *data.fetch_request_table.lock().expect("frq"),
+        *data.fetch_request_table.lock().unwrap_or_else(|e| e.into_inner()),
         "fetch_request_table"
     );
     check_empty!(
-        *data.abort_signal_table.lock().expect("as"),
+        *data.abort_signal_table.lock().unwrap_or_else(|e| e.into_inner()),
         "abort_signal_table"
     );
     check_empty!(
-        *data.http_response_table.lock().expect("http"),
+        *data.http_response_table.lock().unwrap_or_else(|e| e.into_inner()),
         "http_response_table"
     );
     check_empty!(
-        *data.readable_stream_table.lock().expect("rs"),
+        *data.readable_stream_table.lock().unwrap_or_else(|e| e.into_inner()),
         "readable_stream_table"
     );
-    check_empty!(*data.reader_table.lock().expect("rdr"), "reader_table");
+    check_empty!(*data.reader_table.lock().unwrap_or_else(|e| e.into_inner()), "reader_table");
     check_empty!(
-        *data.stream_controller_table.lock().expect("ctrl"),
+        *data.stream_controller_table.lock().unwrap_or_else(|e| e.into_inner()),
         "stream_controller_table"
     );
     check_empty!(
-        *data.byob_request_table.lock().expect("byob"),
+        *data.byob_request_table.lock().unwrap_or_else(|e| e.into_inner()),
         "byob_request_table"
     );
     check_empty!(
-        *data.writable_stream_table.lock().expect("ws"),
+        *data.writable_stream_table.lock().unwrap_or_else(|e| e.into_inner()),
         "writable_stream_table"
     );
-    check_empty!(*data.writer_table.lock().expect("wrt"), "writer_table");
+    check_empty!(*data.writer_table.lock().unwrap_or_else(|e| e.into_inner()), "writer_table");
     check_empty!(
-        *data.transform_stream_table.lock().expect("ts"),
+        *data.transform_stream_table.lock().unwrap_or_else(|e| e.into_inner()),
         "transform_stream_table"
     );
     {
-        let ec = data.eval_cache.lock().expect("eval_cache");
+        let ec = data.eval_cache.lock().unwrap_or_else(|e| e.into_inner());
         if !ec.is_empty() {
             bail!("capture: eval_cache not empty ({} entries)", ec.len());
         }
     }
     {
-        let cc = data.combinator_contexts.lock().expect("cc");
+        let cc = data.combinator_contexts.lock().unwrap_or_else(|e| e.into_inner());
         if !cc.is_empty() {
             bail!("capture: combinator_contexts not empty");
         }
     }
     {
-        let afs = data.async_from_sync_iterators.lock().expect("afs");
+        let afs = data.async_from_sync_iterators.lock().unwrap_or_else(|e| e.into_inner());
         if !afs.is_empty() {
             bail!("capture: async_from_sync_iterators not empty");
         }
     }
     {
         let pcc = data
-            .pending_cleanup_callbacks
-            .lock()
-            .expect("pending_cleanup_callbacks");
+            .pending_cleanup_callbacks.lock().unwrap_or_else(|e| e.into_inner());
         if !pcc.is_empty() {
             bail!(
                 "capture: pending_cleanup_callbacks not empty ({} entries)",
@@ -482,12 +476,12 @@ pub(crate) fn restore_startup_snapshot(
     // 重建 RuntimeState
     {
         let state = store.data_mut();
-        *state.runtime_strings.lock().expect("runtime strings") = snapshot
+        *state.runtime_strings.lock().unwrap_or_else(|e| e.into_inner()) = snapshot
             .runtime_strings
             .iter()
             .map(|s| s.to_string())
             .collect();
-        let mut ncs = state.native_callables.lock().expect("native");
+        let mut ncs = state.native_callables.lock().unwrap_or_else(|e| e.into_inner());
         ncs.clear();
         for (i, snap_nc) in snapshot.native_callables.iter().enumerate() {
             let method = snapshot.native_callable_methods.get(i).copied().unwrap_or(0);

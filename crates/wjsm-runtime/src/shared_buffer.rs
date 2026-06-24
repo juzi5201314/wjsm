@@ -223,7 +223,7 @@ pub(crate) fn materialize_shared_array_buffer_by_handle(
     shared: &Arc<SharedRuntimeState>,
     handle: u32,
 ) -> i64 {
-    let table = shared.sab_table.lock().expect("sab_table mutex");
+    let table = shared.sab_table.lock().unwrap_or_else(|e| e.into_inner());
     let Some(entry) = table.get(handle as usize) else {
         return value::encode_undefined();
     };
@@ -293,7 +293,7 @@ pub(crate) fn construct_shared_array_buffer(
     let max_observable = entry.max_byte_length();
 
     let handle = {
-        let mut table = shared.sab_table.lock().expect("sab_table mutex");
+        let mut table = shared.sab_table.lock().unwrap_or_else(|e| e.into_inner());
         table.push(entry);
         (table.len() - 1) as u32
     };
@@ -365,7 +365,7 @@ pub(crate) fn shared_array_buffer_grow(
         Some(s) => s,
         None => return value::encode_undefined(),
     };
-    let mut table = shared.sab_table.lock().expect("sab_table mutex");
+    let mut table = shared.sab_table.lock().unwrap_or_else(|e| e.into_inner());
     let Some(entry) = table.get_mut(handle as usize) else {
         set_runtime_error(
             caller.data(),
@@ -460,7 +460,7 @@ pub(crate) fn shared_array_buffer_slice(
         max_byte_length: None,
     };
     let new_handle = {
-        let mut table = shared.sab_table.lock().expect("sab_table mutex");
+        let mut table = shared.sab_table.lock().unwrap_or_else(|e| e.into_inner());
         table.push(new_entry);
         (table.len() - 1) as u32
     };
@@ -502,7 +502,7 @@ pub(crate) fn enter_waiter(
         deadline,
         promise,
     };
-    let mut lists = shared.waiter_lists.lock().expect("waiter_lists lock");
+    let mut lists = shared.waiter_lists.lock().unwrap_or_else(|e| e.into_inner());
     let list = lists
         .entry((sab_handle, byte_offset))
         .or_insert_with(|| WaiterList {
@@ -519,7 +519,7 @@ pub(crate) fn notify_waiters_with_promises(
     byte_offset: u32,
     count: u32,
 ) -> (u32, Vec<i64>) {
-    let mut lists = shared.waiter_lists.lock().expect("waiter_lists lock");
+    let mut lists = shared.waiter_lists.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(list) = lists.get_mut(&(sab_handle, byte_offset)) {
         let mut woken = 0u32;
         let mut ps = Vec::new();
@@ -549,7 +549,7 @@ pub(crate) fn remove_waiter(
     byte_offset: u32,
     notified: &Arc<AtomicBool>,
 ) {
-    let mut lists = shared.waiter_lists.lock().expect("waiter_lists lock");
+    let mut lists = shared.waiter_lists.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(list) = lists.get_mut(&(sab_handle, byte_offset)) {
         list.waiters.retain(|w| !Arc::ptr_eq(&w.notified, notified));
     }

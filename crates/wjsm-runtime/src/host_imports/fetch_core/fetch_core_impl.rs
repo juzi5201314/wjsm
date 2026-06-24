@@ -5,15 +5,11 @@ pub(crate) fn push_native_callable(
 ) -> u32 {
     let mut table = caller
         .data()
-        .native_callables
-        .lock()
-        .expect("native_callables mutex");
+        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
     // Prefer free slot if available
     if let Some(free) = caller
         .data()
-        .native_callable_free_slots
-        .lock()
-        .expect("free slots mutex")
+        .native_callable_free_slots.lock().unwrap_or_else(|e| e.into_inner())
         .pop()
     {
         table[free as usize] = callable;
@@ -179,9 +175,7 @@ pub(crate) fn call_response_method_from_caller(
     ) = {
         let mut table = caller
             .data()
-            .fetch_response_table
-            .lock()
-            .expect("fetch_response_table mutex");
+            .fetch_response_table.lock().unwrap_or_else(|e| e.into_inner());
         let entry = table.get_mut(handle as usize)?;
         let is_consuming = matches!(
             kind,
@@ -386,9 +380,7 @@ pub(crate) fn resolve_fetch_request_params(
             let copied = {
                 let table = caller
                     .data()
-                    .fetch_request_table
-                    .lock()
-                    .expect("fetch_request_table mutex");
+                    .fetch_request_table.lock().unwrap_or_else(|e| e.into_inner());
                 table.get(request_handle as usize).map(|entry| {
                     (
                         entry.method.clone(),
@@ -713,9 +705,7 @@ pub(crate) fn create_arraybuffer_with_bytes(
     let ab = alloc_host_object(caller, &env, 1);
     let mut ab_table = caller
         .data()
-        .arraybuffer_table
-        .lock()
-        .expect("arraybuffer_table mutex");
+        .arraybuffer_table.lock().unwrap_or_else(|e| e.into_inner());
     let ab_handle = ab_table.len() as u32;
     ab_table.push(ArrayBufferEntry {
         data: bytes.to_vec(),
@@ -747,7 +737,7 @@ pub(crate) fn alloc_type_error_from_caller(
 
 fn type_error_exception(caller: &mut Caller<'_, RuntimeState>, message: &str) -> i64 {
     let error_obj = alloc_type_error_from_caller(caller, message);
-    let mut errors = caller.data().error_table.lock().expect("error table mutex");
+    let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
     let idx = errors.len() as u32;
     errors.push(ErrorEntry {
         name: "TypeError".to_string(),
@@ -858,9 +848,7 @@ fn append_header_pair(
     }
     let mut table = caller
         .data()
-        .headers_table
-        .lock()
-        .expect("headers_table mutex");
+        .headers_table.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = table.get_mut(handle as usize) {
         entry.pairs.push((name.to_ascii_lowercase(), value_raw));
     }
@@ -882,9 +870,7 @@ fn set_header_pair(
     let lower = name.to_ascii_lowercase();
     let mut table = caller
         .data()
-        .headers_table
-        .lock()
-        .expect("headers_table mutex");
+        .headers_table.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = table.get_mut(handle as usize) {
         entry.pairs.retain(|(key, _)| key != &lower);
         entry.pairs.push((lower, value_raw));
@@ -896,9 +882,7 @@ fn clone_headers_handle(caller: &mut Caller<'_, RuntimeState>, source: u32) -> u
     let pairs = {
         let table = caller
             .data()
-            .headers_table
-            .lock()
-            .expect("headers_table mutex");
+            .headers_table.lock().unwrap_or_else(|e| e.into_inner());
         table
             .get(source as usize)
             .map(|entry| entry.pairs.clone())
@@ -906,9 +890,7 @@ fn clone_headers_handle(caller: &mut Caller<'_, RuntimeState>, source: u32) -> u
     };
     let mut table = caller
         .data()
-        .headers_table
-        .lock()
-        .expect("headers_table mutex");
+        .headers_table.lock().unwrap_or_else(|e| e.into_inner());
     let handle = table.len() as u32;
     table.push(HeadersEntry {
         pairs,
@@ -921,9 +903,7 @@ fn copy_headers_into(caller: &mut Caller<'_, RuntimeState>, target: u32, source:
     let pairs = {
         let table = caller
             .data()
-            .headers_table
-            .lock()
-            .expect("headers_table mutex");
+            .headers_table.lock().unwrap_or_else(|e| e.into_inner());
         table
             .get(source as usize)
             .map(|entry| entry.pairs.clone())
@@ -931,9 +911,7 @@ fn copy_headers_into(caller: &mut Caller<'_, RuntimeState>, target: u32, source:
     };
     let mut table = caller
         .data()
-        .headers_table
-        .lock()
-        .expect("headers_table mutex");
+        .headers_table.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = table.get_mut(target as usize) {
         entry.pairs.extend(pairs);
     }
@@ -1100,9 +1078,7 @@ pub(crate) fn extract_string_from_value(caller: &mut Caller<'_, RuntimeState>, v
         let handle = value::decode_runtime_string_handle(val) as usize;
         caller
             .data()
-            .runtime_strings
-            .lock()
-            .expect("runtime strings mutex")
+            .runtime_strings.lock().unwrap_or_else(|e| e.into_inner())
             .get(handle)
             .cloned()
             .unwrap_or_default()
@@ -1136,9 +1112,7 @@ pub(crate) fn construct_abort_controller(
     let signal_handle = {
         let mut table = caller
             .data()
-            .abort_signal_table
-            .lock()
-            .expect("abort_signal mutex");
+            .abort_signal_table.lock().unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(AbortSignalEntry {
             aborted: false,
@@ -1177,9 +1151,7 @@ pub(crate) fn abort_controller_abort(
 ) -> Option<i64> {
     let mut table = caller
         .data()
-        .abort_signal_table
-        .lock()
-        .expect("abort_signal mutex");
+        .abort_signal_table.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(entry) = table.get_mut(signal_handle as usize) {
         entry.aborted = true;
         entry.reason = args.first().copied();

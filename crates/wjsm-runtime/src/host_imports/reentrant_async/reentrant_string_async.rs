@@ -176,7 +176,7 @@ pub(crate) async fn string_replace_async_body(
 
     if value::is_regexp(search) {
         let entry = {
-            let table = caller.data().regex_table.lock().unwrap();
+            let table = caller.data().regex_table.lock().unwrap_or_else(|e| e.into_inner());
             match table.get(value::decode_regexp_handle(search) as usize) {
                 Some(e) => e.clone(),
                 None => return store_runtime_string(&caller, s),

@@ -116,9 +116,7 @@ pub(crate) fn create_unmapped_arguments_object(
     let callee_getter = {
         let mut table = caller
             .data()
-            .native_callables
-            .lock()
-            .expect("native callable table mutex");
+            .native_callables.lock().unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(crate::NativeCallable::ArgumentsStrictCalleeGetter);
         value::encode_native_callable_idx(handle)

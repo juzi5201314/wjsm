@@ -16,9 +16,7 @@ fn is_native_array_constructor(caller: &mut Caller<'_, RuntimeState>, constructo
     let idx = value::decode_native_callable_idx(constructor) as usize;
     let table = caller
         .data()
-        .native_callables
-        .lock()
-        .expect("native callable table mutex");
+        .native_callables.lock().unwrap_or_else(|e| e.into_inner());
     matches!(
         table.get(idx),
         Some(NativeCallable::ArrayConstructor)

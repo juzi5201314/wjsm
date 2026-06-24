@@ -25,7 +25,7 @@ pub(crate) fn get_method_by_name_id(
             "method is not callable".to_string(),
         );
         let error_obj = crate::runtime_heap::create_error_object(caller, "TypeError", msg_val);
-        let mut errors = caller.data().error_table.lock().expect("error table mutex");
+        let mut errors = caller.data().error_table.lock().unwrap_or_else(|e| e.into_inner());
         let idx = errors.len() as u32;
         errors.push(crate::ErrorEntry {
             name: "TypeError".to_string(),
@@ -57,7 +57,7 @@ fn get_v_by_name_id(caller: &mut Caller<'_, RuntimeState>, value_val: i64, name_
 /// Proxy [[Get]] 的 name_id 版本
 fn get_v_proxy_by_name_id(caller: &mut Caller<'_, RuntimeState>, proxy: i64, _name_id: u32) -> i64 {
     // 简化实现：直接查找 target
-    let table = caller.data().proxy_table.lock().expect("proxy_table mutex");
+    let table = caller.data().proxy_table.lock().unwrap_or_else(|e| e.into_inner());
     let handle = value::decode_proxy_handle(proxy) as usize;
     if handle >= table.len() {
         return value::encode_undefined();

@@ -46,7 +46,7 @@ pub(crate) fn perform_data_url_fetch(
     };
     let resp_headers = create_empty_headers(caller);
     {
-        let mut htable = caller.data().headers_table.lock().expect("headers mutex");
+        let mut htable = caller.data().headers_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = htable.get_mut(resp_headers as usize) {
             entry.pairs.push(("content-type".to_string(), mediatype));
         }
@@ -94,7 +94,7 @@ pub(crate) async fn perform_http_fetch(
 
     // 3. 添加 headers（限制锁作用域）
     {
-        let headers = caller.data().headers_table.lock().expect("headers mutex");
+        let headers = caller.data().headers_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = headers.get(headers_handle as usize) {
             for (name, value) in &entry.pairs {
                 builder = builder.header(name.as_str(), value.as_str());
@@ -133,7 +133,7 @@ pub(crate) async fn perform_http_fetch(
     // 8. 提取响应 headers
     let resp_headers = create_empty_headers(caller);
     {
-        let mut htable = caller.data().headers_table.lock().expect("headers mutex");
+        let mut htable = caller.data().headers_table.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(entry) = htable.get_mut(resp_headers as usize) {
             for (key, value) in response.headers() {
                 entry.pairs.push((
@@ -148,9 +148,7 @@ pub(crate) async fn perform_http_fetch(
     let http_handle = {
         let mut table = caller
             .data()
-            .http_response_table
-            .lock()
-            .expect("http_response mutex");
+            .http_response_table.lock().unwrap_or_else(|e| e.into_inner());
         let handle = table.len() as u32;
         table.push(HttpResponseEntry {
             response: Some(response),
@@ -179,9 +177,7 @@ pub(crate) async fn perform_http_fetch(
 
 pub(crate) fn is_signal_aborted(state: &RuntimeState, handle: u32) -> bool {
     state
-        .abort_signal_table
-        .lock()
-        .expect("abort_signal mutex")
+        .abort_signal_table.lock().unwrap_or_else(|e| e.into_inner())
         .get(handle as usize)
         .map(|e| e.aborted)
         .unwrap_or(false)
