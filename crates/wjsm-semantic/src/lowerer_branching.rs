@@ -441,6 +441,21 @@ impl Lowerer {
             swc_ast::Expr::Lit(swc_ast::Lit::Null(_)) => {
                 Ok(self.module.add_constant(Constant::Null))
             }
+            swc_ast::Expr::Unary(unary) => match unary.op {
+                swc_ast::UnaryOp::Minus => {
+                    let swc_ast::Expr::Lit(swc_ast::Lit::Num(num)) = unary.arg.as_ref() else {
+                        return Err(self.error(expr.span(), "switch case must be a literal"));
+                    };
+                    Ok(self.module.add_constant(Constant::Number(-num.value)))
+                }
+                swc_ast::UnaryOp::Plus => {
+                    let swc_ast::Expr::Lit(swc_ast::Lit::Num(num)) = unary.arg.as_ref() else {
+                        return Err(self.error(expr.span(), "switch case must be a literal"));
+                    };
+                    Ok(self.module.add_constant(Constant::Number(num.value)))
+                }
+                _ => Err(self.error(expr.span(), "switch case must be a literal")),
+            },
             _ => Err(self.error(expr.span(), "switch case must be a literal")),
         }
     }
