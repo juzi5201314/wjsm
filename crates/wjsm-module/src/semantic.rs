@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use crate::graph::ModuleGraph;
 use crate::resolver::ExportEntry;
-use wjsm_ir::{ImportBinding, ModuleId};
+use wjsm_ir::{ImportBinding, ModuleId, ReExportBinding};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModuleLinkResult {
@@ -14,6 +14,8 @@ pub struct ModuleLinkResult {
     /// 动态 import() specifier 映射：module_id → [(specifier, 目标 ModuleId)]
     /// 供语义层构建 (module_id, specifier) → ModuleId 的查找表
     pub dynamic_import_specifiers: HashMap<ModuleId, Vec<(String, ModuleId)>>,
+    /// 重导出声明：module_id → ReExportBinding 列表
+    pub re_export_map: HashMap<ModuleId, Vec<ReExportBinding>>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,13 +153,91 @@ pub fn analyze_module_links(graph: &ModuleGraph) -> Result<ModuleLinkResult> {
         .map(|(module_id, collected)| (module_id, collected.names))
         .collect();
 
+
+    let mut re_export_map: HashMap<ModuleId, Vec<ReExportBinding>> = HashMap::new();
+    for module_id in graph.all_module_ids() {
+        let node = graph
+            .get_module(module_id)
+            .expect("module id from iterator should always exist");
+        let mut re_exports = Vec::new();
+        for export in &node.exports {
+            match export {
+                ExportEntry::NamedReExport {
+                    local,
+                    exported,
+                    source,
+                } if local != "*" => {
+                    let source_module = resolve_reexport_source_module(graph, node, source)?;
+                    re_exports.push(ReExportBinding {
+                        source_module,
+                        local_name: Some(local.clone()),
+                        exported_name: Some(exported.clone()),
+                    });
+                }
+                ExportEntry::All { source } => {
+                    let source_module = resolve_reexport_source_module(graph, node, source)?;
+                    re_exports.push(ReExportBinding {
+                        source_module,
+                        local_name: None,
+                        exported_name: None,
+                    });
+                }
+                _ => {}
+            }
+        }
+        if !re_exports.is_empty() {
+            re_export_map.insert(module_id, re_exports);
+        }
+    }
+
+
     Ok(ModuleLinkResult {
         import_map,
         export_names,
         dynamic_import_targets: collect_dynamic_import_targets(graph),
         dynamic_import_specifiers: collect_dynamic_import_specifiers(graph),
+        re_export_map,
     })
 }
+
+fn resolve_reexport_source_module(
+    graph: &ModuleGraph,
+    node: &crate::graph::GraphNode,
+    source: &str,
+) -> Result<ModuleId> {
+    if let Some((dep_id, _)) = node
+        .imports
+        .iter()
+        .find(|(_, import)| import.specifier == source)
+    {
+        return Ok(*dep_id);
+    }
+    let dep_path = crate::resolver::ModuleResolver::resolve_path(source, &node.path)?;
+    if let Some(dep_id) = node.imports.iter().find_map(|(id, import)| {
+        crate::resolver::ModuleResolver::resolve_path(&import.specifier, &node.path)
+            .ok()
+            .filter(|p| p.as_path() == dep_path.as_path())
+            .map(|_| *id)
+    }) {
+        return Ok(dep_id);
+    }
+    graph
+        .all_module_ids()
+        .find(|id| {
+            graph
+                .get_module(*id)
+                .map(|n| n.path.as_path() == dep_path.as_path())
+                .unwrap_or(false)
+        })
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "re-export source '{}' not found for module '{}'",
+                source,
+                node.path.display()
+            )
+        })
+}
+
 
 /// 收集动态 import() 目标映射
 fn collect_dynamic_import_targets(graph: &ModuleGraph) -> HashMap<ModuleId, Vec<ModuleId>> {
@@ -400,4 +480,36 @@ mod tests {
             "module with no imports/exports should link successfully"
         );
     }
+
+    #[test]
+    fn re_export_fixture_resolves_source_module() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("fixtures/modules/re_export");
+        if !root.join("main.js").exists() {
+            return;
+        }
+        let graph = ModuleGraph::build("./main.js", &root).expect("graph");
+        let link = analyze_module_links(&graph).expect("link");
+        let re_path = root.join("re.js");
+        let re_id = graph
+            .all_module_ids()
+            .find(|id| graph.get_module(*id).map(|n| n.path.as_path()) == Some(re_path.as_path()))
+            .expect("re module");
+        let bindings = link
+            .re_export_map
+            .get(&re_id)
+            .expect("re should have re-exports");
+        assert!(
+            bindings.iter().any(|b| {
+                b.local_name.as_deref() == Some("value")
+                    && b.exported_name.as_deref() == Some("x")
+            }),
+            "expected value as x re-export, got {bindings:?}"
+        );
+    }
+
 }

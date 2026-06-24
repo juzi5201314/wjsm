@@ -43,6 +43,7 @@ impl ModuleBundler {
             &link_result.dynamic_import_targets,
             &link_result.export_names,
             &link_result.dynamic_import_specifiers,
+            &link_result.re_export_map,
         )
         .with_context(|| "Failed to lower modules")
     }
@@ -108,4 +109,25 @@ mod tests {
             "output should be valid WASM binary"
         );
     }
+
+    #[test]
+    fn lower_bundle_re_export_chain() {
+        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("fixtures/modules/re_export");
+        if !fixtures_dir.exists() {
+            return;
+        }
+        let bundler = ModuleBundler::new(&fixtures_dir).expect("bundler");
+        let result = bundler.lower_bundle("./main.js");
+        assert!(
+            result.is_ok(),
+            "re_export lower should succeed: {:?}",
+            result.err()
+        );
+    }
+
 }
