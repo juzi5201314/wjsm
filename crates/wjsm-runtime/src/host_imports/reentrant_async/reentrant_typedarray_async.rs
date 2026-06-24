@@ -347,6 +347,9 @@ async fn typedarray_proto_reduce_right_async(
     } else {
         length as i32 - 2
     };
+    if end < 0 {
+        return acc;
+    }
     for i in (0..=end as u32).rev() {
         let elem = if is_shared {
             sab_read(caller, buf_handle, byte_offset, elem_size, element_kind, i)
