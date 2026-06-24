@@ -1,4 +1,4 @@
 exit_code: 1
 --- stdout ---
 --- stderr ---
-Error: Failed to build module graph: Cannot find module './nonexistent.js' from 'modules/cjs_require_error/main.js'. Tried: ["modules/cjs_require_error/./nonexistent.js"]
+Error: Failed to lower modules: Failed to build module graph: Cannot find module './nonexistent.js' from 'modules/cjs_require_error/main.js'. Tried: ["modules/cjs_require_error/./nonexistent.js"]
