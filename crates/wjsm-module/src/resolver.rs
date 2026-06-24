@@ -141,6 +141,9 @@ impl ModuleResolver {
         let ast = wjsm_parser::parse_module_with_filename(&source, &path.to_string_lossy())
             .with_context(|| format!("Failed to parse module: {}", path.display()))?;
 
+        Self::validate_typescript_module_syntax(&ast, &path)?;
+
+
         // 检测并转换 CommonJS 模块
         let is_cjs = crate::cjs_transform::is_commonjs_module(&ast);
         let ast = if is_cjs {
@@ -680,6 +683,41 @@ impl ModuleResolver {
             }
         }
     }
+    /// 检测 TypeScript 特有模块语法；不支持时返回明确错误（避免静默丢弃）
+    fn validate_typescript_module_syntax(module: &ast::Module, path: &Path) -> Result<()> {
+        for item in &module.body {
+            if let ast::ModuleItem::ModuleDecl(decl) = item {
+                match decl {
+                    ast::ModuleDecl::TsImportEquals(ts_import) => {
+                        let local = ts_import.id.sym.to_string();
+                        bail!(
+                            "TypeScript `import {local} = ...` (import assignment) is not supported in module bundling ({}); \
+                             use ESM `import` or CommonJS `require()` instead",
+                            path.display()
+                        );
+                    }
+                    ast::ModuleDecl::TsExportAssignment(_) => {
+                        bail!(
+                            "TypeScript `export = ...` is not supported in module bundling ({}); \
+                             use `export default` instead",
+                            path.display()
+                        );
+                    }
+                    ast::ModuleDecl::TsNamespaceExport(ns_export) => {
+                        let name = ns_export.id.sym.to_string();
+                        bail!(
+                            "TypeScript `export as namespace {name}` is not supported in module bundling ({}); \
+                             it is a global ambient declaration and does not affect ESM module semantics",
+                            path.display()
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// 从 AST 中提取 export 声明
     fn extract_exports(module: &ast::Module) -> Vec<ExportEntry> {
         let mut exports = Vec::new();

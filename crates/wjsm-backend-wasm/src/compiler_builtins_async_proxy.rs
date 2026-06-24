@@ -252,6 +252,12 @@ impl Compiler {
                 Ok(Some(()))
             }
             Builtin::AsyncFunctionStart => {
+                if args.len() < 1 {
+                    bail!(
+                        "AsyncFunctionStart requires at least 1 argument, got {}",
+                        args.len()
+                    );
+                }
                 let func_idx = self
                     .builtin_func_indices
                     .get(builtin)
@@ -267,6 +273,12 @@ impl Compiler {
                 Ok(Some(()))
             }
             Builtin::AsyncFunctionResume => {
+                if args.len() < 5 {
+                    bail!(
+                        "AsyncFunctionResume requires at least 5 arguments, got {}",
+                        args.len()
+                    );
+                }
                 let func_idx = self
                     .builtin_func_indices
                     .get(builtin)

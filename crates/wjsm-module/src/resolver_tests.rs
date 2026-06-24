@@ -541,3 +541,39 @@ fn extract_exports_handles_multiple_var_declarations() {
     assert!(names.contains(&"a"));
     assert!(names.contains(&"b"));
 }
+
+#[test]
+fn resolve_rejects_ts_import_equals() {
+    let root = create_temp_project("ts_import_eq");
+    write_file(&root, "foo.ts", "export const x = 1;\n");
+    write_file(&root, "main.ts", "import x = require('./foo');\n");
+    let parent = root.join("main.ts");
+    let mut resolver = ModuleResolver::new(&root);
+    let err = resolver
+        .resolve("./main.ts", &parent)
+        .expect_err("ts import equals should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("import assignment") || msg.contains("import x"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn resolve_rejects_ts_export_assignment() {
+    let root = create_temp_project("ts_export_eq");
+    write_file(&root, "mod.ts", "const x = 1;\nexport = x;\n");
+    let parent = root.join("entry.ts");
+    write_file(&root, "entry.ts", "import x = require('./mod');\n");
+    let mut resolver = ModuleResolver::new(&root);
+    // 先解析 mod.ts 会因 export = 失败
+    let err = resolver
+        .resolve("./mod.ts", &parent)
+        .expect_err("export = should fail");
+    assert!(
+        err.to_string().contains("export ="),
+        "unexpected error: {}",
+        err
+    );
+}
+

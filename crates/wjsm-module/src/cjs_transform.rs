@@ -848,11 +848,22 @@ fn extract_require_specifier(call: &ast::CallExpr) -> Option<String> {
         && let ast::Expr::Ident(ident) = expr.as_ref()
         && ident.sym.as_ref() == "require"
         && call.args.len() == 1
-        && let ast::Expr::Lit(ast::Lit::Str(s)) = call.args[0].expr.as_ref()
     {
-        return Some(s.value.to_string_lossy().into_owned());
+        return extract_static_module_specifier(&call.args[0].expr);
     }
     None
+}
+
+/// 从 require()/import() 参数表达式提取静态模块说明符
+fn extract_static_module_specifier(expr: &ast::Expr) -> Option<String> {
+    match expr {
+        ast::Expr::Lit(ast::Lit::Str(s)) => Some(s.value.to_string_lossy().into_owned()),
+        ast::Expr::Tpl(tpl) if tpl.quasis.len() == 1 && tpl.exprs.is_empty() => tpl.quasis[0]
+            .cooked
+            .as_ref()
+            .map(|cooked| cooked.to_string_lossy().into_owned()),
+        _ => None,
+    }
 }
 
 fn is_module_exports_member(expr: &ast::Expr) -> bool {

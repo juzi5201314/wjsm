@@ -50,6 +50,12 @@ fn has_import_decl(transformed: &ast::Module) -> bool {
 }
 
 #[test]
+fn detects_commonjs_require_template_literal() {
+    let module = parse("const x = require(`./foo`);");
+    assert!(is_commonjs_module(&module));
+}
+
+#[test]
 fn detects_commonjs_require() {
     let module = parse(r#"const foo = require('./foo');"#);
     assert!(is_commonjs_module(&module));
