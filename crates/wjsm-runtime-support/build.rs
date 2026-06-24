@@ -24,6 +24,7 @@ fn main() -> anyhow::Result<()> {
     // precompile 必须匹配，否则 Module::deserialize 会拒绝：
     // "Module was compiled without epoch interruption but it is enabled for the host"
     cfg.epoch_interruption(true);
+    cfg.wasm_bulk_memory(true);
     let engine = wasmtime::Engine::new(&cfg)?;
     let cwasm_bytes = engine.precompile_module(&wasm)?;
 

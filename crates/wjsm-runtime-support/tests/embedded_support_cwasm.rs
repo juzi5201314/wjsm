@@ -24,6 +24,7 @@ fn embedded_support_cwasm_deserializes() {
     // 构建期 precompile 现已启用 epoch_interruption（匹配运行时 async yield 路径），
     // deserialize 时 engine config 必须一致。
     cfg.epoch_interruption(true);
+    cfg.wasm_bulk_memory(true);
     let engine = wasmtime::Engine::new(&cfg).expect("engine");
     let module =
         unsafe { wasmtime::Module::deserialize(&engine, bytes) }.expect("deserialize cwasm");
