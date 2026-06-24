@@ -49,7 +49,7 @@ pub(crate) fn define_collections_buffers(
                     for (key, val) in pairs {
                         let mut found = false;
                         for j in 0..map_entry.keys.len() {
-                            if same_value_zero(map_entry.keys[j], key) {
+                            if same_value_zero(&caller, map_entry.keys[j], key) {
                                 map_entry.values[j] = val;
                                 found = true;
                                 break;
@@ -139,7 +139,7 @@ pub(crate) fn define_collections_buffers(
             }
             let entry = &mut table[handle];
             for i in 0..entry.keys.len() {
-                if same_value_zero(entry.keys[i], key) {
+                if same_value_zero(&caller, entry.keys[i], key) {
                     entry.values[i] = val;
                     return this_val;
                 }
@@ -170,7 +170,7 @@ pub(crate) fn define_collections_buffers(
             }
             let entry = &table[handle];
             for i in 0..entry.keys.len() {
-                if same_value_zero(entry.keys[i], key) {
+                if same_value_zero(&caller, entry.keys[i], key) {
                     return entry.values[i];
                 }
             }
@@ -200,7 +200,7 @@ pub(crate) fn define_collections_buffers(
                     if let Some(val) = read_array_elem(&mut caller, arr_ptr, i) {
                         let mut found = false;
                         for &v in &values {
-                            if same_value_zero(v, val) {
+                            if same_value_zero(&caller, v, val) {
                                 found = true;
                                 break;
                             }
@@ -216,7 +216,7 @@ pub(crate) fn define_collections_buffers(
                     for val in values {
                         let mut found = false;
                         for j in 0..set_entry.values.len() {
-                            if same_value_zero(set_entry.values[j], val) {
+                            if same_value_zero(&caller, set_entry.values[j], val) {
                                 found = true;
                                 break;
                             }
@@ -301,7 +301,7 @@ pub(crate) fn define_collections_buffers(
             }
             let entry = &mut table[handle];
             for i in 0..entry.values.len() {
-                if same_value_zero(entry.values[i], val) {
+                if same_value_zero(&caller, entry.values[i], val) {
                     return this_val;
                 }
             }
@@ -328,7 +328,7 @@ pub(crate) fn define_collections_buffers(
                     if handle < table.len() {
                         let entry = &table[handle];
                         for i in 0..entry.keys.len() {
-                            if same_value_zero(entry.keys[i], key) {
+                            if same_value_zero(&caller, entry.keys[i], key) {
                                 return value::encode_bool(true);
                             }
                         }
@@ -342,7 +342,7 @@ pub(crate) fn define_collections_buffers(
                     if handle < table.len() {
                         let entry = &table[handle];
                         for i in 0..entry.values.len() {
-                            if same_value_zero(entry.values[i], key) {
+                            if same_value_zero(&caller, entry.values[i], key) {
                                 return value::encode_bool(true);
                             }
                         }
@@ -371,7 +371,7 @@ pub(crate) fn define_collections_buffers(
                     if handle < table.len() {
                         let entry = &mut table[handle];
                         for i in 0..entry.keys.len() {
-                            if same_value_zero(entry.keys[i], key) {
+                            if same_value_zero(&caller, entry.keys[i], key) {
                                 entry.keys.remove(i);
                                 entry.values.remove(i);
                                 return value::encode_bool(true);
@@ -387,7 +387,7 @@ pub(crate) fn define_collections_buffers(
                     if handle < table.len() {
                         let entry = &mut table[handle];
                         for i in 0..entry.values.len() {
-                            if same_value_zero(entry.values[i], key) {
+                            if same_value_zero(&caller, entry.values[i], key) {
                                 entry.values.remove(i);
                                 return value::encode_bool(true);
                             }

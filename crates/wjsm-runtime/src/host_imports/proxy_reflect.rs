@@ -584,7 +584,7 @@ pub(crate) async fn proxy_own_keys_trap_async(
         }
         if match_all {
             for &tk in &target_keys_sym {
-                if !trap_keys_sym.iter().any(|&s| same_value_zero(s, tk)) {
+                if !trap_keys_sym.iter().any(|&s| same_value_zero(&caller, s, tk)) {
                     match_all = false;
                     break;
                 }
@@ -624,7 +624,7 @@ pub(crate) async fn proxy_own_keys_trap_async(
             if let Some((_, flags, _)) = find_property_slot_by_name_id(caller, t_ptr, name_id) {
                 let configurable = (flags & constants::FLAG_CONFIGURABLE) != 0;
                 if !configurable
-                    && !trap_keys_sym.iter().any(|&s| same_value_zero(s, sym_key))
+                    && !trap_keys_sym.iter().any(|&s| same_value_zero(&caller, s, sym_key))
                 {
                     return make_type_error_exception(
                         caller,

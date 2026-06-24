@@ -99,7 +99,7 @@ pub(crate) fn array_includes_from(
     let start = array_relative_start(len, from_index);
     for i in start..len {
         if let Some(elem) = read_array_elem(caller, ptr, i)
-            && same_value_zero(elem, search)
+            && same_value_zero(&caller, elem, search)
         {
             return value::encode_bool(true);
         }
