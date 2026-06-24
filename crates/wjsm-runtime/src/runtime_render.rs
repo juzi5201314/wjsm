@@ -461,10 +461,9 @@ async fn get_to_json_async(caller: &mut Caller<'_, RuntimeState>, key: &str, val
         return value;
     }
     let key_str = store_runtime_string(caller, key.to_string());
-    match call_wasm_callback_async(caller, to_json, value, &[key_str]).await {
-        Ok(v) => v,
-        Err(_) => value::encode_undefined(),
-    }
+    call_wasm_callback_async(caller, to_json, value, &[key_str])
+        .await
+        .unwrap_or_else(|_| value::encode_undefined())
 }
 /// 完整的 JSON.stringify（ES §24.5.2），返回 boxed JS 值。
 /// async 版本：使用 call_wasm_callback_async 替代 sync call_wasm_callback
@@ -479,7 +478,7 @@ pub(crate) async fn runtime_json_stringify_full_async(
     let replacer_is_fn = is_callable_in_runtime(caller, replacer);
     let replacer_fn = if replacer_is_fn { Some(replacer) } else { None };
     let mut stack = Vec::new();
-    let json = serialize_json_property_async(
+    match serialize_json_property_async(
         caller,
         "",
         val,
@@ -490,11 +489,16 @@ pub(crate) async fn runtime_json_stringify_full_async(
         &gap,
         "",
     )
-    .await;
-    if json == "undefined" {
-        value::encode_undefined()
-    } else {
-        store_runtime_string(caller, json)
+    .await
+    {
+        Ok(json) => {
+            if json == "undefined" {
+                value::encode_undefined()
+            } else {
+                store_runtime_string(caller, json)
+            }
+        }
+        Err(exc) => exc,
     }
 }
 
@@ -511,13 +515,19 @@ async fn serialize_json_property_async(
     stack: &mut Vec<i64>,
     gap: &str,
     current_indent: &str,
-) -> String {
+) -> Result<String, i64> {
     let mut value = get_to_json_async(caller, key, val).await;
+    if value::is_exception(value) {
+        return Err(value);
+    }
     let mut replacer_returned_undefined = false;
     if let Some(rf) = replacer_fn.filter(|_| replacer_is_fn) {
         let key_str = store_runtime_string(caller, key.to_string());
         match call_wasm_callback_async(caller, rf, value, &[key_str, value]).await {
             Ok(new_val) => {
+                if value::is_exception(new_val) {
+                    return Err(new_val);
+                }
                 replacer_returned_undefined = value::is_undefined(new_val);
                 value = new_val;
             }
@@ -528,40 +538,37 @@ async fn serialize_json_property_async(
         }
     }
     if value::is_f64(value) {
-        let f = value::decode_f64(value);
-        return if !f.is_finite() {
+        let f = normalize_negative_zero(value::decode_f64(value));
+        return Ok(if !f.is_finite() {
             "null".to_string()
-        } else if f == 0.0 {
-            "0".to_string()
         } else {
-            f.to_string()
-        };
+            format_number_js(f)
+        });
     }
     if value::is_undefined(value) {
         if replacer_returned_undefined || key.is_empty() {
-            return "undefined".to_string();
+            return Ok("undefined".to_string());
         }
-        return "null".to_string();
+        return Ok("null".to_string());
     }
     if value::is_callable(value) || value::is_symbol(value) {
-        return "undefined".to_string();
+        return Ok("undefined".to_string());
     }
     if value::is_bigint(value) {
-        *caller
-            .data()
-            .runtime_error.lock().unwrap_or_else(|e| e.into_inner()) =
-            Some("TypeError: Do not know how to serialize a BigInt".to_string());
-        return "null".to_string();
+        return Err(make_type_error_exception(
+            caller,
+            "Do not know how to serialize a BigInt",
+        ));
     }
     if value::is_string(value) {
         let s = read_runtime_string(caller, value);
-        return json_escape_string(&s);
+        return Ok(json_escape_string(&s));
     }
     if value::is_bool(value) {
-        return value::decode_bool(value).to_string();
+        return Ok(value::decode_bool(value).to_string());
     }
     if value::is_null(value) {
-        return "null".to_string();
+        return Ok("null".to_string());
     }
 
     let next_indent = if gap.is_empty() {
@@ -572,11 +579,10 @@ async fn serialize_json_property_async(
 
     if value::is_array(value) {
         if stack.contains(&value) {
-            set_runtime_error(
-                caller.data(),
-                "TypeError: Converting circular structure to JSON".to_string(),
-            );
-            return "null".to_string();
+            return Err(make_type_error_exception(
+                caller,
+                "Converting circular structure to JSON",
+            ));
         }
         stack.push(value);
         let handle_idx = value::decode_array_handle(value) as usize;
@@ -584,14 +590,14 @@ async fn serialize_json_property_async(
             Some(ptr) => ptr,
             None => {
                 stack.pop();
-                return "null".to_string();
+                return Ok("null".to_string());
             }
         };
         let len = read_array_length(caller, ptr).unwrap_or(0);
         let mut parts = Vec::with_capacity(len as usize);
         for i in 0..len {
             let elem = read_array_elem(caller, ptr, i).unwrap_or_else(value::encode_undefined);
-            let s = Box::pin(serialize_json_property_async(
+            let s = match Box::pin(serialize_json_property_async(
                 caller,
                 &i.to_string(),
                 elem,
@@ -602,7 +608,11 @@ async fn serialize_json_property_async(
                 gap,
                 &next_indent,
             ))
-            .await;
+            .await
+            {
+                Ok(s) => s,
+                Err(exc) => return Err(exc),
+            };
             parts.push(if s == "undefined" {
                 "null".to_string()
             } else {
@@ -610,41 +620,40 @@ async fn serialize_json_property_async(
             });
         }
         stack.pop();
-        return if parts.is_empty() {
+        return Ok(if parts.is_empty() {
             "[]".to_string()
         } else if gap.is_empty() {
             format!("[{}]", parts.join(","))
         } else {
             let inner = parts.join(&format!(",\n{}", next_indent));
             format!("[\n{}{}\n{}]", next_indent, inner, current_indent)
-        };
+        });
     }
 
     if value::is_object(value) {
         if stack.contains(&value) {
-            set_runtime_error(
-                caller.data(),
-                "TypeError: Converting circular structure to JSON".to_string(),
-            );
-            return "null".to_string();
+            return Err(make_type_error_exception(
+                caller,
+                "Converting circular structure to JSON",
+            ));
         }
         stack.push(value);
         let ptr = match resolve_handle(caller, value) {
             Some(ptr) => ptr,
             None => {
                 stack.pop();
-                return "null".to_string();
+                return Ok("null".to_string());
             }
         };
         let Some(memory) = caller.get_export("memory").and_then(|e| e.into_memory()) else {
             stack.pop();
-            return "null".to_string();
+            return Ok("null".to_string());
         };
         {
             let data = memory.data(&*caller);
             if ptr + 16 > data.len() {
                 stack.pop();
-                return "null".to_string();
+                return Ok("null".to_string());
             }
         }
 
@@ -655,7 +664,7 @@ async fn serialize_json_property_async(
                     if value::is_undefined(prop_val) {
                         continue;
                     }
-                    let s = Box::pin(serialize_json_property_async(
+                    let s = match Box::pin(serialize_json_property_async(
                         caller,
                         name,
                         prop_val,
@@ -666,7 +675,11 @@ async fn serialize_json_property_async(
                         gap,
                         &next_indent,
                     ))
-                    .await;
+                    .await
+                    {
+                        Ok(s) => s,
+                        Err(exc) => return Err(exc),
+                    };
                     if s != "undefined" {
                         let colon = if gap.is_empty() { ":" } else { ": " };
                         pairs.push(format!("{}{}{}", json_escape_string(name), colon, s));
@@ -713,9 +726,12 @@ async fn serialize_json_property_async(
                 slots
             };
             for (name_id, prop_val) in slots {
+                if is_symbol_name_id(name_id) {
+                    continue;
+                }
                 let name_bytes = read_string_bytes(caller, name_id);
                 let name = String::from_utf8_lossy(&name_bytes).to_string();
-                let s = Box::pin(serialize_json_property_async(
+                let s = match Box::pin(serialize_json_property_async(
                     caller,
                     &name,
                     prop_val,
@@ -726,7 +742,11 @@ async fn serialize_json_property_async(
                     gap,
                     &next_indent,
                 ))
-                .await;
+                .await
+                {
+                    Ok(s) => s,
+                    Err(exc) => return Err(exc),
+                };
                 if s != "undefined" {
                     let colon = if gap.is_empty() { ":" } else { ": " };
                     pairs.push(format!("{}{}{}", json_escape_string(&name), colon, s));
@@ -735,17 +755,17 @@ async fn serialize_json_property_async(
         }
 
         stack.pop();
-        return if pairs.is_empty() {
+        return Ok(if pairs.is_empty() {
             "{}".to_string()
         } else if gap.is_empty() {
             format!("{{{}}}", pairs.join(","))
         } else {
             let inner = pairs.join(&format!(",\n{}", next_indent));
             format!("{{\n{}{}\n{}}}", next_indent, inner, current_indent)
-        };
+        });
     }
 
-    "null".to_string()
+    Ok("null".to_string())
 }
 
 pub(crate) fn read_string(caller: &mut Caller<'_, RuntimeState>, ptr: u32) -> Result<String> {
