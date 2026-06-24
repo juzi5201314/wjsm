@@ -1384,7 +1384,7 @@ pub(crate) fn fr_unregister_impl(
     let entry = &mut table[handle];
     let initial_len = entry.registrations.len();
     entry.registrations.retain(|r| match &r.unregister_token {
-        Some(t) => !same_value_zero(*t, token),
+        Some(t) => !same_value_zero(&caller, *t, token),
         None => true,
     });
     value::encode_bool(entry.registrations.len() < initial_len)

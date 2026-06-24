@@ -789,7 +789,7 @@ pub(super) fn register_complex_bridges(
                             Err(_) => return value::encode_undefined(),
                         };
                         let group_index = if let Some(&idx) = key_to_index.get(&key) {
-                            if same_value_zero(groups[idx].0, key) {
+                            if same_value_zero(&caller, groups[idx].0, key) {
                                 Some(idx)
                             } else {
                                 None
@@ -802,7 +802,7 @@ pub(super) fn register_complex_bridges(
                         } else {
                             let mut found = false;
                             for (existing_key, elements) in &mut groups {
-                                if same_value_zero(*existing_key, key) {
+                                if same_value_zero(&caller, *existing_key, key) {
                                     elements.push(elem);
                                     key_to_index.insert(*existing_key, groups.len() - 1);
                                     found = true;

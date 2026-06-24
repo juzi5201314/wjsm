@@ -541,5 +541,5 @@ pub(crate) fn typedarray_same_value_zero(
             _ => false,
         };
     }
-    same_value_zero(left, right)
+    same_value_zero(&caller, left, right)
 }

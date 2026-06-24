@@ -67,21 +67,56 @@ pub(crate) fn resolve_handle(caller: &mut Caller<'_, RuntimeState>, val: i64) ->
     resolve_handle_idx(caller, handle_idx)
 }
 
-pub(crate) fn same_value_zero(a: i64, b: i64) -> bool {
+/// SameValueZero (ECMAScript §7.2.12)：Map/Set 等键比较；NaN 与 NaN、+0 与 -0 视为相等。
+pub(crate) fn same_value_zero(caller: &Caller<'_, RuntimeState>, a: i64, b: i64) -> bool {
     if a == b {
         return true;
     }
-    if value::is_f64(a) && value::is_f64(b) {
-        let fa = value::decode_f64(a);
-        let fb = value::decode_f64(b);
-        if fa.is_nan() && fb.is_nan() {
-            return true;
-        }
-        if fa == 0.0 && fb == 0.0 {
-            return true;
-        }
+    let a_type = type_tag(a);
+    let b_type = type_tag(b);
+    if a_type != b_type {
+        return false;
     }
-    false
+    match a_type {
+        0 => {
+            let fa = value::decode_f64(a);
+            let fb = value::decode_f64(b);
+            if fa.is_nan() && fb.is_nan() {
+                return true;
+            }
+            if fa == 0.0 && fb == 0.0 {
+                return true;
+            }
+            fa == fb
+        }
+        1 => {
+            // 字符串内容比较：runtime_string handle 比较，string_ptr 退回为值比较
+            if value::is_runtime_string_handle(a) && value::is_runtime_string_handle(b) {
+                let ha = value::decode_runtime_string_handle(a) as usize;
+                let hb = value::decode_runtime_string_handle(b) as usize;
+                let strings = caller.data().runtime_strings.lock().unwrap_or_else(|e| e.into_inner());
+                strings.get(ha).zip(strings.get(hb)).map(|(x, y)| x == y).unwrap_or(false)
+            } else {
+                // string_ptr 字面量：相同内容共享同一指针
+                a == b
+            }
+        }
+        6 => {
+            let a_handle = value::decode_bigint_handle(a) as usize;
+            let b_handle = value::decode_bigint_handle(b) as usize;
+            let table = caller
+                .data()
+                .bigint_table
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            table
+                .get(a_handle)
+                .zip(table.get(b_handle))
+                .map(|(x, y)| x == y)
+                .unwrap_or(false)
+        }
+        _ => false,
+    }
 }
 
 /// 通过 handle_idx 解析真实对象指针。
