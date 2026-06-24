@@ -350,7 +350,9 @@ pub(crate) fn define_math_number_error(
             } else if value::is_string(arg) {
                 let s = read_value_string_bytes(&mut caller, arg).unwrap_or_default();
                 let s_str = String::from_utf8_lossy(&s).to_string();
-                value::encode_f64(s_str.trim().parse::<f64>().unwrap_or(f64::NAN))
+                value::encode_f64(crate::runtime_string_to_number::js_string_content_to_f64(
+                    &s_str,
+                ))
             } else {
                 value::encode_f64(0.0)
             }
@@ -470,7 +472,11 @@ pub(crate) fn define_math_number_error(
                 return value::encode_f64(f64::NAN);
             }
             let (actual_radix, parse_str): (i32, &str) = if radix == 0 {
-                if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
+                if trimmed.starts_with("0b") || trimmed.starts_with("0B") {
+                    (2, &trimmed[2..])
+                } else if trimmed.starts_with("0o") || trimmed.starts_with("0O") {
+                    (8, &trimmed[2..])
+                } else if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
                     (16, &trimmed[2..])
                 } else {
                     (10, trimmed)
@@ -524,6 +530,12 @@ pub(crate) fn define_math_number_error(
             let trimmed = s_str.trim();
             if trimmed.is_empty() {
                 return value::encode_f64(f64::NAN);
+            }
+            if trimmed == "Infinity" || trimmed == "+Infinity" {
+                return value::encode_f64(f64::INFINITY);
+            }
+            if trimmed == "-Infinity" {
+                return value::encode_f64(f64::NEG_INFINITY);
             }
             let mut end = 0;
             let bytes = trimmed.as_bytes();
@@ -584,7 +596,7 @@ pub(crate) fn define_math_number_error(
     )?;
     let number_proto_to_string_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, this_val: i64, radix_val: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, radix_val: i64| -> i64 {
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
             }
@@ -594,7 +606,10 @@ pub(crate) fn define_math_number_error(
             } else if value::is_f64(radix_val) {
                 let r = value::decode_f64(radix_val) as i32;
                 if !(2..=36).contains(&r) {
-                    return store_runtime_string(&caller, "NaN".to_string());
+                    return make_range_error_exception(
+                        &mut caller,
+                        "toString() radix argument must be between 2 and 36",
+                    );
                 }
                 r
             } else {
@@ -613,8 +628,7 @@ pub(crate) fn define_math_number_error(
                 let s = format_number_js(x);
                 return store_runtime_string(&caller, s);
             }
-            let int_part = x.trunc() as i64;
-            let result = format_radix(int_part, radix as u32);
+            let result = format_f64_radix_to_string(x, radix);
             store_runtime_string(&caller, result)
         },
     );
@@ -642,7 +656,7 @@ pub(crate) fn define_math_number_error(
     )?;
     let number_proto_to_fixed_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
             }
@@ -655,9 +669,9 @@ pub(crate) fn define_math_number_error(
                 0
             };
             if !(0..=100).contains(&digits) {
-                return store_runtime_string(
-                    &caller,
-                    "RangeError: toFixed() digits argument must be between 0 and 100".to_string(),
+                return make_range_error_exception(
+                    &mut caller,
+                    "toFixed() digits argument must be between 0 and 100",
                 );
             }
             let s = format_number_to_fixed_js(x, digits);
@@ -696,7 +710,7 @@ pub(crate) fn define_math_number_error(
     )?;
     let number_proto_to_precision_fn = Func::wrap(
         &mut store,
-        |caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64, digits_val: i64| -> i64 {
             if !value::is_f64(this_val) {
                 return store_runtime_string(&caller, "NaN".to_string());
             }
@@ -711,9 +725,9 @@ pub(crate) fn define_math_number_error(
             if let Some(precision) = precision
                 && !(1..=21).contains(&precision)
             {
-                return store_runtime_string(
-                    &caller,
-                    "RangeError: toPrecision() argument must be between 1 and 21".to_string(),
+                return make_range_error_exception(
+                    &mut caller,
+                    "toPrecision() argument must be between 1 and 21",
                 );
             }
             let s = format_number_to_precision_js(x, precision);
