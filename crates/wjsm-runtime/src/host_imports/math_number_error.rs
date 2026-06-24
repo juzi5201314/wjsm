@@ -542,14 +542,22 @@ pub(crate) fn define_math_number_error(
             if trimmed.is_empty() {
                 return value::encode_f64(f64::NAN);
             }
-            if trimmed == "Infinity" || trimmed == "+Infinity" {
-                return value::encode_f64(f64::INFINITY);
+            let bytes = trimmed.as_bytes();
+            let mut sign: f64 = 1.0;
+            let mut pos = 0usize;
+            if pos < bytes.len() && (bytes[pos] == b'+' || bytes[pos] == b'-') {
+                if bytes[pos] == b'-' {
+                    sign = -1.0;
+                }
+                pos += 1;
             }
-            if trimmed == "-Infinity" {
-                return value::encode_f64(f64::NEG_INFINITY);
+            const INFINITY_PREFIX: &[u8] = b"Infinity";
+            if bytes.len() >= pos + INFINITY_PREFIX.len()
+                && bytes[pos..pos + INFINITY_PREFIX.len()] == *INFINITY_PREFIX
+            {
+                return value::encode_f64(sign * f64::INFINITY);
             }
             let mut end = 0;
-            let bytes = trimmed.as_bytes();
             if end < bytes.len() && (bytes[end] == b'+' || bytes[end] == b'-') {
                 end += 1;
             }
@@ -887,27 +895,7 @@ pub(crate) fn define_math_number_error(
     let error_proto_to_string_fn = Func::wrap(
         &mut store,
         |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
-            if !value::is_object(this_val) {
-                return store_runtime_string(&caller, "Error".to_string());
-            }
-            let obj_ptr =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let name = obj_ptr
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "name"))
-                .map(|v| get_string_value(&mut caller, v))
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| "Error".to_string());
-            let obj_ptr2 =
-                resolve_handle_idx(&mut caller, value::decode_object_handle(this_val) as usize);
-            let message = obj_ptr2
-                .and_then(|p| read_object_property_by_name(&mut caller, p, "message"))
-                .map(|v| get_string_value(&mut caller, v))
-                .unwrap_or_default();
-            if message.is_empty() {
-                store_runtime_string(&caller, name)
-            } else {
-                store_runtime_string(&caller, format!("{}: {}", name, message))
-            }
+            error_proto_to_string_impl(&mut caller, this_val)
         },
     );
     linker.define(
