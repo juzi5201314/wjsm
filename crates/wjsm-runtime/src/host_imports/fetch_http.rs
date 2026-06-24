@@ -17,23 +17,17 @@ pub(crate) fn parse_fetch_input(
     RedirectMode,
     Option<u32>,
 ) {
-    let url = if value::is_string(input) {
-        extract_string_from_value(caller, input)
-    } else if value::is_object(input) {
-        extract_string_property(caller, input, "url").unwrap_or_default()
-    } else {
-        String::new()
-    };
-
-    let method = "GET".to_string();
-    let headers_handle = create_empty_headers(caller);
-    let body = None;
-    let redirect = RedirectMode::Follow;
-    let signal_handle = None;
-
-    let _ = init;
-
-    (method, url, headers_handle, body, redirect, signal_handle)
+    match resolve_fetch_request_params(caller, input, init) {
+        Ok(v) => v,
+        Err(_) => (
+            "GET".to_string(),
+            String::new(),
+            create_empty_headers(caller),
+            None,
+            RedirectMode::Follow,
+            None,
+        ),
+    }
 }
 
 // ── Core fetch execution + Response construction ────────────────────────────
@@ -86,16 +80,10 @@ pub(crate) async fn perform_http_fetch(
         return Err("The operation was aborted".to_string());
     }
 
-    // 2. 构建 reqwest 请求
-    let redirect_policy = match redirect {
-        RedirectMode::Follow => reqwest::redirect::Policy::limited(20),
-        RedirectMode::Error => reqwest::redirect::Policy::none(),
-        RedirectMode::Manual => reqwest::redirect::Policy::limited(0),
-    };
-
-    let client = reqwest::Client::builder()
-        .redirect(redirect_policy)
-        .build()
+    // 2. 复用按 redirect 策略缓存的 reqwest 客户端
+    let client = caller
+        .data()
+        .http_client_for_redirect(redirect)
         .map_err(|e| format!("fetch client error: {}", e))?;
 
     let http_method: reqwest::Method = method

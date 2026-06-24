@@ -525,6 +525,7 @@ impl Clone for RuntimeState {
             scope_records: self.scope_records.clone(),
             scope_record_next_handle: self.scope_record_next_handle,
             new_target: AtomicI64::new(self.new_target.load(Ordering::Relaxed)),
+            fetch_http_clients: self.fetch_http_clients.clone(),
             host_completion_tx: self.host_completion_tx.clone(),
             async_op_counter: self.async_op_counter.clone(),
         }
@@ -637,6 +638,8 @@ struct RuntimeState {
     abort_signal_table: Arc<Mutex<Vec<AbortSignalEntry>>>,
     /// reqwest Response 侧表：持有未消费的 HTTP response body stream
     http_response_table: Arc<Mutex<Vec<HttpResponseEntry>>>,
+    /// 按 redirect 策略复用的 reqwest HTTP 客户端（连接池）
+    fetch_http_clients: Arc<Mutex<HashMap<RedirectMode, reqwest::Client>>>,
     /// ReadableStream 侧表：存储流状态
     readable_stream_table: Arc<Mutex<Vec<ReadableStreamEntry>>>,
     /// Reader 侧表：存储 reader → stream 映射
@@ -704,7 +707,32 @@ impl RuntimeState {
         self.abandoned_regions.lock().ok()
     }
 
+    /// 按 redirect 模式返回复用的 reqwest 客户端（进程内连接池）。
+    pub(crate) fn http_client_for_redirect(
+        &self,
+        redirect: RedirectMode,
+    ) -> std::result::Result<reqwest::Client, reqwest::Error> {
+        let mut clients = self
+            .fetch_http_clients
+            .lock()
+            .expect("fetch_http_clients mutex");
+        if let Some(client) = clients.get(&redirect) {
+            return Ok(client.clone());
+        }
+        let redirect_policy = match redirect {
+            RedirectMode::Follow => reqwest::redirect::Policy::limited(20),
+            RedirectMode::Error => reqwest::redirect::Policy::none(),
+            RedirectMode::Manual => reqwest::redirect::Policy::limited(0),
+        };
+        let client = reqwest::Client::builder()
+            .redirect(redirect_policy)
+            .build()?;
+        clients.insert(redirect, client.clone());
+        Ok(client)
+    }
+
     /// 构造一个新的 RuntimeState，所有侧表初始化为空，well-known symbols 预分配。
+
     pub(crate) fn new() -> Self {
         const GC_THRESHOLD: u64 = 1000;
         RuntimeState {
@@ -823,6 +851,7 @@ impl RuntimeState {
             fetch_request_table: Arc::new(Mutex::new(Vec::new())),
             abort_signal_table: Arc::new(Mutex::new(Vec::new())),
             http_response_table: Arc::new(Mutex::new(Vec::new())),
+            fetch_http_clients: Arc::new(Mutex::new(HashMap::new())),
             readable_stream_table: Arc::new(Mutex::new(Vec::new())),
             reader_table: Arc::new(Mutex::new(Vec::new())),
             stream_controller_table: Arc::new(Mutex::new(Vec::new())),
