@@ -97,12 +97,64 @@ pub(crate) fn call_headers_method_from_caller(
             }
             Some(value::encode_undefined())
         }
-        HeadersMethodKind::Keys | HeadersMethodKind::Values | HeadersMethodKind::Entries => {
-            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
-            let it = alloc_host_object(caller, &env, 2);
-            Some(it)
+        HeadersMethodKind::Keys => {
+            let mut iters = caller.data().iterators.lock().ok()?;
+            let iter_handle = iters.len() as u32;
+            iters.push(IteratorState::HeadersKeyIter {
+                headers_handle: handle,
+                index: 0,
+            });
+            Some(value::encode_handle(value::TAG_ITERATOR, iter_handle))
         }
-        HeadersMethodKind::ForEach => Some(value::encode_undefined()),
+        HeadersMethodKind::Values => {
+            let mut iters = caller.data().iterators.lock().ok()?;
+            let iter_handle = iters.len() as u32;
+            iters.push(IteratorState::HeadersValueIter {
+                headers_handle: handle,
+                index: 0,
+            });
+            Some(value::encode_handle(value::TAG_ITERATOR, iter_handle))
+        }
+        HeadersMethodKind::Entries => {
+            let mut iters = caller.data().iterators.lock().ok()?;
+            let iter_handle = iters.len() as u32;
+            iters.push(IteratorState::HeadersEntryIter {
+                headers_handle: handle,
+                index: 0,
+            });
+            Some(value::encode_handle(value::TAG_ITERATOR, iter_handle))
+        }
+        HeadersMethodKind::ForEach => {
+            let Some(cb) = args.first().copied() else {
+                return Some(value::encode_undefined());
+            };
+            if !value::is_callable(cb) {
+                return Some(value::encode_undefined());
+            }
+            let this_arg = args.get(1).copied().unwrap_or_else(value::encode_undefined);
+            let pairs: Vec<(String, String)> = {
+                let table = caller.data().headers_table.lock().ok()?;
+                let Some(entry) = table.get(handle as usize) else {
+                    return Some(value::encode_undefined());
+                };
+                entry.pairs.clone()
+            };
+            let env = WasmEnv::from_caller(caller).expect("WasmEnv");
+            let rt = tokio::runtime::Handle::current();
+            for (name, val) in pairs {
+                let name_js = store_runtime_string(caller, name);
+                let val_js = store_runtime_string(caller, val);
+                if rt
+                    .block_on(invoke_resolved_callback_async_option(
+                        caller, &env, cb, this_arg, &[val_js, name_js, this_val],
+                    ))
+                    .is_none()
+                {
+                    return Some(value::encode_undefined());
+                }
+            }
+            Some(value::encode_undefined())
+        }
     }
 }
 
