@@ -355,6 +355,21 @@ fn cmd_run_eval(cli: &Cli, code: &str, script: bool) -> Result<ExitCode> {
 
 fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Result<ExitCode> {
     use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+    use std::time::{Duration, Instant};
+
+    const WATCH_DEBOUNCE: Duration = Duration::from_millis(200);
+
+    fn watch_event_triggers_rebuild(kind: &EventKind) -> bool {
+        match kind {
+            EventKind::Modify(_) => true,
+            EventKind::Create(_) => true,
+            EventKind::Remove(_) => true,
+            EventKind::Any => true,
+            EventKind::Access(_) => false,
+            EventKind::Other => true,
+        }
+    }
 
     let input_path = PathBuf::from(input);
     if !input_path.exists() {
@@ -379,14 +394,14 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
     };
 
     // Set up watcher
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = channel();
 
     let mut watcher = RecommendedWatcher::new(
         move |res: Result<Event, notify::Error>| {
             if let Ok(event) = res
-                && matches!(event.kind, EventKind::Modify(_))
+                && watch_event_triggers_rebuild(&event.kind)
             {
-                let _ = tx.send(event);
+                let _ = tx.send(());
             }
         },
         Config::default(),
@@ -394,16 +409,35 @@ fn cmd_run_watch(cli: &Cli, input: &str, root: Option<&str>, script: bool) -> Re
 
     watcher.watch(&watch_target, watch_mode)?;
 
-    // Wait for changes
-    while rx.recv().is_ok() {
-        eprintln!("\n--- File changed, re-running ---");
-        last_exit = match cmd_run(cli, input, root, script) {
-            Ok(code) => code,
-            Err(e) => {
-                eprintln!("Error: {:#}", e);
-                ExitCode::from(EXIT_COMPILE_ERROR)
+    let mut pending_rebuild = false;
+    let mut debounce_deadline: Option<Instant> = None;
+
+    loop {
+        let wait_for = debounce_deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or(Duration::from_secs(86400));
+
+        match rx.recv_timeout(wait_for) {
+            Ok(()) => {
+                pending_rebuild = true;
+                debounce_deadline = Some(Instant::now() + WATCH_DEBOUNCE);
             }
-        };
+            Err(RecvTimeoutError::Timeout) => {
+                if pending_rebuild {
+                    eprintln!("\n--- File changed, re-running ---");
+                    last_exit = match cmd_run(cli, input, root, script) {
+                        Ok(code) => code,
+                        Err(e) => {
+                            eprintln!("Error: {:#}", e);
+                            ExitCode::from(EXIT_COMPILE_ERROR)
+                        }
+                    };
+                    pending_rebuild = false;
+                    debounce_deadline = None;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break,
+        }
     }
 
     Ok(last_exit)
