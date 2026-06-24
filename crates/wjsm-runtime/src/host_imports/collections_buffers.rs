@@ -470,7 +470,9 @@ pub(crate) fn define_collections_buffers(
 
     let map_set_for_each_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 { value::encode_undefined() },
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            map_set_for_each_impl(&mut caller, this_val, &[])
+        },
     );
     linker.define(&mut store, "env", "map_set_for_each", map_set_for_each_fn)?;
 
@@ -502,13 +504,17 @@ pub(crate) fn define_collections_buffers(
 
     let map_set_values_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 { value::encode_undefined() },
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            map_set_create_iterator(&mut caller, this_val, MapSetMethodKind::Values)
+        },
     );
     linker.define(&mut store, "env", "map_set_values", map_set_values_fn)?;
 
     let map_set_entries_fn = Func::wrap(
         &mut store,
-        |_caller: Caller<'_, RuntimeState>, _this_val: i64| -> i64 { value::encode_undefined() },
+        |mut caller: Caller<'_, RuntimeState>, this_val: i64| -> i64 {
+            map_set_create_iterator(&mut caller, this_val, MapSetMethodKind::Entries)
+        },
     );
     linker.define(&mut store, "env", "map_set_entries", map_set_entries_fn)?;
 

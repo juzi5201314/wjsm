@@ -827,9 +827,27 @@ pub(crate) enum IteratorState {
         map_handle: u32,
         index: u32,
     },
+    /// Map [key, value] 对迭代
+    MapEntryIter {
+        map_handle: u32,
+        index: u32,
+    },
     /// Set 值迭代：读取 set_table.values，勿与 MapValueIter 混用
     SetValueIter {
         set_handle: u32,
+        index: u32,
+    },
+    /// Headers 迭代：按 pairs 顺序产出 name 或 value
+    HeadersKeyIter {
+        headers_handle: u32,
+        index: u32,
+    },
+    HeadersValueIter {
+        headers_handle: u32,
+        index: u32,
+    },
+    HeadersEntryIter {
+        headers_handle: u32,
         index: u32,
     },
     /// 预物化索引序列（如 TypedArray.prototype.keys 的 0..length）

@@ -274,6 +274,100 @@ pub(crate) fn iterator_value_impl(caller: &mut Caller<'_, RuntimeState>, handle:
                 drop(table);
                 val.unwrap_or(value::encode_undefined())
             }
+            IteratorState::MapEntryIter { map_handle, index } => {
+                let table = caller.data().map_table.lock().expect("map table mutex");
+                let val = if *map_handle < table.len() as u32 {
+                    let entry = &table[*map_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.keys.len() {
+                        let key = entry.keys[idx];
+                        let value = entry.values[idx];
+                        drop(table);
+                        drop(iters);
+                        let arr = alloc_array(caller, 2);
+                        if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+                            write_array_elem(caller, arr_ptr, 0, key);
+                            write_array_elem(caller, arr_ptr, 1, value);
+                            write_array_length(caller, arr_ptr, 2);
+                        }
+                        arr
+                    } else {
+                        drop(table);
+                        value::encode_undefined()
+                    }
+                } else {
+                    drop(table);
+                    value::encode_undefined()
+                };
+                val
+            }
+            IteratorState::HeadersKeyIter { headers_handle, index } => {
+                let table = caller.data().headers_table.lock().expect("headers table mutex");
+                let val = if *headers_handle < table.len() as u32 {
+                    let entry = &table[*headers_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.pairs.len() {
+                        let name = entry.pairs[idx].0.clone();
+                        drop(table);
+                        drop(iters);
+                        store_runtime_string(caller, name)
+                    } else {
+                        drop(table);
+                        value::encode_undefined()
+                    }
+                } else {
+                    drop(table);
+                    value::encode_undefined()
+                };
+                val
+            }
+            IteratorState::HeadersValueIter { headers_handle, index } => {
+                let table = caller.data().headers_table.lock().expect("headers table mutex");
+                let val = if *headers_handle < table.len() as u32 {
+                    let entry = &table[*headers_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.pairs.len() {
+                        let value = entry.pairs[idx].1.clone();
+                        drop(table);
+                        drop(iters);
+                        store_runtime_string(caller, value)
+                    } else {
+                        drop(table);
+                        value::encode_undefined()
+                    }
+                } else {
+                    drop(table);
+                    value::encode_undefined()
+                };
+                val
+            }
+            IteratorState::HeadersEntryIter { headers_handle, index } => {
+                let table = caller.data().headers_table.lock().expect("headers table mutex");
+                let val = if *headers_handle < table.len() as u32 {
+                    let entry = &table[*headers_handle as usize];
+                    let idx = *index as usize;
+                    if idx < entry.pairs.len() {
+                        let name = entry.pairs[idx].0.clone();
+                        let value = entry.pairs[idx].1.clone();
+                        drop(table);
+                        drop(iters);
+                        let arr = alloc_array(caller, 2);
+                        if let Some(arr_ptr) = resolve_array_ptr(caller, arr) {
+                            write_array_elem(caller, arr_ptr, 0, store_runtime_string(caller, name));
+                            write_array_elem(caller, arr_ptr, 1, store_runtime_string(caller, value));
+                            write_array_length(caller, arr_ptr, 2);
+                        }
+                        arr
+                    } else {
+                        drop(table);
+                        value::encode_undefined()
+                    }
+                } else {
+                    drop(table);
+                    value::encode_undefined()
+                };
+                val
+            }
             IteratorState::SetValueIter { set_handle, index } => {
                 let table = caller.data().set_table.lock().expect("set table mutex");
                 let val = if *set_handle < table.len() as u32 {
