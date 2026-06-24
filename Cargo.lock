@@ -4428,6 +4428,7 @@ name = "wjsm-module"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "serde_json",
  "swc_core",
  "thiserror 2.0.18",
  "wjsm-backend-wasm",

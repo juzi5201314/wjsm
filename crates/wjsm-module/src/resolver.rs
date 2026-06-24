@@ -6,6 +6,9 @@ use std::path::{Path, PathBuf};
 use swc_core::common::Span;
 use swc_core::ecma::ast;
 
+/// 尝试作为模块入口解析的路径扩展名（顺序优先）
+const MODULE_EXTENSIONS: &[&str] = &["js", "ts", "mjs", "cjs", "jsx", "tsx"];
+
 pub use wjsm_ir::ModuleId;
 
 /// 解析后的模块信息
@@ -78,33 +81,135 @@ impl ModuleResolver {
         }
     }
 
-    /// 解析模块路径
+    /// 解析模块路径（相对路径、目录 index、node_modules bare specifier）
     pub fn resolve_path(specifier: &str, parent: &Path) -> Result<PathBuf> {
-        // 只支持相对路径
-        if !specifier.starts_with('.') {
+        if specifier.starts_with('/') {
             bail!(
-                "Module specifier '{}' is not supported. Only relative imports (starting with './' or '../') are supported.",
+                "Module specifier '{}' is not supported. Absolute path imports are not supported.",
                 specifier
             );
         }
 
+        if Self::is_bare_specifier(specifier) {
+            return Self::resolve_bare_specifier(specifier, parent);
+        }
         let base = parent.parent().unwrap_or(parent);
         let resolved = base.join(specifier);
 
-        // 尝试添加扩展名
-        let candidates = if resolved.extension().is_some() {
-            vec![resolved.clone()]
-        } else {
-            vec![
-                resolved.with_extension("js"),
-                resolved.with_extension("ts"),
-                resolved.clone(),
-            ]
-        };
+        Self::resolve_file_or_directory(&resolved, specifier, parent)
+    }
 
-        for candidate in &candidates {
-            if candidate.exists() {
+    fn is_bare_specifier(specifier: &str) -> bool {
+        !specifier.starts_with('.')
+    }
+
+    /// 将 bare specifier 拆为 npm 包名与包内子路径（若有）
+    fn split_npm_specifier(specifier: &str) -> (String, Option<String>) {
+        if let Some(rest) = specifier.strip_prefix('@') {
+            let mut parts = rest.split('/');
+            let scope = parts.next().unwrap_or("");
+            let name = parts.next();
+            match name {
+                Some(n) => {
+                    let pkg = format!("@{scope}/{n}");
+                    let sub: String = parts.collect::<Vec<_>>().join("/");
+                    (
+                        pkg,
+                        if sub.is_empty() {
+                            None
+                        } else {
+                            Some(sub)
+                        },
+                    )
+                }
+                None => (format!("@{scope}"), None),
+            }
+        } else {
+            match specifier.split_once('/') {
+                Some((pkg, sub)) => (pkg.to_string(), Some(sub.to_string())),
+                None => (specifier.to_string(), None),
+            }
+        }
+    }
+
+    fn resolve_bare_specifier(specifier: &str, parent: &Path) -> Result<PathBuf> {
+        let (package_name, subpath) = Self::split_npm_specifier(specifier);
+        let start_dir = parent.parent().unwrap_or(parent);
+        let package_dir = Self::find_package_in_node_modules(&package_name, start_dir)
+            .ok_or_else(|| anyhow::anyhow!("Cannot find module '{}'", specifier))?;
+
+        if let Some(sub) = subpath {
+            let target = package_dir.join(sub);
+            return Self::resolve_file_or_directory(&target, specifier, parent);
+        }
+
+        Self::resolve_package_entry(&package_dir, specifier, parent)
+    }
+
+    /// 从 `from_dir` 起向上遍历，查找 `node_modules/<package_name>` 目录
+    fn find_package_in_node_modules(package_name: &str, from_dir: &Path) -> Option<PathBuf> {
+        let mut dir = from_dir.to_path_buf();
+        loop {
+            let candidate = dir.join("node_modules").join(package_name);
+            if candidate.is_dir() {
+                return Some(candidate);
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+        None
+    }
+
+    /// 解析包目录入口（package.json 的 module/main，或 index.*）
+    fn resolve_package_entry(
+        package_dir: &Path,
+        specifier: &str,
+        parent: &Path,
+    ) -> Result<PathBuf> {
+        let pkg_json = package_dir.join("package.json");
+        if pkg_json.is_file() {
+            if let Ok(text) = std::fs::read_to_string(&pkg_json) {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+                    for key in ["module", "main"] {
+                        if let Some(entry) = value.get(key).and_then(|v| v.as_str()) {
+                            let entry_path = package_dir.join(entry);
+                            if let Ok(path) =
+                                Self::resolve_existing_module_path(&entry_path, specifier, parent)
+                            {
+                                return Ok(path);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Self::resolve_directory_index(package_dir, specifier, parent)
+    }
+
+    /// 将路径解析为具体模块文件：扩展名补全、目录 index、package.json main/module
+    fn resolve_file_or_directory(
+        resolved: &Path,
+        specifier: &str,
+        parent: &Path,
+    ) -> Result<PathBuf> {
+        if resolved.is_file() {
+            return Ok(resolved.canonicalize()?);
+        }
+        if resolved.is_dir() {
+            return Self::resolve_package_entry(resolved, specifier, parent);
+        }
+
+        let file_candidates = Self::file_candidates(resolved);
+        for candidate in &file_candidates {
+            if candidate.is_file() {
                 return Ok(candidate.canonicalize()?);
+            }
+        }
+
+        for candidate in &file_candidates {
+            if candidate.is_dir() {
+                return Self::resolve_package_entry(candidate, specifier, parent);
             }
         }
 
@@ -112,8 +217,47 @@ impl ModuleResolver {
             "Cannot find module '{}' from '{}'. Tried: {:?}",
             specifier,
             parent.display(),
-            candidates
+            file_candidates
         );
+    }
+
+    fn resolve_existing_module_path(
+        path: &Path,
+        specifier: &str,
+        parent: &Path,
+    ) -> Result<PathBuf> {
+        if path.is_file() {
+            return Ok(path.canonicalize()?);
+        }
+        Self::resolve_file_or_directory(path, specifier, parent)
+    }
+
+    fn resolve_directory_index(dir: &Path, specifier: &str, parent: &Path) -> Result<PathBuf> {
+        for ext in MODULE_EXTENSIONS {
+            let index = dir.join(format!("index.{ext}"));
+            if index.is_file() {
+                return Ok(index.canonicalize()?);
+            }
+        }
+        bail!(
+            "Cannot find module '{}' from '{}'. No index file in directory '{}'",
+            specifier,
+            parent.display(),
+            dir.display()
+        );
+    }
+
+    fn file_candidates(resolved: &Path) -> Vec<PathBuf> {
+        if resolved.extension().is_some() {
+            vec![resolved.to_path_buf()]
+        } else {
+            let mut candidates: Vec<PathBuf> = MODULE_EXTENSIONS
+                .iter()
+                .map(|ext| resolved.with_extension(ext))
+                .collect();
+            candidates.push(resolved.to_path_buf());
+            candidates
+        }
     }
 
     /// 解析模块（如果已解析过则返回缓存的 ID）

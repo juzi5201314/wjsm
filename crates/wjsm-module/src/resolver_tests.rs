@@ -31,7 +31,7 @@ fn resolve_path_rejects_non_relative_specifier() {
     let result = ModuleResolver::resolve_path("lodash", &parent);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("not supported"));
+    assert!(err.contains("Cannot find module"));
 }
 
 #[test]
@@ -75,6 +75,48 @@ fn resolve_path_resolves_parent_directory() {
     assert!(result.is_ok());
 }
 
+
+#[test]
+fn resolve_path_directory_index() {
+    let root = create_temp_project("dir_index");
+    write_file(&root, "lib/index.js", "export const x = 1;\n");
+    let parent = root.join("main.js");
+    let result = ModuleResolver::resolve_path("./lib", &parent);
+    assert!(result.is_ok());
+    let path = result.unwrap();
+    assert!(path.to_string_lossy().ends_with("lib/index.js"));
+}
+
+#[test]
+fn resolve_path_node_modules_package() {
+    let root = create_temp_project("node_modules_pkg");
+    write_file(
+        &root,
+        "node_modules/some-pkg/index.js",
+        "export const x = 1;\n",
+    );
+    let parent = root.join("main.js");
+    let result = ModuleResolver::resolve_path("some-pkg", &parent);
+    assert!(result.is_ok());
+    let path = result.unwrap();
+    assert!(path.to_string_lossy().contains("node_modules/some-pkg"));
+}
+
+#[test]
+fn resolve_path_node_modules_package_json_main() {
+    let root = create_temp_project("node_modules_main");
+    write_file(
+        &root,
+        "node_modules/foo-pkg/package.json",
+        r#"{"main":"lib/entry.js"}"#,
+    );
+    write_file(&root, "node_modules/foo-pkg/lib/entry.js", "export {};\n");
+    let parent = root.join("main.js");
+    let result = ModuleResolver::resolve_path("foo-pkg", &parent);
+    assert!(result.is_ok());
+    let path = result.unwrap();
+    assert!(path.to_string_lossy().ends_with("entry.js"));
+}
 #[test]
 fn resolve_rejects_path_outside_root() {
     let root = create_temp_project("outside_root");
