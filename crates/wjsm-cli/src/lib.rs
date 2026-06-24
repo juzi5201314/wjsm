@@ -112,7 +112,13 @@ pub fn main_entry() -> ExitCode {
         Ok(c) => c,
         Err(e) => {
             e.print().ok();
-            return ExitCode::from(EXIT_USAGE_ERROR);
+            let code = match e.kind() {
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion => {
+                    EXIT_SUCCESS
+                }
+                _ => EXIT_USAGE_ERROR,
+            };
+            return ExitCode::from(code);
         }
     };
 
@@ -191,18 +197,25 @@ fn setup_colors(choice: Option<ColorChoice>) {
     let use_colors = match choice {
         Some(ColorChoice::Always) => true,
         Some(ColorChoice::Never) => false,
-        Some(ColorChoice::Auto) | None => {
-            // Check NO_COLOR env var
-            if std::env::var("NO_COLOR").is_ok() {
-                false
-            } else {
-                // Auto-detect based on stdout
-                io::stdout().is_terminal()
-            }
-        }
+        Some(ColorChoice::Auto) | None => resolve_auto_colors(),
     };
 
     colored::control::set_override(use_colors);
+}
+
+/// 自动颜色：尊重 NO_COLOR / CLICOLOR_FORCE，并检测 stdout、stderr 是否为 TTY。
+fn resolve_auto_colors() -> bool {
+    if let Ok(v) = std::env::var("CLICOLOR_FORCE") {
+        if !v.is_empty() && v != "0" {
+            return true;
+        }
+    }
+    if let Ok(v) = std::env::var("NO_COLOR") {
+        if !v.is_empty() {
+            return false;
+        }
+    }
+    io::stdout().is_terminal() || io::stderr().is_terminal()
 }
 
 // ============================================================================
@@ -390,7 +403,8 @@ fn cmd_check(cli: &Cli, input: &str) -> Result<ExitCode> {
 }
 
 fn cmd_eval(cli: &Cli, code: &str) -> Result<ExitCode> {
-    cmd_run_eval(cli, code, false)
+    let wrapped = format!("console.log(({code}))");
+    cmd_run_eval(cli, &wrapped, false)
 }
 
 fn cmd_dump_ir(cli: &Cli, input: &str, format: DumpFormat) -> Result<ExitCode> {
@@ -514,7 +528,8 @@ fn cmd_size(input: &str) -> Result<ExitCode> {
     // Parse WASM sections
     let parser = wasmparser::Parser::new(0);
 
-    for payload in parser.parse_all(&bytes).flatten() {
+    for payload in parser.parse_all(&bytes) {
+        let payload = payload?;
         use wasmparser::Payload::*;
         let (name, size) = match payload {
             TypeSection(s) => ("Type", s.range().len()),
@@ -547,7 +562,11 @@ fn cmd_size(input: &str) -> Result<ExitCode> {
 
     let total: usize = sizes.iter().map(|(_, s)| s).sum();
     for (name, size) in &sizes {
-        let pct = (*size as f64 / total as f64) * 100.0;
+        let pct = if total == 0 {
+            0.0
+        } else {
+            (*size as f64 / total as f64) * 100.0
+        };
         println!("{:<15} {:>10} {:>9.1}%", name, size, pct);
     }
 
